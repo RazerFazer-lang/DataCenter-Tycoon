@@ -1,0 +1,2162 @@
+class_name TerminalUI
+extends Control
+## v1.0 Streamlined Realistic Windows 11 Desktop OS Workstation (opened with [E] at PC Desk).
+## Exactly 4 Clean Apps:
+##   1. [🛒 Shop]     — CloudParts.de with Empty Chassis, 66 Filtered Parts (DDR2-DDR5), Real Shopping Cart & Teile-Lager
+##   2. [🎧 Support]  — Tickets, Live VoIP Customer Calls, Rented Racks, Client Contracts & AI/DDoS Firewall
+##   3. [🏗 Gebäude]  — 5-Tier Router (Mbit/Gbit), Power/Transformer, Hall B/C & kWh Meter
+##   4. [📊 Monitor]  — Windows Task-Manager with 100% Real Hardware Metrics (GB RAM, TB, Mbit/s, Watts — Zero "CU")
+
+signal close_requested
+signal typing_state_changed(is_typing: bool)
+
+var _monitor_frame: PanelContainer
+var _app_window: PanelContainer
+var _win_title_lbl: Label
+var _win_subtitle_lbl: Label
+var _app_body_host: VBoxContainer
+var _start_menu: PanelContainer
+var _call_popup: PanelContainer
+var _call_body: VBoxContainer
+var _taskbar_btns: Dictionary = {}
+var _desktop_btns: Dictionary = {}
+
+# System Tray labels
+var _tray_money: Label
+var _tray_power: Label
+var _tray_temp: Label
+var _tray_net: Label
+var _tray_clock: Label
+var _tray_power_icon: Control
+var _tray_temp_icon: Control
+var _tray_net_icon: Control
+var _win_title_icon: Control
+
+var _active_app: String = "" # "" | "shop" | "support" | "upgrades" | "monitor"
+var _shop_tab: String = "chassis" # "chassis" | "infra" | "cpu" | "ram" | "gpu" | "storage" | "cooling" | "psu" | "warehouse"
+var _shop_subfilter: String = "Alle"
+var _support_tab: String = "tickets" # "tickets" | "contracts" | "ai"
+
+# Real Shopping Cart: Array of {key, kind, id, cat, name, price, qty}
+var _cart: Array = []
+
+var _save_toast_text: String = ""
+var _save_toast_timer: float = 0.0
+
+# Realistic Mechanical Keyboard Typing Animation & Sound
+var _typing_ticket_id: String = ""
+var _typing_timer: float = 0.0
+var _typing_key_accum: float = 0.0
+var _manual_typing_pulse: float = 0.0
+var _last_emitted_typing: bool = false
+var _ticket_drafts: Dictionary = {}
+
+# Letzte Rückmeldung der Finanz-Apps (Personal, Bank, Rechnungen)
+var _fin_msg: String = ""
+var _fin_msg_ok: bool = true
+
+# Der PC bleibt an, bis jemand im Startmenü "Herunterfahren" wählt.
+# Nur ein ausgeschalteter PC fährt beim Hinsetzen mit BIOS und Windows-Logo hoch.
+var _boot_screen: PcBootScreen = null
+var _boot_cold: bool = true
+var _terminal_open: bool = false
+var _shutting_down: bool = false
+const TRAY_REFRESH_INTERVAL := 0.25
+var _tray_accum: float = 0.0
+const OPEN_FADE_TIME := 0.25
+# Zeitpunkt, an dem der laufende Startvorgang begann (-1 = PC lief schon oder kein Start).
+var _boot_started_msec: int = -1
+
+const FINANCE_APPS: Array[String] = ["staff", "bank", "bills"]
+const APP_ORDER: Array[String] = ["shop", "support", "upgrades", "monitor", "staff", "bank", "bills"]
+const APP_META := {
+	"shop": {"icon": "cart", "name": "Shop", "title": "CloudParts.de — Hardware-Shop, Warenkorb & Teile-Lager"},
+	"support": {"icon": "headset", "name": "Support", "title": "ServiceDesk & Kunden-Hub — Tickets, Verträge & AI"},
+	"upgrades": {"icon": "building", "name": "Gebäude", "title": "Router (Mbit/Gbit), Stromanschluss & Hallen-Ausbau"},
+	"monitor": {"icon": "chart", "name": "Monitor", "title": "Windows Task-Manager — Live Rechenzentrum-Monitor"},
+	"staff": {"icon": "people", "name": "Personal", "title": "Personalverwaltung — Team, Löhne & Bewerbungen"},
+	"bank": {"icon": "bank", "name": "Bank", "title": "Hanse Direktbank — Geschäftskonto, Kredite & Kontoauszug"},
+	"bills": {"icon": "invoice", "name": "Rechnungen", "title": "Rechnungen — Strom, Garagenmiete, Internet & Versicherung"},
+}
+
+
+func _ready() -> void:
+	set_anchors_preset(Control.PRESET_FULL_RECT)
+	visible = false
+	_build_ui()
+	GameState.state_updated.connect(_on_state_tick)
+	GameState.room_level_changed.connect(_refresh_all)
+	GameState.van_updated.connect(_refresh_all)
+	GameState.racks_changed.connect(_refresh_all)
+	GameState.inventory_changed.connect(_refresh_all)
+	GameState.tickets_changed.connect(_refresh_all)
+	GameState.call_changed.connect(_refresh_call_popup)
+	FinanceManager.finance_changed.connect(_on_finance_changed)
+	FinanceManager.action_result.connect(_on_finance_result)
+	visibility_changed.connect(_on_visibility_changed)
+
+
+func _process(delta: float) -> void:
+	if not visible:
+		if _last_emitted_typing:
+			_last_emitted_typing = false
+			typing_state_changed.emit(false)
+		return
+
+	if _save_toast_timer > 0.0:
+		_save_toast_timer = maxf(0.0, _save_toast_timer - delta)
+		if _save_toast_timer <= 0.0:
+			_save_toast_text = ""
+
+	if not _typing_ticket_id.is_empty():
+		_typing_timer -= delta
+		_typing_key_accum += delta
+		if _typing_key_accum >= 0.075:
+			_typing_key_accum = 0.0
+			SfxManager.play_typing_key(-10.0)
+		if _typing_timer <= 0.0:
+			var done_tid := _typing_ticket_id
+			_typing_ticket_id = ""
+			_ticket_drafts.erase(done_tid)
+			GameState.request_reply_ticket(done_tid, "reassure")
+			_refresh_all()
+
+	if _manual_typing_pulse > 0.0:
+		_manual_typing_pulse = maxf(0.0, _manual_typing_pulse - delta)
+
+	var typing_now := (not _typing_ticket_id.is_empty()) or (_manual_typing_pulse > 0.0)
+	if typing_now != _last_emitted_typing:
+		_last_emitted_typing = typing_now
+		typing_state_changed.emit(typing_now)
+
+	_tray_accum += delta
+	if _tray_accum >= TRAY_REFRESH_INTERVAL:
+		_tray_accum = 0.0
+		_refresh_tray()
+
+
+func _input(event: InputEvent) -> void:
+	if not visible:
+		return
+	if event is InputEventKey and event.pressed and not event.echo:
+		var kc: Key = (event as InputEventKey).keycode
+		if kc != KEY_ESCAPE and kc != KEY_SHIFT and kc != KEY_CTRL and kc != KEY_ALT:
+			var focused := get_viewport().gui_get_focus_owner()
+			if focused is LineEdit or focused is TextEdit:
+				SfxManager.play_typing_key(-10.0)
+				_manual_typing_pulse = 0.55
+
+
+func _on_state_tick() -> void:
+	if not visible:
+		return
+	var focused := get_viewport().gui_get_focus_owner()
+	if _active_app == "support" and (focused is LineEdit or not _typing_ticket_id.is_empty()):
+		_refresh_tray()
+		_refresh_taskbar_highlights()
+		_refresh_call_popup()
+		return
+	if FINANCE_APPS.has(_active_app):
+		# Finanz-Apps werden nur bei finance_changed neu aufgebaut, damit die Scrollposition bleibt.
+		_refresh_tray()
+		_refresh_taskbar_highlights()
+		_refresh_call_popup()
+		_refresh_window_subtitle()
+		return
+	if _active_app == "shop" or ["staff", "bank", "bills"].has(_active_app):
+		# Shop und Finanz-Apps nicht jeden Tick neu aufbauen (Finanz-Apps aktualisiert finance_changed).
+		_refresh_tray()
+		_refresh_taskbar_highlights()
+		_refresh_call_popup()
+		_refresh_window_subtitle()
+		return
+	_refresh_all()
+
+
+func open_terminal() -> void:
+	GameState.checklist_opened_pc = true
+	_start_menu.visible = false
+	# Keine App automatisch öffnen: nach dem Hochfahren erscheint der Homescreen.
+	# Läuft der PC schon, bleibt die zuletzt geöffnete App offen (power_on_pc übernimmt sie).
+	# Die Kamera steht schon vor dem Monitor, deshalb nur kurz in das Vollbild überblenden.
+	modulate.a = 0.0
+	visible = true
+	PcScreenState.local_fullscreen = true
+	var fade := create_tween()
+	fade.tween_property(self, "modulate:a", 1.0, OPEN_FADE_TIME)
+	fade.tween_callback(_on_open_faded)
+	_start_boot()
+	_refresh_all()
+	_refresh_call_popup()
+	SfxManager.play("click", -8.0, 1.1)
+
+
+func close_terminal() -> void:
+	_start_menu.visible = false
+	_typing_ticket_id = ""
+	_manual_typing_pulse = 0.0
+	if _last_emitted_typing:
+		_last_emitted_typing = false
+		typing_state_changed.emit(false)
+	_terminal_open = false
+	_boot_started_msec = -1
+	_set_world_rendering(true)
+	PcScreenState.local_fullscreen = false
+	if _shutting_down:
+		# Heruntergefahren: das Bild bleibt schwarz, bis das Vollbild zu ist. Danach ist der PC aus.
+		_shutting_down = false
+		_active_app = ""
+		PcScreenState.report_local_closed()
+	else:
+		# Aufstehen: der PC läuft weiter, die Mitspieler sehen weiter den Desktop.
+		if _boot_screen != null:
+			_boot_screen.stop()
+		PcScreenState.report_local_released()
+	UIStyle.animate_popup_close(self, _monitor_frame)
+	SfxManager.play("click", -8.0, 0.85)
+
+
+func _start_boot() -> void:
+	_terminal_open = true
+	_shutting_down = false
+	if _boot_screen == null:
+		_boot_screen = PcBootScreen.new()
+		add_child(_boot_screen)
+		_boot_screen.finished.connect(_on_boot_finished)
+		get_viewport().size_changed.connect(_fit_fullscreen)
+	_fit_fullscreen()
+	move_child(_boot_screen, get_child_count() - 1)
+	var now := Time.get_ticks_msec()
+	if _boot_started_msec < 0 and not is_pc_running():
+		# Ohne Hinsetzen geöffnet (keine Spielfigur): ein ausgeschalteter PC fährt trotzdem hoch.
+		_boot_cold = true
+		_boot_started_msec = now
+		_active_app = ""
+		PcScreenState.report_local(PcScreenState.PHASE_BOOT, "", true, "")
+	if _boot_started_msec >= 0:
+		# Der Startvorgang lief schon auf dem 3D-Monitor, im Vollbild geht es an derselben Stelle weiter.
+		var offset := float(now - _boot_started_msec) / 1000.0
+		_boot_started_msec = -1
+		_boot_screen.play(_boot_cold, PcScreenState.get_local_name(), offset)
+	else:
+		_boot_screen.stop()
+	_report_screen_state()
+
+
+## true, solange der PC an ist (er fährt hoch oder zeigt den Desktop).
+func is_pc_running() -> bool:
+	return PcScreenState.phase == PcScreenState.PHASE_BOOT or PcScreenState.phase == PcScreenState.PHASE_DESKTOP
+
+
+## Beim Hinsetzen: ein ausgeschalteter PC fährt hoch, ein laufender zeigt sofort den Desktop.
+func power_on_pc() -> void:
+	var now := Time.get_ticks_msec()
+	if PcScreenState.phase == PcScreenState.PHASE_DESKTOP:
+		_boot_started_msec = -1
+		_boot_cold = false
+		_active_app = PcScreenState.app
+		PcScreenState.report_local(PcScreenState.PHASE_DESKTOP, PcScreenState.app, false, PcScreenState.detail)
+	elif PcScreenState.phase == PcScreenState.PHASE_BOOT:
+		# Fährt noch hoch (z. B. aufgestanden, bevor Windows fertig war): an derselben Stelle weiter.
+		_boot_cold = PcScreenState.cold_boot
+		_boot_started_msec = now - int(PcScreenState.get_boot_elapsed() * 1000.0)
+		_active_app = ""
+		PcScreenState.report_local(PcScreenState.PHASE_BOOT, "", _boot_cold, "")
+	else:
+		# PC ist aus: echter Kaltstart, danach Homescreen ohne offene App.
+		_boot_cold = true
+		_boot_started_msec = now
+		_active_app = ""
+		PcScreenState.report_local(PcScreenState.PHASE_BOOT, "", true, "")
+		SfxManager.play("click", -6.0, 0.6)
+
+
+## Aufstehen, bevor das Vollbild offen war. Der PC fährt trotzdem fertig hoch und bleibt an.
+func cancel_power_on() -> void:
+	_boot_started_msec = -1
+	PcScreenState.report_local_released()
+
+
+## Startmenü "Herunterfahren": Windows fährt herunter, der Bildschirm wird schwarz, dann steht der Spieler auf.
+func _shut_down_pc() -> void:
+	if _shutting_down or not _terminal_open or _boot_screen == null:
+		return
+	_start_menu.visible = false
+	_shutting_down = true
+	_typing_ticket_id = ""
+	move_child(_boot_screen, get_child_count() - 1)
+	_boot_screen.play_shutdown()
+	PcScreenState.report_local(PcScreenState.PHASE_SHUTDOWN, "", false, "")
+	SfxManager.play("click", -8.0, 0.7)
+
+
+## Sobald das Vollbild deckend ist, wird die 3D-Welt dahinter nicht mehr gerendert.
+func _on_open_faded() -> void:
+	if _terminal_open and visible:
+		_set_world_rendering(false)
+
+
+func _set_world_rendering(on: bool) -> void:
+	var vp := get_viewport()
+	if vp != null and vp.disable_3d == on:
+		vp.disable_3d = not on
+
+
+func _on_visibility_changed() -> void:
+	if not visible:
+		_set_world_rendering(true)
+		PcScreenState.local_fullscreen = false
+
+
+func _fit_fullscreen() -> void:
+	if _monitor_frame != null:
+		_monitor_frame.custom_minimum_size = get_viewport_rect().size
+
+
+func _on_boot_finished() -> void:
+	if _shutting_down:
+		close_requested.emit()
+		return
+	_report_screen_state()
+
+
+func _report_screen_state() -> void:
+	if not _terminal_open or _shutting_down:
+		return
+	var booting := _boot_screen != null and _boot_screen.is_running()
+	var detail := ""
+	if _active_app == "shop":
+		detail = _shop_tab
+	elif _active_app == "support":
+		detail = _support_tab
+	var phase: String = PcScreenState.PHASE_BOOT if booting else PcScreenState.PHASE_DESKTOP
+	PcScreenState.report_local(phase, _active_app, _boot_cold, detail)
+
+
+func _open_app(app_id: String) -> void:
+	var was_open := (_active_app == app_id)
+	_active_app = app_id
+	_start_menu.visible = false
+	if was_open:
+		SfxManager.play_typing_key(-12.0)
+	else:
+		SfxManager.play("win_open", -10.0)
+	_manual_typing_pulse = 0.28
+	_refresh_all()
+
+
+func _minimize_app() -> void:
+	_active_app = ""
+	_start_menu.visible = false
+	SfxManager.play("click", -10.0, 0.90)
+	_refresh_all()
+
+
+func _trigger_quick_save() -> void:
+	_start_menu.visible = false
+	if multiplayer.is_server():
+		GameState.save_current_world("", false)
+		_save_toast_text = "Gespeichert!"
+		_save_toast_timer = 3.0
+		SfxManager.play("cash", -10.0, 1.2)
+	else:
+		_save_toast_text = "Nur Host kann speichern"
+		_save_toast_timer = 3.0
+	_refresh_tray()
+
+
+func _refresh_window_subtitle() -> void:
+	if _win_subtitle_lbl == null:
+		return
+	var bw_warn := " LIMIT!" if GameState.used_bandwidth_mbps > GameState.max_bandwidth_mbps else ""
+	_win_subtitle_lbl.text = "Guthaben: $%.0f   •   Strom: %d / %d W   •   Internet: %s / %s%s   •   Teile-Lager: %d   •   Tickets: %d" % [
+		GameState.money, GameState.total_watts, GameState.max_watts,
+		HardwareCatalog.format_speed_mbps(GameState.used_bandwidth_mbps),
+		HardwareCatalog.format_speed_mbps(GameState.max_bandwidth_mbps),
+		bw_warn, GameState.get_total_inventory_parts(), GameState.get_open_ticket_count()
+	]
+
+
+func _on_finance_changed() -> void:
+	if visible and FINANCE_APPS.has(_active_app):
+		_refresh_all()
+
+
+func _on_finance_result(ok: bool, message: String) -> void:
+	_fin_msg = message
+	_fin_msg_ok = ok
+	if not ok:
+		SfxManager.play("win_error", -8.0)
+	if visible and FINANCE_APPS.has(_active_app):
+		_refresh_all()
+
+
+func _refresh_all() -> void:
+	if not visible:
+		return
+	_report_screen_state()
+	_refresh_tray()
+	_refresh_taskbar_highlights()
+	_refresh_call_popup()
+
+	if _active_app.is_empty() or not APP_META.has(_active_app):
+		_app_window.visible = false
+		return
+
+	_app_window.visible = true
+	var meta: Dictionary = APP_META[_active_app]
+	_win_title_lbl.text = str(meta["title"])
+	_set_win_icon_kind(_win_title_icon, str(meta["icon"]))
+	_refresh_window_subtitle()
+
+	_clear_children(_app_body_host)
+	match _active_app:
+		"shop":
+			_render_shop_app()
+		"support":
+			_render_support_hub_app()
+		"upgrades":
+			_render_upgrades_app()
+		"monitor":
+			_render_monitor_app()
+		"staff":
+			FinanceApps.render_staff(_app_body_host, _fin_msg, _fin_msg_ok)
+		"bank":
+			FinanceApps.render_bank(_app_body_host, _fin_msg, _fin_msg_ok)
+		"bills":
+			FinanceApps.render_bills(_app_body_host, _fin_msg, _fin_msg_ok)
+
+
+func _refresh_tray() -> void:
+	if _tray_money == null:
+		return
+	if not _save_toast_text.is_empty():
+		_tray_money.text = _save_toast_text
+		_tray_money.modulate = Color(0.14, 0.58, 0.30)
+	else:
+		_tray_money.text = "$%.0f" % GameState.money
+		_tray_money.modulate = Color(0.10, 0.45, 0.24)
+
+	var ups_txt := (" (USV %.0f%%)" % GameState.avg_ups_charge) if not GameState.ups_units.is_empty() else ""
+	_tray_power.text = "%d/%dW%s" % [GameState.total_watts, GameState.max_watts, ups_txt]
+	_tray_power.modulate = Color(0.78, 0.16, 0.14) if GameState.total_watts > GameState.max_watts else Color(0.18, 0.20, 0.24)
+	_tray_power_icon.modulate = _tray_power.modulate
+
+	_tray_temp.text = "%.0f°C" % GameState.room_temp
+	_tray_temp.modulate = Color(0.78, 0.22, 0.12) if GameState.room_temp >= 68.0 else Color(0.18, 0.20, 0.24)
+	_tray_temp_icon.modulate = _tray_temp.modulate
+
+	var spd_str := HardwareCatalog.format_speed_mbps(GameState.max_bandwidth_mbps)
+	var is_throttled := GameState.used_bandwidth_mbps > GameState.max_bandwidth_mbps
+	if GameState.ddos_active:
+		_tray_net.text = "DDoS!"
+		_tray_net.modulate = Color(0.80, 0.16, 0.14)
+	elif is_throttled:
+		_tray_net.text = "%s LIMIT!" % spd_str
+		_tray_net.modulate = Color(0.76, 0.42, 0.06)
+	else:
+		_tray_net.text = spd_str
+		_tray_net.modulate = Color(0.12, 0.42, 0.66)
+	_set_win_icon_kind(_tray_net_icon, "warn" if GameState.ddos_active or is_throttled else "net")
+	_tray_net_icon.modulate = _tray_net.modulate
+
+	var today := Time.get_date_dict_from_system()
+	_tray_clock.text = "%s\n%02d.%02d.%d" % [
+		PcBootScreen.format_real_clock(), int(today["day"]), int(today["month"]), int(today["year"])
+	]
+	_tray_clock.tooltip_text = "Spieltag %d" % GameState.day_number
+
+
+func _refresh_taskbar_highlights() -> void:
+	var open_t := GameState.get_open_ticket_count()
+	var has_call := not GameState.active_call.is_empty()
+	var cart_n := _get_cart_item_count()
+	for app_id in _taskbar_btns.keys():
+		var aid := str(app_id)
+		var btn: Button = _taskbar_btns[aid]
+		var meta: Dictionary = APP_META[aid]
+		var is_open := (aid == _active_app)
+		var app_name := str(meta["name"])
+		_set_win_icon_kind(_btn_icon(btn), "phone" if aid == "support" and has_call else str(meta["icon"]))
+		# Windows 11: nur Symbole. Zähler stehen als kleines Abzeichen neben dem Symbol.
+		if aid == "support" and (open_t > 0 or has_call):
+			btn.text = str(open_t)
+			btn.tooltip_text = "%s: %d offene Tickets%s" % [app_name, open_t, " · eingehender Anruf" if has_call else ""]
+			_style_taskbar_btn(btn, is_open, true)
+		elif aid == "shop" and cart_n > 0:
+			btn.text = str(cart_n)
+			btn.tooltip_text = "%s: %d Artikel im Warenkorb" % [app_name, cart_n]
+			_style_taskbar_btn(btn, is_open, false)
+		else:
+			btn.text = ""
+			btn.tooltip_text = app_name
+			_style_taskbar_btn(btn, is_open, false)
+
+	if _desktop_btns.has("support"):
+		var dbtn: Button = _desktop_btns["support"]
+		_set_win_icon_kind(_btn_icon(dbtn), "phone" if has_call else "headset")
+		if open_t > 0 or has_call:
+			dbtn.text = "Support (%d)" % open_t
+			_style_win_btn(dbtn, Color(0.62, 0.16, 0.14, 0.88), Color(0.95, 0.42, 0.36, 0.82), Color.WHITE)
+		else:
+			dbtn.text = "Support"
+			_style_win_btn(dbtn, Color(0.12, 0.22, 0.34, 0.58), Color(0.45, 0.62, 0.80, 0.30), Color(0.96, 0.98, 1.0))
+
+
+func _refresh_call_popup() -> void:
+	if _call_popup == null:
+		return
+	var call_d := GameState.active_call
+	if call_d.is_empty():
+		_call_popup.visible = false
+		return
+	_call_popup.visible = true
+	_clear_children(_call_body)
+
+	var is_ringing := str(call_d.get("state", "ringing")) == "ringing"
+	var hdr_col := Color(0.78, 0.16, 0.12) if is_ringing else Color(0.10, 0.50, 0.26)
+	var hdr_row := HBoxContainer.new()
+	hdr_row.add_theme_constant_override("separation", 8)
+	_call_body.add_child(hdr_row)
+	var hdr_icon := _win_icon("phone", 16)
+	hdr_icon.modulate = hdr_col
+	hdr_row.add_child(hdr_icon)
+	var hdr := Label.new()
+	hdr.text = "EINGEHENDER KUNDENANRUF!" if is_ringing else "AKTIVES TELEFONAT — VOIP"
+	hdr.add_theme_font_size_override("font_size", 14)
+	hdr.modulate = hdr_col
+	hdr_row.add_child(hdr)
+
+	var who := Label.new()
+	who.text = "%s  (%s)" % [str(call_d.get("customer", "Kunde")), str(call_d.get("rack_id", "")).to_upper()]
+	who.add_theme_font_size_override("font_size", 13)
+	who.modulate = Color(0.10, 0.14, 0.20)
+	_call_body.add_child(who)
+
+	if is_ringing:
+		var ring_lbl := Label.new()
+		ring_lbl.text = "Kunde ruft wegen einer Störung an! Annehmen, um Zufriedenheit zu schützen."
+		ring_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		ring_lbl.add_theme_font_size_override("font_size", 12)
+		ring_lbl.modulate = Color(0.30, 0.34, 0.40)
+		_call_body.add_child(ring_lbl)
+
+		var ans_btn := Button.new()
+		ans_btn.text = "Anruf annehmen"
+		ans_btn.custom_minimum_size = Vector2(0, 36)
+		_add_btn_icon(ans_btn, "phone", 16)
+		_style_win_btn(ans_btn, Color(0.12, 0.58, 0.30), Color(0.08, 0.44, 0.22), Color.WHITE)
+		ans_btn.pressed.connect(func(): GameState.request_answer_call())
+		_call_body.add_child(ans_btn)
+	else:
+		var msg_card := _make_light_card(Color(0.95, 0.97, 1.0), Color(0.76, 0.84, 0.92), 6, 10, 8)
+		_call_body.add_child(msg_card)
+		var ml := Label.new()
+		ml.text = str(call_d.get("message", ""))
+		ml.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		ml.add_theme_font_size_override("font_size", 12)
+		ml.modulate = Color(0.12, 0.16, 0.22)
+		msg_card.add_child(ml)
+
+		var b1 := Button.new()
+		b1.text = "Sofort-Upgrade zusagen (+60s Zeit)"
+		b1.custom_minimum_size = Vector2(0, 32)
+		_style_win_btn(b1, Color(0.10, 0.48, 0.84), Color(0.08, 0.38, 0.70), Color.WHITE)
+		b1.pressed.connect(func():
+			SfxManager.play_typing_key(-10.0)
+			GameState.request_resolve_call("upgrade_promise")
+		)
+		_call_body.add_child(b1)
+
+		var b2 := Button.new()
+		b2.text = "Neustart & $60 Gutschrift (+26%)"
+		b2.custom_minimum_size = Vector2(0, 32)
+		b2.disabled = GameState.money < 60.0
+		_style_win_btn(b2, Color(0.14, 0.56, 0.32), Color(0.10, 0.44, 0.24), Color.WHITE)
+		b2.pressed.connect(func():
+			SfxManager.play_typing_key(-10.0)
+			GameState.request_resolve_call("restart_compensate")
+		)
+		_call_body.add_child(b2)
+
+		var b3 := Button.new()
+		b3.text = "Auflegen (kümmern uns gleich)"
+		b3.custom_minimum_size = Vector2(0, 28)
+		_style_win_btn(b3, Color(0.88, 0.90, 0.93), Color(0.74, 0.78, 0.82), Color(0.18, 0.20, 0.24))
+		b3.pressed.connect(func(): GameState.request_resolve_call("later"))
+		_call_body.add_child(b3)
+
+
+# ==============================================================================
+# SHOPPING CART HELPERS
+# ==============================================================================
+func _cart_add(kind: String, id: String, cat: String, display_name: String, price: int) -> void:
+	var key := "%s:%s" % [kind, id]
+	for item in _cart:
+		var d: Dictionary = item
+		if str(d["key"]) == key:
+			d["qty"] = mini(20, int(d["qty"]) + 1)
+			SfxManager.play_typing_key(-11.0)
+			_manual_typing_pulse = 0.25
+			_refresh_all()
+			return
+	_cart.append({"key": key, "kind": kind, "id": id, "cat": cat, "name": display_name, "price": price, "qty": 1})
+	SfxManager.play_typing_key(-11.0)
+	_manual_typing_pulse = 0.25
+	_refresh_all()
+
+
+func _cart_delta(key: String, delta_n: int) -> void:
+	for i in range(_cart.size()):
+		var d: Dictionary = _cart[i]
+		if str(d["key"]) == key:
+			var nq := int(d["qty"]) + delta_n
+			if nq <= 0:
+				_cart.remove_at(i)
+			else:
+				d["qty"] = mini(20, nq)
+			SfxManager.play("click", -12.0, 0.95)
+			_refresh_all()
+			return
+
+
+func _get_cart_total() -> int:
+	var sum := 0
+	for item in _cart:
+		var d: Dictionary = item
+		sum += int(d["price"]) * int(d["qty"])
+	return sum
+
+
+func _get_cart_item_count() -> int:
+	var n := 0
+	for item in _cart:
+		n += int((item as Dictionary)["qty"])
+	return n
+
+
+func _checkout_cart() -> void:
+	if _cart.is_empty():
+		return
+	var total := _get_cart_total()
+	if GameState.money < float(total):
+		SfxManager.play("error", -8.0)
+		return
+	var payload: Array = []
+	for item in _cart:
+		var d: Dictionary = item
+		payload.append({"kind": str(d["kind"]), "id": str(d["id"]), "cat": str(d["cat"]), "qty": int(d["qty"])})
+	_cart.clear()
+	SfxManager.play_typing_key(-9.0)
+	GameState.request_checkout_cart(payload)
+	_refresh_all()
+
+
+# ==============================================================================
+# APP 1: HARDWARE SHOP (CLOUDPARTS.DE) + REAL SHOPPING CART + TEILE-LAGER!
+# ==============================================================================
+func _render_shop_app() -> void:
+	# Clean Browser Navigation + Category Ribbon
+	var nav_bar := _make_light_card(Color(0.95, 0.96, 0.98), Color(0.80, 0.83, 0.87), 6, 10, 6)
+	_app_body_host.add_child(nav_bar)
+	var nav_v := VBoxContainer.new()
+	nav_v.add_theme_constant_override("separation", 6)
+	nav_bar.add_child(nav_v)
+
+	var tab_row := HBoxContainer.new()
+	tab_row.add_theme_constant_override("separation", 5)
+	nav_v.add_child(tab_row)
+
+	var tabs: Array = [
+		{"id": "chassis", "label": "Racks & Chassis"},
+		{"id": "infra", "label": "Klima & USV"},
+		{"id": "cpu", "label": "CPUs"},
+		{"id": "ram", "label": "RAM"},
+		{"id": "gpu", "label": "GPUs"},
+		{"id": "storage", "label": "Speicher"},
+		{"id": "cooling", "label": "Kühler"},
+		{"id": "psu", "label": "Netzteile"},
+		{"id": "warehouse", "label": "Lager (%d)" % GameState.get_total_inventory_parts()},
+	]
+	for t in tabs:
+		var td: Dictionary = t
+		var tid := str(td["id"])
+		var tb := Button.new()
+		tb.text = str(td["label"])
+		tb.custom_minimum_size = Vector2(0, 28)
+		tb.add_theme_font_size_override("font_size", 11)
+		var sel := (_shop_tab == tid)
+		_style_win_btn(
+			tb,
+			Color(0.10, 0.46, 0.82) if sel else Color(0.90, 0.92, 0.95),
+			Color(0.08, 0.36, 0.68) if sel else Color(0.76, 0.80, 0.85),
+			Color.WHITE if sel else Color(0.16, 0.18, 0.22)
+		)
+		tb.pressed.connect(func():
+			_shop_tab = tid
+			_shop_subfilter = "Alle"
+			SfxManager.play("click", -12.0, 1.1)
+			_refresh_all()
+		)
+		tab_row.add_child(tb)
+
+	# Sub-Generation Filter Row for Hardware Part Tabs (e.g. DDR2 | DDR3 | DDR4 | DDR5!)
+	if HardwareCatalog.CATEGORY_FILTERS.has(_shop_tab):
+		var frow := HBoxContainer.new()
+		frow.add_theme_constant_override("separation", 6)
+		nav_v.add_child(frow)
+		var flbl := Label.new()
+		flbl.text = "Filter:"
+		flbl.add_theme_font_size_override("font_size", 11.5)
+		flbl.modulate = Color(0.32, 0.36, 0.44)
+		frow.add_child(flbl)
+		for f in HardwareCatalog.CATEGORY_FILTERS[_shop_tab]:
+			var fn := str(f)
+			var fb := Button.new()
+			fb.text = fn
+			fb.custom_minimum_size = Vector2(0, 24)
+			fb.add_theme_font_size_override("font_size", 11)
+			var fsel := (_shop_subfilter == fn)
+			_style_win_btn(
+				fb,
+				Color(0.16, 0.52, 0.32) if fsel else Color(0.92, 0.94, 0.96),
+				Color(0.12, 0.40, 0.24) if fsel else Color(0.78, 0.81, 0.86),
+				Color.WHITE if fsel else Color(0.20, 0.24, 0.30)
+			)
+			fb.pressed.connect(func():
+				_shop_subfilter = fn
+				SfxManager.play("click", -13.0, 1.1)
+				_refresh_all()
+			)
+			frow.add_child(fb)
+
+	# MAIN SPLIT: Left Catalog List (~68%) + Right Live Shopping Cart (~32%)!
+	var split := HBoxContainer.new()
+	split.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	split.add_theme_constant_override("separation", 12)
+	_app_body_host.add_child(split)
+
+	var left_scroll := ScrollContainer.new()
+	left_scroll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	left_scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	split.add_child(left_scroll)
+
+	var left_list := VBoxContainer.new()
+	left_list.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	left_list.add_theme_constant_override("separation", 7)
+	left_scroll.add_child(left_list)
+
+	if GameState.racks.is_empty() and _shop_tab == "chassis":
+		var tip := _make_light_card(Color(0.93, 0.98, 0.92), Color(0.36, 0.72, 0.44), 6, 12, 8)
+		left_list.add_child(tip)
+		var tl := Label.new()
+		tl.text = "START-TIPP: Lege 1× Server-Rack (4U), 1× 1U Standard-Chassis und z. B. 16 GB DDR3 RAM in den Warenkorb → 1× Bestellen → der Cloud Express Sprinter liefert alles auf einmal!"
+		tl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		tl.add_theme_font_size_override("font_size", 11.5)
+		tl.modulate = Color(0.12, 0.38, 0.18)
+		tip.add_child(tl)
+
+	if _shop_tab == "chassis":
+		_populate_physical_shop_list(left_list, ["rack", "rack_pro", "web_server", "storage_server", "gpu_server", "net_switch"])
+	elif _shop_tab == "infra":
+		_populate_physical_shop_list(left_list, ["cooler", "chiller", "ups", "cart"])
+	elif _shop_tab == "warehouse":
+		_populate_warehouse_list(left_list)
+	elif HardwareCatalog.PARTS.has(_shop_tab):
+		_populate_parts_shop_list(left_list, _shop_tab)
+
+	# RIGHT: REAL SHOPPING CART PANEL (Warenkorb)
+	var cart_panel := _make_light_card(Color(0.97, 0.98, 0.99), Color(0.74, 0.80, 0.88), 8, 12, 10)
+	cart_panel.custom_minimum_size = Vector2(276, 0)
+	cart_panel.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	split.add_child(cart_panel)
+
+	var cv := VBoxContainer.new()
+	cv.add_theme_constant_override("separation", 8)
+	cart_panel.add_child(cv)
+
+	var chdr := Label.new()
+	chdr.text = "WARENKORB (%d)" % _get_cart_item_count()
+	chdr.add_theme_font_size_override("font_size", 14)
+	chdr.modulate = Color(0.10, 0.24, 0.44)
+	cv.add_child(chdr)
+
+	var cscroll := ScrollContainer.new()
+	cscroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	cv.add_child(cscroll)
+	var clist := VBoxContainer.new()
+	clist.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	clist.add_theme_constant_override("separation", 5)
+	cscroll.add_child(clist)
+
+	if _cart.is_empty():
+		var ce := Label.new()
+		ce.text = "Dein Warenkorb ist leer.\n\nSammle links Racks, Server-Chassis und Einzelteile (CPUs, DDR2–DDR5 RAM, GPUs…) und bestelle alles gemeinsam per Sprinter!"
+		ce.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		ce.add_theme_font_size_override("font_size", 11.5)
+		ce.modulate = Color(0.42, 0.46, 0.54)
+		clist.add_child(ce)
+	else:
+		for item in _cart:
+			var d: Dictionary = item
+			var row_c := _make_light_card(Color.WHITE, Color(0.84, 0.87, 0.91), 5, 8, 5)
+			clist.add_child(row_c)
+			var rv := VBoxContainer.new()
+			rv.add_theme_constant_override("separation", 3)
+			row_c.add_child(rv)
+			var nl := Label.new()
+			nl.text = str(d["name"])
+			nl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+			nl.add_theme_font_size_override("font_size", 11.5)
+			nl.modulate = Color(0.12, 0.14, 0.18)
+			rv.add_child(nl)
+
+			var brow := HBoxContainer.new()
+			brow.add_theme_constant_override("separation", 4)
+			rv.add_child(brow)
+			var pl := Label.new()
+			pl.text = "%d×  •  $%d" % [int(d["qty"]), int(d["price"]) * int(d["qty"])]
+			pl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+			pl.add_theme_font_size_override("font_size", 11)
+			pl.modulate = Color(0.16, 0.46, 0.26)
+			brow.add_child(pl)
+
+			var cap_k := str(d["key"])
+			var bm := Button.new()
+			bm.text = "−"
+			bm.custom_minimum_size = Vector2(24, 22)
+			_style_win_btn(bm, Color(0.92, 0.93, 0.95), Color(0.76, 0.79, 0.84), Color(0.20, 0.22, 0.26))
+			bm.pressed.connect(func(): _cart_delta(cap_k, -1))
+			brow.add_child(bm)
+
+			var bp := Button.new()
+			bp.text = "+"
+			bp.custom_minimum_size = Vector2(24, 22)
+			_style_win_btn(bp, Color(0.92, 0.93, 0.95), Color(0.76, 0.79, 0.84), Color(0.20, 0.22, 0.26))
+			bp.pressed.connect(func(): _cart_delta(cap_k, 1))
+			brow.add_child(bp)
+
+	cv.add_child(HSeparator.new())
+	var tot := _get_cart_total()
+	var tot_lbl := Label.new()
+	tot_lbl.text = "Gesamtsumme:  $%d" % tot
+	tot_lbl.add_theme_font_size_override("font_size", 14)
+	tot_lbl.modulate = Color(0.78, 0.16, 0.14) if GameState.money < float(tot) else Color(0.10, 0.44, 0.24)
+	cv.add_child(tot_lbl)
+
+	var order_btn := Button.new()
+	order_btn.text = " Alles bestellen ($%d)" % tot if not _cart.is_empty() else "Warenkorb leer"
+	order_btn.custom_minimum_size = Vector2(0, 40)
+	order_btn.disabled = _cart.is_empty() or GameState.money < float(tot)
+	_style_win_btn(
+		order_btn,
+		Color(0.10, 0.48, 0.84) if not order_btn.disabled else Color(0.84, 0.86, 0.89),
+		Color(0.08, 0.38, 0.70),
+		Color.WHITE if not order_btn.disabled else Color(0.45, 0.48, 0.52)
+	)
+	order_btn.pressed.connect(_checkout_cart)
+	cv.add_child(order_btn)
+
+	if not _cart.is_empty():
+		var clr_btn := Button.new()
+		clr_btn.text = "Warenkorb leeren"
+		clr_btn.custom_minimum_size = Vector2(0, 26)
+		clr_btn.add_theme_font_size_override("font_size", 11)
+		_style_win_btn(clr_btn, Color(0.92, 0.93, 0.95), Color(0.78, 0.81, 0.86), Color(0.26, 0.28, 0.34))
+		clr_btn.pressed.connect(func():
+			_cart.clear()
+			_refresh_all()
+		)
+		cv.add_child(clr_btn)
+
+
+func _populate_physical_shop_list(parent: VBoxContainer, keys: Array) -> void:
+	for item_type in keys:
+		var it := str(item_type)
+		var cat: Dictionary = GameState.ITEM_CATALOG[it]
+		var price := int(cat["price"])
+		var row := _make_light_card(Color.WHITE, Color(0.82, 0.85, 0.89), 6, 12, 9)
+		parent.add_child(row)
+		var hb := HBoxContainer.new()
+		hb.add_theme_constant_override("separation", 10)
+		row.add_child(hb)
+
+		var sw := ColorRect.new()
+		sw.custom_minimum_size = Vector2(6, 38)
+		sw.color = cat["color"]
+		hb.add_child(sw)
+
+		var iv := VBoxContainer.new()
+		iv.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		iv.add_theme_constant_override("separation", 2)
+		hb.add_child(iv)
+
+		var nl := Label.new()
+		nl.text = str(cat["name"])
+		nl.add_theme_font_size_override("font_size", 14)
+		nl.modulate = Color(0.10, 0.12, 0.16)
+		iv.add_child(nl)
+
+		var dl := Label.new()
+		dl.text = str(cat["desc"])
+		dl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		dl.add_theme_font_size_override("font_size", 11.5)
+		dl.modulate = Color(0.36, 0.40, 0.46)
+		iv.add_child(dl)
+
+		var btn := Button.new()
+		btn.text = "+ Warenkorb ($%d)" % price
+		btn.custom_minimum_size = Vector2(148, 34)
+		_style_win_btn(btn, Color(0.10, 0.48, 0.84), Color(0.08, 0.38, 0.70), Color.WHITE)
+		var cap_it := it
+		var cap_n := str(cat["name"])
+		var cap_p := price
+		btn.pressed.connect(func(): _cart_add("item", cap_it, "", cap_n, cap_p))
+		hb.add_child(btn)
+
+
+func _populate_parts_shop_list(parent: VBoxContainer, cat: String) -> void:
+	for p in HardwareCatalog.get_category_parts(cat):
+		var pd: Dictionary = p
+		var cost := int(pd["cost"])
+		if cost <= 0:
+			continue # Zero-cost barebones stock defaults don't need to be bought!
+		if not HardwareCatalog.matches_filter(cat, pd, _shop_subfilter):
+			continue
+		var pid := str(pd["id"])
+		var stock := GameState.get_part_stock(pid)
+		var row := _make_light_card(Color.WHITE, Color(0.82, 0.85, 0.89), 6, 12, 8)
+		parent.add_child(row)
+		var hb := HBoxContainer.new()
+		hb.add_theme_constant_override("separation", 10)
+		row.add_child(hb)
+
+		var iv := VBoxContainer.new()
+		iv.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		iv.add_theme_constant_override("separation", 3)
+		hb.add_child(iv)
+
+		var nl := Label.new()
+		var st_txt := ("   (Lager: %d×)" % stock) if stock > 0 else ""
+		nl.text = "[%s]  %s%s" % [str(pd.get("tag", "")), str(pd["name"]), st_txt]
+		nl.add_theme_font_size_override("font_size", 13)
+		nl.modulate = Color(0.10, 0.14, 0.20)
+		iv.add_child(nl)
+
+		var brow := HBoxContainer.new()
+		brow.add_theme_constant_override("separation", 8)
+		iv.add_child(brow)
+		var pb := ProgressBar.new()
+		pb.min_value = 0.0
+		pb.max_value = 100.0
+		pb.value = HardwareCatalog.get_part_strength_pct(cat, pd)
+		pb.show_percentage = false
+		pb.custom_minimum_size = Vector2(80, 7)
+		var bsb := StyleBoxFlat.new()
+		bsb.bg_color = Color(0.88, 0.90, 0.93)
+		bsb.set_corner_radius_all(3)
+		var fsb := StyleBoxFlat.new()
+		fsb.bg_color = Color(0.12, 0.50, 0.84)
+		fsb.set_corner_radius_all(3)
+		pb.add_theme_stylebox_override("background", bsb)
+		pb.add_theme_stylebox_override("fill", fsb)
+		brow.add_child(pb)
+
+		var sl := Label.new()
+		sl.text = _format_part_specs_short(cat, pd)
+		sl.add_theme_font_size_override("font_size", 11)
+		sl.modulate = Color(0.36, 0.40, 0.48)
+		brow.add_child(sl)
+
+		var btn := Button.new()
+		btn.text = "+ Warenkorb ($%d)" % cost
+		btn.custom_minimum_size = Vector2(148, 34)
+		_style_win_btn(btn, Color(0.10, 0.48, 0.84), Color(0.08, 0.38, 0.70), Color.WHITE)
+		var cap_pid := pid
+		var cap_cat := cat
+		var cap_name := str(pd["name"])
+		var cap_cost := cost
+		btn.pressed.connect(func(): _cart_add("part", cap_pid, cap_cat, cap_name, cap_cost))
+		hb.add_child(btn)
+
+
+func _populate_warehouse_list(parent: VBoxContainer) -> void:
+	var inv_n := GameState.get_total_inventory_parts()
+	var hdr := _make_light_card(Color(0.93, 0.96, 1.0), Color(0.72, 0.82, 0.92), 6, 12, 8)
+	parent.add_child(hdr)
+	var hl := Label.new()
+	hl.text = "MEIN TEILE-LAGER (%d Bauteile auf Lager) — Am Rack mit [E] → Tab „Hardware-Bau“ kostenlos einbauen oder ungenutzte Teile hier verkaufen!" % inv_n
+	hl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	hl.add_theme_font_size_override("font_size", 12)
+	hl.modulate = Color(0.12, 0.24, 0.38)
+	hdr.add_child(hl)
+
+	if inv_n == 0:
+		var el := Label.new()
+		el.text = "Noch keine Einzelteile im Lager. Bestelle oben CPUs, DDR2–DDR5 RAM, GPUs, SSDs oder Netzteile!"
+		el.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		el.modulate = Color(0.42, 0.46, 0.54)
+		parent.add_child(el)
+		return
+
+	for pid_k in GameState.parts_inventory.keys():
+		var pid := str(pid_k)
+		var cnt := int(GameState.parts_inventory[pid])
+		if cnt <= 0:
+			continue
+		var cat := HardwareCatalog.find_part_category(pid)
+		var pd := HardwareCatalog.get_part(cat, pid)
+		var refund := maxi(5, int(roundf(float(pd.get("cost", 0)) * 0.60)))
+		var row := _make_light_card(Color.WHITE, Color(0.82, 0.85, 0.89), 6, 12, 8)
+		parent.add_child(row)
+		var hb := HBoxContainer.new()
+		hb.add_theme_constant_override("separation", 10)
+		row.add_child(hb)
+
+		var nl := Label.new()
+		nl.text = "%d×  [%s] %s   (%s)" % [cnt, str(pd.get("tag", "")), str(pd.get("name", pid)), _format_part_specs_short(cat, pd)]
+		nl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		nl.add_theme_font_size_override("font_size", 12.5)
+		nl.modulate = Color(0.12, 0.14, 0.18)
+		hb.add_child(nl)
+
+		var sbtn := Button.new()
+		sbtn.text = "Verkaufen (+$%d)" % refund
+		sbtn.custom_minimum_size = Vector2(138, 30)
+		_style_win_btn(sbtn, Color(0.82, 0.24, 0.20), Color(0.66, 0.16, 0.14), Color.WHITE)
+		var cap_p := pid
+		sbtn.pressed.connect(func(): GameState.request_sell_inventory_part(cap_p))
+		hb.add_child(sbtn)
+
+
+func _format_part_specs_short(cat: String, pd: Dictionary) -> String:
+	match cat:
+		"cpu":
+			return "Leistung %d Pkt. • %d W • +%.1f°C" % [int(pd.get("cpu_score", 0)), int(pd.get("watts", 0)), float(pd.get("heat", 0.0))]
+		"ram":
+			return "%d GB %s • %d W" % [int(pd.get("ram_gb", 0)), str(pd.get("tag", "")), int(pd.get("watts", 0))]
+		"gpu":
+			return "GPU %d Pkt. • %d GB VRAM • %d W" % [int(pd.get("gpu_score", 0)), int(pd.get("vram_gb", 0)), int(pd.get("watts", 0))]
+		"storage":
+			return "%.1f TB • %d W" % [float(pd.get("storage_tb", 0.0)), int(pd.get("watts", 0))]
+		"cooling":
+			return "Kühlung %.1f°C • %d W" % [float(pd.get("heat", 0.0)), int(pd.get("watts", 0))]
+		"psu":
+			return "Max. %d W • Effizienz %+d%%" % [int(pd.get("psu_max_watts", 350)), int(roundf((1.0 - float(pd.get("watt_mult", 1.0))) * 100.0))]
+	return ""
+
+
+# ==============================================================================
+# APP 2: UNIFIED SUPPORT & KUNDEN-HUB (3 SUB-TABS: TICKETS | VERTRÄGE | AI & FIREWALL)
+# ==============================================================================
+func _render_support_hub_app() -> void:
+	var sub_bar := _make_light_card(Color(0.95, 0.96, 0.98), Color(0.80, 0.83, 0.87), 6, 10, 6)
+	_app_body_host.add_child(sub_bar)
+	var srow := HBoxContainer.new()
+	srow.add_theme_constant_override("separation", 8)
+	sub_bar.add_child(srow)
+
+	var stabs: Array = [
+		{"id": "tickets", "label": "Tickets & Vermietung (%d)" % GameState.get_open_ticket_count()},
+		{"id": "contracts", "label": "Großkunden-Verträge (%d/4)" % GameState.get_active_contract_count()},
+		{"id": "ai", "label": "AI-Cluster & Firewall%s" % (" (DDoS!)" if GameState.ddos_active else "")},
+	]
+	for t in stabs:
+		var td: Dictionary = t
+		var tid := str(td["id"])
+		var sb := Button.new()
+		sb.text = str(td["label"])
+		sb.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		sb.custom_minimum_size = Vector2(0, 30)
+		var sel := (_support_tab == tid)
+		_style_win_btn(
+			sb,
+			Color(0.10, 0.46, 0.82) if sel else Color(0.90, 0.92, 0.95),
+			Color(0.08, 0.36, 0.68) if sel else Color(0.76, 0.80, 0.85),
+			Color.WHITE if sel else Color(0.16, 0.18, 0.22)
+		)
+		sb.pressed.connect(func():
+			_support_tab = tid
+			SfxManager.play("click", -12.0, 1.1)
+			_refresh_all()
+		)
+		srow.add_child(sb)
+
+	var scroll := ScrollContainer.new()
+	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	_app_body_host.add_child(scroll)
+	var content := VBoxContainer.new()
+	content.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	content.add_theme_constant_override("separation", 8)
+	scroll.add_child(content)
+
+	if _support_tab == "tickets":
+		_render_support_tickets_subtab(content)
+	elif _support_tab == "contracts":
+		_render_contracts_subtab(content)
+	else:
+		_render_ai_firewall_subtab(content)
+
+
+func _render_support_tickets_subtab(content: VBoxContainer) -> void:
+	var total_users := 0
+	var rented_count := 0
+	for rid in GameState.racks.keys():
+		var rk: Dictionary = GameState.racks[rid]
+		if str(rk.get("rental_type", "none")) != "none":
+			rented_count += 1
+			total_users += int(rk.get("active_users", 0))
+
+	var banner := _make_light_card(Color(0.93, 0.96, 1.0), Color(0.70, 0.80, 0.92), 6, 12, 8)
+	content.add_child(banner)
+	var bl := Label.new()
+	bl.text = "Offene Tickets: %d   •   Vermietete Racks: %d   •   Aktive User: %d   •   Miete: +$%.0f / 5s" % [
+		GameState.get_open_ticket_count(), rented_count, total_users, GameState.total_rental_income_per_cycle
+	]
+	bl.add_theme_font_size_override("font_size", 13)
+	bl.modulate = Color(0.12, 0.22, 0.34)
+	banner.add_child(bl)
+
+	if GameState.support_tickets.is_empty():
+		var ok_c := _make_light_card(Color(0.93, 0.99, 0.95), Color(0.42, 0.76, 0.52), 6, 14, 10)
+		content.add_child(ok_c)
+		var ok_l := Label.new()
+		ok_l.text = "Keine offenen Support-Tickets! Alle vermieteten Racks laufen stabil."
+		ok_l.add_theme_font_size_override("font_size", 12.5)
+		ok_l.modulate = Color(0.14, 0.42, 0.24)
+		ok_c.add_child(ok_l)
+	else:
+		for tid in GameState.support_tickets.keys():
+			var t: Dictionary = GameState.support_tickets[tid]
+			var is_fixed := GameState.is_ticket_issue_fixed(t)
+			var is_crit := str(t.get("priority", "HOCH")) == "KRITISCH"
+			var is_typing_this := (_typing_ticket_id == str(tid))
+
+			var bg := Color(0.92, 0.99, 0.94) if is_fixed else (Color(1.0, 0.93, 0.93) if is_crit else Color(1.0, 0.97, 0.92))
+			var bd := Color(0.28, 0.72, 0.42) if is_fixed else (Color(0.84, 0.26, 0.22) if is_crit else Color(0.84, 0.56, 0.16))
+			var tcard := _make_light_card(bg, bd, 7, 14, 10)
+			content.add_child(tcard)
+			var tv := VBoxContainer.new()
+			tv.add_theme_constant_override("separation", 6)
+			tcard.add_child(tv)
+
+			var top_r := HBoxContainer.new()
+			tv.add_child(top_r)
+			var ttl := Label.new()
+			ttl.text = "[%s]  %s — %s (%s) • %s" % [
+				str(t.get("priority", "HOCH")), str(tid), str(t.get("customer", "")),
+				str(t.get("rack_id", "")).to_upper(), str(t.get("title", ""))
+			]
+			ttl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+			ttl.add_theme_font_size_override("font_size", 13.5)
+			ttl.modulate = Color(0.10, 0.46, 0.22) if is_fixed else (Color(0.74, 0.14, 0.12) if is_crit else Color(0.58, 0.34, 0.06))
+			top_r.add_child(ttl)
+
+			var st_l := Label.new()
+			st_l.text = "BEHOBEN!" if is_fixed else "AKTIV"
+			st_l.add_theme_font_size_override("font_size", 12)
+			st_l.modulate = Color(0.10, 0.54, 0.26) if is_fixed else Color(0.78, 0.20, 0.16)
+			top_r.add_child(st_l)
+
+			var msg := Label.new()
+			msg.text = str(t.get("message", ""))
+			msg.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+			msg.add_theme_font_size_override("font_size", 12)
+			msg.modulate = Color(0.20, 0.24, 0.30)
+			tv.add_child(msg)
+
+			var reply_in := LineEdit.new()
+			reply_in.placeholder_text = "Optional: Eigene Antwort tippen (mechanischer Tastatur-Sound)…"
+			reply_in.text = str(_ticket_drafts.get(str(tid), ""))
+			var cap_in := str(tid)
+			reply_in.text_changed.connect(func(nt: String): _ticket_drafts[cap_in] = nt)
+			tv.add_child(reply_in)
+
+			var arow := HBoxContainer.new()
+			arow.add_theme_constant_override("separation", 8)
+			tv.add_child(arow)
+
+			var cap_tid := str(tid)
+			var brep := Button.new()
+			brep.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+			brep.custom_minimum_size = Vector2(0, 32)
+			if is_typing_this:
+				brep.text = "Tippe Antwort…"
+				brep.disabled = true
+			elif bool(t.get("reassured", false)):
+				brep.text = "Beantwortet"
+				brep.disabled = true
+			else:
+				brep.text = "Antwort tippen (+45s)"
+			_style_win_btn(brep, Color(0.10, 0.48, 0.84), Color(0.08, 0.38, 0.70), Color.WHITE)
+			brep.pressed.connect(func():
+				_typing_ticket_id = cap_tid
+				_typing_timer = 1.1
+				_typing_key_accum = 0.0
+				SfxManager.play_typing_key(-9.0)
+				_refresh_all()
+			)
+			arow.add_child(brep)
+
+			var bcomp := Button.new()
+			bcomp.custom_minimum_size = Vector2(0, 32)
+			bcomp.text = "Rabatt erteilt" if bool(t.get("compensated", false)) else "$60 Rabatt"
+			bcomp.disabled = bool(t.get("compensated", false)) or GameState.money < 60.0
+			_style_win_btn(bcomp, Color(0.76, 0.48, 0.12), Color(0.60, 0.36, 0.08), Color.WHITE)
+			bcomp.pressed.connect(func(): GameState.request_reply_ticket(cap_tid, "compensate"))
+			arow.add_child(bcomp)
+
+			var bdone := Button.new()
+			bdone.custom_minimum_size = Vector2(0, 32)
+			bdone.text = "Lösen (+$35)" if is_fixed else "Erst fixen"
+			bdone.disabled = not is_fixed
+			_style_win_btn(bdone, Color(0.12, 0.58, 0.30) if is_fixed else Color(0.84, 0.86, 0.89), Color(0.08, 0.44, 0.22), Color.WHITE if is_fixed else Color(0.45, 0.48, 0.52))
+			bdone.pressed.connect(func(): GameState.request_reply_ticket(cap_tid, "resolve"))
+			arow.add_child(bdone)
+
+	if rented_count > 0:
+		var fhdr := Label.new()
+		fhdr.text = "VERMIETETE RACKS (LIVE-AUSLASTUNG):"
+		fhdr.add_theme_font_size_override("font_size", 11.5)
+		fhdr.modulate = Color(0.32, 0.38, 0.46)
+		content.add_child(fhdr)
+		for rid in GameState.racks.keys():
+			var r: Dictionary = GameState.racks[rid]
+			var rtype := str(r.get("rental_type", "none"))
+			if rtype == "none" or not HardwareCatalog.RENTAL_PROFILES.has(rtype):
+				continue
+			var prof: Dictionary = HardwareCatalog.RENTAL_PROFILES[rtype]
+			var m: Dictionary = r.get("metrics", {})
+			var bn := str(m.get("bottleneck", "ok"))
+			var rc := _make_light_card(Color(1.0, 0.94, 0.93) if bn != "ok" else Color.WHITE, Color(0.84, 0.30, 0.24) if bn != "ok" else Color(0.78, 0.83, 0.88), 6, 12, 8)
+			content.add_child(rc)
+			var rl := Label.new()
+			rl.text = "%s %s (%s) • %d User • RAM: %.1f/%.0f GB (%.0f%%) • CPU: %.0f%% • %.1f/%.1f TB • %.0f%% • +$%.0f/5s" % [
+				str(prof["icon"]), str(rid).to_upper(), str(r.get("rental_customer", "")),
+				int(r.get("active_users", 0)),
+				float(m.get("ram_used_gb", 0.0)), float(m.get("ram_total_gb", 0.0)), float(m.get("ram_pct", 0.0)),
+				float(m.get("cpu_pct", 0.0)), float(m.get("storage_used_tb", 0.0)), float(m.get("storage_total_tb", 0.0)),
+				float(r.get("satisfaction", 100.0)), float(r.get("rental_income", 0.0))
+			]
+			rl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+			rl.add_theme_font_size_override("font_size", 12)
+			rl.modulate = Color(0.72, 0.16, 0.14) if bn != "ok" else Color(0.14, 0.18, 0.24)
+			rc.add_child(rl)
+
+
+func _render_contracts_subtab(content: VBoxContainer) -> void:
+	var b := _make_light_card(Color(0.94, 0.96, 0.99), Color(0.76, 0.82, 0.90), 6, 12, 8)
+	content.add_child(b)
+	var hl := Label.new()
+	hl.text = "Aktive Großkunden-Verträge: %d / 4   •   Verfügbarer RAM: %d GB   •   Router: %s" % [
+		GameState.get_active_contract_count(), GameState.total_ram_gb, HardwareCatalog.format_speed_mbps(GameState.max_bandwidth_mbps)
+	]
+	hl.add_theme_font_size_override("font_size", 12.5)
+	hl.modulate = Color(0.14, 0.22, 0.32)
+	b.add_child(hl)
+
+	for tmpl in GameState.CONTRACTS_TEMPLATE:
+		var cid := str(tmpl["id"])
+		if not GameState.contracts.has(cid):
+			continue
+		var c: Dictionary = GameState.contracts[cid]
+		var active := bool(c["active"])
+		var status := str(c["status"])
+		var row := _make_light_card(
+			Color(0.93, 0.99, 0.95) if (active and status == "ok") else (Color(1.0, 0.93, 0.93) if active else Color.WHITE),
+			Color(0.32, 0.72, 0.44) if (active and status == "ok") else (Color(0.84, 0.30, 0.28) if active else Color(0.82, 0.85, 0.89)),
+			6, 12, 9
+		)
+		content.add_child(row)
+		var hb := HBoxContainer.new()
+		hb.add_theme_constant_override("separation", 10)
+		row.add_child(hb)
+
+		var iv := VBoxContainer.new()
+		iv.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		hb.add_child(iv)
+
+		var badge := ("  [AKTIV]" if status == "ok" else "  [UNTERVERSORGT]") if active else ""
+		var tl := Label.new()
+		tl.text = "%s (%s)%s" % [str(c["title"]), str(c["client"]), badge]
+		tl.add_theme_font_size_override("font_size", 14)
+		tl.modulate = Color(0.10, 0.48, 0.24) if (active and status == "ok") else (Color(0.76, 0.16, 0.14) if active else Color(0.10, 0.12, 0.16))
+		iv.add_child(tl)
+
+		var eff_pay := int(roundf(float(c["payout_per_cycle"]) * GameState.revenue_bonus_mult))
+		var sl := Label.new()
+		sl.text = "Bedarf: %d GB RAM  •  %s Bandbreite  •  Einnahmen: +$%d / 5s  •  Strafe: -$%d" % [
+			int(c.get("req_ram_gb", 4)), HardwareCatalog.format_speed_mbps(float(c.get("req_mbps", 15.0))),
+			eff_pay, int(c["penalty_per_cycle"])
+		]
+		sl.add_theme_font_size_override("font_size", 11.5)
+		sl.modulate = Color(0.34, 0.38, 0.44)
+		iv.add_child(sl)
+
+		var btn := Button.new()
+		btn.text = "Kündigen" if active else "Annehmen"
+		btn.custom_minimum_size = Vector2(130, 34)
+		btn.disabled = (not active) and GameState.get_active_contract_count() >= 4
+		_style_win_btn(
+			btn,
+			Color(0.80, 0.22, 0.20) if active else (Color(0.10, 0.48, 0.84) if not btn.disabled else Color(0.84, 0.86, 0.89)),
+			Color(0.64, 0.14, 0.12) if active else Color(0.08, 0.38, 0.70),
+			Color.WHITE if not btn.disabled else Color(0.45, 0.48, 0.52)
+		)
+		var cap_id := cid
+		btn.pressed.connect(func(): GameState.request_toggle_contract(cap_id))
+		hb.add_child(btn)
+
+
+func _render_ai_firewall_subtab(content: VBoxContainer) -> void:
+	var ddos_c := _make_light_card(
+		Color(1.0, 0.92, 0.92) if GameState.ddos_active else Color(0.94, 0.99, 0.95),
+		Color(0.84, 0.24, 0.22) if GameState.ddos_active else Color(0.36, 0.74, 0.46),
+		7, 14, 12
+	)
+	content.add_child(ddos_c)
+	var dh := HBoxContainer.new()
+	dh.add_theme_constant_override("separation", 12)
+	ddos_c.add_child(dh)
+
+	var di := VBoxContainer.new()
+	di.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	dh.add_child(di)
+	var dt := Label.new()
+	dt.text = "Windows Server Firewall & DDoS-Abwehr"
+	dt.add_theme_font_size_override("font_size", 15)
+	dt.modulate = Color(0.10, 0.12, 0.16)
+	di.add_child(dt)
+	var dd := Label.new()
+	dd.text = "ALARM: Aktiver DDoS-Angriff blockiert alle Einnahmen!" if GameState.ddos_active else "Geschützt — Netzwerkverkehr und Kunden laufen störungsfrei."
+	dd.add_theme_font_size_override("font_size", 12)
+	dd.modulate = Color(0.76, 0.14, 0.12) if GameState.ddos_active else Color(0.14, 0.48, 0.24)
+	di.add_child(dd)
+
+	var dbtn := Button.new()
+	dbtn.text = "DDoS abwehren!" if GameState.ddos_active else "Kein Angriff"
+	dbtn.custom_minimum_size = Vector2(158, 36)
+	dbtn.disabled = not GameState.ddos_active
+	_style_win_btn(dbtn, Color(0.82, 0.18, 0.16) if GameState.ddos_active else Color(0.86, 0.88, 0.90), Color(0.66, 0.12, 0.10), Color.WHITE if GameState.ddos_active else Color(0.45, 0.48, 0.52))
+	dbtn.pressed.connect(func(): GameState.request_mitigate_ddos())
+	dh.add_child(dbtn)
+
+	var cur_lvl := GameState.ai_platform_level
+	var cur_tier: Dictionary = GameState.AI_TIERS[cur_lvl]
+	var ai_c := _make_light_card(Color.WHITE, Color(0.80, 0.84, 0.89), 7, 14, 12)
+	content.add_child(ai_c)
+	var av := VBoxContainer.new()
+	av.add_theme_constant_override("separation", 8)
+	ai_c.add_child(av)
+
+	var at := Label.new()
+	at.text = "Eigene AI-Plattform: %s" % str(cur_tier["label"])
+	at.add_theme_font_size_override("font_size", 16)
+	at.modulate = Color(0.12, 0.26, 0.52)
+	av.add_child(at)
+
+	var ast := Label.new()
+	ast.text = "Monetarisiert freie Server-Kapazität automatisch nebenbei.\nLive-Einnahmen: +$%.2f / Sek.  •  Gesamt: %d GB RAM & GPU-Power %d Pkt." % [
+		GameState.ai_revenue_per_sec, GameState.total_ram_gb, GameState.total_gpu_score
+	]
+	ast.add_theme_font_size_override("font_size", 12.5)
+	ast.modulate = Color(0.24, 0.28, 0.34)
+	av.add_child(ast)
+
+	if cur_lvl + 1 < GameState.AI_TIERS.size():
+		var nxt: Dictionary = GameState.AI_TIERS[cur_lvl + 1]
+		var ncost := int(nxt["cost"])
+		var mram := int(nxt.get("min_ram_gb", 16))
+		var mgpu := int(nxt.get("min_gpu", 30))
+		var ubtn := Button.new()
+		ubtn.text = "Freischalten: %s ($%d  |  benötigt %d GB RAM & %d GPU)" % [str(nxt["label"]), ncost, mram, mgpu]
+		ubtn.custom_minimum_size = Vector2(0, 38)
+		ubtn.disabled = (GameState.money < float(ncost)) or (GameState.total_ram_gb < mram) or (GameState.total_gpu_score < mgpu)
+		_style_win_btn(ubtn, Color(0.10, 0.48, 0.84) if not ubtn.disabled else Color(0.84, 0.86, 0.89), Color(0.08, 0.38, 0.70), Color.WHITE if not ubtn.disabled else Color(0.45, 0.48, 0.52))
+		ubtn.pressed.connect(func(): GameState.request_upgrade_ai_platform())
+		av.add_child(ubtn)
+	else:
+		var ml := Label.new()
+		ml.text = "Maximale AI-Plattform-Stufe erreicht!"
+		ml.modulate = Color(0.12, 0.52, 0.26)
+		av.add_child(ml)
+
+
+# ==============================================================================
+# APP 3: GEBÄUDE, ROUTER & STROMANSCHLUSS
+# ==============================================================================
+func _render_upgrades_app() -> void:
+	var scroll := ScrollContainer.new()
+	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	_app_body_host.add_child(scroll)
+	var content := VBoxContainer.new()
+	content.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	content.add_theme_constant_override("separation", 10)
+	scroll.add_child(content)
+
+	# 1. Internet Router Upgrade (Real Mbit/s & Gbit/s!)
+	var rt_idx := clampi(GameState.router_tier, 0, GameState.ROUTER_TIERS.size() - 1)
+	var cur_rt: Dictionary = GameState.ROUTER_TIERS[rt_idx]
+	var rt_lim := GameState.used_bandwidth_mbps > GameState.max_bandwidth_mbps
+	var rt_c := _make_light_card(Color(1.0, 0.95, 0.90) if rt_lim else Color.WHITE, Color(0.86, 0.48, 0.14) if rt_lim else Color(0.80, 0.84, 0.89), 7, 14, 12)
+	content.add_child(rt_c)
+	var rth := HBoxContainer.new()
+	rth.add_theme_constant_override("separation", 12)
+	rt_c.add_child(rth)
+
+	var rti := VBoxContainer.new()
+	rti.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	rth.add_child(rti)
+	var rtt := Label.new()
+	rtt.text = "Internet-Router (Stufe %d/%d): %s" % [rt_idx + 1, GameState.ROUTER_TIERS.size(), str(cur_rt["label"])]
+	rtt.add_theme_font_size_override("font_size", 15)
+	rtt.modulate = Color(0.68, 0.28, 0.06) if rt_lim else Color(0.10, 0.12, 0.16)
+	rti.add_child(rtt)
+	var rtd := Label.new()
+	var used_ports := GameState.count_cables_on("network", GameState.WALL_ROUTER_ID)
+	rtd.text = "Auslastung: %s / %s  •  LAN-Ports: %d/%d  •  DDoS-Schutz: +%.0f%%" % [
+		HardwareCatalog.format_speed_mbps(GameState.used_bandwidth_mbps), str(cur_rt["speed"]),
+		used_ports, int(cur_rt["ports"]), (float(cur_rt["ddos_mult"]) - 1.0) * 100.0
+	]
+	rtd.add_theme_font_size_override("font_size", 12)
+	rtd.modulate = Color(0.66, 0.24, 0.06) if rt_lim else Color(0.36, 0.40, 0.46)
+	rti.add_child(rtd)
+
+	var rtbtn := Button.new()
+	rtbtn.custom_minimum_size = Vector2(210, 38)
+	if rt_idx + 1 < GameState.ROUTER_TIERS.size():
+		var nxt: Dictionary = GameState.ROUTER_TIERS[rt_idx + 1]
+		rtbtn.text = "Auf %s ($%d)" % [str(nxt["speed"]), int(nxt["cost"])]
+		rtbtn.disabled = GameState.money < float(nxt["cost"])
+		_style_win_btn(rtbtn, Color(0.10, 0.48, 0.84) if not rtbtn.disabled else Color(0.84, 0.86, 0.89), Color(0.08, 0.38, 0.70), Color.WHITE if not rtbtn.disabled else Color(0.45, 0.48, 0.52))
+		rtbtn.pressed.connect(func(): GameState.request_upgrade_router())
+	else:
+		rtbtn.text = "100 Gbit/s Max"
+		rtbtn.disabled = true
+		_style_win_btn(rtbtn, Color(0.88, 0.90, 0.93), Color(0.76, 0.79, 0.82), Color(0.32, 0.36, 0.42))
+	rth.add_child(rtbtn)
+
+	# 2. Power Tier
+	var pc := _make_light_card(Color.WHITE, Color(0.80, 0.84, 0.89), 7, 14, 12)
+	content.add_child(pc)
+	var ph := HBoxContainer.new()
+	ph.add_theme_constant_override("separation", 12)
+	pc.add_child(ph)
+	var pi := VBoxContainer.new()
+	pi.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	ph.add_child(pi)
+	var cur_p: Dictionary = GameState.POWER_TIERS[GameState.power_tier]
+	var pt := Label.new()
+	pt.text = "Hausanschluss & Transformator: %s" % str(cur_p["label"])
+	pt.add_theme_font_size_override("font_size", 15)
+	pt.modulate = Color(0.10, 0.12, 0.16)
+	pi.add_child(pt)
+	var pd := Label.new()
+	pd.text = "Erhöht das Watt-Limit vor Sicherungs-Blackouts & gibt +2 Strom-Ports am Sicherungskasten."
+	pd.add_theme_font_size_override("font_size", 12)
+	pd.modulate = Color(0.36, 0.40, 0.46)
+	pi.add_child(pd)
+	var pbtn := Button.new()
+	pbtn.custom_minimum_size = Vector2(210, 38)
+	if GameState.power_tier + 1 < GameState.POWER_TIERS.size():
+		var np: Dictionary = GameState.POWER_TIERS[GameState.power_tier + 1]
+		pbtn.text = "Auf %d W ($%d)" % [int(np["watts"]), int(np["cost"])]
+		pbtn.disabled = GameState.money < float(np["cost"])
+		_style_win_btn(pbtn, Color(0.12, 0.56, 0.32) if not pbtn.disabled else Color(0.84, 0.86, 0.89), Color(0.08, 0.44, 0.24), Color.WHITE if not pbtn.disabled else Color(0.45, 0.48, 0.52))
+		pbtn.pressed.connect(func(): GameState.request_upgrade_power())
+	else:
+		pbtn.text = "Max. Strom-Stufe"
+		pbtn.disabled = true
+		_style_win_btn(pbtn, Color(0.88, 0.90, 0.93), Color(0.76, 0.79, 0.82), Color(0.32, 0.36, 0.42))
+	ph.add_child(pbtn)
+
+	# 3. Hall B & C
+	var rc := _make_light_card(Color.WHITE, Color(0.80, 0.84, 0.89), 7, 14, 12)
+	content.add_child(rc)
+	var rh := HBoxContainer.new()
+	rh.add_theme_constant_override("separation", 12)
+	rc.add_child(rh)
+	var ri := VBoxContainer.new()
+	ri.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	rh.add_child(ri)
+	var htitle := "Gebäude-Ausbau: Garage (Stufe 1/3)"
+	var hdesc := "Öffnet HALLE B (+63 m² Doppelboden-Serverraum)."
+	if GameState.room_level == 1:
+		htitle = "Gebäude-Ausbau: Garage + Halle B (Stufe 2/3)"
+		hdesc = "Öffnet HALLE C — ENTERPRISE RECHENZENTRUM (+81 m²) mit eigenem Strom- & Glasfaserbus!"
+	elif GameState.room_level >= 2:
+		htitle = "Gebäude-Ausbau: Vollausbau (3/3 Hallen)"
+		hdesc = "Alle Rechenzentrums-Hallen sind vollständig freigeschaltet!"
+	var rt_l := Label.new()
+	rt_l.text = htitle
+	rt_l.add_theme_font_size_override("font_size", 15)
+	rt_l.modulate = Color(0.10, 0.12, 0.16)
+	ri.add_child(rt_l)
+	var rd_l := Label.new()
+	rd_l.text = hdesc
+	rd_l.add_theme_font_size_override("font_size", 12)
+	rd_l.modulate = Color(0.36, 0.40, 0.46)
+	ri.add_child(rd_l)
+	var rbtn := Button.new()
+	rbtn.custom_minimum_size = Vector2(210, 38)
+	if GameState.room_level < 2:
+		var rcost := GameState.HALL_B_COST if GameState.room_level == 0 else GameState.HALL_C_COST
+		rbtn.text = ("Halle B ($%d)" if GameState.room_level == 0 else "Halle C ($%d)") % rcost
+		rbtn.disabled = GameState.money < float(rcost)
+		_style_win_btn(rbtn, Color(0.10, 0.48, 0.84) if not rbtn.disabled else Color(0.84, 0.86, 0.89), Color(0.08, 0.38, 0.70), Color.WHITE if not rbtn.disabled else Color(0.45, 0.48, 0.52))
+		rbtn.pressed.connect(func(): GameState.request_expand_room())
+	else:
+		rbtn.text = "Alle Hallen offen"
+		rbtn.disabled = true
+		_style_win_btn(rbtn, Color(0.88, 0.90, 0.93), Color(0.76, 0.79, 0.82), Color(0.32, 0.36, 0.42))
+	rh.add_child(rbtn)
+
+	# 4. Electricity Meter
+	var bc := _make_light_card(Color(0.99, 0.98, 0.94), Color(0.86, 0.78, 0.56), 7, 14, 12)
+	content.add_child(bc)
+	var bv := VBoxContainer.new()
+	bv.add_theme_constant_override("separation", 4)
+	bc.add_child(bv)
+	var bt := Label.new()
+	bt.text = "Stromzähler & Tagesabrechnung (Tag %d • %s)" % [GameState.day_number, GameState.get_time_string()]
+	bt.add_theme_font_size_override("font_size", 14.5)
+	bt.modulate = Color(0.56, 0.38, 0.08)
+	bv.add_child(bt)
+	var bd := Label.new()
+	bd.text = "Heute verbraucht: %.1f kWh   •   Geschätzte Rechnung um 00:00 Uhr: ~$%d   (Gestern: $%d)" % [
+		GameState.daily_kwh, GameState.get_estimated_daily_bill(), GameState.last_daily_bill
+	]
+	bd.add_theme_font_size_override("font_size", 12)
+	bd.modulate = Color(0.28, 0.26, 0.22)
+	bv.add_child(bd)
+
+
+# ==============================================================================
+# APP 4: WINDOWS TASK-MANAGER (100% REAL METRICS — ZERO "CU"!)
+# ==============================================================================
+func _render_monitor_app() -> void:
+	var scroll := ScrollContainer.new()
+	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	_app_body_host.add_child(scroll)
+	var content := VBoxContainer.new()
+	content.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	content.add_theme_constant_override("separation", 10)
+	scroll.add_child(content)
+
+	var grid := GridContainer.new()
+	grid.columns = 2
+	grid.add_theme_constant_override("h_separation", 12)
+	grid.add_theme_constant_override("v_separation", 12)
+	content.add_child(grid)
+
+	var p_pct := clampf(float(GameState.total_watts) / float(maxi(GameState.max_watts, 1)) * 100.0, 0.0, 100.0)
+	_add_monitor_card(grid, "Stromnetz", "%d / %d W (%.0f%%)" % [GameState.total_watts, GameState.max_watts, p_pct], "Tagesverbrauch: %.1f kWh • USV: %d" % [GameState.daily_kwh, GameState.ups_units.size()], p_pct, Color(0.82, 0.20, 0.16) if p_pct >= 90.0 else Color(0.12, 0.50, 0.84))
+
+	var bw_pct := clampf(GameState.used_bandwidth_mbps / maxf(1.0, GameState.max_bandwidth_mbps) * 100.0, 0.0, 100.0)
+	_add_monitor_card(grid, "Internet-Uplink", "%s / %s" % [HardwareCatalog.format_speed_mbps(GameState.used_bandwidth_mbps), HardwareCatalog.format_speed_mbps(GameState.max_bandwidth_mbps)], "Router-Stufe %d/5 • DDoS: %s" % [GameState.router_tier + 1, "AKTIV!" if GameState.ddos_active else "Geschützt"], bw_pct, Color(0.84, 0.36, 0.10) if bw_pct >= 90.0 else Color(0.14, 0.58, 0.34))
+
+	var t_pct := clampf((GameState.room_temp - 18.0) / 72.0 * 100.0, 0.0, 100.0)
+	_add_monitor_card(grid, "Raumtemperatur", "%.1f °C" % GameState.room_temp, "Kühlgeräte: %d • Kritisch ab 74°C" % GameState.coolers.size(), t_pct, Color(0.84, 0.24, 0.14) if GameState.room_temp >= 68.0 else Color(0.16, 0.56, 0.72))
+
+	_add_monitor_card(grid, "Gesamt-Hardware (Online)", "%d GB RAM  •  %.1f TB" % [GameState.total_ram_gb, GameState.total_storage_tb], "CPU: %d • GPU: %d • Racks: %d • Lager: %d Teile" % [GameState.total_cpu_score, GameState.total_gpu_score, GameState.racks.size(), GameState.get_total_inventory_parts()], minf(100.0, float(GameState.racks.size()) * 20.0), Color(0.32, 0.44, 0.64))
+
+	var tbl := _make_light_card(Color.WHITE, Color(0.80, 0.84, 0.89), 7, 14, 12)
+	content.add_child(tbl)
+	var tv := VBoxContainer.new()
+	tv.add_theme_constant_override("separation", 6)
+	tbl.add_child(tv)
+
+	var thead := Label.new()
+	thead.text = "LIVE RACK-ÜBERSICHT (Strom • RAM • Speicher • Vermietung • Temperatur)"
+	thead.add_theme_font_size_override("font_size", 11.5)
+	thead.modulate = Color(0.34, 0.40, 0.48)
+	tv.add_child(thead)
+
+	if GameState.racks.is_empty():
+		var nl := Label.new()
+		nl.text = "Noch keine Server-Racks im Gebäude aufgestellt."
+		nl.modulate = Color(0.42, 0.46, 0.52)
+		tv.add_child(nl)
+	else:
+		for rid in GameState.racks.keys():
+			var r: Dictionary = GameState.racks[rid]
+			var rtype := str(r.get("rack_type", "rack"))
+			var max_pdu := int(GameState.ITEM_CATALOG[rtype].get("max_pdu_watts", 3200))
+			var hw := GameState.get_rack_hardware_summary(str(rid))
+			var r_rent := str(r.get("rental_type", "none"))
+			var rent_txt := "Standby"
+			if r_rent != "none" and HardwareCatalog.RENTAL_PROFILES.has(r_rent):
+				rent_txt = "%s (%d User)" % [str(HardwareCatalog.RENTAL_PROFILES[r_rent]["short"]), int(r.get("active_users", 0))]
+			var row_l := Label.new()
+			row_l.text = "• %s:  %d/%d W  •  %d GB RAM  •  %.1f TB  •  %.0f°C  •  %s  •  Strom:%s LAN:%s" % [
+				str(rid).to_upper(), int(hw["watts"]), max_pdu, int(hw["ram_gb"]), float(hw["storage_tb"]),
+				float(r["temp"]), rent_txt, "an" if bool(r["powered"]) else "aus", "ok" if bool(r["networked"]) else "fehlt"
+			]
+			row_l.add_theme_font_size_override("font_size", 12)
+			row_l.modulate = Color(0.14, 0.16, 0.20)
+			tv.add_child(row_l)
+
+
+func _add_monitor_card(grid: GridContainer, title: String, value_txt: String, sub_txt: String, pct: float, bar_col: Color) -> void:
+	var card := _make_light_card(Color.WHITE, Color(0.80, 0.84, 0.89), 7, 14, 10)
+	card.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	grid.add_child(card)
+	var v := VBoxContainer.new()
+	v.add_theme_constant_override("separation", 5)
+	card.add_child(v)
+	var t := Label.new()
+	t.text = title
+	t.add_theme_font_size_override("font_size", 11.5)
+	t.modulate = Color(0.36, 0.42, 0.48)
+	v.add_child(t)
+	var val := Label.new()
+	val.text = value_txt
+	val.add_theme_font_size_override("font_size", 16)
+	val.modulate = Color(0.10, 0.12, 0.16)
+	v.add_child(val)
+	var pb := ProgressBar.new()
+	pb.min_value = 0.0
+	pb.max_value = 100.0
+	pb.value = pct
+	pb.show_percentage = false
+	pb.custom_minimum_size = Vector2(0, 9)
+	var bg_sb := StyleBoxFlat.new()
+	bg_sb.bg_color = Color(0.88, 0.90, 0.93)
+	bg_sb.set_corner_radius_all(4)
+	var fill_sb := StyleBoxFlat.new()
+	fill_sb.bg_color = bar_col
+	fill_sb.set_corner_radius_all(4)
+	pb.add_theme_stylebox_override("background", bg_sb)
+	pb.add_theme_stylebox_override("fill", fill_sb)
+	v.add_child(pb)
+	var sub := Label.new()
+	sub.text = sub_txt
+	sub.add_theme_font_size_override("font_size", 11)
+	sub.modulate = Color(0.42, 0.46, 0.52)
+	v.add_child(sub)
+
+
+# ==============================================================================
+# BUILD REALISTIC WINDOWS 11 DESKTOP MONITOR SHELL (4 CLEAN APPS!)
+# ==============================================================================
+func _build_ui() -> void:
+	var dim := ColorRect.new()
+	dim.set_anchors_preset(Control.PRESET_FULL_RECT)
+	dim.color = Color(0.02, 0.03, 0.05, 0.64)
+	add_child(dim)
+
+	var center := CenterContainer.new()
+	center.set_anchors_preset(Control.PRESET_FULL_RECT)
+	add_child(center)
+
+	_monitor_frame = PanelContainer.new()
+	# Vollbild: der PC füllt den ganzen Bildschirm, ohne Rahmen. Die Größe setzt _fit_fullscreen().
+	_monitor_frame.custom_minimum_size = get_viewport_rect().size
+	var bezel := StyleBoxFlat.new()
+	bezel.bg_color = Color(0.0, 0.0, 0.0)
+	bezel.set_border_width_all(0)
+	bezel.set_corner_radius_all(0)
+	bezel.set_content_margin_all(0)
+	_monitor_frame.add_theme_stylebox_override("panel", bezel)
+	center.add_child(_monitor_frame)
+
+	var screen_v := VBoxContainer.new()
+	screen_v.add_theme_constant_override("separation", 0)
+	_monitor_frame.add_child(screen_v)
+
+	var desktop_area := PanelContainer.new()
+	desktop_area.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	var wp_sb := StyleBoxFlat.new()
+	wp_sb.bg_color = Color(0.14, 0.25, 0.38)
+	wp_sb.set_content_margin_all(0)
+	desktop_area.add_theme_stylebox_override("panel", wp_sb)
+	screen_v.add_child(desktop_area)
+
+	var desktop_layer := Control.new()
+	desktop_layer.set_anchors_preset(Control.PRESET_FULL_RECT)
+	desktop_area.add_child(desktop_layer)
+
+	var wp_accent := ColorRect.new()
+	wp_accent.set_anchors_preset(Control.PRESET_BOTTOM_WIDE)
+	wp_accent.offset_top = -220
+	wp_accent.color = Color(0.10, 0.19, 0.31, 0.55)
+	wp_accent.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	desktop_layer.add_child(wp_accent)
+
+	var desk_hbox := HBoxContainer.new()
+	desk_hbox.set_anchors_preset(Control.PRESET_FULL_RECT)
+	desk_hbox.add_theme_constant_override("separation", 12)
+	desktop_layer.add_child(desk_hbox)
+
+	# LEFT DESKTOP ICONS (4 Clean Apps + Save Shortcut)
+	var icon_margin := MarginContainer.new()
+	icon_margin.add_theme_constant_override("margin_left", 12)
+	icon_margin.add_theme_constant_override("margin_top", 14)
+	icon_margin.add_theme_constant_override("margin_bottom", 14)
+	desk_hbox.add_child(icon_margin)
+
+	var icon_col := VBoxContainer.new()
+	icon_col.custom_minimum_size = Vector2(96, 0)
+	icon_col.add_theme_constant_override("separation", 10)
+	icon_margin.add_child(icon_col)
+
+	for aid in APP_ORDER:
+		var meta: Dictionary = APP_META[aid]
+		var ibtn := Button.new()
+		ibtn.text = str(meta["name"])
+		_add_btn_icon(ibtn, str(meta["icon"]), 26, "top")
+		ibtn.custom_minimum_size = Vector2(90, 66)
+		ibtn.add_theme_font_size_override("font_size", 12)
+		_style_win_btn(ibtn, Color(0.12, 0.22, 0.34, 0.58), Color(0.45, 0.62, 0.80, 0.30), Color(0.96, 0.98, 1.0))
+		var cap_aid := aid
+		ibtn.pressed.connect(func(): _open_app(cap_aid))
+		icon_col.add_child(ibtn)
+		_desktop_btns[aid] = ibtn
+
+	var save_icon := Button.new()
+	save_icon.text = "Speichern"
+	_add_btn_icon(save_icon, "save", 26, "top")
+	save_icon.custom_minimum_size = Vector2(90, 66)
+	save_icon.add_theme_font_size_override("font_size", 12)
+	_style_win_btn(save_icon, Color(0.12, 0.22, 0.34, 0.58), Color(0.45, 0.62, 0.80, 0.30), Color(0.96, 0.98, 1.0))
+	save_icon.pressed.connect(_trigger_quick_save)
+	icon_col.add_child(save_icon)
+
+	# MAIN FLOATING WINDOWS 11 APP WINDOW
+	var win_margin := MarginContainer.new()
+	win_margin.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	win_margin.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	win_margin.add_theme_constant_override("margin_top", 12)
+	win_margin.add_theme_constant_override("margin_right", 12)
+	win_margin.add_theme_constant_override("margin_bottom", 12)
+	desk_hbox.add_child(win_margin)
+
+	_app_window = PanelContainer.new()
+	_app_window.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_app_window.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	var win_sb := StyleBoxFlat.new()
+	win_sb.bg_color = Color(0.95, 0.96, 0.97, 0.99)
+	win_sb.border_color = Color(0.68, 0.73, 0.80)
+	win_sb.set_border_width_all(1)
+	win_sb.set_corner_radius_all(8)
+	win_sb.set_content_margin_all(0)
+	_app_window.add_theme_stylebox_override("panel", win_sb)
+	win_margin.add_child(_app_window)
+
+	var win_v := VBoxContainer.new()
+	win_v.add_theme_constant_override("separation", 0)
+	_app_window.add_child(win_v)
+
+	# Light Title Bar
+	var tb_panel := PanelContainer.new()
+	var tb_sb := StyleBoxFlat.new()
+	tb_sb.bg_color = Color(0.90, 0.92, 0.95)
+	tb_sb.border_color = Color(0.80, 0.84, 0.88)
+	tb_sb.border_width_bottom = 1
+	tb_sb.corner_radius_top_left = 7
+	tb_sb.corner_radius_top_right = 7
+	tb_sb.content_margin_left = 14
+	tb_sb.content_margin_right = 8
+	tb_sb.content_margin_top = 6
+	tb_sb.content_margin_bottom = 6
+	tb_panel.add_theme_stylebox_override("panel", tb_sb)
+	win_v.add_child(tb_panel)
+
+	var tb_row := HBoxContainer.new()
+	tb_row.add_theme_constant_override("separation", 6)
+	tb_panel.add_child(tb_row)
+
+	_win_title_icon = _win_icon("cart", 16)
+	_win_title_icon.modulate = Color(0.10, 0.46, 0.82)
+	tb_row.add_child(_win_title_icon)
+
+	_win_title_lbl = Label.new()
+	_win_title_lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_win_title_lbl.add_theme_font_size_override("font_size", 14)
+	_win_title_lbl.modulate = Color(0.10, 0.12, 0.16)
+	tb_row.add_child(_win_title_lbl)
+
+	var min_btn := Button.new()
+	_add_btn_icon(min_btn, "minimize", 12, "center")
+	min_btn.custom_minimum_size = Vector2(34, 26)
+	_style_win_btn(min_btn, Color(0.90, 0.92, 0.95), Color(0.80, 0.84, 0.88), Color(0.18, 0.20, 0.24))
+	min_btn.pressed.connect(_minimize_app)
+	tb_row.add_child(min_btn)
+
+	var cls_btn := Button.new()
+	_add_btn_icon(cls_btn, "close", 12, "center")
+	cls_btn.custom_minimum_size = Vector2(38, 26)
+	_style_win_btn(cls_btn, Color(0.84, 0.22, 0.20), Color(0.70, 0.16, 0.14), Color.WHITE)
+	cls_btn.pressed.connect(_minimize_app)
+	tb_row.add_child(cls_btn)
+
+	var sub_panel := PanelContainer.new()
+	var sub_sb := StyleBoxFlat.new()
+	sub_sb.bg_color = Color(0.96, 0.97, 0.98)
+	sub_sb.border_color = Color(0.86, 0.88, 0.91)
+	sub_sb.border_width_bottom = 1
+	sub_sb.content_margin_left = 14
+	sub_sb.content_margin_right = 14
+	sub_sb.content_margin_top = 5
+	sub_sb.content_margin_bottom = 5
+	sub_panel.add_theme_stylebox_override("panel", sub_sb)
+	win_v.add_child(sub_panel)
+
+	_win_subtitle_lbl = Label.new()
+	_win_subtitle_lbl.add_theme_font_size_override("font_size", 11.5)
+	_win_subtitle_lbl.modulate = Color(0.28, 0.34, 0.42)
+	sub_panel.add_child(_win_subtitle_lbl)
+
+	var body_margin := MarginContainer.new()
+	body_margin.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	body_margin.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	body_margin.add_theme_constant_override("margin_left", 12)
+	body_margin.add_theme_constant_override("margin_right", 12)
+	body_margin.add_theme_constant_override("margin_top", 10)
+	body_margin.add_theme_constant_override("margin_bottom", 10)
+	win_v.add_child(body_margin)
+
+	_app_body_host = VBoxContainer.new()
+	_app_body_host.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_app_body_host.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	_app_body_host.add_theme_constant_override("separation", 8)
+	body_margin.add_child(_app_body_host)
+
+	# START MENU POPUP
+	_start_menu = PanelContainer.new()
+	_start_menu.visible = false
+	# Windows 11: das Startmenü öffnet sich mittig über der Taskleiste
+	_start_menu.set_anchors_preset(Control.PRESET_CENTER_BOTTOM)
+	_start_menu.grow_horizontal = Control.GROW_DIRECTION_BOTH
+	_start_menu.grow_vertical = Control.GROW_DIRECTION_BEGIN
+	_start_menu.offset_left = -170.0
+	_start_menu.offset_right = 170.0
+	_start_menu.offset_top = -372.0
+	_start_menu.offset_bottom = -12.0
+	var sm_sb := StyleBoxFlat.new()
+	sm_sb.bg_color = Color(0.95, 0.96, 0.98, 0.98)
+	sm_sb.border_color = Color(0.68, 0.73, 0.80)
+	sm_sb.set_border_width_all(1)
+	sm_sb.set_corner_radius_all(8)
+	sm_sb.set_content_margin_all(14)
+	_start_menu.add_theme_stylebox_override("panel", sm_sb)
+	desktop_layer.add_child(_start_menu)
+
+	var sm_v := VBoxContainer.new()
+	sm_v.add_theme_constant_override("separation", 6)
+	_start_menu.add_child(sm_v)
+	var sm_hdr_row := HBoxContainer.new()
+	sm_hdr_row.add_theme_constant_override("separation", 8)
+	sm_v.add_child(sm_hdr_row)
+	var sm_logo := _win_icon("windows", 16)
+	sm_logo.modulate = Color(0.10, 0.46, 0.82)
+	sm_hdr_row.add_child(sm_logo)
+	var sm_hdr := Label.new()
+	sm_hdr.text = "Windows Server — Start"
+	sm_hdr.add_theme_font_size_override("font_size", 14)
+	sm_hdr.modulate = Color(0.10, 0.14, 0.20)
+	sm_hdr_row.add_child(sm_hdr)
+	sm_v.add_child(HSeparator.new())
+
+	for aid in APP_ORDER:
+		var meta: Dictionary = APP_META[aid]
+		var sbtn := Button.new()
+		sbtn.text = str(meta["name"])
+		_add_btn_icon(sbtn, str(meta["icon"]), 16)
+		sbtn.alignment = HORIZONTAL_ALIGNMENT_LEFT
+		sbtn.custom_minimum_size = Vector2(0, 34)
+		_style_win_btn(sbtn, Color(0.92, 0.94, 0.97), Color(0.80, 0.84, 0.89), Color(0.12, 0.14, 0.18))
+		var cap_id := aid
+		sbtn.pressed.connect(func(): _open_app(cap_id))
+		sm_v.add_child(sbtn)
+
+	var sm_sp := Control.new()
+	sm_sp.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	sm_v.add_child(sm_sp)
+	sm_v.add_child(HSeparator.new())
+
+	var shutdown_btn := Button.new()
+	shutdown_btn.text = "Herunterfahren"
+	_add_btn_icon(shutdown_btn, "power_off", 16)
+	shutdown_btn.custom_minimum_size = Vector2(0, 36)
+	_style_win_btn(shutdown_btn, Color(0.92, 0.94, 0.97), Color(0.80, 0.84, 0.89), Color(0.12, 0.14, 0.18))
+	shutdown_btn.pressed.connect(_shut_down_pc)
+	sm_v.add_child(shutdown_btn)
+
+	var exit_btn := Button.new()
+	exit_btn.text = "Aufstehen, PC bleibt an [ESC]"
+	_add_btn_icon(exit_btn, "power_off", 16)
+	exit_btn.custom_minimum_size = Vector2(0, 36)
+	_style_win_btn(exit_btn, Color(0.82, 0.22, 0.20), Color(0.66, 0.16, 0.14), Color.WHITE)
+	exit_btn.pressed.connect(func(): close_requested.emit())
+	sm_v.add_child(exit_btn)
+
+	# FLOATING VOIP PHONE CALL POPUP
+	_call_popup = PanelContainer.new()
+	_call_popup.visible = false
+	_call_popup.set_anchors_preset(Control.PRESET_BOTTOM_RIGHT)
+	_call_popup.offset_left = -380
+	_call_popup.offset_right = -14
+	_call_popup.offset_top = -310
+	_call_popup.offset_bottom = -14
+	var cp_sb := StyleBoxFlat.new()
+	cp_sb.bg_color = Color(0.98, 0.99, 1.0, 0.99)
+	cp_sb.border_color = Color(0.82, 0.24, 0.18)
+	cp_sb.set_border_width_all(2)
+	cp_sb.set_corner_radius_all(10)
+	cp_sb.set_content_margin_all(14)
+	_call_popup.add_theme_stylebox_override("panel", cp_sb)
+	desktop_layer.add_child(_call_popup)
+
+	_call_body = VBoxContainer.new()
+	_call_body.add_theme_constant_override("separation", 7)
+	_call_popup.add_child(_call_body)
+
+	# BOTTOM WINDOWS 11 TASKBAR: Start und App-Symbole in der Mitte, Infobereich rechts
+	var taskbar := PanelContainer.new()
+	taskbar.custom_minimum_size = Vector2(0, 48)
+	var tb_bar_sb := StyleBoxFlat.new()
+	tb_bar_sb.bg_color = Color(0.93, 0.94, 0.97, 0.97)
+	tb_bar_sb.border_color = Color(0.80, 0.83, 0.88)
+	tb_bar_sb.border_width_top = 1
+	tb_bar_sb.content_margin_left = 10
+	tb_bar_sb.content_margin_right = 10
+	tb_bar_sb.content_margin_top = 4
+	tb_bar_sb.content_margin_bottom = 4
+	taskbar.add_theme_stylebox_override("panel", tb_bar_sb)
+	screen_v.add_child(taskbar)
+
+	var t_row := HBoxContainer.new()
+	t_row.add_theme_constant_override("separation", 4)
+	taskbar.add_child(t_row)
+
+	# Zwei Platzhalter links und rechts halten Start und Apps in der Mitte, ohne den Infobereich zu überdecken.
+	var tb_left_sp := Control.new()
+	tb_left_sp.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	t_row.add_child(tb_left_sp)
+
+	var start_btn := Button.new()
+	start_btn.tooltip_text = "Start"
+	_add_btn_icon(start_btn, "windows", 20, "center")
+	start_btn.custom_minimum_size = Vector2(44, 40)
+	_style_taskbar_btn(start_btn, false, false)
+	_btn_icon(start_btn).modulate = Color(0.0, 0.47, 0.84)
+	start_btn.pressed.connect(func():
+		_start_menu.visible = not _start_menu.visible
+		if _start_menu.visible:
+			SfxManager.play("win_start", -10.0)
+		else:
+			SfxManager.play("click", -10.0, 1.05)
+	)
+	t_row.add_child(start_btn)
+
+	for aid in APP_ORDER:
+		var meta: Dictionary = APP_META[aid]
+		var pbtn := Button.new()
+		pbtn.tooltip_text = str(meta["name"])
+		_add_btn_icon(pbtn, str(meta["icon"]), 20)
+		pbtn.custom_minimum_size = Vector2(40, 40)
+		pbtn.add_theme_font_size_override("font_size", 12)
+		_style_taskbar_btn(pbtn, false, false)
+		var cap_id := aid
+		pbtn.pressed.connect(func(): _open_app(cap_id))
+		t_row.add_child(pbtn)
+		_taskbar_btns[aid] = pbtn
+
+	var tb_sp := Control.new()
+	tb_sp.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	t_row.add_child(tb_sp)
+
+	_tray_money = Label.new()
+	_tray_money.add_theme_font_size_override("font_size", 13)
+	t_row.add_child(_tray_money)
+	t_row.add_child(VSeparator.new())
+	_tray_power_icon = _win_icon("power", 14)
+	t_row.add_child(_tray_power_icon)
+	_tray_power = Label.new()
+	_tray_power.add_theme_font_size_override("font_size", 12)
+	t_row.add_child(_tray_power)
+	t_row.add_child(VSeparator.new())
+	_tray_temp_icon = _win_icon("temp", 14)
+	t_row.add_child(_tray_temp_icon)
+	_tray_temp = Label.new()
+	_tray_temp.add_theme_font_size_override("font_size", 12)
+	t_row.add_child(_tray_temp)
+	t_row.add_child(VSeparator.new())
+	_tray_net_icon = _win_icon("net", 14)
+	t_row.add_child(_tray_net_icon)
+	_tray_net = Label.new()
+	_tray_net.add_theme_font_size_override("font_size", 12)
+	t_row.add_child(_tray_net)
+	t_row.add_child(VSeparator.new())
+	# Windows-Infobereich: WLAN und Lautsprecher, daneben Uhrzeit und Datum
+	var tray_wifi := _win_icon("wifi", 16)
+	tray_wifi.modulate = Color(0.16, 0.18, 0.22)
+	t_row.add_child(tray_wifi)
+	var tray_speaker := _win_icon("speaker", 16)
+	tray_speaker.modulate = Color(0.16, 0.18, 0.22)
+	t_row.add_child(tray_speaker)
+	_tray_clock = Label.new()
+	_tray_clock.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	_tray_clock.add_theme_font_size_override("font_size", 11)
+	_tray_clock.modulate = Color(0.14, 0.16, 0.20)
+	_tray_clock.custom_minimum_size = Vector2(70, 0)
+	# Damit der Tooltip mit dem Spieltag erscheint, muss das Label die Maus sehen.
+	_tray_clock.mouse_filter = Control.MOUSE_FILTER_PASS
+	t_row.add_child(_tray_clock)
+
+	var leave_btn := Button.new()
+	leave_btn.text = "ESC"
+	_add_btn_icon(leave_btn, "power_off", 14)
+	leave_btn.custom_minimum_size = Vector2(64, 32)
+	_style_win_btn(leave_btn, Color(0.84, 0.24, 0.22), Color(0.68, 0.16, 0.14), Color.WHITE)
+	leave_btn.pressed.connect(func(): close_requested.emit())
+	t_row.add_child(leave_btn)
+
+
+## Gezeichnetes Symbol aus UIStyle.draw_icon. Es wird weiß gezeichnet, die Farbe kommt über modulate.
+func _win_icon(kind: String, px: int) -> Control:
+	var ic := Control.new()
+	ic.custom_minimum_size = Vector2(px, px)
+	ic.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	ic.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	ic.set_meta("kind", kind)
+	ic.draw.connect(func() -> void:
+		UIStyle.draw_icon(ic, str(ic.get_meta("kind", "")), Rect2(Vector2.ZERO, ic.size), Color.WHITE)
+	)
+	return ic
+
+
+func _set_win_icon_kind(ic: Control, kind: String) -> void:
+	if ic == null or str(ic.get_meta("kind", "")) == kind:
+		return
+	ic.set_meta("kind", kind)
+	ic.queue_redraw()
+
+
+func _btn_icon(btn: Button) -> Control:
+	if btn == null or not btn.has_meta("icon_ctrl"):
+		return null
+	return btn.get_meta("icon_ctrl") as Control
+
+
+## Setzt ein gezeichnetes Symbol in einen Button. Vor _style_win_btn aufrufen:
+## _style_win_btn rückt den Text passend ein und färbt das Symbol wie den Text.
+## layout: "left" = links neben dem Text, "top" = über dem Text (Desktop-Kacheln), "center" = nur Symbol.
+func _add_btn_icon(btn: Button, kind: String, px: int, layout: String = "left") -> Control:
+	var ic := _win_icon(kind, px)
+	var half := float(px) * 0.5
+	match layout:
+		"top":
+			ic.set_anchors_preset(Control.PRESET_CENTER_TOP)
+			ic.offset_left = -half
+			ic.offset_right = half
+			ic.offset_top = 8.0
+			ic.offset_bottom = 8.0 + float(px)
+			btn.set_meta("icon_pad_top", px + 8)
+		"center":
+			ic.set_anchors_preset(Control.PRESET_CENTER)
+			ic.offset_left = -half
+			ic.offset_right = half
+			ic.offset_top = -half
+			ic.offset_bottom = half
+		_:
+			ic.set_anchors_preset(Control.PRESET_CENTER_LEFT)
+			ic.offset_left = 10.0
+			ic.offset_right = 10.0 + float(px)
+			ic.offset_top = -half
+			ic.offset_bottom = half
+			btn.set_meta("icon_pad_left", px + 8)
+	btn.add_child(ic)
+	btn.set_meta("icon_ctrl", ic)
+	return ic
+
+
+func _make_light_card(bg: Color, border: Color, radius: int, pad_x: int, pad_y: int) -> PanelContainer:
+	var card := PanelContainer.new()
+	var sb := StyleBoxFlat.new()
+	sb.bg_color = bg
+	sb.border_color = border
+	sb.set_border_width_all(1)
+	sb.set_corner_radius_all(radius)
+	sb.content_margin_left = pad_x
+	sb.content_margin_right = pad_x
+	sb.content_margin_top = pad_y
+	sb.content_margin_bottom = pad_y
+	card.add_theme_stylebox_override("panel", sb)
+	return card
+
+
+func _style_win_btn(btn: Button, bg: Color, border: Color, txt_col: Color) -> void:
+	var normal := StyleBoxFlat.new()
+	normal.bg_color = bg
+	normal.border_color = border
+	normal.set_border_width_all(1)
+	normal.set_corner_radius_all(5)
+	normal.content_margin_left = 10 + int(btn.get_meta("icon_pad_left", 0))
+	normal.content_margin_right = 10
+	normal.content_margin_top = 4 + int(btn.get_meta("icon_pad_top", 0))
+	normal.content_margin_bottom = 4
+	var hover := normal.duplicate() as StyleBoxFlat
+	hover.bg_color = bg.darkened(0.08) if bg.get_luminance() > 0.5 else bg.lightened(0.10)
+	var pressed := normal.duplicate() as StyleBoxFlat
+	pressed.bg_color = bg.darkened(0.15)
+	var disabled := normal.duplicate() as StyleBoxFlat
+	disabled.bg_color = Color(0.88, 0.89, 0.91)
+	disabled.border_color = Color(0.78, 0.80, 0.83)
+	btn.add_theme_stylebox_override("normal", normal)
+	btn.add_theme_stylebox_override("hover", hover)
+	btn.add_theme_stylebox_override("pressed", pressed)
+	btn.add_theme_stylebox_override("disabled", disabled)
+	btn.add_theme_color_override("font_color", txt_col)
+	btn.add_theme_color_override("font_hover_color", txt_col)
+	btn.add_theme_color_override("font_pressed_color", txt_col)
+	btn.add_theme_color_override("font_disabled_color", Color(0.50, 0.53, 0.57))
+	var ic := _btn_icon(btn)
+	if ic != null:
+		ic.modulate = txt_col
+
+
+## Taskleisten-Button im Windows-11-Stil: flach, beim Überfahren hell hinterlegt,
+## geöffnete App mit blauem Strich unten, Warnzustand rot hinterlegt.
+## Ohne Text sitzt das Symbol mittig, mit Text (Zähler) rückt der Text neben das Symbol.
+func _style_taskbar_btn(btn: Button, is_open: bool, alert: bool) -> void:
+	var accent := Color(0.0, 0.47, 0.84)
+	var txt_col := Color(0.66, 0.12, 0.10) if alert else Color(0.10, 0.12, 0.15)
+	var normal := StyleBoxFlat.new()
+	if alert:
+		normal.bg_color = Color(0.98, 0.86, 0.84, 0.95)
+	elif is_open:
+		normal.bg_color = Color(1.0, 1.0, 1.0, 0.80)
+	else:
+		normal.bg_color = Color(1.0, 1.0, 1.0, 0.0)
+	normal.set_corner_radius_all(5)
+	var pad_left := 10
+	if not btn.text.is_empty():
+		pad_left += int(btn.get_meta("icon_pad_left", 0))
+	normal.content_margin_left = pad_left
+	normal.content_margin_right = 10
+	normal.content_margin_top = 4
+	normal.content_margin_bottom = 4
+	if is_open:
+		normal.border_color = accent
+		normal.border_width_bottom = 3
+	var hover := normal.duplicate() as StyleBoxFlat
+	hover.bg_color = normal.bg_color.darkened(0.05) if alert else Color(1.0, 1.0, 1.0, 0.65)
+	var pressed := normal.duplicate() as StyleBoxFlat
+	pressed.bg_color = Color(0.86, 0.88, 0.92, 0.90)
+	btn.add_theme_stylebox_override("normal", normal)
+	btn.add_theme_stylebox_override("hover", hover)
+	btn.add_theme_stylebox_override("pressed", pressed)
+	btn.add_theme_stylebox_override("focus", StyleBoxEmpty.new())
+	btn.add_theme_color_override("font_color", txt_col)
+	btn.add_theme_color_override("font_hover_color", txt_col)
+	btn.add_theme_color_override("font_pressed_color", txt_col)
+	var ic := _btn_icon(btn)
+	if ic != null:
+		ic.modulate = accent if is_open and not alert else txt_col
+
+
+func _clear_children(node: Node) -> void:
+	for c in node.get_children():
+		c.queue_free()

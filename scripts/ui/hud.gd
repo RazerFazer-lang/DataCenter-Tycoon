@@ -1,0 +1,1164 @@
+class_name GameHUD
+extends Control
+## v1.2 Spiel-HUD im Stil des Hauptmenüs (Anthrazit, gedämpftes Amber, kleine Radien).
+## Oben links: Kontostand, Stromlast und Raumtemperatur als Kacheln mit Symbol und Balken.
+## Oben rechts: Tag und Uhrzeit, darunter Co-op-Crew und die Steuerungshilfe [H].
+## Darunter: Aufgaben-Tracker "Erste Schritte", Warnbanner, Meldungen, Lieferungsanzeige,
+## Fadenkreuz mit Interaktions-Hinweis (Tastenkappe) und das Pause-Menü.
+## Symbole werden gezeichnet, damit keine Emoji-Schrift nötig ist.
+
+signal resume_requested
+signal leave_requested
+
+const HUD_BG := Color(0.055, 0.058, 0.066, 0.86)
+const HUD_BORDER := Color(0.24, 0.25, 0.27, 0.85)
+const EDGE := 20
+const TOAST_TOP := 146.0
+const TOAST_TIME := 3.8
+const TOAST_FADE := 0.35
+
+var _world: WorldController = null
+var _display_font: FontVariation
+var _key_regex: RegEx
+
+# Statusanzeigen
+var _money_lbl: Label
+var _power_lbl: Label
+var _power_bar: ProgressBar
+var _power_icon: Control
+var _temp_lbl: Label
+var _temp_bar: ProgressBar
+var _temp_icon: Control
+var _clock_lbl: Label
+var _day_lbl: Label
+var _clock_icon: Control
+var _is_night: bool = false
+
+# Bedingte Panels (nur sichtbar, wenn etwas anliegt)
+var _alert_panel: PanelContainer
+var _alert_lbl: Label
+var _alert_strip: ColorRect
+var _alert_icon: Control
+var _van_panel: PanelContainer
+var _van_lbl: Label
+var _van_bar: ProgressBar
+var _toast_panel: PanelContainer
+var _toast_title: Label
+var _toast_lbl: Label
+var _toast_strip: ColorRect
+var _toast_icon: Control
+var _toast_tween: Tween
+var _checklist_panel: PanelContainer
+var _checklist_box: VBoxContainer
+var _checklist_count_lbl: Label
+var _crew_panel: PanelContainer
+var _crew_box: VBoxContainer
+var _help_panel: PanelContainer
+
+# Fadenkreuz & Interaktions-Hinweis
+var _crosshair: Control
+var _crosshair_active: bool = false
+var _prompt_panel: PanelContainer
+var _prompt_key_cap: PanelContainer
+var _prompt_key_lbl: Label
+var _prompt_lbl: Label
+var _sub_prompt_lbl: Label
+
+# Pause-Menü
+var _pause_overlay: ColorRect
+var _pause_card: PanelContainer
+var _pause_world_lbl: Label
+var _save_section: VBoxContainer
+var _save_name_input: LineEdit
+var _pause_master_slider: HSlider
+var _pause_fan_slider: HSlider
+var _pause_sens_slider: HSlider
+var _pause_gfx_option: OptionButton
+
+var _display_money: float = 1800.0
+var _toast_timer: float = 0.0
+var _blink_t: float = 0.0
+var _prompt_alpha: float = 0.0
+
+
+func bind_world(world_ref: WorldController) -> void:
+	_world = world_ref
+
+
+func _ready() -> void:
+	set_anchors_preset(Control.PRESET_FULL_RECT)
+	mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_key_regex = RegEx.new()
+	_key_regex.compile("^\\s*\\[([^\\]]{1,12})\\]\\s*(.*)$")
+	_build_ui()
+
+	GameState.state_updated.connect(_refresh_all)
+	GameState.racks_changed.connect(_refresh_checklist)
+	GameState.crates_changed.connect(_refresh_checklist)
+	GameState.inventory_changed.connect(_refresh_checklist)
+	GameState.world_snapshot_loaded.connect(func():
+		_display_money = GameState.money
+		_refresh_all()
+	)
+	GameState.event_logged.connect(_on_event_logged)
+	GameState.world_saved.connect(_on_world_saved)
+	GameState.daily_bill_charged.connect(_on_daily_bill_charged)
+	GameState.van_updated.connect(_refresh_van_badge)
+	NetworkManager.players_changed.connect(_refresh_crew)
+
+
+func set_pause_visible(show_pause: bool) -> void:
+	if _pause_overlay == null:
+		return
+	if show_pause:
+		_pause_world_lbl.text = "%s  •  Tag %d, %s Uhr" % [GameState.current_save_name, GameState.day_number, GameState.get_time_string()]
+		var is_host := NetworkManager.is_in_session and multiplayer.is_server()
+		_save_section.visible = is_host
+		_save_name_input.text = GameState.current_save_name
+		_pause_master_slider.set_value_no_signal(SettingsManager.master_volume * 100.0)
+		_pause_fan_slider.set_value_no_signal(SettingsManager.fan_volume * 100.0)
+		_pause_sens_slider.set_value_no_signal(SettingsManager.mouse_sensitivity * 1000.0)
+		_update_slider_label(_pause_master_slider)
+		_update_slider_label(_pause_fan_slider)
+		_update_slider_label(_pause_sens_slider)
+		_pause_gfx_option.selected = SettingsManager.graphics_quality
+		UIStyle.animate_popup_open(_pause_overlay, _pause_card)
+	else:
+		UIStyle.animate_popup_close(_pause_overlay, _pause_card)
+
+
+func show_toast(msg: String, is_warn: bool = false) -> void:
+	if _toast_panel == null:
+		return
+	var col := UIStyle.COL_AMBER if is_warn else UIStyle.COL_GREEN
+	_toast_title.text = "WARNUNG" if is_warn else "MELDUNG"
+	_toast_title.add_theme_color_override("font_color", col)
+	_toast_lbl.text = msg
+	_toast_strip.color = col
+	_set_icon(_toast_icon, "warn" if is_warn else "info", col)
+	_toast_panel.visible = true
+	_toast_panel.modulate.a = 0.0
+	_toast_panel.position.y = TOAST_TOP - 12.0
+	if _toast_tween != null and _toast_tween.is_valid():
+		_toast_tween.kill()
+	_toast_tween = create_tween().set_parallel(true).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
+	_toast_tween.tween_property(_toast_panel, "modulate:a", 1.0, 0.2)
+	_toast_tween.tween_property(_toast_panel, "position:y", TOAST_TOP, 0.28)
+	_toast_timer = TOAST_TIME
+
+
+func _unhandled_input(event: InputEvent) -> void:
+	if not visible:
+		return
+	if event.is_action_pressed("toggle_help") and _help_panel != null:
+		_help_panel.visible = not _help_panel.visible
+		SfxManager.play("click", -12.0)
+
+
+func _process(delta: float) -> void:
+	if not visible:
+		return
+	_blink_t += delta
+
+	_display_money = lerpf(_display_money, GameState.money, clampf(delta * 9.0, 0.0, 1.0))
+	if absf(_display_money - GameState.money) < 0.6:
+		_display_money = GameState.money
+	if _money_lbl != null:
+		_money_lbl.text = _format_money(_display_money)
+		_money_lbl.add_theme_color_override("font_color", UIStyle.COL_RED if _display_money < 0.0 else UIStyle.COL_GOLD_TEXT)
+	if _clock_lbl != null:
+		var night := GameState.time_of_day < 0.24 or GameState.time_of_day > 0.76
+		if night != _is_night:
+			_is_night = night
+			_set_icon(_clock_icon, "moon" if night else "sun", Color(0.70, 0.76, 0.92) if night else UIStyle.COL_GOLD_TEXT)
+		_clock_lbl.text = GameState.get_time_string()
+		_day_lbl.text = "TAG %d" % GameState.day_number
+
+	_refresh_player_hud(delta)
+	_refresh_alert_banner()
+	_refresh_van_badge()
+	if _toast_timer > 0.0:
+		_toast_timer -= delta
+		if _toast_timer <= TOAST_FADE and _toast_panel != null:
+			_toast_panel.modulate.a = maxf(0.0, _toast_timer / TOAST_FADE)
+		if _toast_timer <= 0.0 and _toast_panel != null:
+			_toast_panel.visible = false
+
+
+func _format_money(v: float) -> String:
+	var n := int(roundf(v))
+	var digits := str(absi(n))
+	var grouped := ""
+	while digits.length() > 3:
+		grouped = "." + digits.right(3) + grouped
+		digits = digits.left(digits.length() - 3)
+	return ("-$" if n < 0 else "$") + digits + grouped
+
+
+func _on_world_saved(display_name: String, is_autosave: bool) -> void:
+	if is_autosave:
+		show_toast("Auto-Save: %s" % display_name)
+	else:
+		show_toast("Spielstand '%s' gespeichert." % display_name)
+
+
+func _on_daily_bill_charged(day_num: int, bill_amount: int, kwh_used: float) -> void:
+	show_toast("Stromrechnung Tag %d: -$%d (%.1f kWh)" % [day_num - 1, bill_amount, kwh_used], true)
+
+
+func _on_event_logged(message: String, severity: String) -> void:
+	if severity == "alert" or severity == "warn" or severity == "good":
+		show_toast(message, severity != "good")
+
+
+func _refresh_all() -> void:
+	_refresh_stats()
+	_refresh_checklist()
+	_refresh_crew()
+
+
+func _refresh_stats() -> void:
+	if _power_lbl == null:
+		return
+	var pwr_ratio := clampf(float(GameState.total_watts) / float(maxi(GameState.max_watts, 1)), 0.0, 1.0)
+	var pwr_state := "" if GameState.breaker_on else ("  USV" if GameState.ups_backup_active else "  AUS")
+	_power_lbl.text = "%d / %d W%s" % [GameState.total_watts, GameState.max_watts, pwr_state]
+	_power_bar.value = pwr_ratio * 100.0
+	var p_col := UIStyle.COL_GREEN
+	if not GameState.breaker_on or GameState.total_watts > GameState.max_watts:
+		p_col = UIStyle.COL_AMBER if GameState.ups_backup_active else UIStyle.COL_RED
+	elif pwr_ratio > 0.80:
+		p_col = UIStyle.COL_AMBER
+	_power_lbl.add_theme_color_override("font_color", UIStyle.COL_TEXT_MAIN if p_col == UIStyle.COL_GREEN else p_col)
+	_set_bar_color(_power_bar, p_col)
+	_set_icon(_power_icon, "power", UIStyle.COL_GOLD_TEXT if p_col == UIStyle.COL_GREEN else p_col)
+
+	_temp_lbl.text = "%.0f °C" % GameState.room_temp
+	_temp_bar.value = clampf((GameState.room_temp - 15.0) / 75.0 * 100.0, 0.0, 100.0)
+	var hot := GameState.room_temp >= 56.0
+	var t_col := UIStyle.COL_TEXT_MAIN if not hot else (UIStyle.COL_AMBER if GameState.room_temp < 72.0 else UIStyle.COL_RED)
+	_temp_lbl.add_theme_color_override("font_color", t_col)
+	_set_bar_color(_temp_bar, UIStyle.COL_BLUE if not hot else t_col)
+	_set_icon(_temp_icon, "temp", UIStyle.COL_BLUE if not hot else t_col)
+
+
+func _refresh_checklist() -> void:
+	if _checklist_panel == null or _checklist_box == null:
+		return
+	if GameState.checklist_dismissed:
+		_checklist_panel.visible = false
+		return
+	var steps := GameState.get_starter_checklist()
+	var done_n := 0
+	for s in steps:
+		if bool((s as Dictionary)["done"]):
+			done_n += 1
+	if done_n == steps.size():
+		_checklist_panel.visible = false
+		return
+
+	_checklist_panel.visible = true
+	_checklist_count_lbl.text = "%d / %d" % [done_n, steps.size()]
+	for c in _checklist_box.get_children():
+		c.queue_free()
+
+	var shown_next := false
+	for s in steps:
+		var sd: Dictionary = s
+		var done := bool(sd["done"])
+		# 2 = erledigt, 1 = aktueller Schritt, 0 = noch offen
+		var state := 2 if done else (0 if shown_next else 1)
+		if state == 1:
+			shown_next = true
+
+		var row := HBoxContainer.new()
+		row.add_theme_constant_override("separation", 9)
+		row.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		_checklist_box.add_child(row)
+
+		var box := Control.new()
+		box.custom_minimum_size = Vector2(14, 14)
+		box.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+		box.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		var st := state
+		box.draw.connect(func() -> void: _draw_check_box(box, st))
+		row.add_child(box)
+
+		var lbl := Label.new()
+		lbl.text = str(sd["text"])
+		lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		var col := UIStyle.COL_TEXT_MAIN
+		if state == 2:
+			col = Color(UIStyle.COL_TEXT_SUB, 0.75)
+		elif state == 0:
+			col = Color(UIStyle.COL_TEXT_SUB, 0.9)
+		UIStyle.style_label(lbl, 13 if state == 1 else 12, col)
+		row.add_child(lbl)
+
+
+func _draw_check_box(ci: Control, state: int) -> void:
+	var r := Rect2(Vector2(1.0, 1.0), ci.size - Vector2(2.0, 2.0))
+	match state:
+		2:
+			ci.draw_rect(r, UIStyle.COL_GREEN)
+			var sz := ci.size
+			ci.draw_polyline(PackedVector2Array([
+				Vector2(0.24, 0.52) * sz, Vector2(0.43, 0.72) * sz, Vector2(0.78, 0.30) * sz
+			]), Color(0.05, 0.08, 0.05), 2.0, true)
+		1:
+			ci.draw_rect(r, Color(UIStyle.COL_ACCENT, 0.18))
+			ci.draw_rect(r, UIStyle.COL_ACCENT, false, 1.5)
+		_:
+			ci.draw_rect(r, Color(0.45, 0.46, 0.48), false, 1.0)
+
+
+func _set_bar_color(bar: ProgressBar, col: Color) -> void:
+	var fill := bar.get_theme_stylebox("fill") as StyleBoxFlat
+	if fill != null:
+		fill.bg_color = col
+
+
+func _refresh_van_badge() -> void:
+	if _van_panel == null:
+		return
+	var ph := GameState.van_phase
+	if ph == "idle":
+		_van_panel.visible = false
+		return
+	_van_panel.visible = true
+	var q_n := GameState.van_cargo_count + GameState.pending_delivery_count
+	match ph:
+		"arriving":
+			var dur := maxf(float(GameState.VAN_ARRIVE_DURATION), 0.01)
+			var eta := maxf(0.0, dur - GameState.van_phase_time)
+			_van_lbl.text = "Ankunft in %d s  •  %d Artikel" % [int(ceilf(eta)), q_n]
+			_van_lbl.add_theme_color_override("font_color", UIStyle.COL_TEXT_MAIN)
+			_van_bar.value = clampf(GameState.van_phase_time / dur, 0.0, 1.0) * 100.0
+			_set_bar_color(_van_bar, UIStyle.COL_ACCENT)
+		"unloading":
+			var total_n := maxi(GameState.van_trip_total, 1)
+			var done_n := mini(GameState.van_trip_done, total_n)
+			_van_lbl.text = "Fahrer lädt aus  •  %d / %d" % [done_n, total_n]
+			_van_lbl.add_theme_color_override("font_color", UIStyle.COL_TEXT_MAIN)
+			_van_bar.value = float(done_n) / float(total_n) * 100.0
+			_set_bar_color(_van_bar, UIStyle.COL_GREEN)
+		"departing":
+			_van_lbl.text = "Lieferung abgeschlossen"
+			_van_lbl.add_theme_color_override("font_color", UIStyle.COL_TEXT_SUB)
+			_van_bar.value = 100.0
+			_set_bar_color(_van_bar, UIStyle.COL_GREEN)
+
+
+func _refresh_alert_banner() -> void:
+	if _alert_panel == null:
+		return
+	var alerts: Array[String] = []
+	if not GameState.breaker_on:
+		if GameState.ups_backup_active:
+			alerts.append("USV-Notstrom (%.0f%%): Sicherung [E] einschalten" % GameState.avg_ups_charge)
+		else:
+			alerts.append("BLACKOUT: Hauptsicherung [E] einschalten")
+	elif GameState.total_watts > GameState.max_watts:
+		alerts.append("STROM-ÜBERLAST (%d / %d W)" % [GameState.total_watts, GameState.max_watts])
+	if GameState.has_any_fire():
+		alerts.append("SERVER-BRAND: Feuerlöscher an der Wand holen")
+	if GameState.ddos_active:
+		alerts.append("DDoS-ANGRIFF: am Router [E] oder PC abwehren")
+	if not GameState.active_call.is_empty():
+		alerts.append("KUNDENANRUF (%s): [E] am Schreibtisch" % str(GameState.active_call.get("customer", "Kunde")))
+	elif GameState.get_open_ticket_count() > 0:
+		alerts.append("%d offene Support-Tickets am PC" % GameState.get_open_ticket_count())
+	if GameState.used_bandwidth_mbps > GameState.max_bandwidth_mbps:
+		alerts.append("Router am Limit (%s / %s): upgraden [F]" % [
+			HardwareCatalog.format_speed_mbps(GameState.used_bandwidth_mbps),
+			HardwareCatalog.format_speed_mbps(GameState.max_bandwidth_mbps)
+		])
+
+	if alerts.is_empty():
+		_alert_panel.visible = false
+		return
+	_alert_panel.visible = true
+	_alert_lbl.text = "   •   ".join(alerts)
+	var pulse := 0.55 + 0.45 * (0.5 + 0.5 * sin(_blink_t * 7.0))
+	_alert_strip.modulate.a = pulse
+	_alert_icon.modulate.a = pulse
+
+
+func _refresh_player_hud(delta: float) -> void:
+	if _world == null or _world.local_player == null:
+		return
+	var lp := _world.local_player
+
+	var want_prompt := (not lp.current_prompt.is_empty() or not lp.current_sub_prompt.is_empty()) and not lp.ui_locked
+	_prompt_alpha = lerpf(_prompt_alpha, 1.0 if want_prompt else 0.0, clampf(delta * 16.0, 0.0, 1.0))
+	_prompt_panel.visible = _prompt_alpha > 0.02
+	_prompt_panel.modulate.a = _prompt_alpha
+	if want_prompt:
+		var m := _key_regex.search(lp.current_prompt)
+		if m != null:
+			_prompt_key_cap.visible = true
+			_prompt_key_lbl.text = m.get_string(1)
+			_prompt_lbl.text = m.get_string(2)
+		else:
+			_prompt_key_cap.visible = false
+			_prompt_lbl.text = lp.current_prompt
+		_prompt_lbl.visible = not _prompt_lbl.text.is_empty()
+		_sub_prompt_lbl.text = lp.current_sub_prompt
+		_sub_prompt_lbl.visible = not lp.current_sub_prompt.is_empty()
+
+	var active := not lp.current_prompt.is_empty()
+	if active != _crosshair_active:
+		_crosshair_active = active
+		_crosshair.queue_redraw()
+
+
+func _refresh_crew() -> void:
+	if _crew_panel == null or _crew_box == null:
+		return
+	# Im Solo-Spiel bleibt das Crew-Panel ausgeblendet
+	if NetworkManager.players.size() <= 1:
+		_crew_panel.visible = false
+		return
+	_crew_panel.visible = true
+	for child in _crew_box.get_children():
+		child.queue_free()
+
+	var head := HBoxContainer.new()
+	head.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_crew_box.add_child(head)
+	var title := Label.new()
+	title.text = "CO-OP CREW"
+	title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	UIStyle.style_label(title, 11, UIStyle.COL_GOLD_TEXT, _display_font)
+	head.add_child(title)
+	var count := Label.new()
+	count.text = "%d / 4" % NetworkManager.players.size()
+	UIStyle.style_label(count, 11, UIStyle.COL_TEXT_SUB)
+	head.add_child(count)
+
+	for pid in NetworkManager.players.keys():
+		var info: Dictionary = NetworkManager.players[pid]
+		var row := HBoxContainer.new()
+		row.add_theme_constant_override("separation", 8)
+		row.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		_crew_box.add_child(row)
+
+		var dot := ColorRect.new()
+		dot.custom_minimum_size = Vector2(8, 8)
+		dot.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+		dot.color = (info.get("color", Color.WHITE) as Color).lightened(0.2)
+		dot.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		row.add_child(dot)
+
+		var name_lbl := Label.new()
+		name_lbl.text = str(info.get("name", "Spieler"))
+		name_lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		name_lbl.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+		UIStyle.style_label(name_lbl, 13, UIStyle.COL_TEXT_MAIN)
+		row.add_child(name_lbl)
+
+		if int(pid) == 1:
+			var host_lbl := Label.new()
+			host_lbl.text = "HOST"
+			UIStyle.style_label(host_lbl, 10, UIStyle.COL_GOLD_TEXT, _display_font)
+			row.add_child(host_lbl)
+
+
+func _on_pause_quick_settings_changed(_val: float = 0.0) -> void:
+	SettingsManager.master_volume = _pause_master_slider.value / 100.0
+	SettingsManager.fan_volume = _pause_fan_slider.value / 100.0
+	SettingsManager.mouse_sensitivity = _pause_sens_slider.value / 1000.0
+	SettingsManager.graphics_quality = clampi(_pause_gfx_option.selected, 0, 3)
+	SettingsManager.save_settings()
+
+
+func _build_ui() -> void:
+	_display_font = UIStyle.make_display_font(get_theme_default_font(), 0.5, 1)
+	_build_stats_row()
+	_build_clock_widget()
+	_build_checklist()
+	_build_alert_banner()
+	_build_toast()
+	_build_van_widget()
+	_build_right_column()
+	_build_key_hints()
+	_build_crosshair_and_prompt()
+	# Alles außer dem Pause-Menü lässt Mausklicks durch
+	for child in get_children():
+		_ignore_mouse_recursive(child)
+	_build_pause_overlay()
+
+
+func _ignore_mouse_recursive(node: Node) -> void:
+	if node is Control:
+		(node as Control).mouse_filter = Control.MOUSE_FILTER_IGNORE
+	for c in node.get_children():
+		_ignore_mouse_recursive(c)
+
+
+func _build_stats_row() -> void:
+	var row := HBoxContainer.new()
+	row.position = Vector2(EDGE, EDGE)
+	row.add_theme_constant_override("separation", 8)
+	add_child(row)
+
+	var money_v := _make_chip(row, "", "KONTOSTAND")
+	_money_lbl = Label.new()
+	_money_lbl.text = "$1.800"
+	UIStyle.style_label(_money_lbl, 21, UIStyle.COL_GOLD_TEXT, _display_font, true)
+	money_v.add_child(_money_lbl)
+
+	var pwr_v := _make_chip(row, "power", "STROMLAST")
+	_power_icon = pwr_v.get_meta("icon") as Control
+	_power_lbl = Label.new()
+	_power_lbl.text = "0 / 2400 W"
+	UIStyle.style_label(_power_lbl, 14, UIStyle.COL_TEXT_MAIN, _display_font)
+	pwr_v.add_child(_power_lbl)
+	_power_bar = _make_mini_bar(UIStyle.COL_GREEN)
+	_power_bar.custom_minimum_size = Vector2(150, 5)
+	pwr_v.add_child(_power_bar)
+
+	var tmp_v := _make_chip(row, "temp", "RAUMTEMPERATUR")
+	_temp_icon = tmp_v.get_meta("icon") as Control
+	_temp_lbl = Label.new()
+	_temp_lbl.text = "22 °C"
+	UIStyle.style_label(_temp_lbl, 14, UIStyle.COL_TEXT_MAIN, _display_font)
+	tmp_v.add_child(_temp_lbl)
+	_temp_bar = _make_mini_bar(UIStyle.COL_BLUE)
+	_temp_bar.custom_minimum_size = Vector2(110, 5)
+	tmp_v.add_child(_temp_bar)
+
+
+## Status-Kachel: optionales Symbol links, rechts Beschriftung und Inhalt.
+## Gibt die Inhalts-Spalte zurück; das Symbol liegt als Meta "icon" daran.
+func _make_chip(parent: HBoxContainer, icon_kind: String, caption: String) -> VBoxContainer:
+	var panel := PanelContainer.new()
+	panel.add_theme_stylebox_override("panel", UIStyle.make_panel(HUD_BG, HUD_BORDER, 4, 1, 12, 8))
+	parent.add_child(panel)
+
+	var h := HBoxContainer.new()
+	h.add_theme_constant_override("separation", 10)
+	panel.add_child(h)
+
+	var icon: Control = null
+	if not icon_kind.is_empty():
+		icon = _make_icon(icon_kind, UIStyle.COL_GOLD_TEXT, 18)
+		h.add_child(icon)
+
+	var v := VBoxContainer.new()
+	v.add_theme_constant_override("separation", 2)
+	v.alignment = BoxContainer.ALIGNMENT_CENTER
+	h.add_child(v)
+
+	var cap := Label.new()
+	cap.text = caption
+	UIStyle.style_label(cap, 10, UIStyle.COL_TEXT_SUB, _display_font)
+	v.add_child(cap)
+	v.set_meta("icon", icon)
+	return v
+
+
+func _make_icon(kind: String, col: Color, px: int) -> Control:
+	var ic := Control.new()
+	ic.custom_minimum_size = Vector2(px, px)
+	ic.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	ic.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	ic.set_meta("kind", kind)
+	ic.set_meta("col", col)
+	ic.draw.connect(func() -> void:
+		UIStyle.draw_icon(ic, str(ic.get_meta("kind")), Rect2(Vector2.ZERO, ic.size), ic.get_meta("col") as Color)
+	)
+	return ic
+
+
+func _set_icon(ic: Control, kind: String, col: Color) -> void:
+	if ic == null:
+		return
+	ic.set_meta("kind", kind)
+	ic.set_meta("col", col)
+	ic.queue_redraw()
+
+
+func _build_clock_widget() -> void:
+	var panel := PanelContainer.new()
+	panel.anchor_left = 1.0
+	panel.anchor_right = 1.0
+	panel.offset_left = -EDGE
+	panel.offset_right = -EDGE
+	panel.offset_top = EDGE
+	panel.grow_horizontal = Control.GROW_DIRECTION_BEGIN
+	panel.add_theme_stylebox_override("panel", UIStyle.make_panel(HUD_BG, HUD_BORDER, 4, 1, 14, 8))
+	add_child(panel)
+
+	var h := HBoxContainer.new()
+	h.add_theme_constant_override("separation", 12)
+	panel.add_child(h)
+
+	_clock_icon = _make_icon("sun", UIStyle.COL_GOLD_TEXT, 22)
+	h.add_child(_clock_icon)
+
+	var v := VBoxContainer.new()
+	v.add_theme_constant_override("separation", 0)
+	h.add_child(v)
+
+	_day_lbl = Label.new()
+	_day_lbl.text = "TAG 1"
+	UIStyle.style_label(_day_lbl, 10, UIStyle.COL_TEXT_SUB, _display_font)
+	v.add_child(_day_lbl)
+
+	_clock_lbl = Label.new()
+	_clock_lbl.text = "08:00"
+	UIStyle.style_label(_clock_lbl, 20, UIStyle.COL_TEXT_MAIN, _display_font, true)
+	v.add_child(_clock_lbl)
+
+
+func _build_checklist() -> void:
+	_checklist_panel = PanelContainer.new()
+	_checklist_panel.position = Vector2(EDGE, 92)
+	_checklist_panel.custom_minimum_size = Vector2(290, 0)
+	_checklist_panel.add_theme_stylebox_override("panel", UIStyle.make_panel(HUD_BG, HUD_BORDER, 4, 1, 0, 0))
+	add_child(_checklist_panel)
+
+	var h := HBoxContainer.new()
+	h.add_theme_constant_override("separation", 0)
+	_checklist_panel.add_child(h)
+
+	var strip := ColorRect.new()
+	strip.custom_minimum_size = Vector2(3, 0)
+	strip.color = UIStyle.COL_ACCENT
+	h.add_child(strip)
+
+	var m := MarginContainer.new()
+	m.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	m.add_theme_constant_override("margin_left", 14)
+	m.add_theme_constant_override("margin_right", 14)
+	m.add_theme_constant_override("margin_top", 10)
+	m.add_theme_constant_override("margin_bottom", 12)
+	h.add_child(m)
+
+	var v := VBoxContainer.new()
+	v.add_theme_constant_override("separation", 8)
+	m.add_child(v)
+
+	var head := HBoxContainer.new()
+	v.add_child(head)
+	var title := Label.new()
+	title.text = "ERSTE SCHRITTE"
+	title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	UIStyle.style_label(title, 11, UIStyle.COL_GOLD_TEXT, _display_font)
+	head.add_child(title)
+	_checklist_count_lbl = Label.new()
+	UIStyle.style_label(_checklist_count_lbl, 11, UIStyle.COL_TEXT_SUB)
+	head.add_child(_checklist_count_lbl)
+
+	_checklist_box = VBoxContainer.new()
+	_checklist_box.add_theme_constant_override("separation", 6)
+	v.add_child(_checklist_box)
+
+
+func _build_alert_banner() -> void:
+	_alert_panel = PanelContainer.new()
+	_alert_panel.anchor_left = 0.5
+	_alert_panel.anchor_right = 0.5
+	_alert_panel.offset_left = -300
+	_alert_panel.offset_right = 300
+	_alert_panel.offset_top = 92
+	_alert_panel.visible = false
+	_alert_panel.add_theme_stylebox_override("panel", UIStyle.make_panel(Color(0.20, 0.06, 0.055, 0.92), Color(UIStyle.COL_RED, 0.8), 4, 1, 0, 0))
+	add_child(_alert_panel)
+
+	var h := HBoxContainer.new()
+	h.add_theme_constant_override("separation", 12)
+	_alert_panel.add_child(h)
+
+	_alert_strip = ColorRect.new()
+	_alert_strip.custom_minimum_size = Vector2(4, 0)
+	_alert_strip.color = UIStyle.COL_RED
+	h.add_child(_alert_strip)
+
+	_alert_icon = _make_icon("warn", Color(1.0, 0.78, 0.70), 18)
+	h.add_child(_alert_icon)
+
+	var m := MarginContainer.new()
+	m.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	m.add_theme_constant_override("margin_right", 14)
+	m.add_theme_constant_override("margin_top", 8)
+	m.add_theme_constant_override("margin_bottom", 8)
+	h.add_child(m)
+
+	_alert_lbl = Label.new()
+	_alert_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_alert_lbl.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	UIStyle.style_label(_alert_lbl, 13, Color(1.0, 0.90, 0.86), _display_font)
+	m.add_child(_alert_lbl)
+
+
+func _build_toast() -> void:
+	_toast_panel = PanelContainer.new()
+	_toast_panel.anchor_left = 0.5
+	_toast_panel.anchor_right = 0.5
+	_toast_panel.offset_left = -230
+	_toast_panel.offset_right = 230
+	_toast_panel.offset_top = TOAST_TOP
+	_toast_panel.offset_bottom = TOAST_TOP
+	_toast_panel.visible = false
+	_toast_panel.add_theme_stylebox_override("panel", UIStyle.make_panel(Color(0.065, 0.068, 0.076, 0.94), HUD_BORDER, 4, 1, 0, 0))
+	add_child(_toast_panel)
+
+	var h := HBoxContainer.new()
+	h.add_theme_constant_override("separation", 12)
+	_toast_panel.add_child(h)
+
+	_toast_strip = ColorRect.new()
+	_toast_strip.custom_minimum_size = Vector2(3, 0)
+	_toast_strip.color = UIStyle.COL_GREEN
+	h.add_child(_toast_strip)
+
+	_toast_icon = _make_icon("info", UIStyle.COL_GREEN, 18)
+	h.add_child(_toast_icon)
+
+	var m := MarginContainer.new()
+	m.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	m.add_theme_constant_override("margin_right", 14)
+	m.add_theme_constant_override("margin_top", 8)
+	m.add_theme_constant_override("margin_bottom", 9)
+	h.add_child(m)
+
+	var v := VBoxContainer.new()
+	v.add_theme_constant_override("separation", 1)
+	m.add_child(v)
+
+	_toast_title = Label.new()
+	_toast_title.text = "MELDUNG"
+	UIStyle.style_label(_toast_title, 10, UIStyle.COL_GREEN, _display_font)
+	v.add_child(_toast_title)
+
+	_toast_lbl = Label.new()
+	_toast_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	UIStyle.style_label(_toast_lbl, 13, UIStyle.COL_TEXT_MAIN)
+	v.add_child(_toast_lbl)
+
+
+func _build_van_widget() -> void:
+	_van_panel = PanelContainer.new()
+	_van_panel.anchor_top = 1.0
+	_van_panel.anchor_bottom = 1.0
+	_van_panel.offset_left = EDGE
+	_van_panel.offset_top = -EDGE
+	_van_panel.offset_bottom = -EDGE
+	_van_panel.grow_vertical = Control.GROW_DIRECTION_BEGIN
+	_van_panel.custom_minimum_size = Vector2(280, 0)
+	_van_panel.visible = false
+	_van_panel.add_theme_stylebox_override("panel", UIStyle.make_panel(HUD_BG, HUD_BORDER, 4, 1, 14, 10))
+	add_child(_van_panel)
+
+	var h := HBoxContainer.new()
+	h.add_theme_constant_override("separation", 12)
+	_van_panel.add_child(h)
+
+	h.add_child(_make_icon("truck", UIStyle.COL_GOLD_TEXT, 24))
+
+	var v := VBoxContainer.new()
+	v.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	v.add_theme_constant_override("separation", 3)
+	h.add_child(v)
+
+	var cap := Label.new()
+	cap.text = "LIEFERUNG  •  CLOUD EXPRESS"
+	UIStyle.style_label(cap, 10, UIStyle.COL_GOLD_TEXT, _display_font)
+	v.add_child(cap)
+
+	_van_lbl = Label.new()
+	UIStyle.style_label(_van_lbl, 13, UIStyle.COL_TEXT_MAIN)
+	v.add_child(_van_lbl)
+
+	_van_bar = _make_mini_bar(UIStyle.COL_ACCENT)
+	_van_bar.custom_minimum_size = Vector2(0, 4)
+	v.add_child(_van_bar)
+
+
+func _build_right_column() -> void:
+	var right_col := VBoxContainer.new()
+	right_col.anchor_left = 1.0
+	right_col.anchor_right = 1.0
+	right_col.offset_left = -290
+	right_col.offset_right = -EDGE
+	right_col.offset_top = 86
+	right_col.add_theme_constant_override("separation", 8)
+	add_child(right_col)
+
+	_crew_panel = PanelContainer.new()
+	_crew_panel.visible = false
+	_crew_panel.add_theme_stylebox_override("panel", UIStyle.make_panel(HUD_BG, HUD_BORDER, 4, 1, 12, 10))
+	right_col.add_child(_crew_panel)
+
+	_crew_box = VBoxContainer.new()
+	_crew_box.add_theme_constant_override("separation", 5)
+	_crew_panel.add_child(_crew_box)
+
+	_help_panel = PanelContainer.new()
+	_help_panel.visible = false # Standardmäßig aus, Umschalten mit [H]
+	_help_panel.add_theme_stylebox_override("panel", UIStyle.make_panel(HUD_BG, HUD_BORDER, 4, 1, 14, 12))
+	right_col.add_child(_help_panel)
+
+	var hv := VBoxContainer.new()
+	hv.add_theme_constant_override("separation", 6)
+	_help_panel.add_child(hv)
+
+	var head := HBoxContainer.new()
+	head.add_theme_constant_override("separation", 6)
+	hv.add_child(head)
+	var title := Label.new()
+	title.text = "STEUERUNG"
+	title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	UIStyle.style_label(title, 11, UIStyle.COL_GOLD_TEXT, _display_font)
+	head.add_child(title)
+	head.add_child(_make_keycap("H"))
+	var close_lbl := Label.new()
+	close_lbl.text = "schließen"
+	UIStyle.style_label(close_lbl, 11, UIStyle.COL_TEXT_SUB)
+	head.add_child(close_lbl)
+
+	var rows: Array = [
+		["E", "Interagieren (Kontext-Hand)"],
+		["E", "Am PC: hinsetzen, Shop & Support"],
+		["E", "Buchse: Kabel ziehen (gelb Strom, blau LAN)"],
+		["E", "Am Rack: Übersicht & Teile einbauen"],
+		["F", "Am Router: Geschwindigkeit upgraden"],
+		["RMB", "Trennen / Ausbauen"],
+		["R", "Drehen"],
+		["Q", "Ablegen"],
+		["ESC", "Pause"],
+	]
+	for item in rows:
+		var pair: Array = item
+		var r := HBoxContainer.new()
+		r.add_theme_constant_override("separation", 8)
+		hv.add_child(r)
+		var cap := _make_keycap(str(pair[0]))
+		cap.custom_minimum_size = Vector2(40, 0)
+		r.add_child(cap)
+		var d := Label.new()
+		d.text = str(pair[1])
+		d.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		d.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		UIStyle.style_label(d, 12, UIStyle.COL_TEXT_MAIN)
+		r.add_child(d)
+
+
+func _build_key_hints() -> void:
+	var hints := HBoxContainer.new()
+	hints.anchor_left = 1.0
+	hints.anchor_right = 1.0
+	hints.anchor_top = 1.0
+	hints.anchor_bottom = 1.0
+	hints.offset_left = -EDGE
+	hints.offset_right = -EDGE
+	hints.offset_top = -EDGE
+	hints.offset_bottom = -EDGE
+	hints.grow_horizontal = Control.GROW_DIRECTION_BEGIN
+	hints.grow_vertical = Control.GROW_DIRECTION_BEGIN
+	hints.add_theme_constant_override("separation", 6)
+	hints.modulate.a = 0.8
+	add_child(hints)
+
+	hints.add_child(_make_keycap("H"))
+	hints.add_child(_hint_label("Steuerung"))
+	var gap := Control.new()
+	gap.custom_minimum_size = Vector2(10, 0)
+	hints.add_child(gap)
+	hints.add_child(_make_keycap("ESC"))
+	hints.add_child(_hint_label("Pause"))
+
+
+func _hint_label(txt: String) -> Label:
+	var l := Label.new()
+	l.text = txt
+	l.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	UIStyle.style_label(l, 12, UIStyle.COL_TEXT_SUB, null, true)
+	return l
+
+
+func _build_crosshair_and_prompt() -> void:
+	_crosshair = Control.new()
+	_crosshair.anchor_left = 0.5
+	_crosshair.anchor_top = 0.5
+	_crosshair.anchor_right = 0.5
+	_crosshair.anchor_bottom = 0.5
+	_crosshair.offset_left = -12
+	_crosshair.offset_top = -12
+	_crosshair.offset_right = 12
+	_crosshair.offset_bottom = 12
+	_crosshair.draw.connect(_draw_crosshair)
+	add_child(_crosshair)
+
+	var center := CenterContainer.new()
+	center.anchor_left = 0.0
+	center.anchor_right = 1.0
+	center.anchor_top = 0.5
+	center.anchor_bottom = 0.5
+	center.offset_top = 30
+	center.offset_bottom = 96
+	add_child(center)
+
+	_prompt_panel = PanelContainer.new()
+	_prompt_panel.visible = false
+	_prompt_panel.add_theme_stylebox_override("panel", UIStyle.make_panel(Color(0.05, 0.053, 0.06, 0.84), HUD_BORDER, 4, 1, 12, 8))
+	center.add_child(_prompt_panel)
+
+	var h := HBoxContainer.new()
+	h.add_theme_constant_override("separation", 10)
+	_prompt_panel.add_child(h)
+
+	_prompt_key_cap = _make_keycap("E", 14)
+	_prompt_key_cap.custom_minimum_size = Vector2(28, 26)
+	_prompt_key_lbl = _prompt_key_cap.get_child(0) as Label
+	h.add_child(_prompt_key_cap)
+
+	var v := VBoxContainer.new()
+	v.add_theme_constant_override("separation", 0)
+	v.alignment = BoxContainer.ALIGNMENT_CENTER
+	h.add_child(v)
+
+	_prompt_lbl = Label.new()
+	UIStyle.style_label(_prompt_lbl, 15, UIStyle.COL_TEXT_MAIN, _display_font)
+	v.add_child(_prompt_lbl)
+
+	_sub_prompt_lbl = Label.new()
+	UIStyle.style_label(_sub_prompt_lbl, 12, UIStyle.COL_TEXT_SUB)
+	v.add_child(_sub_prompt_lbl)
+
+
+func _draw_crosshair() -> void:
+	var c := _crosshair.size * 0.5
+	if _crosshair_active:
+		_crosshair.draw_arc(c, 8.0, 0.0, TAU, 32, Color(0.0, 0.0, 0.0, 0.35), 3.0, true)
+		_crosshair.draw_arc(c, 8.0, 0.0, TAU, 32, UIStyle.COL_GOLD_TEXT, 1.5, true)
+		_crosshair.draw_circle(c, 2.0, UIStyle.COL_GOLD_TEXT)
+	else:
+		_crosshair.draw_circle(c, 3.0, Color(0.0, 0.0, 0.0, 0.35))
+		_crosshair.draw_circle(c, 2.0, Color(1.0, 1.0, 1.0, 0.85))
+
+
+func _make_keycap(key: String, font_size: int = 11) -> PanelContainer:
+	var cap := PanelContainer.new()
+	var sb := StyleBoxFlat.new()
+	sb.bg_color = Color(0.16, 0.165, 0.18, 0.95)
+	sb.border_color = Color(0.36, 0.37, 0.40)
+	sb.set_border_width_all(1)
+	sb.border_width_bottom = 2
+	sb.set_corner_radius_all(3)
+	sb.content_margin_left = 7
+	sb.content_margin_right = 7
+	sb.content_margin_top = 1
+	sb.content_margin_bottom = 1
+	cap.add_theme_stylebox_override("panel", sb)
+	cap.custom_minimum_size = Vector2(22, 0)
+	cap.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	cap.mouse_filter = Control.MOUSE_FILTER_IGNORE
+
+	var l := Label.new()
+	l.text = key
+	l.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	l.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	UIStyle.style_label(l, font_size, UIStyle.COL_TEXT_MAIN, _display_font)
+	cap.add_child(l)
+	return cap
+
+
+func _build_pause_overlay() -> void:
+	_pause_overlay = ColorRect.new()
+	_pause_overlay.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_pause_overlay.color = Color(0.02, 0.022, 0.026, 0.62)
+	_pause_overlay.visible = false
+	add_child(_pause_overlay)
+
+	_pause_overlay.add_child(UIStyle.make_gradient_rect(
+		PackedColorArray([Color(0.0, 0.0, 0.0, 0.0), Color(0.0, 0.0, 0.0, 0.6)]),
+		PackedFloat32Array([0.35, 1.0]),
+		Vector2(0.5, 0.5), Vector2(1.05, 0.5), true
+	))
+
+	var pcenter := CenterContainer.new()
+	pcenter.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_pause_overlay.add_child(pcenter)
+
+	_pause_card = PanelContainer.new()
+	_pause_card.custom_minimum_size = Vector2(480, 0)
+	_pause_card.add_theme_stylebox_override("panel", UIStyle.make_panel(UIStyle.COL_BG_DARK, UIStyle.COL_BORDER, UIStyle.MAX_RADIUS, 1, 28, 24))
+	pcenter.add_child(_pause_card)
+
+	var pvbox := VBoxContainer.new()
+	pvbox.add_theme_constant_override("separation", 10)
+	_pause_card.add_child(pvbox)
+
+	# Kopf: Logo, Titel, Welt und Uhrzeit
+	var head := HBoxContainer.new()
+	head.add_theme_constant_override("separation", 14)
+	pvbox.add_child(head)
+
+	var logo := Control.new()
+	logo.custom_minimum_size = Vector2(40, 40)
+	logo.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	logo.draw.connect(func() -> void: UIStyle.draw_logo_mark(logo, Rect2(Vector2.ZERO, logo.size)))
+	head.add_child(logo)
+
+	var head_v := VBoxContainer.new()
+	head_v.add_theme_constant_override("separation", 0)
+	head_v.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	head.add_child(head_v)
+
+	var ptitle := Label.new()
+	ptitle.text = "PAUSIERT"
+	UIStyle.style_label(ptitle, 26, UIStyle.COL_TEXT_MAIN, _display_font, true)
+	head_v.add_child(ptitle)
+
+	_pause_world_lbl = Label.new()
+	_pause_world_lbl.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+	UIStyle.style_label(_pause_world_lbl, 12, UIStyle.COL_TEXT_SUB)
+	head_v.add_child(_pause_world_lbl)
+
+	var accent := ColorRect.new()
+	accent.custom_minimum_size = Vector2(56, 2)
+	accent.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
+	accent.color = UIStyle.COL_ACCENT
+	pvbox.add_child(accent)
+
+	var resume_btn := Button.new()
+	resume_btn.text = "WEITERSPIELEN"
+	resume_btn.custom_minimum_size = Vector2(0, 46)
+	UIStyle.style_button(resume_btn, Color(0.74, 0.49, 0.12), Color(0.96, 0.72, 0.24))
+	resume_btn.add_theme_font_override("font", _display_font)
+	resume_btn.add_theme_font_size_override("font_size", 16)
+	resume_btn.pressed.connect(func(): resume_requested.emit())
+	pvbox.add_child(resume_btn)
+
+	_save_section = VBoxContainer.new()
+	_save_section.add_theme_constant_override("separation", 6)
+	pvbox.add_child(_save_section)
+	_save_section.add_child(_section_label("SPIELSTAND (HOST)"))
+
+	var srow := HBoxContainer.new()
+	srow.add_theme_constant_override("separation", 8)
+	_save_section.add_child(srow)
+
+	_save_name_input = LineEdit.new()
+	_save_name_input.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_save_name_input.max_length = 32
+	UIStyle.style_line_edit(_save_name_input)
+	srow.add_child(_save_name_input)
+
+	var save_btn := Button.new()
+	save_btn.text = "SPEICHERN"
+	save_btn.custom_minimum_size = Vector2(126, 36)
+	UIStyle.style_button(save_btn, Color(0.16, 0.26, 0.16), UIStyle.COL_GREEN)
+	save_btn.add_theme_font_override("font", _display_font)
+	save_btn.pressed.connect(func():
+		var res := GameState.save_current_world(_save_name_input.text, false)
+		if not bool(res.get("ok", false)):
+			show_toast(str(res.get("error", "Speichern fehlgeschlagen")), true)
+	)
+	srow.add_child(save_btn)
+
+	pvbox.add_child(_section_label("SCHNELL-EINSTELLUNGEN"))
+	_pause_master_slider = _add_pause_slider(pvbox, "Gesamtlautstärke", 0, 100, 1, "%d%%")
+	_pause_fan_slider = _add_pause_slider(pvbox, "Server-Lüfter & Raum", 0, 100, 1, "%d%%")
+	_pause_sens_slider = _add_pause_slider(pvbox, "Maus-Empfindlichkeit", 0.5, 8.0, 0.1, "%.1f")
+
+	var grow := HBoxContainer.new()
+	grow.add_theme_constant_override("separation", 10)
+	pvbox.add_child(grow)
+	var glbl := Label.new()
+	glbl.text = "Grafikqualität"
+	glbl.custom_minimum_size = Vector2(170, 0)
+	glbl.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	UIStyle.style_label(glbl, 13, Color(0.80, 0.81, 0.81))
+	grow.add_child(glbl)
+	_pause_gfx_option = OptionButton.new()
+	_pause_gfx_option.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_pause_gfx_option.custom_minimum_size = Vector2(0, 34)
+	_pause_gfx_option.add_item("Niedrig (FPS)")
+	_pause_gfx_option.add_item("Mittel (SSAO)")
+	_pause_gfx_option.add_item("Hoch (SSIL + SSR)")
+	_pause_gfx_option.add_item("Ultra (SDFGI + Nebel)")
+	UIStyle.style_button(_pause_gfx_option)
+	_pause_gfx_option.item_selected.connect(func(_idx: int): _on_pause_quick_settings_changed())
+	grow.add_child(_pause_gfx_option)
+
+	var rule := ColorRect.new()
+	rule.custom_minimum_size = Vector2(0, 1)
+	rule.color = Color(UIStyle.COL_BORDER, 0.7)
+	pvbox.add_child(rule)
+
+	var leave_btn := Button.new()
+	leave_btn.text = "ZURÜCK ZUM HAUPTMENÜ"
+	leave_btn.custom_minimum_size = Vector2(0, 40)
+	UIStyle.style_button(leave_btn, Color(0.24, 0.11, 0.10), UIStyle.COL_RED)
+	leave_btn.add_theme_font_override("font", _display_font)
+	leave_btn.pressed.connect(func(): leave_requested.emit())
+	pvbox.add_child(leave_btn)
+
+
+func _section_label(txt: String) -> Label:
+	var l := Label.new()
+	l.text = txt
+	UIStyle.style_label(l, 11, UIStyle.COL_GOLD_TEXT, _display_font)
+	return l
+
+
+func _make_mini_bar(col: Color) -> ProgressBar:
+	var bar := ProgressBar.new()
+	bar.min_value = 0.0
+	bar.max_value = 100.0
+	bar.show_percentage = false
+	bar.custom_minimum_size = Vector2(0, 5)
+	var styles := UIStyle.make_bar_styles(col)
+	bar.add_theme_stylebox_override("background", styles[0] as StyleBox)
+	bar.add_theme_stylebox_override("fill", styles[1] as StyleBox)
+	return bar
+
+
+func _add_pause_slider(parent: VBoxContainer, label_txt: String, min_v: float, max_v: float, step_v: float, fmt: String) -> HSlider:
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 10)
+	parent.add_child(row)
+
+	var lbl := Label.new()
+	lbl.text = label_txt
+	lbl.custom_minimum_size = Vector2(170, 0)
+	lbl.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	UIStyle.style_label(lbl, 13, Color(0.80, 0.81, 0.81))
+	row.add_child(lbl)
+
+	var sl := HSlider.new()
+	sl.min_value = min_v
+	sl.max_value = max_v
+	sl.step = step_v
+	sl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	sl.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	UIStyle.style_slider(sl)
+	row.add_child(sl)
+
+	var val := Label.new()
+	val.custom_minimum_size = Vector2(50, 0)
+	val.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	UIStyle.style_label(val, 13, UIStyle.COL_GOLD_TEXT)
+	row.add_child(val)
+
+	sl.set_meta("val_lbl", val)
+	sl.set_meta("fmt", fmt)
+	sl.value_changed.connect(func(_v: float): _update_slider_label(sl))
+	sl.value_changed.connect(_on_pause_quick_settings_changed)
+	return sl
+
+
+func _update_slider_label(sl: HSlider) -> void:
+	if sl == null or not sl.has_meta("val_lbl"):
+		return
+	var val := sl.get_meta("val_lbl") as Label
+	var fmt := str(sl.get_meta("fmt"))
+	if fmt.contains("%d"):
+		val.text = fmt % int(roundf(sl.value))
+	else:
+		val.text = fmt % sl.value

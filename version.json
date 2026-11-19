@@ -1,0 +1,29 @@
+{
+  "version": "1.0.0",
+  "codename": "v1.0 Full Realism, Warenkorb & Teile-Lager, 66 Teile (DDR2–DDR5) & Support-Desk",
+  "release_date": "2026-11-19",
+  "changelog": [
+    {
+      "version": "v1.0.0",
+      "title": "Mega-Release v1.0: Einheitlicher AAA-Look, Warenkorb & Teile-Lager, 66 Hardware-Teile (DDR2–DDR5) & Live-Support",
+      "items": [
+        "Klarer Hardware-Kreislauf (PC-Shop + Warenkorb → Teile-Lager → Rack-Bau): Im Windows-PC-Shop bestellst du Racks, leere 1U/2U/4U Server-Chassis & 66 Einzelteile (DDR2–DDR5 RAM, CPUs, GPUs, HDD/SSD/NVMe, Kühlung, Netzteile 350–2400W) gesammelt über einen echten Warenkorb — der neue Cloud Express Sprinter liefert alles auf einmal!",
+        "Aufgeräumtes 3-Tab Rack-Overlay im einheitlichen Hauptmenü-Look (Schiefergrau & Gold): [Übersicht & Vermietung] | [Hardware-Bau aus dem Lager mit DDR2–DDR5 Filtern & Balken] | [Große 360° 3D-Vorschau]!",
+        "Keine künstlichen „CU“ mehr — 100% echte Werte überall: RAM in GB, Speicher in TB, Internet in Mbit/s & Gbit/s, Strom in Watt & kWh!",
+        "Aufgeräumter 4-App Windows-PC: [🛒 Shop + Warenkorb & Lager], [🎧 Support & Kunden (Tickets, Live-Anrufe, Großkunden-Verträge, AI & Firewall)], [🏗 Gebäude & Router] und [📊 Monitor].",
+        "Minimalistisches Ultra-Clean-HUD (oben nur Geld, Watt, Temp & Uhrzeit) + abhakbare 5-Schritte Start-Checkliste für die leere Start-Garage ($1.800), die nach Abschluss automatisch verschwindet!",
+        "Rack-Vermietung & Selbsteinschätzung (Webhosting, Game-Server, Cloud-Storage, Video-Streaming, Datenbank, KI) mit dynamisch wachsenden Usern, Live-Auslastungsbalken, Support-Tickets & VoIP-Kundenanrufen!",
+        "PC-Sitz- & Tastatur-Tipp-Animation (im Co-op für Freunde sitzend & tippend sichtbar) + echte mechanische Tastatur-, Telefon- & Stuhl-Sounds.",
+        "Neuer realistischer Sprinter-Lieferwagen („Cloud Express“) mit sichtbarem Cockpit, Außenspiegeln, EU-Kennzeichen, 5-Speichen-Felgen, Schiebetür-Schiene & Warnblinkern.",
+        "Überarbeitetes AAA-Hauptmenü mit offenem 3D-Rechenzentrum + animierter Loadingscreen + komplett knackfreie 44,1-kHz-Audio-Engine + reine 1-Hand-Steuerung ohne Chat."
+      ]
+    },
+    {
+      "version": "v0.5.0",
+      "title": "Forward+ HD Engine & Eigener Standalone-Launcher",
+      "items": [
+        "Godot 4 Forward+ Upgrade + eigener nativer Windows-Launcher (DataCenterLauncher.exe) mit GitHub-Download & Auto-Updater"
+      ]
+    }
+  ]
+}

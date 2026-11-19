@@ -1,0 +1,500 @@
+<Window x:Class="DataCenterLauncher.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="DataCenter Tycoon — Co-op Launcher"
+        Width="1095" Height="682"
+        WindowStyle="None"
+        AllowsTransparency="True"
+        Background="Transparent"
+        WindowStartupLocation="CenterScreen"
+        ResizeMode="CanMinimize"
+        Loaded="Window_Loaded">
+
+    <Border Margin="12" CornerRadius="14" Background="{StaticResource BgDeep}" BorderBrush="#263B54" BorderThickness="1.5">
+        <Border.Effect>
+            <DropShadowEffect Color="#000000" BlurRadius="22" ShadowDepth="0" Opacity="0.72"/>
+        </Border.Effect>
+
+        <Grid>
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="236"/>
+                <ColumnDefinition Width="*"/>
+            </Grid.ColumnDefinitions>
+
+            <!-- LEFT SIDEBAR -->
+            <Border Grid.Column="0" Background="{StaticResource BgPanel}" CornerRadius="13,0,0,13" BorderBrush="#1C2A3D" BorderThickness="0,0,1,0">
+                <Grid Margin="14,18,14,16">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="24"/>
+                        <RowDefinition Height="*"/>
+                        <RowDefinition Height="Auto"/>
+                    </Grid.RowDefinitions>
+
+                    <!-- BRAND LOGO -->
+                    <StackPanel Grid.Row="0" Orientation="Horizontal" VerticalAlignment="Center" Margin="4,0,0,0">
+                        <Border Width="40" Height="40" CornerRadius="9" BorderBrush="#2ED8FF" BorderThickness="1.2">
+                            <Border.Background>
+                                <LinearGradientBrush StartPoint="0,0" EndPoint="1,1">
+                                    <GradientStop Color="#12273D" Offset="0"/>
+                                    <GradientStop Color="#0B1624" Offset="1"/>
+                                </LinearGradientBrush>
+                            </Border.Background>
+                            <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center" Margin="0,2,0,0">
+                                <Border Width="22" Height="5" CornerRadius="1.5" Background="#2ED8FF" Margin="0,0,0,3"/>
+                                <Border Width="22" Height="5" CornerRadius="1.5" Background="#24D87A" Margin="0,0,0,3"/>
+                                <Border Width="22" Height="5" CornerRadius="1.5" Background="#9B6BFF"/>
+                            </StackPanel>
+                        </Border>
+                        <StackPanel Margin="11,0,0,0" VerticalAlignment="Center">
+                            <TextBlock Text="DATACENTER" Foreground="{StaticResource TextMain}" FontSize="15" FontWeight="Bold"/>
+                            <TextBlock Text="TYCOON LAUNCHER" Foreground="{StaticResource AccentCyan}" FontSize="10" FontWeight="SemiBold"/>
+                        </StackPanel>
+                    </StackPanel>
+
+                    <!-- NAVIGATION -->
+                    <StackPanel Grid.Row="2">
+                        <Button x:Name="NavPlayBtn" Style="{StaticResource NavButtonStyle}" Content="▶   Spielen" Click="NavPlayBtn_Click" Margin="0,0,0,6"/>
+                        <Button x:Name="NavNotesBtn" Style="{StaticResource NavButtonStyle}" Content="📰   Patchnotes" Click="NavNotesBtn_Click" Margin="0,0,0,6"/>
+                        <Button x:Name="NavUpdatesBtn" Style="{StaticResource NavButtonStyle}" Content="⬇   Updates &amp; Install" Click="NavUpdatesBtn_Click" Margin="0,0,0,6"/>
+                        <Button x:Name="NavDevBtn" Style="{StaticResource NavButtonStyle}" Content="🛠   Release &amp; Freunde" Click="NavDevBtn_Click" Margin="0,0,0,6" Visibility="Collapsed"/>
+                        <Button x:Name="NavSettingsBtn" Style="{StaticResource NavButtonStyle}" Content="⚙   Einstellungen" Click="NavSettingsBtn_Click" Margin="0,0,0,6"/>
+                    </StackPanel>
+
+                    <!-- SIDEBAR STATUS CARD -->
+                    <Border Grid.Row="3" Background="{StaticResource BgCard}" BorderBrush="{StaticResource BorderSubtle}" BorderThickness="1" CornerRadius="9" Padding="12">
+                        <StackPanel>
+                            <StackPanel Orientation="Horizontal" Margin="0,0,0,5">
+                                <Ellipse x:Name="SidebarStatusDot" Width="9" Height="9" Fill="{StaticResource AccentAmber}" VerticalAlignment="Center" Margin="0,0,7,0"/>
+                                <TextBlock x:Name="SidebarStatusTitle" Text="Nicht installiert" Foreground="{StaticResource TextMain}" FontSize="12" FontWeight="SemiBold"/>
+                            </StackPanel>
+                            <TextBlock x:Name="SidebarStatusDetail" Text="Lade das Spiel über den Launcher herunter." Foreground="{StaticResource TextMuted}" FontSize="11" TextWrapping="Wrap" Margin="0,0,0,10"/>
+                            <Button Style="{StaticResource SecondaryButton}" Content="📂 Spielstände" Padding="10,6" FontSize="11.5" Click="OpenSavesBtn_Click" Margin="0,0,0,6"/>
+                            <Button Style="{StaticResource SecondaryButton}" Content="📦 3D-Modelle (.glb)" Padding="10,6" FontSize="11.5" Click="OpenModelsBtn_Click"/>
+                        </StackPanel>
+                    </Border>
+                </Grid>
+            </Border>
+
+            <!-- RIGHT CONTENT AREA -->
+            <Grid Grid.Column="1">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="44"/>
+                    <RowDefinition Height="*"/>
+                </Grid.RowDefinitions>
+
+                <!-- DRAGGABLE TOP TITLE BAR -->
+                <Border Grid.Row="0" Background="Transparent" MouseLeftButtonDown="TitleBar_MouseLeftButtonDown" Padding="20,0,12,0">
+                    <Grid>
+                        <TextBlock x:Name="TopBarHint" Text="DATACENTER TYCOON CO-OP  •  STANDALONE LAUNCHER" Foreground="#5C7490" FontSize="11" FontWeight="SemiBold" VerticalAlignment="Center"/>
+                        <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center">
+                            <Button Style="{StaticResource TitleBarButton}" Content="—" ToolTip="Minimieren" Click="MinimizeBtn_Click" Margin="0,0,4,0"/>
+                            <Button Style="{StaticResource TitleBarButton}" Content="✕" ToolTip="Schließen" Click="CloseBtn_Click"/>
+                        </StackPanel>
+                    </Grid>
+                </Border>
+
+                <!-- PAGE 1: PLAY -->
+                <Grid x:Name="PagePlay" Grid.Row="1" Margin="24,4,24,22" Visibility="Visible">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="186"/>
+                        <RowDefinition Height="14"/>
+                        <RowDefinition Height="*"/>
+                        <RowDefinition Height="14"/>
+                        <RowDefinition Height="Auto"/>
+                    </Grid.RowDefinitions>
+
+                    <!-- HERO BANNER -->
+                    <Border Grid.Row="0" CornerRadius="12" BorderBrush="#284A6A" BorderThickness="1.2" ClipToBounds="True">
+                        <Border.Background>
+                            <LinearGradientBrush StartPoint="0,0" EndPoint="1,1">
+                                <GradientStop Color="#0D2136" Offset="0"/>
+                                <GradientStop Color="#112A42" Offset="0.55"/>
+                                <GradientStop Color="#1B183B" Offset="1"/>
+                            </LinearGradientBrush>
+                        </Border.Background>
+                        <Grid>
+                            <!-- Stylized vector server racks -->
+                            <Canvas HorizontalAlignment="Right" VerticalAlignment="Stretch" Width="280" IsHitTestVisible="False" Opacity="0.92">
+                                <Border Canvas.Left="24" Canvas.Top="22" Width="74" Height="156" CornerRadius="6" Background="#0A111C" BorderBrush="#284664" BorderThickness="1.2">
+                                    <StackPanel Margin="8,10">
+                                        <Border Height="16" CornerRadius="2" Background="#132235" Margin="0,0,0,6"><Border Width="12" Height="4" HorizontalAlignment="Left" Margin="6,0" Background="#24D87A" CornerRadius="2"/></Border>
+                                        <Border Height="16" CornerRadius="2" Background="#132235" Margin="0,0,0,6"><Border Width="18" Height="4" HorizontalAlignment="Left" Margin="6,0" Background="#2ED8FF" CornerRadius="2"/></Border>
+                                        <Border Height="16" CornerRadius="2" Background="#132235" Margin="0,0,0,6"><Border Width="10" Height="4" HorizontalAlignment="Left" Margin="6,0" Background="#24D87A" CornerRadius="2"/></Border>
+                                        <Border Height="16" CornerRadius="2" Background="#132235" Margin="0,0,0,6"><Border Width="22" Height="4" HorizontalAlignment="Left" Margin="6,0" Background="#A46BFF" CornerRadius="2"/></Border>
+                                        <Border Height="16" CornerRadius="2" Background="#132235" Margin="0,0,0,6"><Border Width="14" Height="4" HorizontalAlignment="Left" Margin="6,0" Background="#2ED8FF" CornerRadius="2"/></Border>
+                                        <Border Height="16" CornerRadius="2" Background="#132235"><Border Width="16" Height="4" HorizontalAlignment="Left" Margin="6,0" Background="#FFB830" CornerRadius="2"/></Border>
+                                    </StackPanel>
+                                </Border>
+                                <Border Canvas.Left="112" Canvas.Top="12" Width="82" Height="168" CornerRadius="6" Background="#0A111C" BorderBrush="#2ED8FF" BorderThickness="1.4">
+                                    <StackPanel Margin="9,11">
+                                        <Border Height="18" CornerRadius="2" Background="#142940" Margin="0,0,0,7"><Border Width="24" Height="4" HorizontalAlignment="Left" Margin="6,0" Background="#2ED8FF" CornerRadius="2"/></Border>
+                                        <Border Height="18" CornerRadius="2" Background="#142940" Margin="0,0,0,7"><Border Width="18" Height="4" HorizontalAlignment="Left" Margin="6,0" Background="#A46BFF" CornerRadius="2"/></Border>
+                                        <Border Height="18" CornerRadius="2" Background="#142940" Margin="0,0,0,7"><Border Width="28" Height="4" HorizontalAlignment="Left" Margin="6,0" Background="#24D87A" CornerRadius="2"/></Border>
+                                        <Border Height="18" CornerRadius="2" Background="#142940" Margin="0,0,0,7"><Border Width="16" Height="4" HorizontalAlignment="Left" Margin="6,0" Background="#2ED8FF" CornerRadius="2"/></Border>
+                                        <Border Height="18" CornerRadius="2" Background="#142940" Margin="0,0,0,7"><Border Width="22" Height="4" HorizontalAlignment="Left" Margin="6,0" Background="#A46BFF" CornerRadius="2"/></Border>
+                                        <Border Height="18" CornerRadius="2" Background="#142940"><Border Width="12" Height="4" HorizontalAlignment="Left" Margin="6,0" Background="#24D87A" CornerRadius="2"/></Border>
+                                    </StackPanel>
+                                </Border>
+                                <Border Canvas.Left="208" Canvas.Top="34" Width="62" Height="144" CornerRadius="6" Background="#0A111C" BorderBrush="#284664" BorderThickness="1.2">
+                                    <StackPanel Margin="7,10">
+                                        <Border Height="15" CornerRadius="2" Background="#132235" Margin="0,0,0,6"><Border Width="14" Height="4" HorizontalAlignment="Left" Margin="5,0" Background="#24D87A" CornerRadius="2"/></Border>
+                                        <Border Height="15" CornerRadius="2" Background="#132235" Margin="0,0,0,6"><Border Width="10" Height="4" HorizontalAlignment="Left" Margin="5,0" Background="#2ED8FF" CornerRadius="2"/></Border>
+                                        <Border Height="15" CornerRadius="2" Background="#132235" Margin="0,0,0,6"><Border Width="16" Height="4" HorizontalAlignment="Left" Margin="5,0" Background="#FFB830" CornerRadius="2"/></Border>
+                                        <Border Height="15" CornerRadius="2" Background="#132235" Margin="0,0,0,6"><Border Width="12" Height="4" HorizontalAlignment="Left" Margin="5,0" Background="#24D87A" CornerRadius="2"/></Border>
+                                        <Border Height="15" CornerRadius="2" Background="#132235"><Border Width="18" Height="4" HorizontalAlignment="Left" Margin="5,0" Background="#A46BFF" CornerRadius="2"/></Border>
+                                    </StackPanel>
+                                </Border>
+                            </Canvas>
+
+                            <!-- Banner Text + Live Update Pill -->
+                            <StackPanel Margin="26,20,290,20" VerticalAlignment="Center">
+                                <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
+                                    <Border x:Name="HeroStateBorder" Background="#16354E" BorderBrush="#2ED8FF" BorderThickness="1" CornerRadius="12" Padding="10,3" Margin="0,0,8,0">
+                                        <TextBlock x:Name="HeroStateBadge" Text="⬇ NICHT INSTALLIERT" Foreground="{StaticResource AccentCyan}" FontSize="11" FontWeight="Bold"/>
+                                    </Border>
+                                    <Border Background="#15382B" BorderBrush="#24D87A" BorderThickness="1" CornerRadius="12" Padding="10,3" Margin="0,0,8,0">
+                                        <TextBlock Text="1–4 SPIELER CO-OP" Foreground="{StaticResource AccentGreen}" FontSize="11" FontWeight="Bold"/>
+                                    </Border>
+                                    <Button x:Name="HeroCheckUpdatesBtn" Style="{StaticResource SecondaryButton}" Content="🔄 Updates prüfen"
+                                            Padding="10,2" FontSize="11" Click="CheckUpdateBtn_Click"/>
+                                </StackPanel>
+                                <TextBlock Text="DATACENTER TYCOON" Foreground="#FFFFFF" FontSize="31" FontWeight="ExtraBold"/>
+                                <TextBlock Text="Lade das Spiel direkt über den Launcher herunter, bleibe automatisch auf dem neuesten Stand und spiele sofort mit Freunden im Co-op."
+                                           Foreground="#B8CCE2" FontSize="13" TextWrapping="Wrap" Margin="0,8,0,0" LineHeight="19"/>
+                            </StackPanel>
+                        </Grid>
+                    </Border>
+
+                    <!-- CO-OP & GRAPHICS QUICK-LAUNCH CARD -->
+                    <Border Grid.Row="2" Background="{StaticResource BgCard}" BorderBrush="{StaticResource BorderSubtle}" BorderThickness="1" CornerRadius="11" Padding="20,16">
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="20"/>
+                                <ColumnDefinition Width="1.22*"/>
+                            </Grid.ColumnDefinitions>
+
+                            <!-- Left Column -->
+                            <StackPanel Grid.Column="0">
+                                <TextBlock Text="PROFIL &amp; GRAFIK" Foreground="{StaticResource AccentCyan}" FontSize="11.5" FontWeight="Bold" Margin="0,0,0,12"/>
+
+                                <TextBlock Text="Spielername" Foreground="{StaticResource TextMuted}" FontSize="12" Margin="0,0,0,5"/>
+                                <TextBox x:Name="PlayerNameBox" MaxLength="18" Margin="0,0,0,14"/>
+
+                                <TextBlock Text="Grafik-Preset (Forward+)" Foreground="{StaticResource TextMuted}" FontSize="12" Margin="0,0,0,5"/>
+                                <ComboBox x:Name="QualityCombo" Margin="0,0,0,10">
+                                    <ComboBoxItem Content="Performance (Maximale FPS)"/>
+                                    <ComboBoxItem Content="Mittel (Standard-Beleuchtung)"/>
+                                    <ComboBoxItem Content="Hoch (Schatten, Bloom &amp; Reflections)"/>
+                                    <ComboBoxItem Content="Ultra (SDFGI, SSR &amp; Volumetric Fog)"/>
+                                </ComboBox>
+
+                                <TextBlock x:Name="HomeRepoHint" Text="Tipp: Unter ⬇ Updates &amp; Install kannst du jederzeit Updates prüfen oder ein Build installieren."
+                                           Foreground="#6E87A3" FontSize="11" TextWrapping="Wrap" Margin="0,4,0,0"/>
+                            </StackPanel>
+
+                            <!-- Right Column -->
+                            <StackPanel Grid.Column="2">
+                                <TextBlock Text="DIRECT CO-OP SCHNELLSTART" Foreground="{StaticResource AccentGreen}" FontSize="11.5" FontWeight="Bold" Margin="0,0,0,12"/>
+
+                                <TextBlock Text="Start-Modus" Foreground="{StaticResource TextMuted}" FontSize="12" Margin="0,0,0,5"/>
+                                <ComboBox x:Name="ModeCombo" SelectionChanged="ModeCombo_SelectionChanged" Margin="0,0,0,14">
+                                    <ComboBoxItem Content="Normal — Im 3D-Hauptmenü starten"/>
+                                    <ComboBoxItem Content="Direkt-Host — Neue Co-op Welt eröffnen"/>
+                                    <ComboBoxItem Content="Direkt-Join — Freund per IP beitreten"/>
+                                    <ComboBoxItem Content="Spielstand — Vorhandene Welt hosten"/>
+                                </ComboBox>
+
+                                <Border x:Name="PanelModeMenu" Background="#0E1521" BorderBrush="#1F2E42" BorderThickness="1" CornerRadius="7" Padding="12,10" Visibility="Visible">
+                                    <TextBlock Text="Öffnet das interaktive 3D-Hauptmenü mit Server-Showcase, Spielstands-Auswahl, Hosting und Einstellungen."
+                                               Foreground="{StaticResource TextMuted}" FontSize="12" TextWrapping="Wrap" LineHeight="18"/>
+                                </Border>
+
+                                <Grid x:Name="PanelModeHost" Visibility="Collapsed">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="12"/>
+                                        <ColumnDefinition Width="96"/>
+                                    </Grid.ColumnDefinitions>
+                                    <StackPanel Grid.Column="0">
+                                        <TextBlock Text="Welt- / Firmenname" Foreground="{StaticResource TextMuted}" FontSize="12" Margin="0,0,0,5"/>
+                                        <TextBox x:Name="WorldNameBox" MaxLength="32"/>
+                                    </StackPanel>
+                                    <StackPanel Grid.Column="2">
+                                        <TextBlock Text="Port" Foreground="{StaticResource TextMuted}" FontSize="12" Margin="0,0,0,5"/>
+                                        <TextBox x:Name="HostPortBox" MaxLength="5"/>
+                                    </StackPanel>
+                                </Grid>
+
+                                <Grid x:Name="PanelModeJoin" Visibility="Collapsed">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="12"/>
+                                        <ColumnDefinition Width="96"/>
+                                    </Grid.ColumnDefinitions>
+                                    <StackPanel Grid.Column="0">
+                                        <TextBlock Text="Host IP-Adresse (LAN / Radmin / Tailscale)" Foreground="{StaticResource TextMuted}" FontSize="12" Margin="0,0,0,5"/>
+                                        <TextBox x:Name="HostIpBox"/>
+                                    </StackPanel>
+                                    <StackPanel Grid.Column="2">
+                                        <TextBlock Text="Port" Foreground="{StaticResource TextMuted}" FontSize="12" Margin="0,0,0,5"/>
+                                        <TextBox x:Name="JoinPortBox" MaxLength="5"/>
+                                    </StackPanel>
+                                </Grid>
+
+                                <Grid x:Name="PanelModeLoad" Visibility="Collapsed">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="8"/>
+                                        <ColumnDefinition Width="42"/>
+                                        <ColumnDefinition Width="10"/>
+                                        <ColumnDefinition Width="84"/>
+                                    </Grid.ColumnDefinitions>
+                                    <StackPanel Grid.Column="0">
+                                        <TextBlock Text="Gespeicherte Welt" Foreground="{StaticResource TextMuted}" FontSize="12" Margin="0,0,0,5"/>
+                                        <ComboBox x:Name="SaveCombo"/>
+                                    </StackPanel>
+                                    <Button Grid.Column="2" Style="{StaticResource SecondaryButton}" Content="↻" VerticalAlignment="Bottom" Height="34" Padding="0" ToolTip="Spielstände neu einlesen" Click="RefreshSavesBtn_Click"/>
+                                    <StackPanel Grid.Column="4">
+                                        <TextBlock Text="Port" Foreground="{StaticResource TextMuted}" FontSize="12" Margin="0,0,0,5"/>
+                                        <TextBox x:Name="LoadPortBox" MaxLength="5"/>
+                                    </StackPanel>
+                                </Grid>
+                            </StackPanel>
+                        </Grid>
+                    </Border>
+
+                    <!-- BOTTOM SMART DOWNLOAD / UPDATE / PLAY ACTION BAR -->
+                    <Border Grid.Row="4" Background="{StaticResource BgPanel}" BorderBrush="{StaticResource BorderSubtle}" BorderThickness="1" CornerRadius="11" Padding="18,13">
+                        <StackPanel>
+                            <!-- Integrated Live Download Progress Bar -->
+                            <Grid x:Name="HomeProgressRow" Visibility="Collapsed" Margin="0,0,0,10">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="10"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+                                <ProgressBar x:Name="HomeProgressBar" Grid.Column="0" Minimum="0" Maximum="100" Value="0" VerticalAlignment="Center"/>
+                                <Button x:Name="CancelDownloadBtn" Grid.Column="2" Style="{StaticResource SecondaryButton}" Content="✕ Abbrechen" Padding="10,4" FontSize="11.5" Click="CancelDownloadBtn_Click"/>
+                            </Grid>
+
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+
+                                <StackPanel Grid.Column="0" VerticalAlignment="Center" Margin="0,0,14,0">
+                                    <TextBlock x:Name="LaunchStatusTitle" Text="Spiel noch nicht installiert" Foreground="{StaticResource TextMain}" FontSize="13.5" FontWeight="SemiBold"/>
+                                    <TextBlock x:Name="LaunchStatusSub" Text="Klicke auf Herunterladen oder nutze Dev-Start." Foreground="{StaticResource TextMuted}" FontSize="11.5" TextTrimming="CharacterEllipsis"/>
+                                </StackPanel>
+
+                                <StackPanel Grid.Column="1" Orientation="Horizontal">
+                                    <Button x:Name="DevPlayBtn" Style="{StaticResource SecondaryButton}"
+                                            Content="🛠 Dev-Start" ToolTip="Startet das lokale Godot-4-Projekt direkt (nur auf deinem Entwickler-PC sichtbar)"
+                                            Click="DevPlayBtn_Click" Height="48" Padding="14,0" Margin="0,0,8,0" Visibility="Collapsed"/>
+
+                                    <Button x:Name="DualTestBtn" Style="{StaticResource SecondaryButton}"
+                                            Content="⚡ 2× Co-op" ToolTip="Startet 1× Host und 1× Client (127.0.0.1) gleichzeitig zum Testen"
+                                            Click="DualTestBtn_Click" Height="48" Padding="14,0" Margin="0,0,10,0"/>
+
+                                    <Button x:Name="MainActionBtn" Style="{StaticResource DownloadActionButton}"
+                                            Content="⬇  HERUNTERLADEN" Click="MainActionBtn_Click" MinWidth="226" Height="48"/>
+                                </StackPanel>
+                            </Grid>
+                        </StackPanel>
+                    </Border>
+                </Grid>
+
+                <!-- PAGE 2: PATCHNOTES -->
+                <Grid x:Name="PageNotes" Grid.Row="1" Margin="24,4,24,22" Visibility="Collapsed">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="14"/>
+                        <RowDefinition Height="*"/>
+                    </Grid.RowDefinitions>
+                    <StackPanel Grid.Row="0">
+                        <TextBlock Text="PATCHNOTES &amp; CHANGELOG" Foreground="{StaticResource AccentCyan}" FontSize="12" FontWeight="Bold"/>
+                        <TextBlock x:Name="NotesHeaderTitle" Text="Was ist neu in DataCenter Tycoon?" Foreground="{StaticResource TextMain}" FontSize="22" FontWeight="Bold" Margin="0,3,0,0"/>
+                    </StackPanel>
+                    <ScrollViewer Grid.Row="2" VerticalScrollBarVisibility="Auto">
+                        <StackPanel x:Name="PatchnotesPanel"/>
+                    </ScrollViewer>
+                </Grid>
+
+                <!-- PAGE 3: UPDATES & INSTALLATION -->
+                <Grid x:Name="PageUpdates" Grid.Row="1" Margin="24,4,24,22" Visibility="Collapsed">
+                    <ScrollViewer VerticalScrollBarVisibility="Auto">
+                        <StackPanel>
+                            <TextBlock Text="DOWNLOAD &amp; AUTO-UPDATER" Foreground="{StaticResource AccentCyan}" FontSize="12" FontWeight="Bold"/>
+                            <TextBlock Text="Spiel installieren, updaten &amp; verwalten" Foreground="{StaticResource TextMain}" FontSize="22" FontWeight="Bold" Margin="0,3,0,14"/>
+
+                            <Border Background="{StaticResource BgCard}" BorderBrush="{StaticResource BorderSubtle}" BorderThickness="1" CornerRadius="10" Padding="18" Margin="0,0,0,14">
+                                <StackPanel>
+                                    <Grid Margin="0,0,0,14">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="*"/>
+                                        </Grid.ColumnDefinitions>
+                                        <StackPanel Grid.Column="0">
+                                            <TextBlock Text="Installierte Version" Foreground="{StaticResource TextMuted}" FontSize="11.5"/>
+                                            <TextBlock x:Name="InstalledVerText" Text="Nicht installiert" Foreground="{StaticResource TextMain}" FontSize="18" FontWeight="Bold"/>
+                                        </StackPanel>
+                                        <StackPanel Grid.Column="1">
+                                            <TextBlock Text="Neueste Version (GitHub)" Foreground="{StaticResource TextMuted}" FontSize="11.5"/>
+                                            <TextBlock x:Name="RemoteVerText" Text="Noch nicht geprüft" Foreground="{StaticResource AccentCyan}" FontSize="18" FontWeight="Bold"/>
+                                        </StackPanel>
+                                        <StackPanel Grid.Column="2">
+                                            <TextBlock Text="Speicherplatz" Foreground="{StaticResource TextMuted}" FontSize="11.5"/>
+                                            <TextBlock x:Name="InstallSizeText" Text="0 MB" Foreground="{StaticResource TextMain}" FontSize="18" FontWeight="Bold"/>
+                                        </StackPanel>
+                                    </Grid>
+
+                                    <WrapPanel Margin="0,0,0,12">
+                                        <Button x:Name="CheckUpdateBtn" Style="{StaticResource SecondaryButton}" Content="🔍 Nach Updates suchen" Click="CheckUpdateBtn_Click" Margin="0,0,8,8"/>
+                                        <Button x:Name="InstallUpdateBtn" Style="{StaticResource DownloadActionButton}" Content="⬇ Spiel herunterladen / updaten" FontSize="13" Padding="16,9" IsEnabled="False" Click="InstallUpdateBtn_Click" Margin="0,0,8,8"/>
+                                        <Button x:Name="InstallLocalZipBtn" Style="{StaticResource SecondaryButton}" Content="📦 Lokale .zip installieren" Click="InstallLocalZipBtn_Click" Margin="0,0,8,8"/>
+                                    </WrapPanel>
+
+                                    <ProgressBar x:Name="UpdateProgressBar" Minimum="0" Maximum="100" Value="0" Visibility="Collapsed" Margin="0,0,0,8"/>
+                                    <TextBlock x:Name="UpdateStatusText" Text="Trage unter ⚙ Einstellungen dein GitHub-Repo ein (z.B. deinname/datacenter-tycoon) oder installiere eine lokale Release-.zip." Foreground="{StaticResource TextMuted}" FontSize="12.5" TextWrapping="Wrap"/>
+
+                                    <Border x:Name="RemoteNotesCard" Background="#0C121D" BorderBrush="#21344A" BorderThickness="1" CornerRadius="7" Padding="12" Margin="0,12,0,0" Visibility="Collapsed">
+                                        <TextBlock x:Name="RemoteNotesText" Foreground="#C8DAEE" FontSize="12" TextWrapping="Wrap"/>
+                                    </Border>
+                                </StackPanel>
+                            </Border>
+
+                            <!-- Install Management Card -->
+                            <Border Background="{StaticResource BgCard}" BorderBrush="{StaticResource BorderSubtle}" BorderThickness="1" CornerRadius="10" Padding="18">
+                                <StackPanel>
+                                    <TextBlock Text="INSTALLATION VERWALTEN" Foreground="{StaticResource AccentGreen}" FontSize="11.5" FontWeight="Bold" Margin="0,0,0,6"/>
+                                    <TextBlock x:Name="InstallDirLabel" Text="" Foreground="{StaticResource TextMuted}" FontSize="12" TextWrapping="Wrap" Margin="0,0,0,12"/>
+                                    <StackPanel Orientation="Horizontal">
+                                        <Button Style="{StaticResource SecondaryButton}" Content="📂 Spielordner öffnen" Click="OpenInstallDirBtn_Click" Margin="0,0,10,0"/>
+                                        <Button x:Name="UninstallBtn" Style="{StaticResource SecondaryButton}" Content="🗑 Spiel deinstallieren" Click="UninstallBtn_Click"/>
+                                    </StackPanel>
+                                </StackPanel>
+                            </Border>
+                        </StackPanel>
+                    </ScrollViewer>
+                </Grid>
+
+                <!-- PAGE 4: DEVELOPER RELEASE & FRIENDS (ONLY VISIBLE ON DEV PC) -->
+                <Grid x:Name="PageDev" Grid.Row="1" Margin="24,4,24,22" Visibility="Collapsed">
+                    <ScrollViewer VerticalScrollBarVisibility="Auto">
+                        <StackPanel>
+                            <TextBlock Text="ENTWICKLER-WERKZEUGE (NUR AUF DEINEM PC SICHTBAR)" Foreground="{StaticResource AccentAmber}" FontSize="12" FontWeight="Bold"/>
+                            <TextBlock Text="Release erstellen &amp; an Freunde verteilen" Foreground="{StaticResource TextMain}" FontSize="22" FontWeight="Bold" Margin="0,3,0,14"/>
+
+                            <!-- Step 1 & 2: Build Windows Release ZIP -->
+                            <Border Background="{StaticResource BgCard}" BorderBrush="{StaticResource BorderSubtle}" BorderThickness="1" CornerRadius="10" Padding="18" Margin="0,0,0,14">
+                                <StackPanel>
+                                    <TextBlock Text="SCHRITT 1 — SPIEL ALS WINDOWS-RELEASE (.ZIP) BAUEN" Foreground="{StaticResource AccentCyan}" FontSize="12" FontWeight="Bold" Margin="0,0,0,6"/>
+                                    <TextBlock Text="Exportiert dein Godot-4-Projekt automatisch als DataCenterTycoon.exe + .pck und verpackt alles in eine fertige Release-.zip für GitHub Releases."
+                                               Foreground="{StaticResource TextMuted}" FontSize="12.5" TextWrapping="Wrap" Margin="0,0,0,12"/>
+
+                                    <WrapPanel Margin="0,0,0,10">
+                                        <Button x:Name="BuildReleaseZipBtn" Style="{StaticResource PrimaryPlayButton}" Content="📦 Windows-Build &amp; Release-ZIP erstellen" FontSize="13.5" Padding="16,10" Click="BuildReleaseZipBtn_Click" Margin="0,0,10,8"/>
+                                        <Button x:Name="InstallBuiltZipBtn" Style="{StaticResource SecondaryButton}" Content="🧪 Lokal im Launcher installieren" Click="InstallBuiltZipBtn_Click" Margin="0,0,10,8"/>
+                                        <Button Style="{StaticResource SecondaryButton}" Content="📂 dist/ Ordner öffnen" Click="OpenDistDirBtn_Click" Margin="0,0,0,8"/>
+                                    </WrapPanel>
+
+                                    <ProgressBar x:Name="DevBuildProgressBar" Minimum="0" Maximum="100" Value="0" Visibility="Collapsed" Margin="0,0,0,8"/>
+                                    <TextBlock x:Name="DevBuildStatusText" Text="Bereit. Klicke auf „Windows-Build &amp; Release-ZIP erstellen“." Foreground="{StaticResource TextMuted}" FontSize="12.5" TextWrapping="Wrap"/>
+                                </StackPanel>
+                            </Border>
+
+                            <!-- Step 3: Publish to GitHub Releases & Share Launcher -->
+                            <Border Background="{StaticResource BgCard}" BorderBrush="{StaticResource BorderSubtle}" BorderThickness="1" CornerRadius="10" Padding="18">
+                                <StackPanel>
+                                    <TextBlock Text="SCHRITT 2 — AUF GITHUB HOCHLADEN &amp; FREUNDEN SCHICKEN" Foreground="{StaticResource AccentGreen}" FontSize="12" FontWeight="Bold" Margin="0,0,0,8"/>
+                                    <TextBlock Foreground="#C3D5E8" FontSize="12.5" TextWrapping="Wrap" LineHeight="20" Margin="0,0,0,12">
+                                        1. Erstelle ein öffentliches GitHub-Repo (z.B. deinname/datacenter-tycoon) und trage es unter ⚙ Einstellungen ein.<LineBreak/>
+                                        2. Erstelle dort ein neues Release (Tag z.B. v0.5.0) und ziehe die erzeugte DataCenterTycoon-v0.5.0-win64.zip hinein.<LineBreak/>
+                                        3. Klicke unten auf „🎁 Freunde-Paket vorbereiten“ — das erzeugt den fertigen Ordner mit der eigenständigen DataCenterLauncher.exe + deiner Repo-Adresse.<LineBreak/>
+                                        4. Schick deinen Freunden nur diesen Ordner (kein .NET, kein Godot nötig!). Sie öffnen den Launcher → klicken „⬇ SPIEL HERUNTERLADEN“ → „▶ SPIELEN“!
+                                    </TextBlock>
+                                    <WrapPanel>
+                                        <Button Style="{StaticResource SecondaryButton}" Content="🌐 GitHub Release erstellen" Click="OpenGitHubReleaseBtn_Click" Margin="0,0,10,6"/>
+                                        <Button Style="{StaticResource SecondaryButton}" Content="🎁 Freunde-Paket vorbereiten" Click="PrepareFriendsBundleBtn_Click" Margin="0,0,0,6"/>
+                                    </WrapPanel>
+                                </StackPanel>
+                            </Border>
+                        </StackPanel>
+                    </ScrollViewer>
+                </Grid>
+
+                <!-- PAGE 5: SETTINGS -->
+                <Grid x:Name="PageSettings" Grid.Row="1" Margin="24,4,24,22" Visibility="Collapsed">
+                    <ScrollViewer VerticalScrollBarVisibility="Auto">
+                        <StackPanel>
+                            <TextBlock Text="KONFIGURATION" Foreground="{StaticResource AccentCyan}" FontSize="12" FontWeight="Bold"/>
+                            <TextBlock Text="Launcher-Einstellungen" Foreground="{StaticResource TextMain}" FontSize="22" FontWeight="Bold" Margin="0,3,0,14"/>
+
+                            <!-- Update Source & Install Path -->
+                            <Border Background="{StaticResource BgCard}" BorderBrush="{StaticResource BorderSubtle}" BorderThickness="1" CornerRadius="10" Padding="18" Margin="0,0,0,14">
+                                <StackPanel>
+                                    <TextBlock Text="DOWNLOAD &amp; UPDATE-QUELLE (GITHUB RELEASES)" Foreground="{StaticResource AccentGreen}" FontSize="11.5" FontWeight="Bold" Margin="0,0,0,10"/>
+
+                                    <TextBlock Text="GitHub Repository (z.B. deinname/datacenter-tycoon) oder Manifest-JSON URL" Foreground="{StaticResource TextMuted}" FontSize="12" Margin="0,0,0,5"/>
+                                    <TextBox x:Name="UpdateUrlBox" Margin="0,0,0,14"/>
+
+                                    <TextBlock Text="Spiel-Installationsordner (dort lädt der Launcher das Spiel hin)" Foreground="{StaticResource TextMuted}" FontSize="12" Margin="0,0,0,5"/>
+                                    <Grid>
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="8"/>
+                                            <ColumnDefinition Width="Auto"/>
+                                        </Grid.ColumnDefinitions>
+                                        <TextBox x:Name="InstallDirBox" Grid.Column="0"/>
+                                        <Button Grid.Column="2" Style="{StaticResource SecondaryButton}" Content="Ordner..." Click="BrowseInstallDir_Click"/>
+                                    </Grid>
+                                </StackPanel>
+                            </Border>
+
+                            <!-- Developer-only Godot Paths -->
+                            <Border x:Name="DevSettingsCard" Background="{StaticResource BgCard}" BorderBrush="#3C3522" BorderThickness="1" CornerRadius="10" Padding="18" Margin="0,0,0,14">
+                                <StackPanel>
+                                    <TextBlock Text="ENTWICKLER-PFADE (NUR FÜR GODOT DEV-START &amp; EXPORT — FREUNDE BRAUCHEN DAS NICHT)" Foreground="{StaticResource AccentAmber}" FontSize="11" FontWeight="Bold" Margin="0,0,0,12"/>
+
+                                    <TextBlock Text="Godot 4 .exe (z.B. Godot_v4.7.2-stable_win64.exe)" Foreground="{StaticResource TextMuted}" FontSize="12" Margin="0,0,0,4"/>
+                                    <Grid Margin="0,0,0,12">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="8"/>
+                                            <ColumnDefinition Width="Auto"/>
+                                            <ColumnDefinition Width="8"/>
+                                            <ColumnDefinition Width="Auto"/>
+                                        </Grid.ColumnDefinitions>
+                                        <TextBox x:Name="GodotExeBox" Grid.Column="0"/>
+                                        <Button Grid.Column="2" Style="{StaticResource SecondaryButton}" Content="Durchsuchen..." Click="BrowseGodotExe_Click"/>
+                                        <Button Grid.Column="4" Style="{StaticResource SecondaryButton}" Content="🔍 Auto" Click="AutoDetectGodot_Click"/>
+                                    </Grid>
+
+                                    <TextBlock Text="Godot Projektordner (enthält project.godot)" Foreground="{StaticResource TextMuted}" FontSize="12" Margin="0,0,0,4"/>
+                                    <Grid>
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="8"/>
+                                            <ColumnDefinition Width="Auto"/>
+                                        </Grid.ColumnDefinitions>
+                                        <TextBox x:Name="ProjectDirBox" Grid.Column="0"/>
+                                        <Button Grid.Column="2" Style="{StaticResource SecondaryButton}" Content="Ordner..." Click="BrowseProjectDir_Click"/>
+                                    </Grid>
+                                </StackPanel>
+                            </Border>
+
+                            <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                                <TextBlock x:Name="SettingsSavedHint" Text="" Foreground="{StaticResource AccentGreen}" FontSize="12.5" VerticalAlignment="Center" Margin="0,0,14,0"/>
+                                <Button Style="{StaticResource PrimaryPlayButton}" Content="💾 Einstellungen speichern" FontSize="13.5" Padding="18,10" Click="SaveSettingsBtn_Click"/>
+                            </StackPanel>
+                        </StackPanel>
+                    </ScrollViewer>
+                </Grid>
+            </Grid>
+        </Grid>
+    </Border>
+</Window>

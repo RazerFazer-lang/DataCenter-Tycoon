@@ -1,0 +1,584 @@
+class_name WorldController
+extends Node3D
+## Synchronizes all 3D visual entities (Garage, Racks, Coolers, UPS units, Crates, Cables, Players),
+## drives the Dynamic Day/Night Sky & Lighting cycle, applies Graphics Quality presets (SSAO/SSIL/Shadows),
+## renders the live Main Menu 3D showcase, and relays player poses across ENet peers.
+
+signal terminal_open_requested
+signal rack_inspect_requested(rack_id: String, slot_index: int)
+signal device_inspect_requested(kind: String, entity_id: String)
+
+var local_player: PlayerController = null
+
+@onready var _world_env: WorldEnvironment = $WorldEnvironment
+@onready var _sun_light: DirectionalLight3D = $SunLight
+
+var _garage: GarageBuilder
+var _delivery_van: DeliveryVan
+var _cable_renderer: CableRenderer
+var _racks_container: Node3D
+var _coolers_container: Node3D
+var _ups_container: Node3D
+var _carts_container: Node3D
+var _crates_container: Node3D
+var _players_container: Node3D
+var _showcase_container: Node3D
+
+var _rack_nodes: Dictionary = {}   # rack_id -> RackProp
+var _cooler_nodes: Dictionary = {} # cooler_id -> CoolerProp
+var _ups_nodes: Dictionary = {}    # ups_id -> UpsProp
+var _cart_nodes: Dictionary = {}   # cart_id -> CartProp
+var _crate_nodes: Dictionary = {}  # crate_id -> CrateProp
+var _player_nodes: Dictionary = {} # peer_id -> PlayerController
+
+
+func _ready() -> void:
+	_garage = GarageBuilder.new()
+	_garage.name = "Garage"
+	add_child(_garage)
+
+	_delivery_van = DeliveryVan.new()
+	_delivery_van.name = "DeliveryVan"
+	add_child(_delivery_van)
+
+	_racks_container = Node3D.new()
+	_racks_container.name = "Racks"
+	add_child(_racks_container)
+
+	_coolers_container = Node3D.new()
+	_coolers_container.name = "Coolers"
+	add_child(_coolers_container)
+
+	_ups_container = Node3D.new()
+	_ups_container.name = "UpsUnits"
+	add_child(_ups_container)
+
+	_carts_container = Node3D.new()
+	_carts_container.name = "Carts"
+	add_child(_carts_container)
+
+	_crates_container = Node3D.new()
+	_crates_container.name = "Crates"
+	add_child(_crates_container)
+
+	_players_container = Node3D.new()
+	_players_container.name = "Players"
+	add_child(_players_container)
+
+	_showcase_container = Node3D.new()
+	_showcase_container.name = "MenuShowcase"
+	add_child(_showcase_container)
+
+	_cable_renderer = CableRenderer.new()
+	_cable_renderer.name = "Cables"
+	add_child(_cable_renderer)
+
+	GameState.world_snapshot_loaded.connect(_on_full_rebuild)
+	GameState.racks_changed.connect(_sync_racks)
+	GameState.coolers_changed.connect(_sync_coolers)
+	GameState.ups_changed.connect(_sync_ups)
+	GameState.carts_changed.connect(_sync_carts)
+	GameState.crates_changed.connect(_sync_crates)
+	GameState.cables_changed.connect(_sync_cables)
+	GameState.extinguisher_changed.connect(_sync_extinguisher)
+	GameState.room_level_changed.connect(_sync_room_level)
+	GameState.state_updated.connect(_on_state_updated)
+
+	NetworkManager.player_joined.connect(_on_player_joined)
+	NetworkManager.player_left.connect(_on_player_left)
+	SettingsManager.settings_changed.connect(_apply_graphics_quality)
+
+	# Upgrade Sky to Custom Cloud + Twinkling Starfield ShaderMaterial!
+	if _world_env != null and _world_env.environment != null:
+		var sky_mat := MatLib.get_sky_shader_material()
+		if sky_mat != null:
+			if _world_env.environment.sky == null:
+				_world_env.environment.sky = Sky.new()
+			_world_env.environment.sky.sky_material = sky_mat
+
+	_apply_graphics_quality()
+
+
+func _process(_delta: float) -> void:
+	_update_day_night_atmosphere()
+
+
+func _apply_graphics_quality() -> void:
+	if _world_env == null or _world_env.environment == null:
+		return
+	var env := _world_env.environment
+	var q := SettingsManager.graphics_quality
+	env.tonemap_mode = Environment.TONE_MAPPER_ACES
+	env.tonemap_exposure = 1.02
+	# Realistic natural highlights ONLY (zero cyberpunk neon bloom!)
+	env.glow_enabled = (q >= 2)
+	env.glow_intensity = 0.22 if q >= 2 else 0.12
+	env.glow_bloom = 0.025
+	env.glow_hdr_threshold = 1.45
+
+	# Natural photographic color balance (neutral saturation, clean contrast)
+	env.adjustment_enabled = (q >= 1)
+	env.adjustment_contrast = 1.03
+	env.adjustment_saturation = 0.98
+	env.adjustment_brightness = 1.00
+
+	# Forward+ Ambient Occlusion, Indirect Lighting, Reflections & Subtle Natural Air Haze
+	env.ssao_enabled = (q >= 1)
+	env.ssao_radius = 0.85
+	env.ssao_intensity = 1.45
+	env.ssil_enabled = (q >= 2)
+	env.ssil_intensity = 0.65
+	env.ssr_enabled = (q >= 2)
+	env.ssr_max_steps = 48 if q >= 3 else 32
+	env.sdfgi_enabled = (q >= 3)
+	env.sdfgi_use_occlusion = true
+	env.sdfgi_energy = 0.78
+	env.volumetric_fog_enabled = (q >= 3)
+	env.volumetric_fog_density = 0.0022
+	env.volumetric_fog_albedo = Color(0.88, 0.89, 0.90)
+	env.volumetric_fog_emission_energy = 0.0
+	env.ssr_max_steps = 32
+	env.sdfgi_cascades = 3
+
+	# Kosten begrenzen (gemessen auf Ultra: MSAA 4x ~68 ms, Himmels-Reflexion 256 ~58 ms, SDFGI ~62 ms pro Frame).
+	RenderingServer.gi_set_use_half_resolution(true)
+	RenderingServer.environment_set_volumetric_fog_volume_size(48, 48)
+	RenderingServer.environment_set_ssao_quality(RenderingServer.ENV_SSAO_QUALITY_MEDIUM, true, 0.5, 2, 50.0, 300.0)
+	RenderingServer.environment_set_ssil_quality(RenderingServer.ENV_SSIL_QUALITY_MEDIUM, true, 0.5, 2, 50.0, 300.0)
+	if env.sky != null:
+		env.sky.process_mode = Sky.PROCESS_MODE_INCREMENTAL
+		env.sky.radiance_size = Sky.RADIANCE_SIZE_128 if q >= 3 else Sky.RADIANCE_SIZE_64
+
+	# Kantenglättung: FXAA (und TAA auf Ultra) statt MSAA 4x.
+	var vp := get_viewport()
+	if vp != null:
+		vp.msaa_3d = Viewport.MSAA_DISABLED
+		vp.screen_space_aa = Viewport.SCREEN_SPACE_AA_FXAA if q >= 1 else Viewport.SCREEN_SPACE_AA_DISABLED
+		vp.use_taa = (q >= 3)
+
+	if _sun_light != null:
+		_sun_light.shadow_enabled = (q >= 1)
+	if _garage != null and _garage.has_method("apply_graphics_quality"):
+		_garage.apply_graphics_quality(q)
+
+
+# Zuletzt an den Himmels-Shader gesendete Werte. Neue Werte nur bei echter Änderung senden,
+# damit der Himmel nicht in jedem Frame neu berechnet wird.
+var _sky_sun_dir_sent: Vector3 = Vector3.ZERO
+var _sky_day_sent: float = -1.0
+var _sky_sunset_sent: float = -1.0
+
+
+func _update_day_night_atmosphere() -> void:
+	if _world_env == null or _world_env.environment == null or _sun_light == null:
+		return
+	var tod := GameState.time_of_day if GameState.is_active else 0.38
+	var env := _world_env.environment
+
+	var sun_phase := (tod - 0.25) * TAU
+	var elev := sin(sun_phase)
+	var day_factor := clampf(elev * 2.4 + 0.15, 0.0, 1.0)
+	var sunset_factor := clampf(1.0 - absf(elev) * 4.5, 0.0, 1.0)
+
+	var pitch_deg := lerpf(-16.0, -68.0, clampf(absf(elev), 0.0, 1.0))
+	var yaw_deg := lerpf(-75.0, 75.0, clampf((tod - 0.20) / 0.60, 0.0, 1.0))
+	_sun_light.rotation_degrees = Vector3(pitch_deg, yaw_deg, 0.0)
+
+	if elev >= -0.05:
+		var noon_col := Color(1.0, 0.97, 0.92)
+		var sunset_col := Color(1.0, 0.54, 0.24)
+		_sun_light.light_color = noon_col.lerp(sunset_col, sunset_factor * 0.88)
+		_sun_light.light_energy = lerpf(0.24, 1.45, day_factor)
+	else:
+		_sun_light.light_color = Color(0.42, 0.62, 0.98)
+		_sun_light.light_energy = 0.28
+
+	var sky_sh := MatLib.get_sky_shader_material()
+	if sky_sh != null:
+		var sun_dir := (_sun_light.global_transform.basis.z).normalized()
+		if sun_dir.distance_squared_to(_sky_sun_dir_sent) > 0.00001 \
+				or absf(day_factor - _sky_day_sent) > 0.003 \
+				or absf(sunset_factor - _sky_sunset_sent) > 0.003:
+			_sky_sun_dir_sent = sun_dir
+			_sky_day_sent = day_factor
+			_sky_sunset_sent = sunset_factor
+			sky_sh.set_shader_parameter("sun_dir", sun_dir)
+			sky_sh.set_shader_parameter("day_factor", day_factor)
+			sky_sh.set_shader_parameter("sunset_factor", sunset_factor)
+
+	env.ambient_light_color = Color(0.08, 0.13, 0.24).lerp(Color(0.28, 0.33, 0.40), day_factor)
+	env.ambient_light_energy = lerpf(0.24, 0.56, day_factor)
+
+
+func show_menu_showcase() -> void:
+	clear_menu_showcase()
+
+	var rack_a := RackProp.new()
+	_showcase_container.add_child(rack_a)
+	rack_a.setup("rack_1", "rack_pro", true)
+	rack_a.apply_data({
+		"id": "rack_1",
+		"rack_type": "rack_pro",
+		"pos": Vector3(-2.4, 0.0, -2.4),
+		"rot_y": 0.0,
+		"powered": true,
+		"networked": true,
+		"temp": 44.0,
+		"rental_type": "ai",
+		"rental_customer": "VektorLabs AI",
+		"active_users": 148,
+		"metrics": {"bottleneck": "ok"},
+		"slots": [
+			{"item_type": "web_server", "state": "ok", "repair_progress": 0.0, "fire_level": 0.0, "components": {"cpu": "cpu_epyc_64c", "gpu": "gpu_rtx4070ti", "ram": "ram_ddr5_256gb", "storage": "sto_nvme4_8tb", "cooling": "cool_fanwall", "psu": "psu_1000w_plat"}},
+			{"item_type": "storage_server", "state": "ok", "repair_progress": 0.0, "fire_level": 0.0, "components": {"cpu": "cpu_xeon_14c", "gpu": "gpu_onboard", "ram": "ram_ddr4_128gb", "storage": "sto_allflash_128tb", "cooling": "cool_noctua", "psu": "psu_850w_gold"}},
+			{"item_type": "gpu_server", "state": "ok", "repair_progress": 0.0, "fire_level": 0.0, "components": {"cpu": "cpu_epyc_128c", "gpu": "gpu_h200_dual", "ram": "ram_ddr5_512gb", "storage": "sto_nvme5_64tb", "cooling": "cool_direct_liquid", "psu": "psu_2400w_dual"}},
+			{"item_type": "net_switch", "state": "ok", "repair_progress": 0.0, "fire_level": 0.0, "components": {}},
+			{"item_type": "gpu_server", "state": "ok", "repair_progress": 0.0, "fire_level": 0.0, "components": {"cpu": "cpu_epyc_64c", "gpu": "gpu_h100", "ram": "ram_ddr5_256gb", "storage": "sto_nvme4_24tb", "cooling": "cool_aio_liquid", "psu": "psu_1600w_tit"}},
+			{"item_type": "", "state": "ok", "repair_progress": 0.0, "fire_level": 0.0, "components": {}},
+		],
+	})
+
+	var rack_b := RackProp.new()
+	_showcase_container.add_child(rack_b)
+	rack_b.setup("rack_2", "rack", true)
+	rack_b.apply_data({
+		"id": "rack_2",
+		"rack_type": "rack",
+		"pos": Vector3(-1.1, 0.0, -2.4),
+		"rot_y": 0.0,
+		"powered": true,
+		"networked": true,
+		"temp": 38.0,
+		"rental_type": "game",
+		"rental_customer": "NordicFrag Clan",
+		"active_users": 215,
+		"metrics": {"bottleneck": "ok"},
+		"slots": [
+			{"item_type": "web_server", "state": "ok", "repair_progress": 0.0, "fire_level": 0.0, "components": {"cpu": "cpu_ryzen9_16c", "gpu": "gpu_gtx1660ti", "ram": "ram_ddr4_128gb", "storage": "sto_nvme4_8tb", "cooling": "cool_noctua", "psu": "psu_750w_gold"}},
+			{"item_type": "storage_server", "state": "ok", "repair_progress": 0.0, "fire_level": 0.0, "components": {"cpu": "cpu_xeon_14c", "gpu": "gpu_onboard", "ram": "ram_ddr4_64gb", "storage": "sto_nvme4_24tb", "cooling": "cool_copper_hp", "psu": "psu_650w_silver"}},
+			{"item_type": "gpu_server", "state": "ok", "repair_progress": 0.0, "fire_level": 0.0, "components": {"cpu": "cpu_epyc_24c", "gpu": "gpu_rtx4090", "ram": "ram_ddr5_128gb", "storage": "sto_nvme3_2tb", "cooling": "cool_vapor", "psu": "psu_1200w_red"}},
+			{"item_type": "", "state": "ok", "repair_progress": 0.0, "fire_level": 0.0, "components": {}},
+		],
+	})
+
+	var cooler_a := CoolerProp.new()
+	_showcase_container.add_child(cooler_a)
+	cooler_a.setup("chiller_1", "chiller", true)
+	cooler_a.apply_data({
+		"id": "chiller_1",
+		"cooler_type": "chiller",
+		"pos": Vector3(-3.8, 0.0, -1.0),
+		"rot_y": PI * 0.45,
+		"powered": true,
+	})
+
+	var showcase_cables := {
+		"sc_1": {"cable_type": "power", "from_id": GameState.WALL_BREAKER_ID, "to_id": "sc_rack_1"},
+		"sc_2": {"cable_type": "power", "from_id": "sc_rack_1", "to_id": "sc_rack_2"},
+		"sc_3": {"cable_type": "power", "from_id": GameState.WALL_BREAKER_ID, "to_id": "sc_cooler_1"},
+		"sc_4": {"cable_type": "network", "from_id": GameState.WALL_ROUTER_ID, "to_id": "sc_rack_1"},
+		"sc_5": {"cable_type": "network", "from_id": "sc_rack_1", "to_id": "sc_rack_2"},
+	}
+	var resolver := func(ctype: String, eid: String) -> Variant:
+		if eid == GameState.WALL_BREAKER_ID:
+			return _garage.breaker_port_pos
+		if eid == GameState.WALL_ROUTER_ID:
+			return _garage.router_port_pos
+		if eid == "sc_rack_1":
+			return rack_a.get_power_port_global_pos() if ctype == "power" else rack_a.get_net_port_global_pos()
+		if eid == "sc_rack_2":
+			return rack_b.get_power_port_global_pos() if ctype == "power" else rack_b.get_net_port_global_pos()
+		if eid == "sc_cooler_1":
+			return cooler_a.get_power_port_global_pos()
+		return null
+	_cable_renderer.rebuild_cables(showcase_cables, resolver)
+
+
+func clear_menu_showcase() -> void:
+	for child in _showcase_container.get_children():
+		child.queue_free()
+
+
+func activate_session() -> void:
+	clear_menu_showcase()
+	_sync_cables()
+	_sync_all_players()
+	_on_full_rebuild()
+
+
+func reset_world() -> void:
+	for container_dict in [_rack_nodes, _cooler_nodes, _ups_nodes, _cart_nodes, _crate_nodes, _player_nodes]:
+		var d: Dictionary = container_dict
+		for node in d.values():
+			if is_instance_valid(node):
+				(node as Node).queue_free()
+		d.clear()
+	local_player = null
+	_cable_renderer.rebuild_cables({}, get_port_world_pos)
+	_cable_renderer.update_preview_cable(false, "power", Vector3.ZERO, Vector3.ZERO)
+	_garage.set_room_level(0)
+	_garage.set_extinguisher_mounted(true)
+
+
+func open_terminal() -> void:
+	terminal_open_requested.emit()
+
+
+func open_rack_inspector(rack_id: String, slot_index: int = 0) -> void:
+	rack_inspect_requested.emit(rack_id, slot_index)
+
+
+func open_device_inspector(kind: String, entity_id: String) -> void:
+	device_inspect_requested.emit(kind, entity_id)
+
+
+func start_relocate_rack(rack_id: String) -> void:
+	if local_player != null:
+		local_player.start_relocate_rack(rack_id)
+
+
+func update_cable_preview(active: bool, cable_type: String, start_pos: Vector3, end_pos: Vector3) -> void:
+	if _cable_renderer != null:
+		_cable_renderer.update_preview_cable(active, cable_type, start_pos, end_pos)
+
+
+func get_port_world_pos(cable_type: String, endpoint_id: String) -> Variant:
+	if endpoint_id == GameState.WALL_BREAKER_ID:
+		return _garage.breaker_port_pos
+	if endpoint_id == GameState.WALL_ROUTER_ID:
+		return _garage.router_port_pos
+	if endpoint_id == GameState.HALL_C_BREAKER_ID:
+		return _garage.hall_c_breaker_port_pos
+	if endpoint_id == GameState.HALL_C_ROUTER_ID:
+		return _garage.hall_c_router_port_pos
+	if _rack_nodes.has(endpoint_id):
+		var rp: RackProp = _rack_nodes[endpoint_id]
+		return rp.get_power_port_global_pos() if cable_type == "power" else rp.get_net_port_global_pos()
+	if _cooler_nodes.has(endpoint_id):
+		var cp: CoolerProp = _cooler_nodes[endpoint_id]
+		return cp.get_power_port_global_pos()
+	if _ups_nodes.has(endpoint_id):
+		var up: UpsProp = _ups_nodes[endpoint_id]
+		return up.get_power_port_global_pos()
+	return null
+
+
+func _on_full_rebuild() -> void:
+	_sync_room_level()
+	_sync_extinguisher()
+	_sync_racks()
+	_sync_coolers()
+	_sync_ups()
+	_sync_carts()
+	_sync_crates()
+	_sync_cables()
+
+
+func _on_state_updated() -> void:
+	for rid in GameState.racks.keys():
+		if _rack_nodes.has(rid):
+			(_rack_nodes[rid] as RackProp).apply_data(GameState.racks[rid])
+	for cid in GameState.coolers.keys():
+		if _cooler_nodes.has(cid):
+			(_cooler_nodes[cid] as CoolerProp).apply_data(GameState.coolers[cid])
+	for uid in GameState.ups_units.keys():
+		if _ups_nodes.has(uid):
+			(_ups_nodes[uid] as UpsProp).apply_data(GameState.ups_units[uid])
+
+
+func _sync_room_level() -> void:
+	_garage.set_room_level(GameState.room_level)
+
+
+func _sync_extinguisher() -> void:
+	_garage.set_extinguisher_mounted(GameState.extinguisher_held_by == 0)
+
+
+func _sync_racks() -> void:
+	for rid in _rack_nodes.keys():
+		if not GameState.racks.has(rid):
+			_rack_nodes[rid].queue_free()
+			_rack_nodes.erase(rid)
+	for rid in GameState.racks.keys():
+		var data: Dictionary = GameState.racks[rid]
+		if not _rack_nodes.has(rid):
+			var rp := RackProp.new()
+			rp.name = rid
+			_racks_container.add_child(rp)
+			rp.setup(rid, str(data.get("rack_type", "rack")), false)
+			_rack_nodes[rid] = rp
+		(_rack_nodes[rid] as RackProp).apply_data(data)
+	_sync_cables()
+
+
+func _sync_coolers() -> void:
+	for cid in _cooler_nodes.keys():
+		if not GameState.coolers.has(cid):
+			_cooler_nodes[cid].queue_free()
+			_cooler_nodes.erase(cid)
+	for cid in GameState.coolers.keys():
+		var data: Dictionary = GameState.coolers[cid]
+		if not _cooler_nodes.has(cid):
+			var cp := CoolerProp.new()
+			cp.name = cid
+			_coolers_container.add_child(cp)
+			cp.setup(cid, str(data.get("cooler_type", "cooler")), false)
+			_cooler_nodes[cid] = cp
+		(_cooler_nodes[cid] as CoolerProp).apply_data(data)
+	_sync_cables()
+
+
+func _sync_ups() -> void:
+	for uid in _ups_nodes.keys():
+		if not GameState.ups_units.has(uid):
+			_ups_nodes[uid].queue_free()
+			_ups_nodes.erase(uid)
+	for uid in GameState.ups_units.keys():
+		if not _ups_nodes.has(uid):
+			var up := UpsProp.new()
+			up.name = uid
+			_ups_container.add_child(up)
+			up.setup(uid)
+			_ups_nodes[uid] = up
+		(_ups_nodes[uid] as UpsProp).apply_data(GameState.ups_units[uid])
+	_sync_cables()
+
+
+func _sync_carts() -> void:
+	for cid in _cart_nodes.keys():
+		if not GameState.carts.has(cid):
+			_cart_nodes[cid].queue_free()
+			_cart_nodes.erase(cid)
+	for cid in GameState.carts.keys():
+		if not _cart_nodes.has(cid):
+			var cp := CartProp.new()
+			cp.name = cid
+			_carts_container.add_child(cp)
+			cp.setup(cid)
+			_cart_nodes[cid] = cp
+		(_cart_nodes[cid] as CartProp).apply_data(GameState.carts[cid])
+
+
+func update_local_pushed_cart(cart_id: String, pos: Vector3, rot_y: float) -> void:
+	if _cart_nodes.has(cart_id):
+		(_cart_nodes[cart_id] as CartProp).apply_live_pose(pos, rot_y, true)
+
+
+func send_cart_pose(cart_id: String, pos: Vector3, rot_y: float) -> void:
+	if not NetworkManager.is_in_session:
+		return
+	if multiplayer.is_server():
+		GameState.update_cart_pose_from_host(cart_id, pos, rot_y)
+		_rpc_relay_cart_pose.rpc(1, cart_id, pos, rot_y)
+	else:
+		_rpc_submit_cart_pose.rpc_id(1, cart_id, pos, rot_y)
+
+
+@rpc("any_peer", "call_remote", "unreliable_ordered")
+func _rpc_submit_cart_pose(cart_id: String, pos: Vector3, rot_y: float) -> void:
+	if not multiplayer.is_server():
+		return
+	var sid := multiplayer.get_remote_sender_id()
+	if not GameState.carts.has(cart_id) or int(GameState.carts[cart_id].get("pushed_by", 0)) != sid:
+		return
+	GameState.update_cart_pose_from_host(cart_id, pos, rot_y)
+	if _cart_nodes.has(cart_id):
+		(_cart_nodes[cart_id] as CartProp).apply_live_pose(pos, rot_y, false)
+	_rpc_relay_cart_pose.rpc(sid, cart_id, pos, rot_y)
+
+
+@rpc("authority", "call_remote", "unreliable_ordered")
+func _rpc_relay_cart_pose(pusher_id: int, cart_id: String, pos: Vector3, rot_y: float) -> void:
+	if pusher_id == multiplayer.get_unique_id():
+		return
+	if _cart_nodes.has(cart_id):
+		(_cart_nodes[cart_id] as CartProp).apply_live_pose(pos, rot_y, false)
+
+
+func _sync_crates() -> void:
+	for cid in _crate_nodes.keys():
+		if not GameState.crates.has(cid):
+			_crate_nodes[cid].queue_free()
+			_crate_nodes.erase(cid)
+	for cid in GameState.crates.keys():
+		var data: Dictionary = GameState.crates[cid]
+		if not _crate_nodes.has(cid):
+			var cp := CrateProp.new()
+			cp.name = cid
+			_crates_container.add_child(cp)
+			cp.setup(cid, str(data["item_type"]))
+			_crate_nodes[cid] = cp
+		(_crate_nodes[cid] as CrateProp).apply_data(data)
+
+
+func _sync_cables() -> void:
+	_cable_renderer.rebuild_cables(GameState.cables, get_port_world_pos)
+
+
+func _sync_all_players() -> void:
+	for pid in NetworkManager.players.keys():
+		_spawn_player_if_missing(int(pid), NetworkManager.players[pid])
+
+
+func _on_player_joined(peer_id: int, info: Dictionary) -> void:
+	if not NetworkManager.is_in_session:
+		return
+	_spawn_player_if_missing(peer_id, info)
+
+
+func _on_player_left(peer_id: int) -> void:
+	if _player_nodes.has(peer_id):
+		var node: Node = _player_nodes[peer_id]
+		if is_instance_valid(node):
+			node.queue_free()
+		_player_nodes.erase(peer_id)
+
+
+func _spawn_player_if_missing(peer_id: int, info: Dictionary) -> void:
+	if _player_nodes.has(peer_id):
+		return
+	var my_id := multiplayer.get_unique_id()
+	var is_me := (peer_id == my_id)
+
+	var p := PlayerController.new()
+	p.name = "Player_%d" % peer_id
+	var spawn_idx := _player_nodes.size()
+	p.position = Vector3(-1.2 + float(spawn_idx) * 1.1, 0.05, 1.6)
+	p.setup(
+		peer_id,
+		is_me,
+		str(info.get("name", "Spieler")),
+		info.get("color", Color(0.22, 0.72, 0.98)),
+		self
+	)
+	_players_container.add_child(p)
+	_player_nodes[peer_id] = p
+	if is_me:
+		local_player = p
+
+
+func send_local_pose(pos: Vector3, yaw: float, pitch: float, tool: int, spraying: bool) -> void:
+	if not NetworkManager.is_in_session:
+		return
+	if multiplayer.is_server():
+		_rpc_relay_pose.rpc(1, pos, yaw, pitch, tool, spraying)
+	else:
+		_rpc_submit_pose.rpc_id(1, pos, yaw, pitch, tool, spraying)
+
+
+@rpc("any_peer", "call_remote", "unreliable_ordered")
+func _rpc_submit_pose(pos: Vector3, yaw: float, pitch: float, tool: int, spraying: bool) -> void:
+	if not multiplayer.is_server():
+		return
+	var sid := multiplayer.get_remote_sender_id()
+	if _player_nodes.has(sid):
+		(_player_nodes[sid] as PlayerController).apply_remote_pose(pos, yaw, pitch, tool, spraying)
+	_rpc_relay_pose.rpc(sid, pos, yaw, pitch, tool, spraying)
+
+
+@rpc("authority", "call_remote", "unreliable_ordered")
+func _rpc_relay_pose(peer_id: int, pos: Vector3, yaw: float, pitch: float, tool: int, spraying: bool) -> void:
+	if peer_id == multiplayer.get_unique_id():
+		return
+	if _player_nodes.has(peer_id):
+		(_player_nodes[peer_id] as PlayerController).apply_remote_pose(pos, yaw, pitch, tool, spraying)

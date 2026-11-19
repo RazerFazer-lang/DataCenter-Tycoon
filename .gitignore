@@ -1,0 +1,11 @@
+# Godot-Cache (wird beim Öffnen neu erzeugt)
+.godot/
+*.tmp
+
+# Build-Ausgaben
+dist/
+launcher/bin/
+launcher/obj/
+
+# Ausgaben der Probe-Skripte (Screenshots, Logs)
+tests/_*

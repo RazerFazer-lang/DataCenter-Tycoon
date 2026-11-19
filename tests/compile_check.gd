@@ -1,0 +1,28 @@
+extends SceneTree
+## Lädt die geänderten Skripte mit aktiven Autoloads und meldet Kompilierfehler.
+## Aufruf: godot --headless --path . --script res://tests/compile_check.gd
+
+const SCRIPTS: Array[String] = [
+	"res://scripts/world/player_controller.gd",
+	"res://scripts/ui/terminal_ui.gd",
+	"res://scripts/main.gd",
+	"res://scripts/ui/pc_boot_screen.gd",
+	"res://scripts/world/pc_screen_mirror.gd",
+	"res://scripts/autoload/game_state.gd",
+	"res://scripts/autoload/pc_screen_state.gd",
+	"res://scripts/world/garage_builder.gd",
+]
+
+
+func _initialize() -> void:
+	await process_frame
+	var failed := 0
+	for path in SCRIPTS:
+		var s := load(path) as GDScript
+		if s == null or not s.can_instantiate():
+			print("FEHLER  ", path)
+			failed += 1
+		else:
+			print("OK      ", path)
+	print("Ergebnis: %d Fehler" % failed)
+	quit(1 if failed > 0 else 0)
