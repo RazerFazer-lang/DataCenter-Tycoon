@@ -121,7 +121,9 @@ func _on_finance_changed() -> void:
 
 
 func _on_screen_changed() -> void:
-	_accum = REFRESH_INTERVAL
+	# Beim nächsten Frame sofort neu zeichnen, egal welches Intervall gerade gilt (idle = 1 s).
+	# Nur erhöhen: nach dem Vollbild ist _accum schon groß und darf nicht zurückgesetzt werden.
+	_accum = maxf(_accum, IDLE_REFRESH_INTERVAL)
 
 
 func _process(delta: float) -> void:
