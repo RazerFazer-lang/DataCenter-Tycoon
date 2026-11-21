@@ -38,8 +38,10 @@ func _find_model_path(model_id: String) -> String:
 	if _cache.has(model_id):
 		return str(_cache[model_id])
 
+	# Im Export liegt nur die importierte Fassung (.glb.import + .scn) in der .pck, nicht die Rohdatei.
+	# FileAccess.file_exists() findet sie dort nicht, ResourceLoader.exists() schon.
 	var res_glb := "res://assets/models/%s.glb" % model_id
-	if FileAccess.file_exists(res_glb):
+	if ResourceLoader.exists(res_glb) or FileAccess.file_exists(res_glb):
 		_cache[model_id] = res_glb
 		return res_glb
 

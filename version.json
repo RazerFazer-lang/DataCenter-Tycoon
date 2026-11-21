@@ -1,8 +1,17 @@
 {
-  "version": "1.0.1",
-  "codename": "v1.0.1 Co-op-Spielermodell",
-  "release_date": "2026-11-21",
+  "version": "1.0.2",
+  "codename": "v1.0.2 Modell-Fix",
+  "release_date": "2026-11-22",
   "changelog": [
+    {
+      "version": "v1.0.2",
+      "title": "Blender-Modelle auch in der Spielversion",
+      "items": [
+        "Der Sicherungskasten hat jetzt auch in der heruntergeladenen Version die Tür. Vorher erschien dort der alte Kasten ohne Tür.",
+        "Alle eigenen 3D-Modelle (Router, Sicherungen, Feuerlöscher und weitere) werden in der Spielversion genauso geladen wie beim Entwickeln.",
+        "Enthält alle Neuerungen aus v1.0.1."
+      ]
+    },
     {
       "version": "v1.0.1",
       "title": "Neues Co-op-Spielermodell",
