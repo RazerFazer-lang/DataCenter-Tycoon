@@ -9,3 +9,10 @@ launcher/obj/
 
 # Ausgaben der Probe-Skripte (Screenshots, Logs)
 tests/_*
+tests/out/
+
+# Blender: Vorschaubilder, Logs und Backups (werden von den Skripten neu erzeugt)
+tools/blender/*.png
+tools/blender/*.log
+tools/blender/*.blend1
+tools/blender/__pycache__/

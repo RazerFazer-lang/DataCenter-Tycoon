@@ -53,6 +53,10 @@ var _checklist_box: VBoxContainer
 var _checklist_count_lbl: Label
 var _crew_panel: PanelContainer
 var _crew_box: VBoxContainer
+## Pausemenü: Mitspielerliste mit Ping und Kick-Knopf (nur Host).
+var _pause_players_box: VBoxContainer
+## peer_id -> Ping-Label in der Pausemenü-Liste
+var _pause_ping_labels: Dictionary = {}
 var _help_panel: PanelContainer
 
 # Fadenkreuz & Interaktions-Hinweis
@@ -61,6 +65,10 @@ var _crosshair_active: bool = false
 var _prompt_panel: PanelContainer
 var _prompt_key_cap: PanelContainer
 var _prompt_key_lbl: Label
+## Tastenkappe "Steuerung" unten rechts (folgt der Belegung von toggle_help).
+var _help_key_lbl: Label
+## true, sobald die Checkliste in dieser Sitzung unvollständig angezeigt wurde (für die Abschlussmeldung).
+var _checklist_seen_open: bool = false
 var _prompt_lbl: Label
 var _sub_prompt_lbl: Label
 
@@ -74,6 +82,15 @@ var _pause_master_slider: HSlider
 var _pause_fan_slider: HSlider
 var _pause_sens_slider: HSlider
 var _pause_gfx_option: OptionButton
+var _pause_gfx_toggle: Button
+var _pause_gfx_details: VBoxContainer
+var _pause_aa_option: OptionButton
+var _pause_scale_slider: HSlider
+var _pause_upscaler_option: OptionButton
+var _pause_sharp_slider: HSlider
+var _pause_aniso_option: OptionButton
+var _pause_fps_option: OptionButton
+var _pause_vsync_check: CheckButton
 
 var _display_money: float = 1800.0
 var _toast_timer: float = 0.0
@@ -94,8 +111,10 @@ func _ready() -> void:
 
 	GameState.state_updated.connect(_refresh_all)
 	GameState.racks_changed.connect(_refresh_checklist)
+	GameState.cables_changed.connect(_refresh_checklist)
 	GameState.crates_changed.connect(_refresh_checklist)
 	GameState.inventory_changed.connect(_refresh_checklist)
+	GameState.checklist_changed.connect(_refresh_checklist)
 	GameState.world_snapshot_loaded.connect(func():
 		_display_money = GameState.money
 		_refresh_all()
@@ -105,15 +124,24 @@ func _ready() -> void:
 	GameState.daily_bill_charged.connect(_on_daily_bill_charged)
 	GameState.van_updated.connect(_refresh_van_badge)
 	NetworkManager.players_changed.connect(_refresh_crew)
+	NetworkManager.pings_updated.connect(_refresh_crew)
+	NetworkManager.pings_updated.connect(_update_pause_pings)
+	NetworkManager.players_changed.connect(func() -> void:
+		if _pause_overlay != null and _pause_overlay.visible:
+			_refresh_pause_players()
+	)
 
 
 func set_pause_visible(show_pause: bool) -> void:
 	if _pause_overlay == null:
 		return
 	if show_pause:
-		_pause_world_lbl.text = "%s  •  Tag %d, %s Uhr" % [GameState.current_save_name, GameState.day_number, GameState.get_time_string()]
+		_pause_world_lbl.text = tr("%s  •  Tag %d, %s Uhr") % [GameState.current_save_name, GameState.day_number, GameState.get_time_string()]
 		var is_host := NetworkManager.is_in_session and multiplayer.is_server()
+		if is_host and not NetworkManager.public_ip.is_empty():
+			_pause_world_lbl.text += "  •  " + tr("IP für Freunde: %s (Port %d)") % [NetworkManager.public_ip, NetworkManager.hosted_port]
 		_save_section.visible = is_host
+		_refresh_pause_players()
 		_save_name_input.text = GameState.current_save_name
 		_pause_master_slider.set_value_no_signal(SettingsManager.master_volume * 100.0)
 		_pause_fan_slider.set_value_no_signal(SettingsManager.fan_volume * 100.0)
@@ -122,6 +150,7 @@ func set_pause_visible(show_pause: bool) -> void:
 		_update_slider_label(_pause_fan_slider)
 		_update_slider_label(_pause_sens_slider)
 		_pause_gfx_option.selected = SettingsManager.graphics_quality
+		_sync_pause_graphics()
 		UIStyle.animate_popup_open(_pause_overlay, _pause_card)
 	else:
 		UIStyle.animate_popup_close(_pause_overlay, _pause_card)
@@ -131,12 +160,15 @@ func show_toast(msg: String, is_warn: bool = false) -> void:
 	if _toast_panel == null:
 		return
 	var col := UIStyle.COL_AMBER if is_warn else UIStyle.COL_GREEN
-	_toast_title.text = "WARNUNG" if is_warn else "MELDUNG"
+	_toast_title.text = tr("WARNUNG") if is_warn else tr("MELDUNG")
 	_toast_title.add_theme_color_override("font_color", col)
 	_toast_lbl.text = msg
 	_toast_strip.color = col
 	_set_icon(_toast_icon, "warn" if is_warn else "info", col)
 	_toast_panel.visible = true
+	# Controls schrumpfen nicht von selbst: ohne Reset bleibt der Rahmen so hoch wie die bisher längste Meldung.
+	_toast_panel.reset_size()
+	_toast_panel.reset_size.call_deferred()
 	_toast_panel.modulate.a = 0.0
 	_toast_panel.position.y = TOAST_TOP - 12.0
 	if _toast_tween != null and _toast_tween.is_valid():
@@ -172,7 +204,7 @@ func _process(delta: float) -> void:
 			_is_night = night
 			_set_icon(_clock_icon, "moon" if night else "sun", Color(0.70, 0.76, 0.92) if night else UIStyle.COL_GOLD_TEXT)
 		_clock_lbl.text = GameState.get_time_string()
-		_day_lbl.text = "TAG %d" % GameState.day_number
+		_day_lbl.text = tr("TAG %d") % GameState.day_number
 
 	_refresh_player_hud(delta)
 	_refresh_alert_banner()
@@ -199,11 +231,11 @@ func _on_world_saved(display_name: String, is_autosave: bool) -> void:
 	if is_autosave:
 		show_toast("Auto-Save: %s" % display_name)
 	else:
-		show_toast("Spielstand '%s' gespeichert." % display_name)
+		show_toast(tr("Spielstand '%s' gespeichert.") % display_name)
 
 
 func _on_daily_bill_charged(day_num: int, bill_amount: int, kwh_used: float) -> void:
-	show_toast("Stromrechnung Tag %d: -$%d (%.1f kWh)" % [day_num - 1, bill_amount, kwh_used], true)
+	show_toast(tr("Stromrechnung Tag %d: -$%d (%.1f kWh)") % [day_num - 1, bill_amount, kwh_used], true)
 
 
 func _on_event_logged(message: String, severity: String) -> void:
@@ -221,7 +253,7 @@ func _refresh_stats() -> void:
 	if _power_lbl == null:
 		return
 	var pwr_ratio := clampf(float(GameState.total_watts) / float(maxi(GameState.max_watts, 1)), 0.0, 1.0)
-	var pwr_state := "" if GameState.breaker_on else ("  USV" if GameState.ups_backup_active else "  AUS")
+	var pwr_state := "" if GameState.breaker_on else ("  " + tr("USV") if GameState.ups_backup_active else "  " + tr("AUS"))
 	_power_lbl.text = "%d / %d W%s" % [GameState.total_watts, GameState.max_watts, pwr_state]
 	_power_bar.value = pwr_ratio * 100.0
 	var p_col := UIStyle.COL_GREEN
@@ -255,8 +287,12 @@ func _refresh_checklist() -> void:
 			done_n += 1
 	if done_n == steps.size():
 		_checklist_panel.visible = false
+		if _checklist_seen_open:
+			_checklist_seen_open = false
+			GameState.event_logged.emit(tr("Erste Schritte geschafft! Dein erstes Rack ist vermietet und verdient Geld."), "good")
 		return
 
+	_checklist_seen_open = true
 	_checklist_panel.visible = true
 	_checklist_count_lbl.text = "%d / %d" % [done_n, steps.size()]
 	for c in _checklist_box.get_children():
@@ -285,7 +321,7 @@ func _refresh_checklist() -> void:
 		row.add_child(box)
 
 		var lbl := Label.new()
-		lbl.text = str(sd["text"])
+		lbl.text = SettingsManager.remap_prompt_keys(tr(str(sd["text"])))
 		lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 		lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		var col := UIStyle.COL_TEXT_MAIN
@@ -295,6 +331,29 @@ func _refresh_checklist() -> void:
 			col = Color(UIStyle.COL_TEXT_SUB, 0.9)
 		UIStyle.style_label(lbl, 13 if state == 1 else 12, col)
 		row.add_child(lbl)
+
+		var hint := str(sd.get("hint", ""))
+		if state == 1 and not hint.is_empty():
+			var hint_margin := MarginContainer.new()
+			hint_margin.mouse_filter = Control.MOUSE_FILTER_IGNORE
+			hint_margin.add_theme_constant_override("margin_left", 27)
+			var hint_lbl := Label.new()
+			hint_lbl.text = _format_checklist_hint(tr(hint))
+			hint_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+			hint_lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
+			UIStyle.style_label(hint_lbl, 12, UIStyle.COL_TEXT_SUB)
+			hint_margin.add_child(hint_lbl)
+			_checklist_box.add_child(hint_margin)
+
+
+## Standardtasten auf die Belegung umschreiben und {aktion} durch die belegte Taste ersetzen.
+func _format_checklist_hint(hint: String) -> String:
+	var out := SettingsManager.remap_prompt_keys(hint)
+	for action in SettingsManager.REBINDABLE_ACTIONS:
+		var token := "{%s}" % action
+		if out.contains(token):
+			out = out.replace(token, SettingsManager.get_action_key_label(action))
+	return out
 
 
 func _draw_check_box(ci: Control, state: int) -> void:
@@ -332,14 +391,14 @@ func _refresh_van_badge() -> void:
 		"arriving":
 			var dur := maxf(float(GameState.VAN_ARRIVE_DURATION), 0.01)
 			var eta := maxf(0.0, dur - GameState.van_phase_time)
-			_van_lbl.text = "Ankunft in %d s  •  %d Artikel" % [int(ceilf(eta)), q_n]
+			_van_lbl.text = tr("Ankunft in %d s  •  %d Artikel") % [int(ceilf(eta)), q_n]
 			_van_lbl.add_theme_color_override("font_color", UIStyle.COL_TEXT_MAIN)
 			_van_bar.value = clampf(GameState.van_phase_time / dur, 0.0, 1.0) * 100.0
 			_set_bar_color(_van_bar, UIStyle.COL_ACCENT)
 		"unloading":
 			var total_n := maxi(GameState.van_trip_total, 1)
 			var done_n := mini(GameState.van_trip_done, total_n)
-			_van_lbl.text = "Fahrer lädt aus  •  %d / %d" % [done_n, total_n]
+			_van_lbl.text = tr("Fahrer lädt aus  •  %d / %d") % [done_n, total_n]
 			_van_lbl.add_theme_color_override("font_color", UIStyle.COL_TEXT_MAIN)
 			_van_bar.value = float(done_n) / float(total_n) * 100.0
 			_set_bar_color(_van_bar, UIStyle.COL_GREEN)
@@ -356,21 +415,21 @@ func _refresh_alert_banner() -> void:
 	var alerts: Array[String] = []
 	if not GameState.breaker_on:
 		if GameState.ups_backup_active:
-			alerts.append("USV-Notstrom (%.0f%%): Sicherung [E] einschalten" % GameState.avg_ups_charge)
+			alerts.append(tr("USV-Notstrom (%.0f%%): Sicherung [E] einschalten") % GameState.avg_ups_charge)
 		else:
-			alerts.append("BLACKOUT: Hauptsicherung [E] einschalten")
+			alerts.append(tr("BLACKOUT: Hauptsicherung [E] einschalten"))
 	elif GameState.total_watts > GameState.max_watts:
-		alerts.append("STROM-ÜBERLAST (%d / %d W)" % [GameState.total_watts, GameState.max_watts])
+		alerts.append(tr("STROM-ÜBERLAST (%d / %d W)") % [GameState.total_watts, GameState.max_watts])
 	if GameState.has_any_fire():
-		alerts.append("SERVER-BRAND: Feuerlöscher an der Wand holen")
+		alerts.append(tr("SERVER-BRAND: Feuerlöscher an der Wand holen"))
 	if GameState.ddos_active:
-		alerts.append("DDoS-ANGRIFF: am Router [E] oder PC abwehren")
+		alerts.append(tr("DDoS-ANGRIFF: am Router [E] oder PC abwehren"))
 	if not GameState.active_call.is_empty():
-		alerts.append("KUNDENANRUF (%s): [E] am Schreibtisch" % str(GameState.active_call.get("customer", "Kunde")))
+		alerts.append(tr("KUNDENANRUF (%s): [E] am Schreibtisch") % str(GameState.active_call.get("customer", "Kunde")))
 	elif GameState.get_open_ticket_count() > 0:
-		alerts.append("%d offene Support-Tickets am PC" % GameState.get_open_ticket_count())
+		alerts.append(tr("%d offene Support-Tickets am PC") % GameState.get_open_ticket_count())
 	if GameState.used_bandwidth_mbps > GameState.max_bandwidth_mbps:
-		alerts.append("Router am Limit (%s / %s): upgraden [F]" % [
+		alerts.append(tr("Router am Limit (%s / %s): upgraden [F]") % [
 			HardwareCatalog.format_speed_mbps(GameState.used_bandwidth_mbps),
 			HardwareCatalog.format_speed_mbps(GameState.max_bandwidth_mbps)
 		])
@@ -379,7 +438,11 @@ func _refresh_alert_banner() -> void:
 		_alert_panel.visible = false
 		return
 	_alert_panel.visible = true
-	_alert_lbl.text = "   •   ".join(alerts)
+	# Nur die wichtigste Warnung ausschreiben, damit das Banner einzeilig bleibt.
+	var alert_txt := alerts[0]
+	if alerts.size() > 1:
+		alert_txt += "   " + tr("(+%d weitere)") % (alerts.size() - 1)
+	_alert_lbl.text = alert_txt
 	var pulse := 0.55 + 0.45 * (0.5 + 0.5 * sin(_blink_t * 7.0))
 	_alert_strip.modulate.a = pulse
 	_alert_icon.modulate.a = pulse
@@ -395,16 +458,16 @@ func _refresh_player_hud(delta: float) -> void:
 	_prompt_panel.visible = _prompt_alpha > 0.02
 	_prompt_panel.modulate.a = _prompt_alpha
 	if want_prompt:
-		var m := _key_regex.search(lp.current_prompt)
+		var m := _key_regex.search(SettingsManager.remap_prompt_keys(lp.current_prompt))
 		if m != null:
 			_prompt_key_cap.visible = true
 			_prompt_key_lbl.text = m.get_string(1)
 			_prompt_lbl.text = m.get_string(2)
 		else:
 			_prompt_key_cap.visible = false
-			_prompt_lbl.text = lp.current_prompt
+			_prompt_lbl.text = SettingsManager.remap_prompt_keys(lp.current_prompt)
 		_prompt_lbl.visible = not _prompt_lbl.text.is_empty()
-		_sub_prompt_lbl.text = lp.current_sub_prompt
+		_sub_prompt_lbl.text = SettingsManager.remap_prompt_keys(lp.current_sub_prompt)
 		_sub_prompt_lbl.visible = not lp.current_sub_prompt.is_empty()
 
 	var active := not lp.current_prompt.is_empty()
@@ -452,11 +515,23 @@ func _refresh_crew() -> void:
 		row.add_child(dot)
 
 		var name_lbl := Label.new()
-		name_lbl.text = str(info.get("name", "Spieler"))
+		name_lbl.text = str(info.get("name", tr("Spieler")))
 		name_lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		name_lbl.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
 		UIStyle.style_label(name_lbl, 13, UIStyle.COL_TEXT_MAIN)
 		row.add_child(name_lbl)
+
+		var ping := NetworkManager.get_player_ping(int(pid))
+		if int(pid) != 1 and ping >= 0:
+			var ping_lbl := Label.new()
+			ping_lbl.text = "%d ms" % ping
+			var ping_col: Color = Color(0.45, 0.85, 0.50)
+			if ping > 150:
+				ping_col = Color(1.0, 0.42, 0.38)
+			elif ping > 80:
+				ping_col = Color(0.95, 0.85, 0.35)
+			UIStyle.style_label(ping_lbl, 10, ping_col)
+			row.add_child(ping_lbl)
 
 		if int(pid) == 1:
 			var host_lbl := Label.new()
@@ -470,14 +545,53 @@ func _on_pause_quick_settings_changed(_val: float = 0.0) -> void:
 	SettingsManager.fan_volume = _pause_fan_slider.value / 100.0
 	SettingsManager.mouse_sensitivity = _pause_sens_slider.value / 1000.0
 	SettingsManager.graphics_quality = clampi(_pause_gfx_option.selected, 0, 3)
+	if _pause_aa_option != null:
+		SettingsManager.anti_aliasing = clampi(_pause_aa_option.selected, 0, SettingsManager.AA_COUNT - 1)
+		SettingsManager.render_scale = clampf(_pause_scale_slider.value / 100.0, SettingsManager.RENDER_SCALE_MIN, SettingsManager.RENDER_SCALE_MAX)
+		SettingsManager.upscaler = clampi(_pause_upscaler_option.selected, 0, SettingsManager.UPSCALER_COUNT - 1)
+		SettingsManager.sharpness = clampf(_pause_sharp_slider.value / 100.0, 0.0, 1.0)
+		SettingsManager.anisotropic = clampi(_pause_aniso_option.selected, 0, SettingsManager.ANISO_LEVELS.size() - 1)
+		var fps_idx := clampi(_pause_fps_option.selected, 0, SettingsManager.FPS_LIMITS.size() - 1)
+		SettingsManager.max_fps = SettingsManager.FPS_LIMITS[fps_idx]
+		SettingsManager.vsync = _pause_vsync_check.button_pressed
+		_update_pause_sharpness_state()
 	SettingsManager.save_settings()
+
+
+func _sync_pause_graphics() -> void:
+	if _pause_aa_option == null:
+		return
+	_pause_aa_option.selected = SettingsManager.anti_aliasing
+	_pause_scale_slider.set_value_no_signal(SettingsManager.render_scale * 100.0)
+	_pause_upscaler_option.selected = SettingsManager.upscaler
+	_pause_sharp_slider.set_value_no_signal(SettingsManager.sharpness * 100.0)
+	_pause_aniso_option.selected = SettingsManager.anisotropic
+	_pause_fps_option.selected = maxi(SettingsManager.FPS_LIMITS.find(SettingsManager.max_fps), 0)
+	_pause_vsync_check.set_pressed_no_signal(SettingsManager.vsync)
+	_update_slider_label(_pause_scale_slider)
+	_update_slider_label(_pause_sharp_slider)
+	_update_pause_sharpness_state()
+
+
+func _update_pause_sharpness_state() -> void:
+	if _pause_sharp_slider == null or _pause_scale_slider == null or _pause_upscaler_option == null:
+		return
+	var active := SettingsManager.is_sharpness_active(_pause_scale_slider.value / 100.0, _pause_upscaler_option.selected)
+	_pause_sharp_slider.editable = active
+	_pause_sharp_slider.modulate.a = 1.0 if active else 0.45
+
+
+func _on_port_forward_finished(ok: bool, _ip: String, message: String) -> void:
+	show_toast(message, not ok)
 
 
 func _build_ui() -> void:
 	_display_font = UIStyle.make_display_font(get_theme_default_font(), 0.5, 1)
+	if not NetworkManager.port_forward_finished.is_connected(_on_port_forward_finished):
+		NetworkManager.port_forward_finished.connect(_on_port_forward_finished)
 	_build_stats_row()
-	_build_clock_widget()
 	_build_checklist()
+	_build_clock_widget()
 	_build_alert_banner()
 	_build_toast()
 	_build_van_widget()
@@ -651,18 +765,32 @@ func _build_checklist() -> void:
 	_checklist_count_lbl = Label.new()
 	UIStyle.style_label(_checklist_count_lbl, 11, UIStyle.COL_TEXT_SUB)
 	head.add_child(_checklist_count_lbl)
+	var close_btn := Button.new()
+	close_btn.text = "×"
+	close_btn.flat = true
+	close_btn.focus_mode = Control.FOCUS_NONE
+	close_btn.tooltip_text = tr("Checkliste ausblenden")
+	close_btn.add_theme_font_size_override("font_size", 14)
+	close_btn.add_theme_color_override("font_color", UIStyle.COL_TEXT_SUB)
+	close_btn.pressed.connect(_on_checklist_dismissed)
+	head.add_child(close_btn)
 
 	_checklist_box = VBoxContainer.new()
 	_checklist_box.add_theme_constant_override("separation", 6)
 	v.add_child(_checklist_box)
 
 
+func _on_checklist_dismissed() -> void:
+	GameState.checklist_dismissed = true
+	_refresh_checklist()
+
+
 func _build_alert_banner() -> void:
 	_alert_panel = PanelContainer.new()
 	_alert_panel.anchor_left = 0.5
 	_alert_panel.anchor_right = 0.5
-	_alert_panel.offset_left = -300
-	_alert_panel.offset_right = 300
+	_alert_panel.offset_left = -220
+	_alert_panel.offset_right = 220
 	_alert_panel.offset_top = 92
 	_alert_panel.visible = false
 	_alert_panel.add_theme_stylebox_override("panel", UIStyle.make_panel(Color(0.20, 0.06, 0.055, 0.92), Color(UIStyle.COL_RED, 0.8), 4, 1, 0, 0))
@@ -677,20 +805,20 @@ func _build_alert_banner() -> void:
 	_alert_strip.color = UIStyle.COL_RED
 	h.add_child(_alert_strip)
 
-	_alert_icon = _make_icon("warn", Color(1.0, 0.78, 0.70), 18)
+	_alert_icon = _make_icon("warn", Color(1.0, 0.78, 0.70), 14)
 	h.add_child(_alert_icon)
 
 	var m := MarginContainer.new()
 	m.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	m.add_theme_constant_override("margin_right", 14)
-	m.add_theme_constant_override("margin_top", 8)
-	m.add_theme_constant_override("margin_bottom", 8)
+	m.add_theme_constant_override("margin_top", 4)
+	m.add_theme_constant_override("margin_bottom", 4)
 	h.add_child(m)
 
 	_alert_lbl = Label.new()
 	_alert_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	_alert_lbl.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	UIStyle.style_label(_alert_lbl, 13, Color(1.0, 0.90, 0.86), _display_font)
+	UIStyle.style_label(_alert_lbl, 12, Color(1.0, 0.90, 0.86), _display_font)
 	m.add_child(_alert_lbl)
 
 
@@ -698,10 +826,12 @@ func _build_toast() -> void:
 	_toast_panel = PanelContainer.new()
 	_toast_panel.anchor_left = 0.5
 	_toast_panel.anchor_right = 0.5
-	_toast_panel.offset_left = -230
-	_toast_panel.offset_right = 230
+	_toast_panel.offset_left = -180
+	_toast_panel.offset_right = 180
 	_toast_panel.offset_top = TOAST_TOP
 	_toast_panel.offset_bottom = TOAST_TOP
+	_toast_panel.custom_minimum_size = Vector2(360, 0)
+	_toast_panel.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
 	_toast_panel.visible = false
 	_toast_panel.add_theme_stylebox_override("panel", UIStyle.make_panel(Color(0.065, 0.068, 0.076, 0.94), HUD_BORDER, 4, 1, 0, 0))
 	add_child(_toast_panel)
@@ -715,14 +845,14 @@ func _build_toast() -> void:
 	_toast_strip.color = UIStyle.COL_GREEN
 	h.add_child(_toast_strip)
 
-	_toast_icon = _make_icon("info", UIStyle.COL_GREEN, 18)
+	_toast_icon = _make_icon("info", UIStyle.COL_GREEN, 14)
 	h.add_child(_toast_icon)
 
 	var m := MarginContainer.new()
 	m.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	m.add_theme_constant_override("margin_right", 14)
-	m.add_theme_constant_override("margin_top", 8)
-	m.add_theme_constant_override("margin_bottom", 9)
+	m.add_theme_constant_override("margin_right", 10)
+	m.add_theme_constant_override("margin_top", 5)
+	m.add_theme_constant_override("margin_bottom", 6)
 	h.add_child(m)
 
 	var v := VBoxContainer.new()
@@ -731,12 +861,15 @@ func _build_toast() -> void:
 
 	_toast_title = Label.new()
 	_toast_title.text = "MELDUNG"
-	UIStyle.style_label(_toast_title, 10, UIStyle.COL_GREEN, _display_font)
+	UIStyle.style_label(_toast_title, 9, UIStyle.COL_GREEN, _display_font)
 	v.add_child(_toast_title)
 
 	_toast_lbl = Label.new()
 	_toast_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	UIStyle.style_label(_toast_lbl, 13, UIStyle.COL_TEXT_MAIN)
+	# Feste Mindestbreite, damit der Umbruch nie mit Breite 0 rechnet (ein Wort pro Zeile).
+	_toast_lbl.custom_minimum_size = Vector2(300, 0)
+	_toast_lbl.max_lines_visible = 3
+	UIStyle.style_label(_toast_lbl, 12, UIStyle.COL_TEXT_MAIN)
 	v.add_child(_toast_lbl)
 
 
@@ -821,14 +954,14 @@ func _build_right_column() -> void:
 	head.add_child(close_lbl)
 
 	var rows: Array = [
-		["E", "Interagieren (Kontext-Hand)"],
-		["E", "Am PC: hinsetzen, Shop & Support"],
-		["E", "Buchse: Kabel ziehen (gelb Strom, blau LAN)"],
-		["E", "Am Rack: Übersicht & Teile einbauen"],
-		["F", "Am Router: Geschwindigkeit upgraden"],
-		["RMB", "Trennen / Ausbauen"],
-		["R", "Drehen"],
-		["Q", "Ablegen"],
+		["E", tr("Interagieren (Kontext-Hand)")],
+		["E", tr("Am PC: hinsetzen, Shop & Support")],
+		["E", tr("Buchse: Kabel ziehen (gelb Strom, blau LAN)")],
+		["E", tr("Am Rack: Übersicht & Teile einbauen")],
+		["F", tr("Am Router: Geschwindigkeit upgraden")],
+		["RMB", tr("Trennen / Ausbauen")],
+		["R", tr("Drehen")],
+		["Q", tr("Ablegen")],
 		["ESC", "Pause"],
 	]
 	for item in rows:
@@ -863,13 +996,23 @@ func _build_key_hints() -> void:
 	hints.modulate.a = 0.8
 	add_child(hints)
 
-	hints.add_child(_make_keycap("H"))
-	hints.add_child(_hint_label("Steuerung"))
+	var help_cap := _make_keycap(SettingsManager.get_action_key_label("toggle_help"))
+	_help_key_lbl = help_cap.get_child(0) as Label
+	hints.add_child(help_cap)
+	if not SettingsManager.key_bindings_changed.is_connected(_on_key_bindings_changed):
+		SettingsManager.key_bindings_changed.connect(_on_key_bindings_changed)
+	hints.add_child(_hint_label(tr("Steuerung")))
 	var gap := Control.new()
 	gap.custom_minimum_size = Vector2(10, 0)
 	hints.add_child(gap)
 	hints.add_child(_make_keycap("ESC"))
 	hints.add_child(_hint_label("Pause"))
+
+
+func _on_key_bindings_changed() -> void:
+	if _help_key_lbl != null and is_instance_valid(_help_key_lbl):
+		_help_key_lbl.text = SettingsManager.get_action_key_label("toggle_help")
+	_refresh_checklist()
 
 
 func _hint_label(txt: String) -> Label:
@@ -911,8 +1054,8 @@ func _build_crosshair_and_prompt() -> void:
 	h.add_theme_constant_override("separation", 10)
 	_prompt_panel.add_child(h)
 
-	_prompt_key_cap = _make_keycap("E", 14)
-	_prompt_key_cap.custom_minimum_size = Vector2(28, 26)
+	_prompt_key_cap = _make_keycap("E", 12)
+	_prompt_key_cap.custom_minimum_size = Vector2(24, 22)
 	_prompt_key_lbl = _prompt_key_cap.get_child(0) as Label
 	h.add_child(_prompt_key_cap)
 
@@ -922,11 +1065,11 @@ func _build_crosshair_and_prompt() -> void:
 	h.add_child(v)
 
 	_prompt_lbl = Label.new()
-	UIStyle.style_label(_prompt_lbl, 15, UIStyle.COL_TEXT_MAIN, _display_font)
+	UIStyle.style_label(_prompt_lbl, 13, UIStyle.COL_TEXT_MAIN, _display_font)
 	v.add_child(_prompt_lbl)
 
 	_sub_prompt_lbl = Label.new()
-	UIStyle.style_label(_sub_prompt_lbl, 12, UIStyle.COL_TEXT_SUB)
+	UIStyle.style_label(_sub_prompt_lbl, 11, UIStyle.COL_TEXT_SUB)
 	v.add_child(_sub_prompt_lbl)
 
 
@@ -1037,7 +1180,7 @@ func _build_pause_overlay() -> void:
 	_save_section = VBoxContainer.new()
 	_save_section.add_theme_constant_override("separation", 6)
 	pvbox.add_child(_save_section)
-	_save_section.add_child(_section_label("SPIELSTAND (HOST)"))
+	_save_section.add_child(_section_label(tr("SPIELSTAND (HOST)")))
 
 	var srow := HBoxContainer.new()
 	srow.add_theme_constant_override("separation", 8)
@@ -1057,11 +1200,11 @@ func _build_pause_overlay() -> void:
 	save_btn.pressed.connect(func():
 		var res := GameState.save_current_world(_save_name_input.text, false)
 		if not bool(res.get("ok", false)):
-			show_toast(str(res.get("error", "Speichern fehlgeschlagen")), true)
+			show_toast(tr(str(res.get("error", "Speichern fehlgeschlagen"))), true)
 	)
 	srow.add_child(save_btn)
 
-	pvbox.add_child(_section_label("SCHNELL-EINSTELLUNGEN"))
+	pvbox.add_child(_section_label(tr("SCHNELL-EINSTELLUNGEN")))
 	_pause_master_slider = _add_pause_slider(pvbox, "Gesamtlautstärke", 0, 100, 1, "%d%%")
 	_pause_fan_slider = _add_pause_slider(pvbox, "Server-Lüfter & Raum", 0, 100, 1, "%d%%")
 	_pause_sens_slider = _add_pause_slider(pvbox, "Maus-Empfindlichkeit", 0.5, 8.0, 0.1, "%.1f")
@@ -1086,6 +1229,58 @@ func _build_pause_overlay() -> void:
 	_pause_gfx_option.item_selected.connect(func(_idx: int): _on_pause_quick_settings_changed())
 	grow.add_child(_pause_gfx_option)
 
+	_pause_gfx_toggle = Button.new()
+	_pause_gfx_toggle.text = "Erweiterte Grafik ▸"
+	_pause_gfx_toggle.toggle_mode = true
+	_pause_gfx_toggle.custom_minimum_size = Vector2(0, 32)
+	UIStyle.style_button(_pause_gfx_toggle)
+	pvbox.add_child(_pause_gfx_toggle)
+
+	# Eigener Scrollbereich, damit das Pausemenü auch auf 720p-Bildschirmen passt.
+	var gfx_scroll := ScrollContainer.new()
+	gfx_scroll.custom_minimum_size = Vector2(0, 230)
+	gfx_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	gfx_scroll.visible = false
+	pvbox.add_child(gfx_scroll)
+
+	_pause_gfx_details = VBoxContainer.new()
+	_pause_gfx_details.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_pause_gfx_details.add_theme_constant_override("separation", 8)
+	gfx_scroll.add_child(_pause_gfx_details)
+
+	_pause_gfx_toggle.toggled.connect(func(on: bool):
+		gfx_scroll.visible = on
+		_pause_gfx_toggle.text = "Erweiterte Grafik ▾" if on else "Erweiterte Grafik ▸"
+	)
+
+	_pause_aa_option = _add_pause_option(_pause_gfx_details, "Kantenglättung", SettingsManager.AA_LABELS)
+	_pause_scale_slider = _add_pause_slider(_pause_gfx_details, "Render-Auflösung", SettingsManager.RENDER_SCALE_MIN * 100.0, SettingsManager.RENDER_SCALE_MAX * 100.0, 5.0, "%d%%")
+	_pause_upscaler_option = _add_pause_option(_pause_gfx_details, "Hochskalierung", SettingsManager.UPSCALER_LABELS)
+	if _pause_aa_option != null:
+		_pause_aa_option.tooltip_text = tr("Mit AMD FSR 2.2 ist MSAA automatisch aus, weil FSR 2.2 die Kanten selbst glättet. Deine MSAA-Auswahl greift wieder bei Bilinear oder FSR 1.0.")
+	_pause_sharp_slider = _add_pause_slider(_pause_gfx_details, "Schärfe (FSR)", 0.0, 100.0, 5.0, "%d%%")
+	_pause_aniso_option = _add_pause_option(_pause_gfx_details, "Texturfilter", SettingsManager.ANISO_LABELS)
+	_pause_fps_option = _add_pause_option(_pause_gfx_details, "FPS-Limit", SettingsManager.get_fps_labels())
+
+	_pause_vsync_check = CheckButton.new()
+	_pause_vsync_check.text = "V-Sync (kein Bildreißen)"
+	_pause_vsync_check.add_theme_font_size_override("font_size", 13)
+	_pause_vsync_check.add_theme_color_override("font_color", Color(0.80, 0.81, 0.81))
+	_pause_vsync_check.toggled.connect(func(_on: bool): _on_pause_quick_settings_changed())
+	_pause_gfx_details.add_child(_pause_vsync_check)
+
+	_pause_players_box = VBoxContainer.new()
+	_pause_players_box.add_theme_constant_override("separation", 6)
+	_pause_players_box.visible = false
+	pvbox.add_child(_pause_players_box)
+
+	var log_btn := Button.new()
+	log_btn.text = "Log-Ordner öffnen"
+	log_btn.custom_minimum_size = Vector2(0, 32)
+	UIStyle.style_button(log_btn, Color(0.12, 0.15, 0.17), UIStyle.COL_BORDER)
+	log_btn.pressed.connect(_open_log_folder)
+	pvbox.add_child(log_btn)
+
 	var rule := ColorRect.new()
 	rule.custom_minimum_size = Vector2(0, 1)
 	rule.color = Color(UIStyle.COL_BORDER, 0.7)
@@ -1098,6 +1293,109 @@ func _build_pause_overlay() -> void:
 	leave_btn.add_theme_font_override("font", _display_font)
 	leave_btn.pressed.connect(func(): leave_requested.emit())
 	pvbox.add_child(leave_btn)
+
+
+## Öffnet den Ordner mit den Godot-Logs (user://logs) im Datei-Explorer.
+func _open_log_folder() -> void:
+	var dir := ProjectSettings.globalize_path("user://logs")
+	DirAccess.make_dir_recursive_absolute(dir)
+	var err := OS.shell_open(dir)
+	if err != OK:
+		push_warning("Log-Ordner konnte nicht geöffnet werden (%s): %s" % [error_string(err), dir])
+
+
+func _add_pause_option(parent: VBoxContainer, label_txt: String, items: Array) -> OptionButton:
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 10)
+	parent.add_child(row)
+
+	var lbl := Label.new()
+	lbl.text = tr(label_txt)
+	lbl.custom_minimum_size = Vector2(170, 0)
+	lbl.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	UIStyle.style_label(lbl, 13, Color(0.80, 0.81, 0.81))
+	row.add_child(lbl)
+
+	var opt := OptionButton.new()
+	for i in items.size():
+		opt.add_item(tr(str(items[i])), i)
+	opt.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	opt.custom_minimum_size = Vector2(0, 34)
+	UIStyle.style_button(opt)
+	opt.item_selected.connect(func(_idx: int): _on_pause_quick_settings_changed())
+	row.add_child(opt)
+	return opt
+
+
+func _ping_color(ms: int) -> Color:
+	if ms > 150:
+		return Color(1.0, 0.42, 0.38)
+	if ms > 80:
+		return Color(0.95, 0.85, 0.35)
+	return Color(0.45, 0.85, 0.50)
+
+
+func _refresh_pause_players() -> void:
+	if _pause_players_box == null:
+		return
+	for child in _pause_players_box.get_children():
+		child.queue_free()
+	_pause_ping_labels.clear()
+	var is_host := NetworkManager.is_in_session and multiplayer.is_server()
+	_pause_players_box.visible = is_host and NetworkManager.players.size() > 1
+	if not _pause_players_box.visible:
+		return
+
+	_pause_players_box.add_child(_section_label(tr("MITSPIELER (HOST)")))
+	for pid in NetworkManager.players.keys():
+		var peer_id := int(pid)
+		if peer_id == 1:
+			continue
+		var info: Dictionary = NetworkManager.players[pid]
+		var row := HBoxContainer.new()
+		row.add_theme_constant_override("separation", 10)
+		_pause_players_box.add_child(row)
+
+		var name_lbl := Label.new()
+		name_lbl.text = str(info.get("name", tr("Spieler")))
+		name_lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		name_lbl.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+		name_lbl.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+		UIStyle.style_label(name_lbl, 13, UIStyle.COL_TEXT_MAIN)
+		row.add_child(name_lbl)
+
+		var ping_lbl := Label.new()
+		ping_lbl.custom_minimum_size = Vector2(64, 0)
+		ping_lbl.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+		ping_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+		UIStyle.style_label(ping_lbl, 12, UIStyle.COL_TEXT_SUB)
+		row.add_child(ping_lbl)
+		_pause_ping_labels[peer_id] = ping_lbl
+
+		var kick_btn := Button.new()
+		kick_btn.text = "KICKEN"
+		kick_btn.custom_minimum_size = Vector2(96, 32)
+		UIStyle.style_button(kick_btn, Color(0.24, 0.11, 0.10), UIStyle.COL_RED)
+		kick_btn.pressed.connect(func() -> void:
+			kick_btn.disabled = true
+			NetworkManager.kick_player(peer_id)
+		)
+		row.add_child(kick_btn)
+	_update_pause_pings()
+
+
+func _update_pause_pings() -> void:
+	for peer_id in _pause_ping_labels.keys():
+		var lbl := _pause_ping_labels[peer_id] as Label
+		if lbl == null or not is_instance_valid(lbl):
+			continue
+		var ms := NetworkManager.get_player_ping(int(peer_id))
+		if ms < 0:
+			lbl.text = "– ms"
+			lbl.modulate = Color.WHITE
+		else:
+			lbl.text = "%d ms" % ms
+			lbl.modulate = _ping_color(ms)
 
 
 func _section_label(txt: String) -> Label:
@@ -1125,7 +1423,7 @@ func _add_pause_slider(parent: VBoxContainer, label_txt: String, min_v: float, m
 	parent.add_child(row)
 
 	var lbl := Label.new()
-	lbl.text = label_txt
+	lbl.text = tr(label_txt)
 	lbl.custom_minimum_size = Vector2(170, 0)
 	lbl.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	UIStyle.style_label(lbl, 13, Color(0.80, 0.81, 0.81))

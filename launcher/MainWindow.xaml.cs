@@ -851,6 +851,18 @@ public partial class MainWindow : Window
         Process.Start(new ProcessStartInfo { FileName = dir, UseShellExecute = true });
     }
 
+    private void OpenLogsBtn_Click(object sender, RoutedEventArgs e)
+    {
+        // Godot 4 schreibt auf dem PC standardmäßig nach user://logs/godot.log
+        var dir = Path.Combine(LauncherConfig.GetGodotUserDataDir(), "logs");
+        Directory.CreateDirectory(dir);
+        var latest = Path.Combine(dir, "godot.log");
+        var psi = File.Exists(latest)
+            ? new ProcessStartInfo { FileName = "explorer.exe", Arguments = $"/select,\"{latest}\"", UseShellExecute = true }
+            : new ProcessStartInfo { FileName = dir, UseShellExecute = true };
+        Process.Start(psi);
+    }
+
     private void OpenModelsBtn_Click(object sender, RoutedEventArgs e)
     {
         string dir = _config.IsGameInstalled

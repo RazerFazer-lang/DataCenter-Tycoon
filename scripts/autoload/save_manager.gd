@@ -4,6 +4,10 @@ extends Node
 
 const SAVES_SUBDIR := "saves"
 const SAVE_FORMAT_VERSION := 2
+## Sicherungen liegen in user://saves/backups/<save_id>/<unix_zeit>.json.
+const BACKUPS_SUBDIR := "backups"
+## So viele Sicherungen bleiben pro Welt erhalten.
+const MAX_BACKUPS := 5
 
 
 func _ensure_saves_dir() -> bool:
@@ -37,11 +41,13 @@ func get_save_path(save_id: String) -> String:
 	return "user://%s/%s.json" % [SAVES_SUBDIR, sanitize_save_id(save_id)]
 
 
-func save_world(save_id: String, display_name: String, state_data: Dictionary) -> Dictionary:
+func save_world(save_id: String, display_name: String, state_data: Dictionary, make_backup: bool = false) -> Dictionary:
 	if not _ensure_saves_dir():
 		return {"ok": false, "error": "Speicherordner konnte nicht erstellt werden."}
 
 	var clean_id := sanitize_save_id(save_id)
+	if make_backup:
+		_backup_current(clean_id)
 	var clean_display := display_name.strip_edges()
 	if clean_display.is_empty():
 		clean_display = clean_id
@@ -70,7 +76,7 @@ func save_world(save_id: String, display_name: String, state_data: Dictionary) -
 	var path := get_save_path(clean_id)
 	var file := FileAccess.open(path, FileAccess.WRITE)
 	if file == null:
-		return {"ok": false, "error": "Datei konnte nicht geschrieben werden: %s" % path}
+		return {"ok": false, "error": TranslationServer.translate("Datei konnte nicht geschrieben werden: %s") % path}
 
 	file.store_string(json_text)
 	file.close()
@@ -147,6 +153,102 @@ func delete_save(save_id: String) -> bool:
 		return false
 	var err := DirAccess.remove_absolute(ProjectSettings.globalize_path(path))
 	return err == OK
+
+
+func _backup_dir(save_id: String) -> String:
+	return "user://%s/%s/%s" % [SAVES_SUBDIR, BACKUPS_SUBDIR, sanitize_save_id(save_id)]
+
+
+## Kopiert den aktuellen Spielstand in den Sicherungsordner und löscht überzählige Sicherungen.
+func _backup_current(clean_id: String) -> bool:
+	var src := get_save_path(clean_id)
+	if not FileAccess.file_exists(src):
+		return false
+	var dir_path := _backup_dir(clean_id)
+	var abs_dir := ProjectSettings.globalize_path(dir_path)
+	if not DirAccess.dir_exists_absolute(abs_dir):
+		if DirAccess.make_dir_recursive_absolute(abs_dir) != OK:
+			push_warning("Sicherungsordner konnte nicht erstellt werden: %s" % abs_dir)
+			return false
+	var stamp := int(Time.get_unix_time_from_system())
+	var dst := "%s/%d.json" % [dir_path, stamp]
+	var n := 1
+	while FileAccess.file_exists(dst):
+		dst = "%s/%d_%d.json" % [dir_path, stamp, n]
+		n += 1
+	var err := DirAccess.copy_absolute(ProjectSettings.globalize_path(src), ProjectSettings.globalize_path(dst))
+	if err != OK:
+		push_warning("Sicherung fehlgeschlagen (%d): %s" % [err, dst])
+		return false
+	_prune_backups(clean_id)
+	return true
+
+
+## Dateinamen der Sicherungen einer Welt, neueste zuerst.
+func _backup_files(save_id: String) -> Array[String]:
+	var files: Array[String] = []
+	var dir := DirAccess.open(_backup_dir(save_id))
+	if dir == null:
+		return files
+	for fname in dir.get_files():
+		if fname.ends_with(".json"):
+			files.append(fname)
+	files.sort()
+	files.reverse()
+	return files
+
+
+func _prune_backups(save_id: String) -> void:
+	var files := _backup_files(save_id)
+	var dir_path := _backup_dir(save_id)
+	for i in range(MAX_BACKUPS, files.size()):
+		DirAccess.remove_absolute(ProjectSettings.globalize_path("%s/%s" % [dir_path, files[i]]))
+
+
+## Sicherungen einer Welt, neueste zuerst: [{file, saved_at, summary}].
+func list_backups(save_id: String) -> Array:
+	var results: Array = []
+	var dir_path := _backup_dir(save_id)
+	for fname in _backup_files(save_id):
+		var f := FileAccess.open("%s/%s" % [dir_path, fname], FileAccess.READ)
+		if f == null:
+			continue
+		var parsed: Variant = JSON.parse_string(f.get_as_text())
+		f.close()
+		if not (parsed is Dictionary):
+			continue
+		var d: Dictionary = parsed
+		results.append({
+			"file": fname,
+			"saved_at": str(d.get("saved_at", "")),
+			"summary": d.get("summary", {}),
+		})
+	return results
+
+
+## Ersetzt den Spielstand durch eine Sicherung. Der aktuelle Stand wird vorher selbst gesichert.
+func restore_backup(save_id: String, backup_file: String) -> Dictionary:
+	var clean_id := sanitize_save_id(save_id)
+	# Nur Dateinamen aus dem eigenen Sicherungsordner zulassen (kein "../").
+	if not _backup_files(clean_id).has(backup_file):
+		return {"ok": false, "error": "Sicherung nicht gefunden."}
+	var f := FileAccess.open("%s/%s" % [_backup_dir(clean_id), backup_file], FileAccess.READ)
+	if f == null:
+		return {"ok": false, "error": "Sicherung konnte nicht geöffnet werden."}
+	var text := f.get_as_text()
+	f.close()
+	var parsed: Variant = JSON.parse_string(text)
+	if not (parsed is Dictionary) or not ((parsed as Dictionary).get("state") is Dictionary):
+		return {"ok": false, "error": "Sicherung ist beschädigt."}
+	if not _ensure_saves_dir():
+		return {"ok": false, "error": "Speicherordner konnte nicht erstellt werden."}
+	_backup_current(clean_id)
+	var out := FileAccess.open(get_save_path(clean_id), FileAccess.WRITE)
+	if out == null:
+		return {"ok": false, "error": "Spielstand konnte nicht geschrieben werden."}
+	out.store_string(text)
+	out.close()
+	return {"ok": true, "save_id": clean_id}
 
 
 func _serialize_state(data: Dictionary) -> Dictionary:

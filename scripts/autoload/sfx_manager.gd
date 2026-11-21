@@ -5,6 +5,10 @@ extends Node
 ## support ticket chime, chair sit-down sound, RJ45/IEC plugs, 1U rails, footsteps & 3D hardware hums.
 
 const MIX_RATE := 44100
+# Erzeugte Klänge werden hier gespeichert, damit nur der erste Start rechnen muss (~870 ms gemessen).
+const SFX_CACHE_DIR := "user://sfx_cache"
+# Erhöhen, wenn sich ein Generator oder seine Parameter ändern, sonst bleiben die alten Klänge im Cache.
+const SFX_CACHE_VERSION := 1
 
 var _sounds: Dictionary = {}
 var _loops: Dictionary = {}
@@ -20,6 +24,13 @@ func _ready() -> void:
 		add_child(player)
 		_pool.append(player)
 
+	if not _load_sound_cache():
+		_generate_sounds()
+		_save_sound_cache()
+	_setup_room_ambience()
+
+
+func _generate_sounds() -> void:
 	# Tactile mechanical & UI interaction sounds (zero harsh synth beeps)
 	_sounds["click"] = _gen_mouse_click()
 	_sounds["key_type"] = _gen_keyboard_keystroke()
@@ -73,12 +84,77 @@ func _ready() -> void:
 	_loops["van_engine"] = _gen_van_engine_loop(2.0)
 	_loops["cart_roll"] = _gen_cart_roll_loop(2.0)
 
+
+func _setup_room_ambience() -> void:
 	# Very subtle warm room presence (ONLY plays in-game, completely quiet in Main Menu!)
 	_room_amb_player = AudioStreamPlayer.new()
 	_room_amb_player.stream = _loops["room_ambience"]
 	_room_amb_player.volume_db = -80.0
 	add_child(_room_amb_player)
 	SettingsManager.settings_changed.connect(_update_room_ambience_volume)
+
+
+func _cache_index_path() -> String:
+	return "%s/index_v%d.cfg" % [SFX_CACHE_DIR, SFX_CACHE_VERSION]
+
+
+func _cache_stream_path(kind: String, stream_name: String) -> String:
+	return "%s/%s_%s_v%d.res" % [SFX_CACHE_DIR, kind, stream_name, SFX_CACHE_VERSION]
+
+
+## Lädt alle Klänge aus user://sfx_cache. Liefert false, wenn der Index fehlt oder ein Klang fehlt
+## oder kaputt ist. Dann bleiben _sounds und _loops leer, und der Aufrufer erzeugt alles neu.
+func _load_sound_cache() -> bool:
+	var index_path := _cache_index_path()
+	if not FileAccess.file_exists(index_path):
+		return false
+	var cfg := ConfigFile.new()
+	if cfg.load(index_path) != OK:
+		return false
+	var ok := _load_streams_into(_sounds, "sfx", cfg.get_value("cache", "sounds", PackedStringArray())) \
+		and _load_streams_into(_loops, "loop", cfg.get_value("cache", "loops", PackedStringArray()))
+	if not ok or _sounds.is_empty() or not _loops.has("room_ambience"):
+		_sounds.clear()
+		_loops.clear()
+		return false
+	return true
+
+
+func _load_streams_into(target: Dictionary, kind: String, names: Variant) -> bool:
+	if not (names is PackedStringArray):
+		return false
+	for stream_name in names:
+		var path := _cache_stream_path(kind, stream_name)
+		if not ResourceLoader.exists(path):
+			return false
+		var res := ResourceLoader.load(path, "AudioStreamWAV", ResourceLoader.CACHE_MODE_IGNORE)
+		if not (res is AudioStreamWAV):
+			return false
+		target[stream_name] = res
+	return true
+
+
+## Speichert alle Klänge. Den Index erst zum Schluss schreiben, damit ein halb gespeicherter Cache nie geladen wird.
+func _save_sound_cache() -> void:
+	DirAccess.make_dir_recursive_absolute(SFX_CACHE_DIR)
+	if not (_save_streams(_sounds, "sfx") and _save_streams(_loops, "loop")):
+		return
+	var cfg := ConfigFile.new()
+	cfg.set_value("cache", "sounds", PackedStringArray(_sounds.keys()))
+	cfg.set_value("cache", "loops", PackedStringArray(_loops.keys()))
+	var err := cfg.save(_cache_index_path())
+	if err != OK:
+		push_warning("Sound-Cache-Index konnte nicht gespeichert werden (Fehler %d)" % err)
+
+
+func _save_streams(source: Dictionary, kind: String) -> bool:
+	for stream_name in source:
+		var path := _cache_stream_path(kind, stream_name)
+		var err := ResourceSaver.save(source[stream_name] as Resource, path)
+		if err != OK:
+			push_warning("Klang '%s' konnte nicht gespeichert werden (Fehler %d)" % [stream_name, err])
+			return false
+	return true
 
 
 func _process(_delta: float) -> void:

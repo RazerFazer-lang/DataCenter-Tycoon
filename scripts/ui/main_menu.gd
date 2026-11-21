@@ -34,6 +34,10 @@ var _join_name_input: LineEdit
 var _join_ip_input: LineEdit
 var _join_port_input: LineEdit
 var _join_btn: Button
+## Erscheint nach Verbindungsabbruch, wenn die letzten Verbindungsdaten noch da sind.
+var _reconnect_btn: Button
+## Beitreten-Seite: gefundene Spiele im lokalen Netzwerk.
+var _lan_list: VBoxContainer
 var _recent_ips_box: HBoxContainer
 
 # Settings page controls
@@ -49,8 +53,35 @@ var _sens_val: Label
 var _fov_slider: HSlider
 var _fov_val: Label
 var _gfx_option: OptionButton
-var _fullscreen_check: CheckButton
+var _window_mode_option: OptionButton
+var _screen_option: OptionButton
+var _window_size_option: OptionButton
+## Fenstergrößen in der Reihenfolge der Einträge von _window_size_option.
+var _window_size_values: Array[Vector2i] = []
+## true, wenn _window_size_option gerade die Vollbild-Auflösungen zeigt (Eintrag 0 = nativ).
+var _window_size_list_fullscreen := false
+var _ui_scale_option: OptionButton
+var _language_option: OptionButton
+## Tastenbelegung: action -> Button mit der aktuellen Taste.
+var _keybind_buttons: Dictionary = {}
+## Aktion, die gerade auf eine neue Taste wartet ("" = keine).
+var _rebind_action: String = ""
+var _keybind_hint: Label
+## Fußzeile: action -> Label der Tastenkappe.
+var _footer_key_labels: Dictionary = {}
 var _autosave_check: CheckButton
+var _aa_option: OptionButton
+var _scale_slider: HSlider
+var _scale_val: Label
+var _upscaler_option: OptionButton
+var _sharp_slider: HSlider
+var _sharp_val: Label
+var _aniso_option: OptionButton
+var _fps_option: OptionButton
+var _vsync_check: CheckButton
+var _host_password_input: LineEdit
+var _load_password_input: LineEdit
+var _join_password_input: LineEdit
 
 
 func _ready() -> void:
@@ -60,6 +91,10 @@ func _ready() -> void:
 	_switch_page("new_game", false)
 	NetworkManager.connection_failed.connect(_on_connection_failed)
 	NetworkManager.disconnected_from_session.connect(_on_disconnected)
+	NetworkManager.lan_games_updated.connect(_rebuild_lan_list)
+	SettingsManager.key_bindings_changed.connect(_on_key_bindings_changed)
+	visibility_changed.connect(_update_lan_scan)
+	_update_lan_scan()
 	visibility_changed.connect(_on_visibility_changed)
 	_play_intro.call_deferred()
 
@@ -70,6 +105,8 @@ func refresh_on_show() -> void:
 	_sync_from_settings()
 	_rebuild_saves_list()
 	_rebuild_recent_ips()
+	_update_reconnect_btn()
+	_update_lan_scan()
 
 
 func show_status(text: String, color: Color = Color(0.80, 0.80, 0.78)) -> void:
@@ -124,6 +161,8 @@ func _set_action_buttons_disabled(disabled: bool) -> void:
 		_host_start_btn.disabled = disabled
 	if _join_btn != null:
 		_join_btn.disabled = disabled
+	if _reconnect_btn != null:
+		_reconnect_btn.disabled = disabled
 
 
 func _sync_from_settings() -> void:
@@ -154,10 +193,24 @@ func _sync_from_settings() -> void:
 		_fov_val.text = "%d°" % int(roundf(SettingsManager.fov))
 	if _gfx_option != null:
 		_gfx_option.selected = SettingsManager.graphics_quality
-	if _fullscreen_check != null:
-		_fullscreen_check.set_pressed_no_signal(SettingsManager.fullscreen)
+	_sync_window_options()
 	if _autosave_check != null:
 		_autosave_check.set_pressed_no_signal(SettingsManager.autosave_enabled)
+	if _aa_option != null:
+		_aa_option.selected = SettingsManager.anti_aliasing
+	if _scale_slider != null:
+		_scale_slider.set_value_no_signal(SettingsManager.render_scale * 100.0)
+	if _upscaler_option != null:
+		_upscaler_option.selected = SettingsManager.upscaler
+	if _sharp_slider != null:
+		_sharp_slider.set_value_no_signal(SettingsManager.sharpness * 100.0)
+	if _aniso_option != null:
+		_aniso_option.selected = SettingsManager.anisotropic
+	if _fps_option != null:
+		_fps_option.selected = maxi(SettingsManager.FPS_LIMITS.find(SettingsManager.max_fps), 0)
+	if _vsync_check != null:
+		_vsync_check.set_pressed_no_signal(SettingsManager.vsync)
+	_update_graphics_labels()
 	if _join_ip_input != null and not SettingsManager.recent_ips.is_empty():
 		_join_ip_input.text = SettingsManager.recent_ips[0]
 
@@ -194,11 +247,11 @@ func _on_host_new_pressed() -> void:
 	var port := _parse_port(_host_port_input.text)
 	var world_title := _world_name_input.text.strip_edges()
 	if world_title.is_empty():
-		world_title = "Mein DataCenter"
-	show_status("Starte neue Co-op Welt '%s' auf Port %d..." % [world_title, port])
+		world_title = tr("Mein DataCenter")
+	show_status(tr("Starte neue Co-op Welt '%s' auf Port %d...") % [world_title, port])
 	_busy = true
 	_set_action_buttons_disabled(true)
-	NetworkManager.host_game(_host_name_input.text, port, world_title)
+	NetworkManager.host_game(_host_name_input.text, port, world_title, _host_password_input.text)
 
 
 func _on_load_save_pressed(save_id: String, display_name: String) -> void:
@@ -206,17 +259,17 @@ func _on_load_save_pressed(save_id: String, display_name: String) -> void:
 		return
 	SfxManager.play("click")
 	var port := _parse_port(_load_port_input.text)
-	show_status("Lade Spielstand '%s' & starte Host auf Port %d..." % [display_name, port])
+	show_status(tr("Lade Spielstand '%s' & starte Host auf Port %d...") % [display_name, port])
 	_busy = true
 	_set_action_buttons_disabled(true)
-	NetworkManager.host_from_save(save_id, SettingsManager.player_name, port)
+	NetworkManager.host_from_save(save_id, SettingsManager.player_name, port, _load_password_input.text)
 
 
 func _on_delete_save_pressed(save_id: String) -> void:
 	SfxManager.play("cable_cut")
 	SaveManager.delete_save(save_id)
 	_rebuild_saves_list()
-	show_status("Spielstand gelöscht.", Color(0.95, 0.72, 0.32))
+	show_status(tr("Spielstand gelöscht."), Color(0.95, 0.72, 0.32))
 
 
 func _on_join_pressed() -> void:
@@ -227,15 +280,34 @@ func _on_join_pressed() -> void:
 	var ip := _join_ip_input.text.strip_edges()
 	if ip.is_empty():
 		ip = "127.0.0.1"
-	show_status("Verbinde mit %s:%d..." % [ip, port], Color(0.95, 0.85, 0.35))
+	show_status(tr("Verbinde mit %s:%d...") % [ip, port], Color(0.95, 0.85, 0.35))
 	_busy = true
 	_set_action_buttons_disabled(true)
-	NetworkManager.join_game(ip, _join_name_input.text, port)
+	NetworkManager.join_game(ip, _join_name_input.text, port, _join_password_input.text)
 
 
 func _on_connection_failed(reason: String) -> void:
 	SfxManager.play("error")
 	show_status(reason, Color(1.0, 0.42, 0.38))
+	_update_reconnect_btn()
+	_update_lan_scan()
+
+
+func _update_reconnect_btn() -> void:
+	if _reconnect_btn != null:
+		_reconnect_btn.visible = NetworkManager.can_reconnect()
+
+
+func _on_reconnect_pressed() -> void:
+	if _busy or not NetworkManager.can_reconnect():
+		return
+	SfxManager.play("click")
+	show_status(tr("Verbinde erneut mit dem letzten Host..."), Color(0.95, 0.85, 0.35))
+	_busy = true
+	_set_action_buttons_disabled(true)
+	var err := NetworkManager.reconnect()
+	if err != OK:
+		show_status(tr("Wiederverbinden fehlgeschlagen (Fehler %d).") % err, Color(1.0, 0.42, 0.38))
 
 
 func _on_disconnected(reason: String) -> void:
@@ -258,14 +330,44 @@ func _apply_settings_change() -> void:
 	SettingsManager.fov = _fov_slider.value
 	if _gfx_option != null:
 		SettingsManager.graphics_quality = clampi(_gfx_option.selected, 0, 3)
-	SettingsManager.fullscreen = _fullscreen_check.button_pressed
+	if _window_mode_option != null:
+		SettingsManager.window_mode = clampi(_window_mode_option.selected, 0, SettingsManager.WINDOW_MODE_COUNT - 1)
+	if _language_option != null:
+		var lang_idx := clampi(_language_option.selected, 0, SettingsManager.LANGUAGE_CODES.size() - 1)
+		SettingsManager.language = SettingsManager.LANGUAGE_CODES[lang_idx]
+	if _screen_option != null:
+		SettingsManager.screen_index = maxi(_screen_option.selected - 1, -1)
+	if _window_size_option != null and _window_size_option.selected >= 0 and _window_size_option.selected < _window_size_values.size():
+		var picked: Vector2i = _window_size_values[_window_size_option.selected]
+		if _window_size_list_fullscreen:
+			SettingsManager.fullscreen_resolution = picked
+		else:
+			SettingsManager.window_size = picked
+	if _ui_scale_option != null and _ui_scale_option.selected >= 0 and _ui_scale_option.selected < SettingsManager.UI_SCALE_VALUES.size():
+		SettingsManager.ui_scale = SettingsManager.UI_SCALE_VALUES[_ui_scale_option.selected]
 	SettingsManager.autosave_enabled = _autosave_check.button_pressed
+	if _aa_option != null:
+		SettingsManager.anti_aliasing = clampi(_aa_option.selected, 0, SettingsManager.AA_COUNT - 1)
+	if _scale_slider != null:
+		SettingsManager.render_scale = clampf(_scale_slider.value / 100.0, SettingsManager.RENDER_SCALE_MIN, SettingsManager.RENDER_SCALE_MAX)
+	if _upscaler_option != null:
+		SettingsManager.upscaler = clampi(_upscaler_option.selected, 0, SettingsManager.UPSCALER_COUNT - 1)
+	if _sharp_slider != null:
+		SettingsManager.sharpness = clampf(_sharp_slider.value / 100.0, 0.0, 1.0)
+	if _aniso_option != null:
+		SettingsManager.anisotropic = clampi(_aniso_option.selected, 0, SettingsManager.ANISO_LEVELS.size() - 1)
+	if _fps_option != null:
+		var fps_idx := clampi(_fps_option.selected, 0, SettingsManager.FPS_LIMITS.size() - 1)
+		SettingsManager.max_fps = SettingsManager.FPS_LIMITS[fps_idx]
+	if _vsync_check != null:
+		SettingsManager.vsync = _vsync_check.button_pressed
 
 	_master_val.text = "%d%%" % int(roundf(_master_slider.value))
 	_sfx_val.text = "%d%%" % int(roundf(_sfx_slider.value))
 	_fan_val.text = "%d%%" % int(roundf(_fan_slider.value))
 	_sens_val.text = "%.1f" % _sens_slider.value
 	_fov_val.text = "%d°" % int(roundf(_fov_slider.value))
+	_update_graphics_labels()
 
 	SettingsManager.save_settings()
 
@@ -279,7 +381,7 @@ func _rebuild_saves_list() -> void:
 	var saves := SaveManager.list_saves()
 	if saves.is_empty():
 		var empty_lbl := Label.new()
-		empty_lbl.text = "Noch keine Spielstände vorhanden.\nStarte ein neues Spiel und speichere im Pause-Menü [ESC] oder am Windows-PC!"
+		empty_lbl.text = tr("Noch keine Spielstände vorhanden.") + "\n" + tr("Starte ein neues Spiel und speichere im Pause-Menü [ESC] oder am Windows-PC!")
 		empty_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 		UIStyle.style_label(empty_lbl, 13, UIStyle.COL_TEXT_SUB)
 		_saves_list.add_child(empty_lbl)
@@ -296,7 +398,7 @@ func _rebuild_saves_list() -> void:
 		var ram_gb := int(summary.get("total_ram_gb", 0))
 		var day_n := int(summary.get("day_number", 1))
 		var rlvl := int(summary.get("room_level", 1 if bool(summary.get("room_expanded", false)) else 0))
-		var exp_txt := " • Halle B" if rlvl == 1 else (" • Halle C Enterprise" if rlvl >= 2 else "")
+		var exp_txt := " • " + tr("Halle B") if rlvl == 1 else (" • " + tr("Halle C Enterprise") if rlvl >= 2 else "")
 
 		var card := _make_card_panel(Color(0.10, 0.105, 0.115, 0.92), UIStyle.COL_BORDER, 14, 10)
 		_saves_list.add_child(card)
@@ -317,7 +419,7 @@ func _rebuild_saves_list() -> void:
 		info.add_child(title)
 
 		var meta := Label.new()
-		meta.text = "Tag %d  •  $%d  •  %d Racks  •  %d GB RAM%s\nGespeichert: %s" % [
+		meta.text = (tr("Tag %d  •  $%d  •  %d Racks  •  %d GB RAM%s") + "\n" + tr("Gespeichert: %s")) % [
 			day_n, money_i, rack_c, ram_gb, exp_txt, saved_at
 		]
 		UIStyle.style_label(meta, 12, UIStyle.COL_TEXT_SUB)
@@ -334,6 +436,17 @@ func _rebuild_saves_list() -> void:
 		load_btn.pressed.connect(func(): _on_load_save_pressed(cap_id, cap_name))
 		row.add_child(load_btn)
 
+		var backups := SaveManager.list_backups(sid)
+		var bak_btn := Button.new()
+		bak_btn.text = tr("Sicherungen (%d)") % backups.size()
+		bak_btn.tooltip_text = "Automatische Sicherungen vor jedem Auto-Save. Beim Wiederherstellen wird der aktuelle Stand vorher gesichert."
+		bak_btn.custom_minimum_size = Vector2(128, 38)
+		bak_btn.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+		bak_btn.disabled = backups.is_empty()
+		UIStyle.style_button(bak_btn)
+		bak_btn.pressed.connect(func(): _show_backup_menu(bak_btn, cap_id, cap_name))
+		row.add_child(bak_btn)
+
 		var del_btn := Button.new()
 		del_btn.text = "Löschen"
 		del_btn.tooltip_text = "Spielstand löschen"
@@ -342,6 +455,38 @@ func _rebuild_saves_list() -> void:
 		UIStyle.style_button(del_btn, Color(0.20, 0.11, 0.11, 0.95), Color(0.68, 0.26, 0.24))
 		del_btn.pressed.connect(func(): _on_delete_save_pressed(cap_id))
 		row.add_child(del_btn)
+
+
+func _show_backup_menu(anchor: Button, save_id: String, display_name: String) -> void:
+	if _busy:
+		return
+	SfxManager.play("click", -10.0)
+	var backups := SaveManager.list_backups(save_id)
+	if backups.is_empty():
+		show_status(tr("Keine Sicherungen für '%s' vorhanden.") % display_name, Color(0.95, 0.72, 0.32))
+		return
+	var popup := PopupMenu.new()
+	for i in range(backups.size()):
+		var b: Dictionary = backups[i]
+		var s: Dictionary = b.get("summary", {})
+		popup.add_item(tr("%s  •  Tag %d  •  $%d  •  %d Racks") % [
+			str(b.get("saved_at", "")), int(s.get("day_number", 1)), int(s.get("money", 0)), int(s.get("rack_count", 0))
+		], i)
+	popup.id_pressed.connect(func(idx: int) -> void:
+		if idx < 0 or idx >= backups.size():
+			return
+		var file_name := str((backups[idx] as Dictionary).get("file", ""))
+		var res := SaveManager.restore_backup(save_id, file_name)
+		if bool(res.get("ok", false)):
+			SfxManager.play("click")
+			show_status(tr("Sicherung für '%s' wiederhergestellt. Der vorherige Stand liegt jetzt selbst als Sicherung vor.") % display_name)
+		else:
+			show_status(tr(str(res.get("error", "Wiederherstellen fehlgeschlagen."))), Color(0.95, 0.42, 0.36))
+		_rebuild_saves_list()
+	)
+	popup.popup_hide.connect(popup.queue_free)
+	add_child(popup)
+	popup.popup(Rect2i(Vector2i(anchor.global_position + Vector2(0, anchor.size.y)), Vector2i.ZERO))
 
 
 func _rebuild_recent_ips() -> void:
@@ -368,6 +513,76 @@ func _rebuild_recent_ips() -> void:
 			_join_ip_input.text = cap_ip
 		)
 		_recent_ips_box.add_child(btn)
+
+
+## LAN-Suche läuft nur, solange das Hauptmenü sichtbar ist und keine Sitzung läuft.
+func _update_lan_scan() -> void:
+	if is_visible_in_tree() and not NetworkManager.is_in_session:
+		NetworkManager.start_lan_discovery()
+	else:
+		NetworkManager.stop_lan_discovery()
+	_rebuild_lan_list()
+
+
+func _rebuild_lan_list() -> void:
+	if _lan_list == null:
+		return
+	for c in _lan_list.get_children():
+		c.queue_free()
+
+	if not NetworkManager.is_lan_discovery_active():
+		var off_lbl := Label.new()
+		off_lbl.text = tr("LAN-Suche aus (Port %d belegt, läuft das Spiel schon ein zweites Mal?).") % NetworkManager.DISCOVERY_PORT
+		off_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		UIStyle.style_label(off_lbl, 12, UIStyle.COL_TEXT_SUB)
+		_lan_list.add_child(off_lbl)
+		return
+
+	if NetworkManager.lan_games.is_empty():
+		var none_lbl := Label.new()
+		none_lbl.text = "Suche im lokalen Netzwerk... noch kein Spiel gefunden."
+		UIStyle.style_label(none_lbl, 12, UIStyle.COL_TEXT_SUB)
+		_lan_list.add_child(none_lbl)
+		return
+
+	var my_version := UIStyle.game_version()
+	for key in NetworkManager.lan_games.keys():
+		var g: Dictionary = NetworkManager.lan_games[key]
+		var world := str(g.get("world", ""))
+		if world.is_empty():
+			world = tr("Unbenannte Welt")
+		var players := int(g.get("players", 0))
+		var max_players := int(g.get("max", NetworkManager.MAX_PLAYERS))
+		var needs_pw := bool(g.get("password", false))
+		var version := str(g.get("version", ""))
+
+		var text := "%s  ·  %s  ·  %d/%d" % [world, str(g.get("host", tr("Host"))), players, max_players]
+		if needs_pw:
+			text += "  ·  " + tr("Passwort")
+		var btn := Button.new()
+		if version != my_version:
+			text += "  ·  " + tr("Version %s") % version
+			btn.disabled = true
+			btn.tooltip_text = tr("Der Host nutzt Version %s, du hast %s.") % [version, my_version]
+		elif players >= max_players:
+			text += "  ·  " + tr("voll")
+			btn.disabled = true
+		btn.text = text
+		btn.alignment = HORIZONTAL_ALIGNMENT_LEFT
+		btn.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+		btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		btn.custom_minimum_size = Vector2(0, 34)
+		UIStyle.style_button(btn, Color(0.13, 0.135, 0.145, 0.95), UIStyle.COL_BLUE)
+		var cap_ip := str(g.get("ip", ""))
+		var cap_port := int(g.get("port", NetworkManager.DEFAULT_PORT))
+		btn.pressed.connect(func() -> void:
+			SfxManager.play("click", -10.0)
+			_join_ip_input.text = cap_ip
+			_join_port_input.text = str(cap_port)
+			if needs_pw:
+				_join_password_input.grab_focus()
+		)
+		_lan_list.add_child(btn)
 
 
 func _build_ui() -> void:
@@ -442,6 +657,16 @@ func _build_ui() -> void:
 	_status_lbl.add_theme_font_size_override("font_size", 13)
 	_status_lbl.modulate = UIStyle.COL_TEXT_SUB
 	content_wrap.add_child(_status_lbl)
+
+	_reconnect_btn = Button.new()
+	_reconnect_btn.text = "WIEDERVERBINDEN"
+	_reconnect_btn.custom_minimum_size = Vector2(0, 40)
+	_reconnect_btn.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
+	UIStyle.style_button(_reconnect_btn, Color(0.16, 0.24, 0.32, 0.97), UIStyle.COL_BLUE)
+	_reconnect_btn.add_theme_font_override("font", _display_font)
+	_reconnect_btn.visible = false
+	_reconnect_btn.pressed.connect(_on_reconnect_pressed)
+	content_wrap.add_child(_reconnect_btn)
 
 	# Rechts frei für den Blick auf das live gerenderte Rechenzentrum
 	var open_view_spacer := Control.new()
@@ -544,12 +769,12 @@ func _build_nav_column() -> Control:
 func _build_footer() -> Control:
 	var footer := HBoxContainer.new()
 	footer.add_theme_constant_override("separation", 18)
-	_key_hint(footer, "E", "Interagieren")
-	_key_hint(footer, "F", "Rack-Menü")
+	_key_hint(footer, "E", "Interagieren", "interact")
+	_key_hint(footer, "F", "Rack-Menü", "inspect_rack")
 	_key_hint(footer, "Rechtsklick", "Trennen")
-	_key_hint(footer, "R", "Drehen")
-	_key_hint(footer, "Q", "Ablegen")
-	_key_hint(footer, "H", "Hilfe")
+	_key_hint(footer, "R", "Drehen", "rotate_item")
+	_key_hint(footer, "Q", "Ablegen", "drop_item")
+	_key_hint(footer, "H", "Hilfe", "toggle_help")
 	_key_hint(footer, "ESC", "Pause")
 
 	var spacer := Control.new()
@@ -629,13 +854,13 @@ func _make_nav_item(parent: VBoxContainer, title_txt: String, hint_txt: String) 
 	btn.add_child(inner)
 
 	var title := Label.new()
-	title.text = title_txt
+	title.text = tr(title_txt)
 	title.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	UIStyle.style_label(title, 19, UIStyle.COL_TEXT_MAIN, _display_font)
 	inner.add_child(title)
 
 	var hint := Label.new()
-	hint.text = hint_txt
+	hint.text = tr(hint_txt)
 	hint.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	UIStyle.style_label(hint, 12, UIStyle.COL_TEXT_SUB)
 	inner.add_child(hint)
@@ -692,7 +917,7 @@ func _nav_styles(btn: Button, accent: Color, active: bool) -> void:
 	btn.add_theme_stylebox_override("focus", focus)
 
 
-func _key_hint(parent: HBoxContainer, key: String, txt: String) -> void:
+func _key_hint(parent: HBoxContainer, key: String, txt: String, action: String = "") -> void:
 	var box := HBoxContainer.new()
 	box.add_theme_constant_override("separation", 6)
 	box.mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -714,12 +939,15 @@ func _key_hint(parent: HBoxContainer, key: String, txt: String) -> void:
 	box.add_child(cap)
 
 	var key_lbl := Label.new()
-	key_lbl.text = key
+	key_lbl.text = tr(key)
+	if not action.is_empty():
+		key_lbl.text = SettingsManager.get_action_key_label(action)
+		_footer_key_labels[action] = key_lbl
 	UIStyle.style_label(key_lbl, 11, UIStyle.COL_TEXT_MAIN, _display_font)
 	cap.add_child(key_lbl)
 
 	var t := Label.new()
-	t.text = txt
+	t.text = tr(txt)
 	t.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	UIStyle.style_label(t, 12, UIStyle.COL_TEXT_SUB)
 	box.add_child(t)
@@ -734,7 +962,7 @@ func _build_new_game_page() -> Control:
 	v.add_child(_field_label("Name der Welt / des Spielstands"))
 	_world_name_input = LineEdit.new()
 	_world_name_input.text = "Garage Cloud GmbH"
-	_world_name_input.placeholder_text = "z. B. Freitag Co-op Serverraum"
+	_world_name_input.placeholder_text = tr("z. B. Freitag Co-op Serverraum")
 	_world_name_input.max_length = 32
 	_style_line_edit(_world_name_input)
 	v.add_child(_world_name_input)
@@ -764,8 +992,12 @@ func _build_new_game_page() -> Control:
 	_style_line_edit(_host_port_input)
 	port_v.add_child(_host_port_input)
 
+	v.add_child(_field_label("Welt-Passwort (optional)"))
+	_host_password_input = _make_password_input("Leer lassen = jeder mit deiner IP kann beitreten")
+	v.add_child(_host_password_input)
+
 	var note := Label.new()
-	note.text = "Freunde können jederzeit über deine LAN-, Radmin-VPN- oder Tailscale-IP beitreten (auch später per Late-Join). Dein Fortschritt wird alle 3 Minuten automatisch gespeichert."
+	note.text = "Beim Hosten gibt das Spiel den Port per UPnP automatisch im Router frei und zeigt deine öffentliche IP an (auch im Pausemenü). Freunde tragen diese IP unter „Beitreten“ ein. Klappt UPnP nicht, gehen weiterhin LAN-, Tailscale- oder Radmin-VPN-IPs, auch per Late-Join. Dein Fortschritt wird alle 3 Minuten automatisch gespeichert."
 	note.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	UIStyle.style_label(note, 12, UIStyle.COL_TEXT_SUB)
 	v.add_child(note)
@@ -802,6 +1034,12 @@ func _build_load_game_page() -> Control:
 	_load_port_input.custom_minimum_size = Vector2(100, 0)
 	_style_line_edit(_load_port_input)
 	port_row.add_child(_load_port_input)
+	var pw_lbl := _field_label("Passwort")
+	pw_lbl.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	port_row.add_child(pw_lbl)
+	_load_password_input = _make_password_input("optional")
+	_load_password_input.custom_minimum_size = Vector2(170, 0)
+	port_row.add_child(_load_password_input)
 	var row_spacer := Control.new()
 	row_spacer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	port_row.add_child(row_spacer)
@@ -828,7 +1066,7 @@ func _build_join_game_page() -> Control:
 	var v := VBoxContainer.new()
 	v.add_theme_constant_override("separation", 10)
 
-	v.add_child(_page_heading("CO-OP SITZUNG BEITRETEN", "Trage die IP-Adresse deines Hosts ein (LAN / Radmin VPN / Tailscale)."))
+	v.add_child(_page_heading("CO-OP SITZUNG BEITRETEN", "Wähle ein Spiel aus deinem LAN oder trage die IP-Adresse deines Hosts ein (Radmin VPN / Tailscale)."))
 
 	v.add_child(_field_label("Dein Spielername"))
 	_join_name_input = LineEdit.new()
@@ -844,7 +1082,7 @@ func _build_join_game_page() -> Control:
 
 	_join_ip_input = LineEdit.new()
 	_join_ip_input.text = "127.0.0.1"
-	_join_ip_input.placeholder_text = "z. B. 127.0.0.1 oder 26.x.x.x"
+	_join_ip_input.placeholder_text = tr("z. B. 127.0.0.1 oder 26.x.x.x")
 	_join_ip_input.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_style_line_edit(_join_ip_input)
 	row.add_child(_join_ip_input)
@@ -855,10 +1093,20 @@ func _build_join_game_page() -> Control:
 	_style_line_edit(_join_port_input)
 	row.add_child(_join_port_input)
 
+	v.add_child(_field_label("Passwort (nur falls der Host eins gesetzt hat)"))
+	_join_password_input = _make_password_input("leer lassen, wenn die Welt kein Passwort hat")
+	v.add_child(_join_password_input)
+
 	v.add_child(_field_label("Zuletzt genutzt (Klicken zum Einfügen)"))
 	_recent_ips_box = HBoxContainer.new()
 	_recent_ips_box.add_theme_constant_override("separation", 6)
 	v.add_child(_recent_ips_box)
+
+	v.add_child(_field_label("Spiele im lokalen Netzwerk (Klicken zum Einfügen)"))
+	_lan_list = VBoxContainer.new()
+	_lan_list.add_theme_constant_override("separation", 6)
+	v.add_child(_lan_list)
+	_rebuild_lan_list()
 
 	var spacer := Control.new()
 	spacer.custom_minimum_size = Vector2(0, 4)
@@ -880,80 +1128,266 @@ func _build_settings_page() -> Control:
 	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
 	var v := VBoxContainer.new()
 	v.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	v.add_theme_constant_override("separation", 10)
+	v.add_theme_constant_override("separation", 14)
 	scroll.add_child(v)
 
 	v.add_child(_page_heading("EINSTELLUNGEN", "Änderungen werden sofort gespeichert."))
 
-	v.add_child(_section_label("SPIELER"))
-	v.add_child(_field_label("Standard-Spielername"))
+	# --- Allgemein ---
+	var general := _add_settings_card(v, "ALLGEMEIN")
+	var name_row := HBoxContainer.new()
+	name_row.add_theme_constant_override("separation", 10)
+	general.add_child(name_row)
+	var name_lbl := _field_label("Standard-Spielername")
+	name_lbl.custom_minimum_size = Vector2(185, 0)
+	name_lbl.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	name_row.add_child(name_lbl)
 	_set_name_input = LineEdit.new()
 	_set_name_input.max_length = 18
+	_set_name_input.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_style_line_edit(_set_name_input)
 	_set_name_input.text_changed.connect(func(_t: String): _apply_settings_change())
-	v.add_child(_set_name_input)
+	name_row.add_child(_set_name_input)
 
-	v.add_child(_section_label("AUDIO"))
-	var m_pair := _add_slider_row(v, "Gesamt-Lautstärke", 0.0, 100.0, 1.0)
+	_language_option = _add_option_row(general, "Sprache", SettingsManager.LANGUAGE_LABELS)
+	_autosave_check = _add_check_row(general, "Auto-Save alle 3 Minuten (Host)")
+
+	# --- Anzeige ---
+	var display := _add_settings_card(v, "ANZEIGE")
+	_window_mode_option = _add_option_row(display, "Fenstermodus", SettingsManager.WINDOW_MODE_LABELS)
+	_window_mode_option.item_selected.connect(func(_i: int): _rebuild_window_sizes())
+	_screen_option = _add_option_row(display, "Monitor", SettingsManager.get_screen_labels())
+	# Läuft nach _apply_settings_change (Reihenfolge der Verbindungen), damit die Liste zum neuen Monitor passt.
+	_screen_option.item_selected.connect(func(_i: int): _rebuild_window_sizes())
+	_window_size_option = _add_option_row(display, "Auflösung", [])
+	_ui_scale_option = _add_option_row(display, "UI-Skalierung", SettingsManager.UI_SCALE_LABELS)
+	_ui_scale_option.tooltip_text = tr("Automatisch: 100 % bis 1080p, 125 % bei 1440p, 200 % bei 4K.")
+	_fps_option = _add_option_row(display, "FPS-Limit", SettingsManager.get_fps_labels())
+	_vsync_check = _add_check_row(display, "V-Sync (kein Bildreißen)")
+	_sync_window_options()
+
+	# --- Grafik ---
+	var gfx := _add_settings_card(v, "GRAFIK")
+	_gfx_option = _add_option_row(gfx, "Grafikqualität", [
+		"Performance (Schnell)",
+		"Mittel (SSAO + Schatten)",
+		"Hoch (SSR + ReflectionProbes + Spot-Schatten)",
+		"Ultra (SDFGI + Vol. Fog + Full Reflections)",
+	])
+	_aa_option = _add_option_row(gfx, "Kantenglättung", SettingsManager.AA_LABELS)
+	_aniso_option = _add_option_row(gfx, "Texturfilter", SettingsManager.ANISO_LABELS)
+
+	var rs_pair := _add_slider_row(gfx, "Render-Auflösung", SettingsManager.RENDER_SCALE_MIN * 100.0, SettingsManager.RENDER_SCALE_MAX * 100.0, 5.0)
+	_scale_slider = rs_pair[0]
+	_scale_val = rs_pair[1]
+
+	_upscaler_option = _add_option_row(gfx, "Hochskalierung", SettingsManager.UPSCALER_LABELS)
+
+	var sh_pair := _add_slider_row(gfx, "Schärfe (FSR)", 0.0, 100.0, 5.0)
+	_sharp_slider = sh_pair[0]
+	_sharp_val = sh_pair[1]
+
+	_add_settings_hint(gfx, tr("Mit AMD FSR 2.2 ist MSAA automatisch aus, weil FSR 2.2 die Kanten selbst glättet. Deine MSAA-Auswahl greift wieder bei Bilinear oder FSR 1.0."))
+
+	_add_settings_hint(gfx, tr("Am schärfsten: Kantenglättung „SMAA“ oder „Aus“ und Render-Auflösung 100 % oder mehr. Über 100 % rechnet das Spiel intern höher (Supersampling), das kostet viel Leistung. Unter 100 % skaliert FSR hoch, nur dann wirkt der Schärfe-Regler (FSR 2.2 auch bei 100 %)."))
+
+	# --- Audio ---
+	var audio := _add_settings_card(v, "AUDIO")
+	var m_pair := _add_slider_row(audio, "Gesamt-Lautstärke", 0.0, 100.0, 1.0)
 	_master_slider = m_pair[0]
 	_master_val = m_pair[1]
 
-	var s_pair := _add_slider_row(v, "Effekte & UI (SFX)", 0.0, 100.0, 1.0)
+	var s_pair := _add_slider_row(audio, "Effekte & UI (SFX)", 0.0, 100.0, 1.0)
 	_sfx_slider = s_pair[0]
 	_sfx_val = s_pair[1]
 
-	var f_pair := _add_slider_row(v, "Server- & Klima-Lüfter", 0.0, 100.0, 1.0)
+	var f_pair := _add_slider_row(audio, "Server- & Klima-Lüfter", 0.0, 100.0, 1.0)
 	_fan_slider = f_pair[0]
 	_fan_val = f_pair[1]
 
 	var test_sfx_btn := Button.new()
 	test_sfx_btn.text = "Test-Ton abspielen"
 	test_sfx_btn.custom_minimum_size = Vector2(180, 32)
-	test_sfx_btn.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
+	test_sfx_btn.size_flags_horizontal = Control.SIZE_SHRINK_END
 	UIStyle.style_button(test_sfx_btn)
 	test_sfx_btn.pressed.connect(func(): SfxManager.play("cash"))
-	v.add_child(test_sfx_btn)
+	audio.add_child(test_sfx_btn)
 
-	v.add_child(_section_label("STEUERUNG"))
-	var ms_pair := _add_slider_row(v, "Maus-Empfindlichkeit", 0.8, 6.0, 0.1)
+	# --- Steuerung ---
+	var controls := _add_settings_card(v, "STEUERUNG")
+	var ms_pair := _add_slider_row(controls, "Maus-Empfindlichkeit", 0.8, 6.0, 0.1)
 	_sens_slider = ms_pair[0]
 	_sens_val = ms_pair[1]
 
-	var fov_pair := _add_slider_row(v, "Sichtfeld (FOV)", 60.0, 105.0, 1.0)
+	var fov_pair := _add_slider_row(controls, "Sichtfeld (FOV)", 60.0, 105.0, 1.0)
 	_fov_slider = fov_pair[0]
 	_fov_val = fov_pair[1]
 
-	v.add_child(_section_label("GRAFIK & SYSTEM"))
-	var gfx_row := HBoxContainer.new()
-	gfx_row.add_theme_constant_override("separation", 10)
-	v.add_child(gfx_row)
-	var glbl := _field_label("Grafikqualität")
-	glbl.custom_minimum_size = Vector2(185, 0)
-	glbl.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-	gfx_row.add_child(glbl)
-	_gfx_option = OptionButton.new()
-	_gfx_option.add_item("Performance (Schnell)", 0)
-	_gfx_option.add_item("Mittel (SSAO + Schatten)", 1)
-	_gfx_option.add_item("Hoch (SSR + ReflectionProbes + Spot-Schatten)", 2)
-	_gfx_option.add_item("Ultra (SDFGI + Vol. Fog + Full Reflections)", 3)
-	_gfx_option.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	_gfx_option.custom_minimum_size = Vector2(0, 34)
-	UIStyle.style_button(_gfx_option)
-	_gfx_option.item_selected.connect(func(_i: int): _apply_settings_change())
-	gfx_row.add_child(_gfx_option)
+	controls.add_child(_make_rule())
+	var kb_title := _field_label("Tastenbelegung (anklicken, dann neue Taste drücken)")
+	UIStyle.style_label(kb_title, 12, UIStyle.COL_TEXT_SUB)
+	controls.add_child(kb_title)
+	_keybind_buttons.clear()
+	for action in SettingsManager.REBINDABLE_ACTIONS:
+		var row := HBoxContainer.new()
+		row.add_theme_constant_override("separation", 10)
+		controls.add_child(row)
 
-	_fullscreen_check = CheckButton.new()
-	_fullscreen_check.text = "Vollbildmodus"
-	_style_check(_fullscreen_check)
-	_fullscreen_check.toggled.connect(func(_on: bool): _apply_settings_change())
-	v.add_child(_fullscreen_check)
+		var lbl := _field_label(SettingsManager.get_action_label(action))
+		lbl.custom_minimum_size = Vector2(185, 0)
+		lbl.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+		row.add_child(lbl)
 
-	_autosave_check = CheckButton.new()
-	_autosave_check.text = "Auto-Save alle 3 Minuten (Host)"
-	_style_check(_autosave_check)
-	_autosave_check.toggled.connect(func(_on: bool): _apply_settings_change())
-	v.add_child(_autosave_check)
+		var btn := Button.new()
+		btn.custom_minimum_size = Vector2(0, 32)
+		btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		btn.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+		UIStyle.style_button(btn)
+		var cap_action: String = action
+		btn.pressed.connect(func() -> void: _start_rebind(cap_action))
+		row.add_child(btn)
+		_keybind_buttons[action] = btn
+
+	_keybind_hint = _add_settings_hint(controls, "ESC oder Mausklick bricht die Abfrage ab. Belegte Tasten werden getauscht.")
+
+	var reset_keys_btn := Button.new()
+	reset_keys_btn.text = "Standardtasten wiederherstellen"
+	reset_keys_btn.custom_minimum_size = Vector2(240, 32)
+	reset_keys_btn.size_flags_horizontal = Control.SIZE_SHRINK_END
+	UIStyle.style_button(reset_keys_btn)
+	reset_keys_btn.pressed.connect(func() -> void:
+		SfxManager.play("click", -10.0)
+		_rebind_action = ""
+		SettingsManager.reset_key_bindings()
+		_refresh_keybind_buttons()
+		_keybind_hint.text = "Standardtasten wiederhergestellt."
+	)
+	controls.add_child(reset_keys_btn)
+	_refresh_keybind_buttons()
+
+	# --- Fehlersuche ---
+	var support := _add_settings_card(v, "FEHLERSUCHE")
+	_add_settings_hint(support, tr("Bei Fehlern die Datei godot.log aus diesem Ordner schicken:") + "\n" + ProjectSettings.globalize_path("user://logs"))
+	var log_btn := Button.new()
+	log_btn.text = "Log-Ordner öffnen"
+	log_btn.custom_minimum_size = Vector2(200, 34)
+	log_btn.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
+	UIStyle.style_button(log_btn, Color(0.12, 0.15, 0.17), UIStyle.COL_BORDER)
+	log_btn.pressed.connect(_open_log_folder)
+	support.add_child(log_btn)
 	return scroll
+
+
+## Karte für eine Einstellungsgruppe: Überschrift, Trennlinie, darunter die Zeilen.
+func _add_settings_card(parent: VBoxContainer, title_txt: String) -> VBoxContainer:
+	var card := _make_card_panel(Color(0.09, 0.11, 0.12, 0.92), Color(UIStyle.COL_BORDER, 0.8))
+	parent.add_child(card)
+	var body := VBoxContainer.new()
+	body.add_theme_constant_override("separation", 9)
+	card.add_child(body)
+	body.add_child(_section_label(title_txt))
+	body.add_child(_make_rule())
+	return body
+
+
+## Zeile mit Beschriftung links und Schalter rechts, passend zu Slider- und Auswahlzeilen.
+func _add_check_row(parent: VBoxContainer, label_txt: String) -> CheckButton:
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 10)
+	parent.add_child(row)
+	var lbl := _field_label(label_txt)
+	lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	lbl.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	row.add_child(lbl)
+	var cb := CheckButton.new()
+	_style_check(cb)
+	cb.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	cb.toggled.connect(func(_on: bool): _apply_settings_change())
+	row.add_child(cb)
+	return cb
+
+
+func _add_settings_hint(parent: VBoxContainer, txt: String) -> Label:
+	var l := Label.new()
+	l.text = txt
+	l.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	UIStyle.style_label(l, 12, UIStyle.COL_TEXT_SUB)
+	parent.add_child(l)
+	return l
+
+
+## Öffnet den Ordner mit den Godot-Logs (user://logs) im Datei-Explorer.
+func _open_log_folder() -> void:
+	var dir := ProjectSettings.globalize_path("user://logs")
+	DirAccess.make_dir_recursive_absolute(dir)
+	var err := OS.shell_open(dir)
+	if err != OK:
+		push_warning("Log-Ordner konnte nicht geöffnet werden (%s): %s" % [error_string(err), dir])
+
+
+func _on_key_bindings_changed() -> void:
+	for action in _footer_key_labels.keys():
+		var lbl := _footer_key_labels[action] as Label
+		if lbl != null and is_instance_valid(lbl):
+			lbl.text = SettingsManager.get_action_key_label(action)
+	_refresh_keybind_buttons()
+
+
+func _refresh_keybind_buttons() -> void:
+	for action in _keybind_buttons.keys():
+		var btn := _keybind_buttons[action] as Button
+		if btn == null or not is_instance_valid(btn):
+			continue
+		if action == _rebind_action:
+			btn.text = "Taste drücken..."
+		else:
+			btn.text = SettingsManager.get_action_key_label(action)
+
+
+func _start_rebind(action: String) -> void:
+	SfxManager.play("click", -10.0)
+	_rebind_action = action
+	_refresh_keybind_buttons()
+	if _keybind_hint != null:
+		_keybind_hint.text = tr("Neue Taste für „%s“ drücken (ESC bricht ab).") % SettingsManager.get_action_label(action)
+
+
+func _cancel_rebind() -> void:
+	_rebind_action = ""
+	_refresh_keybind_buttons()
+	if _keybind_hint != null:
+		_keybind_hint.text = "Abgebrochen, Belegung unverändert."
+
+
+func _input(event: InputEvent) -> void:
+	if _rebind_action.is_empty():
+		return
+	if not is_visible_in_tree():
+		_cancel_rebind()
+		return
+	if event is InputEventMouseButton and event.is_pressed():
+		_cancel_rebind()
+		return
+	var key := event as InputEventKey
+	if key == null or not key.pressed or key.echo:
+		return
+	get_viewport().set_input_as_handled()
+	var code := int(key.physical_keycode)
+	if code == 0:
+		code = int(key.keycode)
+	if code == 0 or SettingsManager.RESERVED_KEYS.has(code):
+		_cancel_rebind()
+		return
+	var action := _rebind_action
+	_rebind_action = ""
+	var swapped := SettingsManager.set_key_binding(action, code)
+	_refresh_keybind_buttons()
+	if _keybind_hint != null:
+		if swapped.is_empty():
+			_keybind_hint.text = tr("„%s“ liegt jetzt auf %s.") % [SettingsManager.get_action_label(action), SettingsManager.get_action_key_label(action)]
+		else:
+			_keybind_hint.text = tr("„%s“ liegt jetzt auf %s. „%s“ hat die alte Taste bekommen.") % [SettingsManager.get_action_label(action), SettingsManager.get_action_key_label(action), swapped]
 
 
 func _add_slider_row(parent: VBoxContainer, label_txt: String, min_v: float, max_v: float, step_v: float) -> Array:
@@ -984,11 +1418,108 @@ func _add_slider_row(parent: VBoxContainer, label_txt: String, min_v: float, max
 	return [slider, val_lbl]
 
 
+func _make_password_input(placeholder: String) -> LineEdit:
+	var le := LineEdit.new()
+	le.secret = true
+	le.max_length = NetworkManager.PASSWORD_MAX_LEN
+	le.placeholder_text = tr(placeholder)
+	_style_line_edit(le)
+	return le
+
+
+func _add_option_row(parent: VBoxContainer, label_txt: String, items: Array) -> OptionButton:
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 10)
+	parent.add_child(row)
+
+	var lbl := _field_label(label_txt)
+	lbl.custom_minimum_size = Vector2(185, 0)
+	lbl.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	row.add_child(lbl)
+
+	var opt := OptionButton.new()
+	for i in items.size():
+		opt.add_item(tr(str(items[i])), i)
+	opt.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	opt.custom_minimum_size = Vector2(0, 34)
+	UIStyle.style_button(opt)
+	opt.item_selected.connect(func(_i: int): _apply_settings_change())
+	row.add_child(opt)
+	return opt
+
+
+func _sync_window_options() -> void:
+	if _window_mode_option != null:
+		_window_mode_option.select(clampi(SettingsManager.window_mode, 0, _window_mode_option.item_count - 1))
+	if _screen_option != null and _screen_option.item_count > 0:
+		_screen_option.select(clampi(SettingsManager.screen_index + 1, 0, _screen_option.item_count - 1))
+	if _ui_scale_option != null:
+		_ui_scale_option.select(maxi(SettingsManager.UI_SCALE_VALUES.find(SettingsManager.ui_scale), 0))
+	if _language_option != null:
+		_language_option.select(maxi(SettingsManager.LANGUAGE_CODES.find(SettingsManager.language), 0))
+	_rebuild_window_sizes()
+
+
+func _rebuild_window_sizes() -> void:
+	if _window_size_option == null:
+		return
+	var screen := SettingsManager.screen_index
+	if _screen_option != null:
+		screen = _screen_option.selected - 1
+	var mode := SettingsManager.window_mode
+	if _window_mode_option != null:
+		mode = _window_mode_option.selected
+	_window_size_list_fullscreen = mode != SettingsManager.WINDOW_WINDOWED
+
+	var native := SettingsManager.get_screen_size(screen)
+	var wanted := SettingsManager.window_size
+	var values: Array[Vector2i] = []
+	if _window_size_list_fullscreen:
+		values.append(Vector2i.ZERO)
+		wanted = SettingsManager.fullscreen_resolution
+		if wanted == native:
+			wanted = Vector2i.ZERO
+	values.append_array(SettingsManager.get_window_sizes(screen, _window_size_list_fullscreen))
+	_window_size_values = values
+
+	_window_size_option.clear()
+	var current := 0
+	for i in _window_size_values.size():
+		var s: Vector2i = _window_size_values[i]
+		if s == Vector2i.ZERO:
+			_window_size_option.add_item(tr("Nativ (%d × %d)") % [native.x, native.y], i)
+		else:
+			_window_size_option.add_item("%d × %d" % [s.x, s.y], i)
+		if s == wanted:
+			current = i
+	if _window_size_values.size() > 0:
+		_window_size_option.select(current)
+	_update_window_size_enabled()
+
+
+func _update_window_size_enabled() -> void:
+	if _window_size_option == null:
+		return
+	_window_size_option.disabled = false
+	_window_size_option.tooltip_text = tr("Im Vollbild wird das Bild in dieser Auflösung berechnet und auf den Monitor hochskaliert.") if _window_size_list_fullscreen else ""
+
+
+func _update_graphics_labels() -> void:
+	if _scale_slider == null or _sharp_slider == null:
+		return
+	_scale_val.text = "%d%%" % int(roundf(_scale_slider.value))
+	_sharp_val.text = "%d%%" % int(roundf(_sharp_slider.value))
+	var up: int = _upscaler_option.selected if _upscaler_option != null else SettingsManager.UPSCALER_BILINEAR
+	var sharp_active := SettingsManager.is_sharpness_active(_scale_slider.value / 100.0, up)
+	_sharp_slider.editable = sharp_active
+	_sharp_slider.modulate.a = 1.0 if sharp_active else 0.45
+
+
 func _page_heading(title_txt: String, sub_txt: String) -> VBoxContainer:
 	var b := VBoxContainer.new()
 	b.add_theme_constant_override("separation", 5)
 	var t := Label.new()
-	t.text = title_txt
+	t.text = tr(title_txt)
 	UIStyle.style_label(t, 21, UIStyle.COL_TEXT_MAIN, _display_font)
 	b.add_child(t)
 	var line := ColorRect.new()
@@ -997,7 +1528,7 @@ func _page_heading(title_txt: String, sub_txt: String) -> VBoxContainer:
 	line.color = UIStyle.COL_ACCENT
 	b.add_child(line)
 	var s := Label.new()
-	s.text = sub_txt
+	s.text = tr(sub_txt)
 	s.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	UIStyle.style_label(s, 12, UIStyle.COL_TEXT_SUB)
 	b.add_child(s)
@@ -1009,14 +1540,14 @@ func _page_heading(title_txt: String, sub_txt: String) -> VBoxContainer:
 
 func _section_label(txt: String) -> Label:
 	var l := Label.new()
-	l.text = txt
+	l.text = tr(txt)
 	UIStyle.style_label(l, 11, UIStyle.COL_GOLD_TEXT, _display_font)
 	return l
 
 
 func _field_label(txt: String) -> Label:
 	var l := Label.new()
-	l.text = txt
+	l.text = tr(txt)
 	UIStyle.style_label(l, 13, Color(0.80, 0.81, 0.81))
 	return l
 

@@ -1,34 +1,89 @@
 class_name RackInspectorUI
 extends Control
-## v1.2 Rack-, Router- und Geräte-Overlay im Stil von Hauptmenü und HUD (Anthrazit, gedämpftes Amber).
-## Keine Emoji-Symbole mehr: Klartext, gezeichnete Symbole, Akzentleisten und Reiter mit Unterstrich.
-## Clean 3-Tab Rack Layout:
-##   1. [📊 Übersicht & Vermietung] — Hardware Totals, Rental Purpose & Live User Load Bars
-##   2. [🔧 Hardware-Bau (Lager)]   — 66 Parts with Generation Filters (DDR2-DDR5, HDD/SSD/NVMe) installed from Teile-Lager
-##   3. [🖥 3D-Vorschau]            — Spacious 360°-Rotatable Live 3D Hardware Workbench
-## Zero "CU" jargon — 100% real metrics (GB RAM, TB Storage, Mbit/Gbit, Watts, °C).
+## v2.0 Rack-, Router- und Geräte-Menü (komplettes Redesign, gleiche Spielfunktionen wie v1.2).
+## Rack-Ansicht: oben Live-Kennzahlen mit Ringanzeigen, links der Rack-Schrank mit allen Einschüben,
+## in der Mitte der gewählte Einschub (Mainboard-Auswahl oder Komponenten mit Teileliste),
+## rechts die drehbare 3D-Vorschau. Zweiter Reiter: Vermietung & Auslastung.
+## Bedienung: [E] am Rack öffnet das Menü, darin wird alles mit der Maus angeklickt
+## (siehe MOUSE_CLICKS_ENABLED). [ESC] schließt.
 
 signal close_requested
 signal relocate_rack_requested(rack_id: String)
+signal cable_pull_requested(cable_type: String, entity_id: String)
+
+## true = Schaltflächen im Menü werden mit der Maus angeklickt; [E] löst im Menü nichts aus.
+const MOUSE_CLICKS_ENABLED := true
+const CARD_MAX_SIZE := Vector2(1440, 1000)
+const CARD_MIN_SIZE := Vector2(940, 580)
+const SCREEN_MARGIN := 24.0
+const RACK_COL_W := 268.0
+const SIDE_COL_W := 300.0
+const PREVIEW_H := 240.0
+const SLOT_ROW_H := 58.0
+const TILE_H := 58.0
+## Mausrad in Listen: Pixel pro Raste und wie schnell die Liste zum Ziel gleitet.
+const WHEEL_STEP := 96.0
+const SMOOTH_SCROLL_SPEED := 16.0
+## Höhe einer Mainboard-Zeile: klein genug, dass bei 1280×720 etwa 6 Boards sichtbar sind.
+const MB_ROW_H := 50.0
+const LOAD_WARN_PCT := 72.0
+const LOAD_CRIT_PCT := 90.0
+const TEMP_CRIT := 70.0
+const TEMP_WARN_SPAN := 12.0
+const TEMP_GAUGE_MAX := 90.0
+const SAT_WARN := 75.0
+const RING_PX := 40
+const RING_ANIM_TIME := 0.7
+const COL_SELECT := Color(0.86, 0.58, 0.16, 0.20)
+const COL_RACK_FRAME := Color(0.050, 0.053, 0.059, 0.98)
+const COL_SLOT_BG := Color(0.092, 0.097, 0.105, 0.98)
+const COL_LED_OFF := Color(0.30, 0.31, 0.33)
+const COL_LED_DARK := Color(0.42, 0.42, 0.44)
 
 var _mode: String = "rack" # "rack" | "router" | "cooler" | "ups" | "cart"
 var _entity_id: String = ""
 var _selected_slot: int = 0
-var _active_tab: String = "overview" # "overview" | "hardware" | "preview"
-var _selected_cat: String = "ram"
+var _active_tab: String = "hardware" # "hardware" | "rental"
+var _selected_cat: String = "cpu"
 var _selected_filter: String = "Alle"
 var _only_in_stock: bool = false
 var _confirm_sell_entity: bool = false
+var _confirm_sell_module: bool = false
+# Freier Einschub: false = Übersicht mit "Mainboard auswählen", true = Mainboard-Liste.
+var _mb_picker_open: bool = false
+# Gewählte Mainboard-Kategorie ("" = alle).
+var _mb_cat: String = ""
+# Ansicht, zu der die gemerkte Scroll-Position gehört (siehe _scroll_view_key).
+var _scroll_key: String = ""
 
 var _card: PanelContainer
 var _title_lbl: Label
 var _subtitle_lbl: Label
-var _stat_strip: HBoxContainer
+var _status_panel: PanelContainer
+var _status_lbl: Label
+var _kpi_row: HBoxContainer
 var _tab_row: HBoxContainer
 var _body_host: VBoxContainer
+var _footer_actions: HBoxContainer
 var _display_font: FontVariation
 
-# Spacious 360° 3D Hardware Preview Studio (shown on Tab 3!)
+# Bedienung: alle Schaltflächen des aktuellen Aufbaus, Fokus-Schlüssel und Eingabemodus.
+var _buttons: Array = []
+var _focus_key: String = ""
+var _pointer_mode: bool = false
+var _animate_next: bool = false
+var _pulse_nodes: Array = []
+var _pulse_t: float = 0.0
+var _parts_scroll: ScrollContainer
+var _parts_scroll_v: int = 0
+var _smooth_target: float = 0.0
+var _smooth_pos: float = 0.0
+var _smooth_written: int = 0
+var _smooth_active: bool = false
+var _mb_money_label: Label
+var _mb_afford_sig: int = -1
+
+# Drehbare 3D-Vorschau (wird bei jedem Aufbau in die rechte Spalte gehängt)
 var _preview_frame: PanelContainer
 var _preview_vp: SubViewport
 var _preview_pivot: Node3D
@@ -49,11 +104,78 @@ func _ready() -> void:
 	GameState.ups_changed.connect(_refresh)
 	GameState.carts_changed.connect(_refresh)
 	GameState.inventory_changed.connect(_refresh)
-	GameState.state_updated.connect(_refresh)
+	GameState.state_updated.connect(_on_state_updated)
+	get_viewport().size_changed.connect(_on_viewport_resized)
+
+
+## Spiel-Tick: Bei offener Mainboard-Liste wird nur das Guthaben aktualisiert. Neu gebaut wird nur,
+## wenn sich ändert, wie viele Boards bezahlbar sind. Der Neuaufbau bei jedem Tick ließ das Scrollen ruckeln.
+func _on_state_updated() -> void:
+	if not visible:
+		return
+	if _mb_picker_open and _mode == "rack" and is_instance_valid(_parts_scroll):
+		if is_instance_valid(_mb_money_label):
+			_mb_money_label.text = "$%.0f" % GameState.money
+		if _mb_affordable_count() == _mb_afford_sig:
+			return
+	_refresh()
+
+
+func _mb_affordable_count() -> int:
+	var n := 0
+	for id in GameState.get_mainboards():
+		if float(GameState.ITEM_CATALOG[id]["price"]) <= float(GameState.money):
+			n += 1
+	return n
+
+
+## Mausrad über der Mainboard-Liste: Ziel verschieben, _process gleitet weich dorthin.
+func _handle_wheel(mb: InputEventMouseButton) -> bool:
+	if not mb.pressed or not _mb_picker_open or not is_instance_valid(_parts_scroll):
+		return false
+	if mb.button_index != MOUSE_BUTTON_WHEEL_UP and mb.button_index != MOUSE_BUTTON_WHEEL_DOWN:
+		return false
+	if not _parts_scroll.get_global_rect().has_point(_parts_scroll.get_global_mouse_position()):
+		return false
+	var bar := _parts_scroll.get_v_scroll_bar()
+	var max_v := maxf(0.0, bar.max_value - bar.page)
+	if not _smooth_active:
+		_smooth_pos = float(_parts_scroll.scroll_vertical)
+		_smooth_target = _smooth_pos
+		_smooth_written = _parts_scroll.scroll_vertical
+	var dir := -1.0 if mb.button_index == MOUSE_BUTTON_WHEEL_UP else 1.0
+	var factor := mb.factor if mb.factor > 0.0 else 1.0
+	_smooth_target = clampf(_smooth_target + dir * WHEEL_STEP * factor, 0.0, max_v)
+	_smooth_active = true
+	return true
+
+
+func _update_smooth_scroll(delta: float) -> void:
+	if not _smooth_active:
+		return
+	if not is_instance_valid(_parts_scroll) or absi(_parts_scroll.scroll_vertical - _smooth_written) > 2:
+		# Liste neu gebaut oder Scrollbalken von Hand gezogen: Gleiten abbrechen.
+		_smooth_active = false
+		return
+	_smooth_pos = lerpf(_smooth_pos, _smooth_target, 1.0 - exp(-SMOOTH_SCROLL_SPEED * delta))
+	if absf(_smooth_target - _smooth_pos) < 0.5:
+		_smooth_pos = _smooth_target
+		_smooth_active = false
+	_smooth_written = roundi(_smooth_pos)
+	_parts_scroll.scroll_vertical = _smooth_written
 
 
 func _process(delta: float) -> void:
-	if not visible or _preview_vp == null or not _preview_frame.visible:
+	if not visible:
+		return
+	_update_smooth_scroll(delta)
+	_pulse_t += delta
+	var pulse := 0.35 + 0.65 * absf(sin(_pulse_t * 4.0))
+	for n in _pulse_nodes:
+		if is_instance_valid(n):
+			(n as CanvasItem).modulate.a = pulse
+
+	if _preview_vp == null or not _preview_frame.is_inside_tree() or not _preview_frame.visible:
 		return
 	if not _preview_dragging:
 		_preview_yaw += delta * 0.28
@@ -69,31 +191,69 @@ func _process(delta: float) -> void:
 				fnode.rotation.z += delta * 14.0
 
 
+func _input(event: InputEvent) -> void:
+	if not visible:
+		return
+	if event is InputEventMouseMotion:
+		if (event as InputEventMouseMotion).relative.length_squared() > 1.0:
+			_set_pointer_mode(true)
+			_focus_under_pointer()
+		return
+	if event is InputEventMouseButton:
+		if _handle_wheel(event as InputEventMouseButton):
+			get_viewport().set_input_as_handled()
+		return
+	if not (event is InputEventKey) or not event.pressed:
+		return
+	# Enter/Leertaste lösen keine Schaltflächen aus: im Menü wird mit der Maus geklickt.
+	if event.is_action("ui_accept"):
+		get_viewport().set_input_as_handled()
+		return
+	if event.is_action("ui_up") or event.is_action("ui_down") or event.is_action("ui_left") \
+			or event.is_action("ui_right") or event.is_action("ui_focus_next") or event.is_action("ui_focus_prev"):
+		_set_pointer_mode(false)
+		_ensure_focus()
+
+
+## Wird von main.gd bei [E] aufgerufen: löst die Schaltfläche unter dem Mauszeiger
+## bzw. (bei Pfeiltasten-Bedienung) die angewählte Schaltfläche aus.
+func press_interact() -> void:
+	# Mit Mausbedienung löst [E] im Menü nichts aus.
+	if not visible or MOUSE_CLICKS_ENABLED:
+		return
+	var btn := _find_target_button()
+	if btn == null:
+		return
+	if btn.disabled:
+		SfxManager.play("error", -10.0)
+		return
+	_focus_key = str(btn.get_meta("key", ""))
+	btn.grab_focus()
+	btn.pressed.emit()
+
+
 func open_rack(rack_id: String, initial_slot: int = 0) -> void:
 	if not GameState.racks.has(rack_id):
 		return
 	_mode = "rack"
 	_entity_id = rack_id
-	_selected_slot = clampi(initial_slot, 0, (GameState.racks[rack_id]["slots"] as Array).size() - 1)
-	_confirm_sell_entity = false
-	_preview_sig = ""
-	UIStyle.animate_popup_open(self, _card)
-	_refresh()
-	SfxManager.play("click", -8.0, 1.15)
+	var slot_n := (GameState.racks[rack_id]["slots"] as Array).size()
+	_selected_slot = clampi(initial_slot, 0, maxi(slot_n - 1, 0))
+	_active_tab = "hardware"
+	_focus_key = "slot_%d" % _selected_slot
+	_open_common()
 
 
 func open_device(kind: String, entity_id: String) -> void:
 	_mode = kind
 	_entity_id = entity_id
-	_confirm_sell_entity = false
-	_preview_sig = ""
-	UIStyle.animate_popup_open(self, _card)
-	_refresh()
-	SfxManager.play("click", -8.0, 1.15)
+	_focus_key = "primary"
+	_open_common()
 
 
 func close_inspector() -> void:
 	_confirm_sell_entity = false
+	_confirm_sell_module = false
 	_preview_dragging = false
 	if _preview_vp != null:
 		_preview_vp.render_target_update_mode = SubViewport.UPDATE_DISABLED
@@ -101,478 +261,828 @@ func close_inspector() -> void:
 	SfxManager.play("click", -10.0, 0.85)
 
 
+func _open_common() -> void:
+	_confirm_sell_entity = false
+	_confirm_sell_module = false
+	_preview_sig = ""
+	_parts_scroll_v = 0
+	_pointer_mode = false
+	_animate_next = true
+	_fit_card_size()
+	UIStyle.animate_popup_open(self, _card)
+	_refresh()
+	SfxManager.play("click", -8.0, 1.15)
+
+
+func _on_viewport_resized() -> void:
+	if visible:
+		_fit_card_size()
+
+
+func _fit_card_size() -> void:
+	if _card == null:
+		return
+	var vp := get_viewport_rect().size
+	_card.custom_minimum_size = Vector2(
+		clampf(vp.x - SCREEN_MARGIN, CARD_MIN_SIZE.x, CARD_MAX_SIZE.x),
+		clampf(vp.y - SCREEN_MARGIN, CARD_MIN_SIZE.y, CARD_MAX_SIZE.y)
+	)
+
+
 func _refresh() -> void:
 	if not visible:
 		return
-	if _mode == "rack":
-		if not GameState.racks.has(_entity_id):
-			close_requested.emit()
+	match _mode:
+		"rack":
+			if not GameState.racks.has(_entity_id):
+				close_requested.emit()
+				return
+			_render_rack_view()
+		"router":
+			_render_router_view()
+		"cooler", "ups", "cart":
+			if not _device_exists(_mode):
+				close_requested.emit()
+				return
+			_render_device_view(_mode)
+		_:
 			return
-		_render_rack_view()
-	elif _mode == "router":
-		_render_router_view()
-	elif _mode == "cooler":
-		if not GameState.coolers.has(_entity_id):
-			close_requested.emit()
-			return
-		_render_device_view("cooler")
-	elif _mode == "ups":
-		if not GameState.ups_units.has(_entity_id):
-			close_requested.emit()
-			return
-		_render_device_view("ups")
-	elif _mode == "cart":
-		if not GameState.carts.has(_entity_id):
-			close_requested.emit()
-			return
-		_render_device_view("cart")
+	_restore_focus()
+	_animate_next = false
 
 
-# ==============================================================================
-# RACK OVERLAY (3 CLEAN TABS: ÜBERSICHT & VERMIETUNG | HARDWARE-BAU | 3D-VORSCHAU)
-# ==============================================================================
-func _render_rack_view() -> void:
-	_clear(_stat_strip)
+func _device_exists(kind: String) -> bool:
+	match kind:
+		"cooler":
+			return GameState.coolers.has(_entity_id)
+		"ups":
+			return GameState.ups_units.has(_entity_id)
+		"cart":
+			return GameState.carts.has(_entity_id)
+	return false
+
+
+## Räumt den alten Aufbau ab. Die 3D-Vorschau wird vorher herausgelöst, damit sie nicht mit gelöscht wird.
+func _begin_render() -> void:
+	if is_instance_valid(_parts_scroll):
+		_parts_scroll_v = roundi(_smooth_target) if _smooth_active else _parts_scroll.scroll_vertical
+	_parts_scroll = null
+	_smooth_active = false
+	_mb_money_label = null
+	var pp := _preview_frame.get_parent()
+	if pp != null:
+		pp.remove_child(_preview_frame)
+	_clear(_kpi_row)
 	_clear(_tab_row)
 	_clear(_body_host)
+	_clear(_footer_actions)
+	_buttons.clear()
+	_pulse_nodes.clear()
 
+
+# ==============================================================================
+# RACK
+# ==============================================================================
+func _render_rack_view() -> void:
+	_begin_render()
 	var rack: Dictionary = GameState.racks[_entity_id]
 	var rtype := str(rack.get("rack_type", "rack"))
 	var cat_rack: Dictionary = GameState.ITEM_CATALOG[rtype]
 	var slots: Array = rack["slots"]
-	_selected_slot = clampi(_selected_slot, 0, slots.size() - 1)
+	_selected_slot = clampi(_selected_slot, 0, maxi(slots.size() - 1, 0))
 
 	var hw := GameState.get_rack_hardware_summary(_entity_id)
-	var used_slots := 0
-	for s in slots:
-		if str((s as Dictionary)["item_type"]) != "":
-			used_slots += 1
-	var max_pdu := int(cat_rack.get("max_pdu_watts", 3200))
+	var used_slots := _count_used_slots(slots)
+	var max_pdu := maxi(int(cat_rack.get("max_pdu_watts", 3200)), 1)
+	var watts := int(hw["watts"])
 	var temp := float(rack["temp"])
 	var powered := bool(rack["powered"])
 	var networked := bool(rack["networked"])
 
-	_title_lbl.text = "%s  —  %s" % [_entity_id.to_upper(), str(cat_rack["name"])]
-	_subtitle_lbl.text = "Guthaben: $%.0f   •   Teile im Lager: %d   •   Restwert: $%d" % [
-		GameState.money, GameState.get_total_inventory_parts(), GameState.get_rack_sell_value(_entity_id)
+	_title_lbl.text = "%s  —  %s" % [_entity_id.to_upper(), tr(str(cat_rack["name"]))]
+	_subtitle_lbl.text = tr("Guthaben: $%.0f   •   Teile im Lager: %d   •   Haus-Router: %s") % [
+		GameState.money, GameState.get_total_inventory_parts(), HardwareCatalog.format_speed_mbps(GameState.max_bandwidth_mbps)
 	]
+	var status := _rack_status(slots, powered, networked, temp, watts, max_pdu)
+	_set_status(str(status[0]), status[1] as Color)
 
-	# Compact Top 4-Stat Strip (Slate & Gold Pills — airy and readable!)
-	_stat_strip.visible = true
-	_add_stat_pill("STROMLAST", "%d / %d W" % [int(hw["watts"]), max_pdu], UIStyle.COL_RED if int(hw["watts"]) > max_pdu else UIStyle.COL_GOLD_TEXT, "power")
-	_add_stat_pill("EINSCHÜBE", "%d / %d belegt" % [used_slots, slots.size()], UIStyle.COL_GREEN if used_slots < slots.size() else UIStyle.COL_AMBER)
-	_add_stat_pill("TEMPERATUR", "%.0f °C" % temp, UIStyle.COL_RED if temp >= 70.0 else UIStyle.COL_BLUE, "temp")
-	_add_stat_pill("ANSCHLÜSSE", "Strom %s  •  LAN %s" % ["OK" if powered else "FEHLT", "OK" if networked else "FEHLT"], UIStyle.COL_GREEN if (powered and networked) else UIStyle.COL_AMBER, "info" if (powered and networked) else "warn")
-
-	# 3 Clean Main Tabs
-	_tab_row.visible = true
-	var inv_n := GameState.get_total_inventory_parts()
-	_add_main_tab("overview", "ÜBERSICHT & VERMIETUNG")
-	_add_main_tab("hardware", "HARDWARE-BAU  (%d IM LAGER)" % inv_n)
-	_add_main_tab("preview", "3D-VORSCHAU")
-
-	# Toggle 3D SubViewport cleanly ONLY on Tab 3!
-	if _active_tab == "preview":
-		var cur_slot: Dictionary = slots[_selected_slot]
-		_update_3d_preview(str(cur_slot["item_type"]), cur_slot.get("components", {}) as Dictionary)
-		_render_tab_preview(slots)
+	# Kennzahlen
+	var watt_ratio := float(watts) / float(max_pdu)
+	_add_kpi("STROMLAST", "%d / %d W" % [watts, max_pdu], tr("PDU des Racks"),
+		UIStyle.COL_RED if watts > max_pdu else _load_color(watt_ratio * 100.0), watt_ratio)
+	_add_kpi("TEMPERATUR", "%.0f °C" % temp, tr("kritisch ab %.0f °C") % TEMP_CRIT,
+		UIStyle.COL_RED if temp >= TEMP_CRIT else (UIStyle.COL_AMBER if temp >= TEMP_CRIT - TEMP_WARN_SPAN else UIStyle.COL_BLUE),
+		temp / TEMP_GAUGE_MAX)
+	_add_kpi("EINSCHÜBE", tr("%d / %d belegt") % [used_slots, slots.size()], tr("%d Server online") % int(hw["active_servers"]),
+		UIStyle.COL_GREEN if used_slots < slots.size() else UIStyle.COL_AMBER, float(used_slots) / float(maxi(slots.size(), 1)))
+	var r_rent := str(rack.get("rental_type", "none"))
+	if r_rent != "none" and HardwareCatalog.RENTAL_PROFILES.has(r_rent):
+		var sat := float(rack.get("satisfaction", 100.0))
+		_add_kpi("EINNAHMEN", "+$%.0f / 5 s" % float(rack.get("rental_income", 0.0)),
+			tr("%d Nutzer  •  %.0f %% zufrieden") % [int(rack.get("active_users", 0)), sat],
+			UIStyle.COL_AMBER if sat < SAT_WARN else UIStyle.COL_GREEN, sat / 100.0)
 	else:
-		_update_3d_preview("", {})
-		if _active_tab == "overview":
-			_render_tab_overview(rack, hw)
-		else:
-			_render_tab_hardware(rack, slots)
+		_add_kpi("EINNAHMEN", tr("Nicht vermietet"), tr("Reiter VERMIETUNG"), UIStyle.COL_TEXT_SUB, -1.0, "info")
+	_add_kpi("ANSCHLÜSSE", tr("Strom %s  •  LAN %s") % ["OK" if powered else tr("FEHLT"), "OK" if networked else tr("FEHLT")],
+		"", UIStyle.COL_GREEN if (powered and networked) else UIStyle.COL_AMBER, -1.0, "info" if (powered and networked) else "warn")
 
+	# Reiter
+	_tab_row.visible = true
+	_add_tab("hardware", tr("HARDWARE & EINSCHÜBE"))
+	_add_tab("rental", tr("VERMIETUNG & AUSLASTUNG"))
 
-func _add_main_tab(tab_id: String, label_txt: String) -> void:
-	var btn := Button.new()
-	btn.text = label_txt
-	btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	btn.custom_minimum_size = Vector2(0, 38)
-	btn.add_theme_font_size_override("font_size", 13)
-	_style_tab(btn, _active_tab == tab_id)
-	var cap := tab_id
-	btn.pressed.connect(func():
-		_active_tab = cap
-		SfxManager.play("click", -12.0, 1.1)
-		_render_rack_view()
-	)
-	_tab_row.add_child(btn)
-
-
-# ==============================================================================
-# TAB 1: ÜBERSICHT & VERMIETUNG (Clean 2-Column Overview + Live User Load Bars)
-# ==============================================================================
-func _render_tab_overview(rack: Dictionary, hw: Dictionary) -> void:
-	var split := HBoxContainer.new()
-	split.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	split.add_theme_constant_override("separation", 14)
-	_body_host.add_child(split)
-
-	# LEFT: Hardware Totals + Actions
-	var left := VBoxContainer.new()
-	left.custom_minimum_size = Vector2(280, 0)
-	left.add_theme_constant_override("separation", 10)
-	split.add_child(left)
-
-	var hw_card := PanelContainer.new()
-	hw_card.add_theme_stylebox_override("panel", UIStyle.make_panel(UIStyle.COL_BG_CARD, UIStyle.COL_BORDER, 4, 1, 14, 12))
-	left.add_child(hw_card)
-	var hv := VBoxContainer.new()
-	hv.add_theme_constant_override("separation", 6)
-	hw_card.add_child(hv)
-
-	hv.add_child(_section_label("HARDWARE IM RACK"))
-
-	_add_kv_line(hv, "Aktive Server", "%d / %d online" % [int(hw["active_servers"]), int(hw["total_servers"])])
-	_add_kv_line(hv, "CPU-Leistung", "%d Pkt." % int(hw["cpu_score"]))
-	_add_kv_line(hv, "Arbeitsspeicher", "%d GB RAM" % int(hw["ram_gb"]))
-	_add_kv_line(hv, "Grafik / VRAM", "%d Pkt. (%d GB)" % [int(hw["gpu_score"]), int(hw["vram_gb"])])
-	_add_kv_line(hv, "Speicherplatz", "%.1f TB" % float(hw["storage_tb"]))
-	_add_kv_line(hv, "Haus-Router", HardwareCatalog.format_speed_mbps(GameState.max_bandwidth_mbps))
-
-	if bool(hw.get("psu_overloaded", false)):
-		var pw := Label.new()
-		pw.text = "Mindestens ein Netzteil ist zu schwach für seine Bauteile."
-		pw.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-		UIStyle.style_label(pw, 12, UIStyle.COL_RED)
-		hv.add_child(pw)
-
-	var sp := Control.new()
-	sp.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	left.add_child(sp)
-
-	var move_btn := Button.new()
-	move_btn.text = "Rack umsetzen"
-	move_btn.custom_minimum_size = Vector2(0, 38)
-	UIStyle.style_button(move_btn, Color(0.15, 0.17, 0.19), UIStyle.COL_BLUE)
+	# Rack-Aktionen unten rechts
+	var move_btn := _make_btn(tr("Rack umsetzen"), "rack_move", Vector2(150, 34))
+	_style_btn(move_btn, Color(0.15, 0.17, 0.19), UIStyle.COL_BLUE)
 	move_btn.pressed.connect(func(): relocate_rack_requested.emit(_entity_id))
-	left.add_child(move_btn)
+	_footer_actions.add_child(move_btn)
 
 	var sell_val := GameState.get_rack_sell_value(_entity_id)
-	var sell_btn := Button.new()
-	sell_btn.custom_minimum_size = Vector2(0, 38)
+	var sell_btn := _make_btn("", "rack_sell", Vector2(200, 34))
 	if _confirm_sell_entity:
-		sell_btn.text = "WIRKLICH VERKAUFEN? (+$%d)" % sell_val
-		UIStyle.style_button(sell_btn, Color(0.62, 0.16, 0.14), UIStyle.COL_RED)
+		sell_btn.text = tr("WIRKLICH VERKAUFEN? (+$%d)") % sell_val
+		_style_btn(sell_btn, Color(0.62, 0.16, 0.14), UIStyle.COL_RED)
 	else:
-		sell_btn.text = "Rack verkaufen (+$%d)" % sell_val
-		UIStyle.style_button(sell_btn, Color(0.28, 0.13, 0.14), UIStyle.COL_RED)
+		sell_btn.text = tr("Rack verkaufen (+$%d)") % sell_val
+		_style_btn(sell_btn, Color(0.28, 0.13, 0.14), UIStyle.COL_RED)
 	sell_btn.pressed.connect(func():
 		if not _confirm_sell_entity:
 			_confirm_sell_entity = true
 			SfxManager.play("click", -8.0, 0.9)
-			_render_rack_view()
+			_refresh()
 		else:
 			GameState.request_sell_rack(_entity_id)
 			close_requested.emit()
 	)
-	left.add_child(sell_btn)
+	_footer_actions.add_child(sell_btn)
 
-	# RIGHT: Scrollable Live Load + Rental Service Picker
-	var scroll := ScrollContainer.new()
-	scroll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	split.add_child(scroll)
+	if slots.is_empty():
+		_update_3d_preview("", {})
+		_body_host.add_child(_make_label(tr("Dieses Rack hat keine Einschübe."), 14, UIStyle.COL_TEXT_SUB))
+		return
 
-	var rv := VBoxContainer.new()
-	rv.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	rv.add_theme_constant_override("separation", 10)
-	scroll.add_child(rv)
-
-	var r_rent := str(rack.get("rental_type", "none"))
-	var m: Dictionary = rack.get("metrics", {})
-	if r_rent != "none" and HardwareCatalog.RENTAL_PROFILES.has(r_rent):
-		var prof: Dictionary = HardwareCatalog.RENTAL_PROFILES[r_rent]
-		var users := int(rack.get("active_users", 0))
-		var sat := float(rack.get("satisfaction", 100.0))
-		var inc := float(rack.get("rental_income", 0.0))
-
-		var load_card := PanelContainer.new()
-		var bn := str(m.get("bottleneck", "ok"))
-		load_card.add_theme_stylebox_override("panel", UIStyle.make_panel(
-			UIStyle.COL_BG_CARD, UIStyle.COL_RED if bn != "ok" else UIStyle.COL_GREEN, 8, 1, 14, 12
-		))
-		rv.add_child(load_card)
-		var lv := VBoxContainer.new()
-		lv.add_theme_constant_override("separation", 6)
-		load_card.add_child(lv)
-
-		var lh := Label.new()
-		lh.text = "%s  —  %s" % [str(prof["short"]).to_upper(), str(rack.get("rental_customer", ""))]
-		lh.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-		UIStyle.style_label(lh, 14, UIStyle.COL_TEXT_MAIN, _display_font)
-		lv.add_child(lh)
-
-		var lmeta := Label.new()
-		lmeta.text = "%d aktive Nutzer   •   Zufriedenheit %.0f %%   •   +$%.0f pro 5 s" % [users, sat, inc]
-		lmeta.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-		UIStyle.style_label(lmeta, 12, UIStyle.COL_AMBER if sat < 75.0 else UIStyle.COL_GREEN)
-		lv.add_child(lmeta)
-
-		_add_load_bar_row(lv, "RAM-Belegung", "%.1f / %.0f GB (%.0f%%)" % [float(m.get("ram_used_gb", 0.0)), float(m.get("ram_total_gb", 0.0)), float(m.get("ram_pct", 0.0))], float(m.get("ram_pct", 0.0)))
-		_add_load_bar_row(lv, "CPU-Auslastung", "%.0f%% Last" % float(m.get("cpu_pct", 0.0)), float(m.get("cpu_pct", 0.0)))
-		_add_load_bar_row(lv, "Speicherplatz", "%.2f / %.1f TB (%.0f%%)" % [float(m.get("storage_used_tb", 0.0)), float(m.get("storage_total_tb", 0.0)), float(m.get("storage_pct", 0.0))], float(m.get("storage_pct", 0.0)))
-		if float(prof["gpu_per_user"]) > 0.001:
-			_add_load_bar_row(lv, "GPU-Auslastung", "%.0f%% Last" % float(m.get("gpu_pct", 0.0)), float(m.get("gpu_pct", 0.0)))
-		_add_load_bar_row(lv, "Internet-Uplink", "%s / %s" % [
-			HardwareCatalog.format_speed_mbps(float(m.get("net_used_mbps", 0.0))),
-			HardwareCatalog.format_speed_mbps(GameState.max_bandwidth_mbps)
-		], float(m.get("net_pct", 0.0)))
-
-	rv.add_child(_section_label("VERMIETUNG WÄHLEN"))
-	var pick_lbl := Label.new()
-	pick_lbl.text = "Schätze selbst ein, ob RAM, CPU, Speicher und Router für den Dienst reichen."
-	pick_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	UIStyle.style_label(pick_lbl, 12, UIStyle.COL_TEXT_SUB)
-	rv.add_child(pick_lbl)
-
-	for key in HardwareCatalog.RENTAL_ORDER:
-		var prof: Dictionary = HardwareCatalog.RENTAL_PROFILES[key]
-		var is_cur := (key == r_rent)
-		var card := PanelContainer.new()
-		card.add_theme_stylebox_override("panel", UIStyle.make_panel(
-			Color(0.11, 0.19, 0.14, 0.96) if is_cur else UIStyle.COL_BG_CARD,
-			UIStyle.COL_GREEN if is_cur else UIStyle.COL_BORDER,
-			7, 1, 12, 8
-		))
-		rv.add_child(card)
-		var row := HBoxContainer.new()
-		row.add_theme_constant_override("separation", 10)
-		card.add_child(row)
-
-		var iv := VBoxContainer.new()
-		iv.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		iv.add_theme_constant_override("separation", 2)
-		row.add_child(iv)
-
-		var tl := Label.new()
-		var pay_s := ("   •   $%.2f pro Nutzer" % float(prof["pay_per_user"])) if key != "none" else ""
-		tl.text = "%s%s" % [str(prof["label"]), pay_s]
-		UIStyle.style_label(tl, 14, UIStyle.COL_GREEN if is_cur else UIStyle.COL_TEXT_MAIN, _display_font)
-		iv.add_child(tl)
-
-		var dl := Label.new()
-		dl.text = str(prof["desc"])
-		dl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-		UIStyle.style_label(dl, 12, UIStyle.COL_TEXT_SUB)
-		iv.add_child(dl)
-
-		var btn := Button.new()
-		btn.custom_minimum_size = Vector2(146, 34)
-		if is_cur:
-			btn.text = "AKTIV"
-			btn.disabled = true
-			UIStyle.style_button(btn, Color(0.16, 0.26, 0.16), UIStyle.COL_GREEN)
-		else:
-			btn.text = "Freigeben" if key == "none" else "Vermieten"
-			UIStyle.style_button(btn, Color(0.18, 0.17, 0.15), UIStyle.COL_GOLD_TEXT)
-			var cap_k: String = key
-			btn.pressed.connect(func(): GameState.request_set_rack_rental(_entity_id, cap_k))
-		row.add_child(btn)
+	if _active_tab == "rental":
+		_update_3d_preview("", {})
+		_render_rack_rental(rack, hw)
+	else:
+		_render_rack_hardware(slots, hw, powered)
 
 
-# ==============================================================================
-# TAB 2: HARDWARE-BAU (INSTALL PARTS FROM TEILE-LAGER WITH GENERATION FILTERS!)
-# ==============================================================================
-func _render_tab_hardware(_rack: Dictionary, slots: Array) -> void:
+func _rack_status(slots: Array, powered: bool, networked: bool, temp: float, watts: int, max_pdu: int) -> Array:
+	for s in slots:
+		if str((s as Dictionary)["state"]) == "burning":
+			return [tr("BRAND!"), UIStyle.COL_RED]
+	if not powered:
+		return [tr("KEIN STROM"), UIStyle.COL_RED]
+	if watts > max_pdu:
+		return [tr("ÜBERLAST"), UIStyle.COL_RED]
+	if temp >= TEMP_CRIT:
+		return [tr("ÜBERHITZT"), UIStyle.COL_RED]
+	for s in slots:
+		if str((s as Dictionary)["state"]) == "crashed":
+			return [tr("STÖRUNG"), UIStyle.COL_AMBER]
+	if not networked:
+		return [tr("KEIN LAN"), UIStyle.COL_AMBER]
+	return [tr("IN BETRIEB"), UIStyle.COL_GREEN]
+
+
+func _count_used_slots(slots: Array) -> int:
+	var n := 0
+	for s in slots:
+		if str((s as Dictionary)["item_type"]) != "":
+			n += 1
+	return n
+
+
+# ------------------------------------------------------------------------------
+# Reiter HARDWARE: Rack-Schrank | Einschub | 3D-Vorschau
+# ------------------------------------------------------------------------------
+func _render_rack_hardware(slots: Array, hw: Dictionary, powered: bool) -> void:
 	var split := HBoxContainer.new()
 	split.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	split.add_theme_constant_override("separation", 14)
 	_body_host.add_child(split)
 
-	# LEFT: Clean Server Slot Selector
-	var left := VBoxContainer.new()
-	left.custom_minimum_size = Vector2(260, 0)
-	left.add_theme_constant_override("separation", 7)
-	split.add_child(left)
+	_build_rack_column(split, slots, hw, powered)
 
-	left.add_child(_section_label("EINSCHÜBE"))
+	var mid := VBoxContainer.new()
+	mid.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	mid.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	mid.add_theme_constant_override("separation", 10)
+	split.add_child(mid)
+
+	var side := VBoxContainer.new()
+	side.custom_minimum_size = Vector2(SIDE_COL_W, 0)
+	side.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	side.add_theme_constant_override("separation", 10)
+	split.add_child(side)
+
+	var slot: Dictionary = slots[_selected_slot]
+	var itype := str(slot["item_type"])
+	if itype == "":
+		_build_mainboard_picker(mid)
+	else:
+		_build_slot_detail(mid, slot, itype)
+	_build_side_column(side, slot, itype)
+
+
+func _build_rack_column(parent: HBoxContainer, slots: Array, hw: Dictionary, powered: bool) -> void:
+	var col := VBoxContainer.new()
+	col.custom_minimum_size = Vector2(RACK_COL_W, 0)
+	col.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	col.add_theme_constant_override("separation", 8)
+	parent.add_child(col)
+
+	col.add_child(_section_label("RACK-SCHRANK"))
+
+	var frame := PanelContainer.new()
+	frame.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	frame.add_theme_stylebox_override("panel", UIStyle.make_panel(COL_RACK_FRAME, UIStyle.COL_BORDER, 6, 1, 8, 8))
+	col.add_child(frame)
+
+	var scroll := ScrollContainer.new()
+	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	scroll.follow_focus = true
+	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	frame.add_child(scroll)
+
+	var list := VBoxContainer.new()
+	list.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	list.add_theme_constant_override("separation", 5)
+	scroll.add_child(list)
 
 	for i in range(slots.size()):
-		var slot: Dictionary = slots[i]
-		var itype := str(slot["item_type"])
-		var sstate := str(slot["state"])
-		var is_sel := (i == _selected_slot)
+		list.add_child(_make_slot_button(i, slots[i] as Dictionary, powered))
 
-		var btn := Button.new()
-		btn.alignment = HORIZONTAL_ALIGNMENT_LEFT
-		btn.custom_minimum_size = Vector2(0, 48)
-		if itype == "":
-			btn.text = "  Slot %d  —  [ Leer / Frei ]" % (i + 1)
-		else:
-			var cname := str(GameState.ITEM_CATALOG[itype]["name"])
-			var st := GameState.get_slot_stats(slot)
-			var warn := "   •   BRAND" if sstate == "burning" else ("   •   AUSGEFALLEN" if sstate == "crashed" else "")
-			if GameState.is_slot_upgradeable(itype):
-				btn.text = "  Slot %d  —  %s%s\n  %d GB %s • %.1f TB • %d W" % [
-					i + 1, cname, warn, int(st["ram_gb"]), str(st["ram_tag"]), float(st["storage_tb"]), int(st["watts"])
-				]
-			else:
-				btn.text = "  Slot %d  —  %s%s\n  %d W • Netzwerk-Switch" % [i + 1, cname, warn, int(st["watts"])]
-		UIStyle.style_button(
-			btn,
-			Color(0.86, 0.58, 0.16, 0.24) if is_sel else UIStyle.COL_BG_CARD,
-			UIStyle.COL_RED if (sstate == "burning" or sstate == "crashed") else (UIStyle.COL_GOLD_TEXT if is_sel else UIStyle.COL_BORDER)
-		)
-		var cap_i := i
-		btn.pressed.connect(func():
-			_selected_slot = cap_i
-			SfxManager.play("click", -12.0, 1.1)
-			_render_rack_view()
-		)
-		left.add_child(btn)
-
-	# RIGHT: Filtered Hardware Assembly from Teile-Lager
-	var right := VBoxContainer.new()
-	right.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	right.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	right.add_theme_constant_override("separation", 8)
-	split.add_child(right)
-
-	var cur_slot: Dictionary = slots[_selected_slot]
-	var cur_type := str(cur_slot["item_type"])
-	var cur_state := str(cur_slot["state"])
-
-	if cur_type == "":
-		var empty_c := PanelContainer.new()
-		empty_c.add_theme_stylebox_override("panel", UIStyle.make_panel(UIStyle.COL_BG_CARD, UIStyle.COL_BORDER, 8, 1, 16, 14))
-		right.add_child(empty_c)
-		var el := Label.new()
-		el.text = "Slot %d ist leer.\n\nBestelle im Windows-PC-Shop ein Server-Chassis (1U Standard, 2U Storage oder 4U GPU), nimm den Karton aus der Lieferzone auf und schiebe ihn mit [E] in diesen Slot!" % (_selected_slot + 1)
-		el.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-		UIStyle.style_label(el, 13, UIStyle.COL_TEXT_SUB)
-		empty_c.add_child(el)
-		return
-
-	var stats := GameState.get_slot_stats(cur_slot)
-	var sum_card := PanelContainer.new()
-	sum_card.add_theme_stylebox_override("panel", UIStyle.make_panel(
-		UIStyle.COL_BG_CARD, UIStyle.COL_RED if bool(stats["psu_overloaded"]) else UIStyle.COL_BORDER, 8, 1, 12, 9
-	))
-	right.add_child(sum_card)
+	var sum := PanelContainer.new()
+	sum.add_theme_stylebox_override("panel", UIStyle.make_panel(UIStyle.COL_BG_CARD, UIStyle.COL_BORDER, 6, 1, 12, 9))
+	col.add_child(sum)
 	var sv := VBoxContainer.new()
 	sv.add_theme_constant_override("separation", 4)
-	sum_card.add_child(sv)
+	sum.add_child(sv)
+	_add_kv_line(sv, "CPU-Leistung", tr("%d Pkt.") % int(hw["cpu_score"]))
+	_add_kv_line(sv, "Arbeitsspeicher", "%d GB" % int(hw["ram_gb"]))
+	_add_kv_line(sv, "Grafik / VRAM", tr("%d Pkt. (%d GB)") % [int(hw["gpu_score"]), int(hw["vram_gb"])])
+	_add_kv_line(sv, "Speicherplatz", "%.1f TB" % float(hw["storage_tb"]))
 
-	var sh_row := HBoxContainer.new()
-	sh_row.add_theme_constant_override("separation", 8)
-	sv.add_child(sh_row)
 
-	var stitle := Label.new()
-	stitle.text = "Slot %d: %s" % [_selected_slot + 1, str(GameState.ITEM_CATALOG[cur_type]["name"])]
-	stitle.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	UIStyle.style_label(stitle, 16, UIStyle.COL_TEXT_MAIN, _display_font)
-	sh_row.add_child(stitle)
+func _make_slot_button(i: int, slot: Dictionary, powered: bool) -> Button:
+	var itype := str(slot["item_type"])
+	var state := str(slot["state"])
+	var sel := (i == _selected_slot)
+	var bad := state == "burning" or state == "crashed"
 
-	if cur_state == "crashed":
-		var rep := Button.new()
-		rep.text = "Reparieren"
-		UIStyle.style_button(rep, Color(0.18, 0.30, 0.18), UIStyle.COL_GREEN)
-		rep.pressed.connect(func(): GameState.request_repair_slot(_entity_id, _selected_slot, 1.0))
-		sh_row.add_child(rep)
+	var btn := _make_btn("", "slot_%d" % i, Vector2(0, SLOT_ROW_H))
+	btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_style_btn(btn, COL_SELECT if sel else COL_SLOT_BG, UIStyle.COL_RED if bad else (UIStyle.COL_ACCENT if sel else UIStyle.COL_BORDER))
+	# Gilt für freie und belegte Einschübe; vorher fehlte das bei freien Slots.
+	btn.pressed.connect(func(): _select_slot(i))
 
-	var sell_m := Button.new()
-	var sv_amt := int(roundf(float(stats["total_value"]) * GameState.SELL_REFUND_RATIO))
-	sell_m.text = "Modul verkaufen (+$%d)" % sv_amt
-	sell_m.disabled = (cur_state == "burning")
-	UIStyle.style_button(sell_m, Color(0.28, 0.13, 0.14), UIStyle.COL_RED)
-	sell_m.pressed.connect(func(): GameState.request_sell_slot_module(_entity_id, _selected_slot))
-	sh_row.add_child(sell_m)
+	var m := _btn_content(btn, 10, 6)
+	var row := HBoxContainer.new()
+	row.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	row.add_theme_constant_override("separation", 9)
+	m.add_child(row)
 
-	var psu_note := "   •   NETZTEIL ZU SCHWACH" if bool(stats["psu_overloaded"]) else ""
-	var spec_l := Label.new()
-	spec_l.text = "CPU %d  •  RAM %d GB %s  •  GPU %d (%d GB)  •  Speicher %.1f TB  •  %d / %d W Netzteil%s" % [
-		int(stats["cpu_score"]), int(stats["ram_gb"]), str(stats["ram_tag"]),
-		int(stats["gpu_score"]), int(stats["vram_gb"]), float(stats["storage_tb"]),
-		int(stats["watts"]), int(stats["psu_max_watts"]), psu_note
-	]
-	spec_l.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	UIStyle.style_label(spec_l, 12, UIStyle.COL_RED if bool(stats["psu_overloaded"]) else UIStyle.COL_TEXT_SUB)
-	sv.add_child(spec_l)
+	var u := _make_label("U%d" % (i + 1), 11, UIStyle.COL_GOLD_TEXT if sel else UIStyle.COL_TEXT_SUB, true)
+	u.custom_minimum_size = Vector2(26, 0)
+	u.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	row.add_child(u)
 
-	if not GameState.is_slot_upgradeable(cur_type):
-		var sw := Label.new()
-		sw.text = "Ein Rack-Switch benötigt keine internen Bauteile und leitet LAN automatisch an bis zu 3 weitere Racks weiter."
-		sw.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-		sw.modulate = UIStyle.COL_TEXT_SUB
-		right.add_child(sw)
+	var led := ColorRect.new()
+	led.custom_minimum_size = Vector2(8, 8)
+	led.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	led.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	led.color = _slot_led_color(slot, powered)
+	row.add_child(led)
+	if bad:
+		_pulse_nodes.append(led)
+
+	var info := VBoxContainer.new()
+	info.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	info.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	info.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	info.add_theme_constant_override("separation", 1)
+	row.add_child(info)
+
+	if itype == "":
+		info.add_child(_make_label(tr("Frei"), 13, UIStyle.COL_TEXT_SUB, true))
+		info.add_child(_make_label(tr("Mainboard einbauen"), 11, Color(UIStyle.COL_TEXT_SUB, 0.75)))
+		var plus := _make_label("+", 20, UIStyle.COL_ACCENT, true)
+		plus.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+		row.add_child(plus)
+		return btn
+
+	info.add_child(_make_label(tr(str(GameState.ITEM_CATALOG[itype]["name"])), 13, UIStyle.COL_TEXT_MAIN, true))
+	var st := GameState.get_slot_stats(slot)
+	var line := ""
+	if GameState.is_slot_upgradeable(itype):
+		line = "%d GB %s  •  %.1f TB  •  %d W" % [int(st["ram_gb"]), str(st["ram_tag"]), float(st["storage_tb"]), int(st["watts"])]
+	else:
+		line = tr("Netzwerk-Switch  •  %d W") % int(st["watts"])
+	if state == "burning":
+		info.add_child(_make_label(tr("BRAND!"), 11, UIStyle.COL_RED, true))
+	elif state == "crashed":
+		info.add_child(_make_label(tr("AUSGEFALLEN"), 11, UIStyle.COL_AMBER, true))
+	else:
+		info.add_child(_make_label(line, 11, UIStyle.COL_TEXT_SUB))
+	return btn
+
+
+func _select_slot(i: int) -> void:
+	if i != _selected_slot:
+		_confirm_sell_module = false
+		_parts_scroll_v = 0
+		_mb_picker_open = false
+	_selected_slot = i
+	SfxManager.play("click", -12.0, 1.1)
+	_refresh()
+
+
+func _slot_led_color(slot: Dictionary, powered: bool) -> Color:
+	var itype := str(slot["item_type"])
+	var state := str(slot["state"])
+	if itype == "":
+		return COL_LED_OFF
+	if state == "burning":
+		return UIStyle.COL_RED
+	if state == "crashed":
+		return UIStyle.COL_AMBER
+	if not powered:
+		return COL_LED_DARK
+	return UIStyle.COL_GREEN
+
+
+## Leerer Einschub: zuerst eine Übersicht mit "Mainboard auswählen", danach die Mainboard-Liste.
+## Die Liste ist nach Kategorien gruppiert und innerhalb jeder Kategorie nach Preis sortiert.
+## Ein Klick auf eine Zeile kauft das Mainboard und baut es sofort ein.
+func _build_mainboard_picker(parent: VBoxContainer) -> void:
+	if not _mb_picker_open:
+		_build_empty_slot_intro(parent)
 		return
 
-	# 6 Category Tabs
-	var cat_row := HBoxContainer.new()
-	cat_row.add_theme_constant_override("separation", 5)
-	right.add_child(cat_row)
-	for cat_k in HardwareCatalog.CATEGORY_ORDER:
-		var cm: Dictionary = HardwareCatalog.CATEGORY_META[cat_k]
-		var stock_in_cat := 0
-		for p in HardwareCatalog.get_category_parts(cat_k):
-			stock_in_cat += GameState.get_part_stock(str((p as Dictionary)["id"]))
-		var cbtn := Button.new()
-		cbtn.text = "%s%s" % [str(cm["short"]).to_upper(), ("  (%d)" % stock_in_cat) if stock_in_cat > 0 else ""]
-		cbtn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		cbtn.custom_minimum_size = Vector2(0, 32)
-		cbtn.add_theme_font_size_override("font_size", 12)
-		_style_tab(cbtn, _selected_cat == cat_k)
-		var cap_c: String = cat_k
-		cbtn.pressed.connect(func():
-			_selected_cat = cap_c
-			_selected_filter = "Alle"
-			SfxManager.play("click", -12.0, 1.15)
-			_render_rack_view()
-		)
-		cat_row.add_child(cbtn)
+	# Kopfzeile: Titel, Guthaben, Zurück
+	var head := PanelContainer.new()
+	head.add_theme_stylebox_override("panel", UIStyle.make_panel(UIStyle.COL_BG_CARD, UIStyle.COL_ACCENT, 8, 1, 14, 6))
+	parent.add_child(head)
+	var hr := HBoxContainer.new()
+	hr.add_theme_constant_override("separation", 14)
+	head.add_child(hr)
+	var hv := VBoxContainer.new()
+	hv.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	hv.add_theme_constant_override("separation", 2)
+	hr.add_child(hv)
+	hv.add_child(_make_label(tr("Mainboard für Einschub U%d") % (_selected_slot + 1), 16, UIStyle.COL_TEXT_MAIN, true))
+	var hint := _make_label(tr("Zeile anklicken: Das Mainboard wird gekauft und sofort eingebaut."), 11, UIStyle.COL_TEXT_SUB)
+	hint.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+	hint.clip_text = true
+	hv.add_child(hint)
 
-	# Sub-Generation Filter Row (DDR2 | DDR3 | DDR4 | DDR5 etc.) + "Nur aus Lager" Toggle!
+	var money_box := VBoxContainer.new()
+	money_box.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	money_box.add_theme_constant_override("separation", 0)
+	hr.add_child(money_box)
+	var ml := _make_label(tr("GUTHABEN"), 10, UIStyle.COL_TEXT_SUB, true)
+	ml.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	money_box.add_child(ml)
+	var mv := _make_label("$%.0f" % GameState.money, 18, UIStyle.COL_GOLD_TEXT, true)
+	mv.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	money_box.add_child(mv)
+	_mb_money_label = mv
+	_mb_afford_sig = _mb_affordable_count()
+
+	var back := _make_btn(tr("Zurück"), "mb_back", Vector2(100, 30))
+	back.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	_style_btn(back, Color(0.15, 0.17, 0.19), UIStyle.COL_BORDER)
+	back.pressed.connect(func():
+		_mb_picker_open = false
+		_focus_key = "mb_open"
+		SfxManager.play("click", -12.0, 1.1)
+		_refresh()
+	)
+	hr.add_child(back)
+
+	# Kategorie-Reiter: gleich breit über die ganze Spalte
+	var tabs := HBoxContainer.new()
+	tabs.add_theme_constant_override("separation", 6)
+	parent.add_child(tabs)
+	tabs.add_child(_make_mb_cat_btn("", tr("Alle"), GameState.get_mainboards().size(), UIStyle.COL_ACCENT))
+	for c in GameState.MAINBOARD_CATEGORIES:
+		var cd := c as Dictionary
+		var cid := str(cd["id"])
+		tabs.add_child(_make_mb_cat_btn(cid, tr(str(cd["label"])), GameState.get_mainboards(cid).size(), cd["color"] as Color))
+
+	# Liste: eine Zeile pro Mainboard, darüber je Kategorie eine farbige Kopfzeile
+	var scroll := ScrollContainer.new()
+	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	scroll.follow_focus = false
+	parent.add_child(scroll)
+	_parts_scroll = scroll
+
+	var pad := MarginContainer.new()
+	pad.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	pad.add_theme_constant_override("margin_right", 12)
+	pad.add_theme_constant_override("margin_bottom", 6)
+	scroll.add_child(pad)
+
+	var list := VBoxContainer.new()
+	list.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	list.add_theme_constant_override("separation", 4)
+	pad.add_child(list)
+
+	var first := true
+	for c in GameState.MAINBOARD_CATEGORIES:
+		var cd := c as Dictionary
+		var cid := str(cd["id"])
+		if _mb_cat != "" and cid != _mb_cat:
+			continue
+		var ids := GameState.get_mainboards(cid)
+		if ids.is_empty():
+			continue
+		if not first:
+			var gap := Control.new()
+			gap.custom_minimum_size = Vector2(0, 6)
+			gap.mouse_filter = Control.MOUSE_FILTER_IGNORE
+			list.add_child(gap)
+		first = false
+		list.add_child(_make_mb_group_header(cd, ids.size()))
+		for id in ids:
+			list.add_child(_make_mainboard_card(str(id)))
+
+
+## Übersicht für einen freien Einschub: kurze Anleitung und die Schaltfläche "Mainboard auswählen".
+func _build_empty_slot_intro(parent: VBoxContainer) -> void:
+	var slots: Array = GameState.racks[_entity_id]["slots"]
+	var free_n := slots.size() - _count_used_slots(slots)
+	var all_ids := GameState.get_mainboards()
+	var from_price := 0 if all_ids.is_empty() else int(GameState.ITEM_CATALOG[all_ids[0]]["price"])
+
+	var head := PanelContainer.new()
+	head.add_theme_stylebox_override("panel", UIStyle.make_panel(UIStyle.COL_BG_CARD, UIStyle.COL_ACCENT, 10, 1, 22, 18))
+	parent.add_child(head)
+	var hv := VBoxContainer.new()
+	hv.add_theme_constant_override("separation", 10)
+	head.add_child(hv)
+
+	var title_row := HBoxContainer.new()
+	title_row.add_theme_constant_override("separation", 10)
+	hv.add_child(title_row)
+	var tl := _make_label(tr("Einschub U%d ist frei") % (_selected_slot + 1), 22, UIStyle.COL_TEXT_MAIN, true)
+	tl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	title_row.add_child(tl)
+	title_row.add_child(_make_chip(tr("%d / %d FREI") % [free_n, slots.size()], UIStyle.COL_GREEN))
+
+	var info := _make_label(tr("In diesen Einschub kommt ein Mainboard. Andere Einschübe wählst du links im Rack-Schrank per Klick."), 12, UIStyle.COL_TEXT_SUB)
+	info.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	hv.add_child(info)
+
+	var line := ColorRect.new()
+	line.custom_minimum_size = Vector2(0, 1)
+	line.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	line.color = UIStyle.COL_BORDER
+	hv.add_child(line)
+
+	var steps := [
+		tr("Links im Rack-Schrank einen freien Einschub anklicken"),
+		tr("„Mainboard auswählen“ klicken und ein Mainboard kaufen, es wird sofort eingebaut"),
+		tr("Danach CPU, RAM, GPU, Speicher, Kühlung und Netzteil einzeln auswählen"),
+	]
+	for i in range(steps.size()):
+		var sr := HBoxContainer.new()
+		sr.add_theme_constant_override("separation", 10)
+		hv.add_child(sr)
+		var num := _make_chip(str(i + 1), UIStyle.COL_ACCENT)
+		num.custom_minimum_size = Vector2(26, 0)
+		sr.add_child(num)
+		var sl := _make_label(str(steps[i]), 13, UIStyle.COL_TEXT_MAIN)
+		sl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		sl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		sr.add_child(sl)
+
+	var open_btn := _make_btn(tr("MAINBOARD AUSWÄHLEN"), "mb_open", Vector2(0, 58))
+	open_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_style_btn(open_btn, COL_SELECT, UIStyle.COL_ACCENT)
+	if _display_font != null:
+		open_btn.add_theme_font_override("font", _display_font)
+	open_btn.add_theme_font_size_override("font_size", 18)
+	open_btn.pressed.connect(func(): _open_mb_picker(""))
+	parent.add_child(open_btn)
+
+	var sub := _make_label(tr("%d Mainboards in %d Kategorien  •  ab $%d") % [
+		all_ids.size(), GameState.MAINBOARD_CATEGORIES.size(), from_price
+	], 12, UIStyle.COL_TEXT_SUB)
+	sub.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	parent.add_child(sub)
+
+
+func _open_mb_picker(cid: String) -> void:
+	_mb_picker_open = true
+	_mb_cat = cid
+	_parts_scroll_v = 0
+	_focus_key = "mbcat_%s" % (cid if cid != "" else "all")
+	SfxManager.play("click", -12.0, 1.1)
+	_refresh()
+
+
+func _make_mb_cat_btn(cid: String, label: String, count: int, col: Color) -> Button:
+	var sel := (cid == _mb_cat)
+	var b := _make_btn("%s  %d" % [label, count], "mbcat_%s" % (cid if cid != "" else "all"), Vector2(0, 28))
+	b.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	b.add_theme_font_size_override("font_size", 12)
+	_style_btn(b, Color(col, 0.22) if sel else UIStyle.COL_BG_CARD, col if sel else UIStyle.COL_BORDER)
+	if sel:
+		b.add_theme_color_override("font_color", UIStyle.COL_TEXT_MAIN)
+	b.pressed.connect(func():
+		_mb_cat = cid
+		_parts_scroll_v = 0
+		SfxManager.play("click", -12.0, 1.1)
+		_refresh()
+	)
+	return b
+
+
+## Farbige Kopfzeile einer Mainboard-Kategorie in der Liste.
+func _make_mb_group_header(cd: Dictionary, count: int) -> PanelContainer:
+	var col := cd["color"] as Color
+	var p := PanelContainer.new()
+	p.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	var sb := UIStyle.make_panel(Color(col, 0.12), Color(col, 0.60), 6, 1, 10, 4)
+	sb.shadow_size = 0
+	p.add_theme_stylebox_override("panel", sb)
+	var h := HBoxContainer.new()
+	h.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	h.add_theme_constant_override("separation", 10)
+	p.add_child(h)
+	h.add_child(_make_label(tr(str(cd["label"])).to_upper(), 13, col, true))
+	var dl := _make_label(tr(str(cd["desc"])), 11, UIStyle.COL_TEXT_SUB)
+	dl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	dl.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+	dl.clip_text = true
+	h.add_child(dl)
+	h.add_child(_make_chip(str(cd["form"]), col))
+	h.add_child(_make_label(tr("%d Boards") % count, 11, UIStyle.COL_TEXT_SUB, true))
+	return p
+
+
+## Eine Mainboard-Zeile: Farbleiste, Name mit Beschreibung, Werte als Chips, rechts der Preis.
+func _make_mainboard_card(item_type: String) -> Button:
+	var item: Dictionary = GameState.ITEM_CATALOG[item_type]
+	var price := int(item.get("price", 0))
+	var affordable := GameState.money >= float(price)
+	var accent := item.get("color", UIStyle.COL_ACCENT) as Color
+	var bonus := int(roundf(float(item.get("revenue_bonus", 0.0)) * 100.0))
+
+	var btn := _make_btn("", "mb_%s" % item_type, Vector2(0, MB_ROW_H))
+	btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	btn.disabled = not affordable
+	btn.tooltip_text = tr(str(item.get("desc", "")))
+	_style_btn(btn, UIStyle.COL_BG_CARD, accent if affordable else UIStyle.COL_BORDER)
+	var m := _btn_content(btn, 10, 5)
+	var row := HBoxContainer.new()
+	row.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	row.add_theme_constant_override("separation", 10)
+	m.add_child(row)
+
+	var stripe := ColorRect.new()
+	stripe.custom_minimum_size = Vector2(4, 0)
+	stripe.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	stripe.color = accent if affordable else Color(accent, 0.35)
+	row.add_child(stripe)
+
+	var v := VBoxContainer.new()
+	v.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	v.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	v.add_theme_constant_override("separation", 2)
+	v.alignment = BoxContainer.ALIGNMENT_CENTER
+	row.add_child(v)
+
+	var nl := _make_label(tr(str(item.get("name", item_type))), 14, UIStyle.COL_TEXT_MAIN if affordable else UIStyle.COL_TEXT_SUB, true)
+	nl.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+	nl.clip_text = true
+	v.add_child(nl)
+
+	var chips := HBoxContainer.new()
+	chips.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	chips.add_theme_constant_override("separation", 5)
+	v.add_child(chips)
+	chips.add_child(_make_chip(str(item.get("form", "")), accent))
+	chips.add_child(_make_chip(tr("LEISTUNG %d") % int(item.get("base_compute", 0)), UIStyle.COL_BLUE))
+	if bonus > 0:
+		chips.add_child(_make_chip(tr("+%d %% EINNAHMEN") % bonus, UIStyle.COL_GREEN))
+	chips.add_child(_make_chip("%d W" % int(item.get("watts", 0)), UIStyle.COL_AMBER))
+
+	var pv := VBoxContainer.new()
+	pv.custom_minimum_size = Vector2(96, 0)
+	pv.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	pv.alignment = BoxContainer.ALIGNMENT_CENTER
+	pv.add_theme_constant_override("separation", 0)
+	row.add_child(pv)
+	var price_l := _make_label("$%d" % price, 17, UIStyle.COL_GOLD_TEXT if affordable else UIStyle.COL_RED, true)
+	price_l.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	pv.add_child(price_l)
+	var act_l := _make_label(tr("KAUFEN & EINBAUEN") if affordable else tr("ZU WENIG GELD"), 9, UIStyle.COL_TEXT_SUB, true)
+	act_l.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	pv.add_child(act_l)
+
+	var cap_slot := _selected_slot
+	btn.pressed.connect(func():
+		SfxManager.play("click", -12.0, 1.1)
+		_mb_picker_open = false
+		_selected_cat = "cpu"
+		_selected_filter = "Alle"
+		_parts_scroll_v = 0
+		_focus_key = "cat_cpu"
+		GameState.request_buy_install_module(_entity_id, cap_slot, item_type)
+	)
+	return btn
+
+
+## Belegter Einschub: Kopfkarte, Komponenten-Kacheln und Teileliste der gewählten Kategorie.
+func _build_slot_detail(parent: VBoxContainer, slot: Dictionary, itype: String) -> void:
+	var state := str(slot["state"])
+	var stats := GameState.get_slot_stats(slot)
+	var overloaded := bool(stats["psu_overloaded"])
+	var bad := state == "burning" or state == "crashed"
+
+	var head := PanelContainer.new()
+	head.add_theme_stylebox_override("panel", UIStyle.make_panel(
+		UIStyle.COL_BG_CARD, UIStyle.COL_RED if (overloaded or bad) else UIStyle.COL_BORDER, 8, 1, 14, 10
+	))
+	parent.add_child(head)
+	var hv := VBoxContainer.new()
+	hv.add_theme_constant_override("separation", 6)
+	head.add_child(hv)
+
+	var top := HBoxContainer.new()
+	top.add_theme_constant_override("separation", 10)
+	hv.add_child(top)
+
+	var name_l := _make_label("U%d  ·  %s" % [_selected_slot + 1, tr(str(GameState.ITEM_CATALOG[itype]["name"]))], 17, UIStyle.COL_TEXT_MAIN, true)
+	name_l.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	name_l.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	top.add_child(name_l)
+
+	if state == "burning":
+		top.add_child(_make_chip(tr("BRENNT"), UIStyle.COL_RED))
+	elif state == "crashed":
+		top.add_child(_make_chip(tr("AUSGEFALLEN"), UIStyle.COL_AMBER))
+	else:
+		top.add_child(_make_chip(tr("ONLINE"), UIStyle.COL_GREEN))
+
+	if state == "crashed":
+		var rep := _make_btn(tr("Reparieren"), "slot_repair", Vector2(120, 32))
+		_style_btn(rep, Color(0.18, 0.30, 0.18), UIStyle.COL_GREEN)
+		rep.pressed.connect(func(): GameState.request_repair_slot(_entity_id, _selected_slot, 1.0))
+		top.add_child(rep)
+
+	var sv_amt := int(roundf(float(stats["total_value"]) * GameState.SELL_REFUND_RATIO))
+	var sell := _make_btn("", "slot_sell", Vector2(190, 32))
+	sell.disabled = (state == "burning")
+	if _confirm_sell_module:
+		sell.text = tr("WIRKLICH VERKAUFEN? (+$%d)") % sv_amt
+		_style_btn(sell, Color(0.62, 0.16, 0.14), UIStyle.COL_RED)
+	else:
+		sell.text = tr("Modul verkaufen (+$%d)") % sv_amt
+		_style_btn(sell, Color(0.28, 0.13, 0.14), UIStyle.COL_RED)
+	sell.pressed.connect(func():
+		if not _confirm_sell_module:
+			_confirm_sell_module = true
+			SfxManager.play("click", -8.0, 0.9)
+			_refresh()
+		else:
+			_confirm_sell_module = false
+			_focus_key = "slot_%d" % _selected_slot
+			GameState.request_sell_slot_module(_entity_id, _selected_slot)
+	)
+	top.add_child(sell)
+
+	if not GameState.is_slot_upgradeable(itype):
+		var sw := _make_label(tr("Ein Rack-Switch braucht keine internen Bauteile und leitet LAN automatisch an bis zu 3 weitere Racks weiter."), 12, UIStyle.COL_TEXT_SUB)
+		sw.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		hv.add_child(sw)
+		return
+
+	var spec := _make_label(tr("CPU %d Pkt.  •  RAM %d GB %s  •  GPU %d Pkt. (%d GB)  •  Speicher %.1f TB") % [
+		int(stats["cpu_score"]), int(stats["ram_gb"]), str(stats["ram_tag"]),
+		int(stats["gpu_score"]), int(stats["vram_gb"]), float(stats["storage_tb"])
+	], 12, UIStyle.COL_TEXT_SUB)
+	spec.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	hv.add_child(spec)
+	if overloaded:
+		hv.add_child(_make_label(tr("Netzteil zu schwach: %d W Bedarf, %d W maximal") % [int(stats["watts"]), int(stats["psu_max_watts"])], 12, UIStyle.COL_RED, true))
+
+	parent.add_child(_section_label("KOMPONENTEN  ·  KATEGORIE WÄHLEN"))
+	var comps := HardwareCatalog.normalize_components(slot.get("components", {}) as Dictionary, itype)
+	var grid := GridContainer.new()
+	grid.columns = 3
+	grid.add_theme_constant_override("h_separation", 8)
+	grid.add_theme_constant_override("v_separation", 8)
+	parent.add_child(grid)
+	for cat_k in HardwareCatalog.CATEGORY_ORDER:
+		grid.add_child(_make_category_tile(str(cat_k), comps))
+
+	_build_part_picker(parent, comps, state)
+
+
+func _make_category_tile(cat_k: String, comps: Dictionary) -> Button:
+	var cm: Dictionary = HardwareCatalog.CATEGORY_META[cat_k]
+	var sel := (cat_k == _selected_cat)
+	var stock_n := 0
+	for p in HardwareCatalog.get_category_parts(cat_k):
+		stock_n += GameState.get_part_stock(str((p as Dictionary)["id"]))
+	var pid := str(comps.get(cat_k, HardwareCatalog.DEFAULT_PARTS.get(cat_k, "")))
+	var part: Dictionary = HardwareCatalog.get_part(cat_k, pid)
+
+	var btn := _make_btn("", "cat_%s" % cat_k, Vector2(0, TILE_H))
+	btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_style_btn(btn, COL_SELECT if sel else UIStyle.COL_BG_CARD, UIStyle.COL_ACCENT if sel else UIStyle.COL_BORDER)
+	var m := _btn_content(btn, 10, 6)
+	var v := VBoxContainer.new()
+	v.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	v.add_theme_constant_override("separation", 2)
+	m.add_child(v)
+
+	var tr_row := HBoxContainer.new()
+	tr_row.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	v.add_child(tr_row)
+	var cl := _make_label(tr(str(cm["short"])).to_upper(), 10, UIStyle.COL_GOLD_TEXT if sel else UIStyle.COL_TEXT_SUB, true)
+	cl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	tr_row.add_child(cl)
+	if stock_n > 0:
+		tr_row.add_child(_make_label(tr("%d im Lager") % stock_n, 10, UIStyle.COL_GREEN))
+
+	v.add_child(_make_label(str(part.get("name", "-")), 13, UIStyle.COL_TEXT_MAIN))
+	var strength := 0.0 if part.is_empty() else HardwareCatalog.get_part_strength_pct(cat_k, part)
+	v.add_child(_make_bar(strength, UIStyle.COL_GOLD_TEXT if sel else UIStyle.COL_GREEN, 5))
+
+	btn.pressed.connect(func():
+		_selected_cat = cat_k
+		_selected_filter = "Alle"
+		_parts_scroll_v = 0
+		SfxManager.play("click", -12.0, 1.15)
+		_refresh()
+	)
+	return btn
+
+
+func _build_part_picker(parent: VBoxContainer, comps: Dictionary, state: String) -> void:
+	var cm: Dictionary = HardwareCatalog.CATEGORY_META[_selected_cat]
+
 	var flt_row := HBoxContainer.new()
 	flt_row.add_theme_constant_override("separation", 5)
-	right.add_child(flt_row)
+	parent.add_child(flt_row)
+
+	var head := _section_label(tr("%s WÄHLEN") % tr(str(cm["short"])).to_upper())
+	head.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	head.custom_minimum_size = Vector2(110, 0)
+	flt_row.add_child(head)
+
 	var flts: Array = HardwareCatalog.CATEGORY_FILTERS.get(_selected_cat, ["Alle"])
 	for flt_name in flts:
 		var fn_str := str(flt_name)
-		var fb := Button.new()
-		fb.text = fn_str
-		fb.custom_minimum_size = Vector2(0, 26)
-		fb.add_theme_font_size_override("font_size", 11)
 		var fsel := (_selected_filter == fn_str)
-		UIStyle.style_button(fb, Color(0.17, 0.21, 0.25) if fsel else Color(0.115, 0.12, 0.13), UIStyle.COL_BLUE if fsel else UIStyle.COL_BORDER)
+		var fb := _make_btn(tr(fn_str), "flt_%s" % fn_str, Vector2(0, 26))
+		fb.add_theme_font_size_override("font_size", 11)
+		_style_btn(fb, Color(0.17, 0.21, 0.25) if fsel else Color(0.115, 0.12, 0.13), UIStyle.COL_BLUE if fsel else UIStyle.COL_BORDER)
 		fb.pressed.connect(func():
 			_selected_filter = fn_str
+			_parts_scroll_v = 0
 			SfxManager.play("click", -13.0, 1.1)
-			_render_rack_view()
+			_refresh()
 		)
 		flt_row.add_child(fb)
 
-	var flt_sp := Control.new()
-	flt_sp.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	flt_row.add_child(flt_sp)
+	var sp := Control.new()
+	sp.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	flt_row.add_child(sp)
 
-	var stock_btn := Button.new()
-	stock_btn.text = "Nur Lager" if not _only_in_stock else "Nur Lager: AN"
-	stock_btn.custom_minimum_size = Vector2(118, 26)
+	var stock_btn := _make_btn(tr("Nur Lager: AN") if _only_in_stock else tr("Nur Lager"), "flt_stock", Vector2(118, 26))
 	stock_btn.add_theme_font_size_override("font_size", 11)
-	UIStyle.style_button(stock_btn, Color(0.16, 0.27, 0.16) if _only_in_stock else Color(0.115, 0.12, 0.13), UIStyle.COL_GREEN if _only_in_stock else UIStyle.COL_BORDER)
+	_style_btn(stock_btn, Color(0.16, 0.27, 0.16) if _only_in_stock else Color(0.115, 0.12, 0.13), UIStyle.COL_GREEN if _only_in_stock else UIStyle.COL_BORDER)
 	stock_btn.pressed.connect(func():
 		_only_in_stock = not _only_in_stock
+		_parts_scroll_v = 0
 		SfxManager.play("click", -12.0, 1.1)
-		_render_rack_view()
+		_refresh()
 	)
 	flt_row.add_child(stock_btn)
 
-	# Scrollable Filtered Parts List with Strength Bars & Warehouse Stock!
-	var pscroll := ScrollContainer.new()
-	pscroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	right.add_child(pscroll)
+	_parts_scroll = ScrollContainer.new()
+	_parts_scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	_parts_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	_parts_scroll.follow_focus = true
+	parent.add_child(_parts_scroll)
 	var plist := VBoxContainer.new()
 	plist.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	plist.add_theme_constant_override("separation", 6)
-	pscroll.add_child(plist)
+	_parts_scroll.add_child(plist)
 
-	var comps := HardwareCatalog.normalize_components(cur_slot.get("components", {}) as Dictionary, cur_type)
 	var cur_pid := str(comps.get(_selected_cat, HardwareCatalog.DEFAULT_PARTS[_selected_cat]))
+	var sorted_parts: Array = HardwareCatalog.get_category_parts(_selected_cat).duplicate()
+	sorted_parts.sort_custom(func(a, b): return int(a["cost"]) < int(b["cost"]))
 	var shown := 0
-
-	for p in HardwareCatalog.get_category_parts(_selected_cat):
+	for p in sorted_parts:
 		var pd: Dictionary = p
 		var pid := str(pd["id"])
 		if not HardwareCatalog.matches_filter(_selected_cat, pd, _selected_filter):
@@ -583,277 +1093,418 @@ func _render_tab_hardware(_rack: Dictionary, slots: Array) -> void:
 		if _only_in_stock and not installed and stock <= 0 and not is_default:
 			continue
 		shown += 1
-
-		var pcard := PanelContainer.new()
-		var pbg := Color(0.11, 0.16, 0.11, 0.96) if installed else (Color(0.13, 0.145, 0.16, 0.96) if stock > 0 else UIStyle.COL_BG_CARD)
-		var pbd := UIStyle.COL_GREEN if installed else (UIStyle.COL_GOLD_TEXT if stock > 0 else UIStyle.COL_BORDER)
-		pcard.add_theme_stylebox_override("panel", UIStyle.make_panel(pbg, pbd, 6, 1, 10, 7))
-		plist.add_child(pcard)
-
-		var prow := HBoxContainer.new()
-		prow.add_theme_constant_override("separation", 10)
-		pcard.add_child(prow)
-
-		var pinfo := VBoxContainer.new()
-		pinfo.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		pinfo.add_theme_constant_override("separation", 3)
-		prow.add_child(pinfo)
-
-		var plbl := Label.new()
-		var stock_tag := ("   •   Im Lager: %d×" % stock) if stock > 0 else ""
-		plbl.text = "[%s]  %s%s" % [str(pd.get("tag", "")), str(pd["name"]), stock_tag]
-		plbl.add_theme_font_size_override("font_size", 13)
-		plbl.modulate = UIStyle.COL_GREEN if installed else (UIStyle.COL_GOLD_TEXT if stock > 0 else UIStyle.COL_TEXT_MAIN)
-		pinfo.add_child(plbl)
-
-		# Clean Comparison Bar + Real Specs
-		var bar_row := HBoxContainer.new()
-		bar_row.add_theme_constant_override("separation", 8)
-		pinfo.add_child(bar_row)
-		var pbar := ProgressBar.new()
-		pbar.min_value = 0.0
-		pbar.max_value = 100.0
-		pbar.value = HardwareCatalog.get_part_strength_pct(_selected_cat, pd)
-		pbar.show_percentage = false
-		pbar.custom_minimum_size = Vector2(90, 7)
-		var bstyles := UIStyle.make_bar_styles(UIStyle.COL_GREEN if installed else UIStyle.COL_GOLD_TEXT)
-		pbar.add_theme_stylebox_override("background", bstyles[0])
-		pbar.add_theme_stylebox_override("fill", bstyles[1])
-		bar_row.add_child(pbar)
-
-		var pspec := Label.new()
-		pspec.text = _format_catalog_part_specs(_selected_cat, pd)
-		pspec.add_theme_font_size_override("font_size", 11)
-		pspec.modulate = UIStyle.COL_TEXT_SUB
-		bar_row.add_child(pspec)
-
-		var ibtn := Button.new()
-		ibtn.custom_minimum_size = Vector2(162, 34)
-		if installed:
-			ibtn.text = "VERBAUT"
-			ibtn.disabled = true
-			UIStyle.style_button(ibtn, Color(0.16, 0.26, 0.16), UIStyle.COL_GREEN)
-		elif stock > 0 or is_default:
-			ibtn.text = "Einbauen (Lager)" if stock > 0 else "Basis einbauen"
-			ibtn.disabled = (cur_state == "burning")
-			UIStyle.style_button(ibtn, Color(0.18, 0.30, 0.18), UIStyle.COL_GREEN)
-			var cap_cat := _selected_cat
-			var cap_pid := pid
-			ibtn.pressed.connect(func():
-				GameState.request_install_component(_entity_id, _selected_slot, cap_cat, cap_pid)
-			)
-		else:
-			ibtn.text = "PC-Shop ($%d)" % int(pd["cost"])
-			ibtn.disabled = true
-			UIStyle.style_button(ibtn, Color(0.10, 0.12, 0.15), UIStyle.COL_BORDER)
-		prow.add_child(ibtn)
+		plist.add_child(_make_part_row(pd, installed, is_default, stock, state))
 
 	if shown == 0:
-		var nl := Label.new()
-		nl.text = "Keine passenden Bauteile im Teile-Lager! Kaufe CPUs, DDR2–DDR5 RAM, GPUs, SSDs & Netzteile im Windows-PC-Shop (Warenkorb) — der Cloud Express Sprinter liefert direkt in dein Lager!"
+		var nl := _make_label(tr("Keine passenden Bauteile. Ändere den Filter oder schalte „Nur Lager“ aus. Fehlende Teile kaufst du hier direkt mit „Kaufen & einbauen“."), 12, UIStyle.COL_TEXT_SUB)
 		nl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-		nl.modulate = UIStyle.COL_TEXT_SUB
 		plist.add_child(nl)
 
+	if _parts_scroll_v > 0:
+		var sc := _parts_scroll
+		var v := _parts_scroll_v
+		var restore := func() -> void:
+			if is_instance_valid(sc):
+				sc.scroll_vertical = v
+		get_tree().process_frame.connect(restore, CONNECT_ONE_SHOT)
 
-# ==============================================================================
-# TAB 3: SPACIOUS 360° 3D HARDWARE WORKBENCH PREVIEW
-# ==============================================================================
-func _render_tab_preview(slots: Array) -> void:
-	var srow := HBoxContainer.new()
-	srow.add_theme_constant_override("separation", 6)
-	_body_host.add_child(srow)
-	for i in range(slots.size()):
-		var sd: Dictionary = slots[i]
-		var itype := str(sd["item_type"])
-		var btn := Button.new()
-		btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		btn.custom_minimum_size = Vector2(0, 32)
-		btn.text = "Slot %d: %s" % [i + 1, str(GameState.ITEM_CATALOG[itype]["name"]) if itype != "" else "Leer"]
-		var is_sel := (i == _selected_slot)
-		UIStyle.style_button(btn, Color(0.86, 0.58, 0.16, 0.24) if is_sel else UIStyle.COL_BG_CARD, UIStyle.COL_GOLD_TEXT if is_sel else UIStyle.COL_BORDER)
-		var cap_i := i
-		btn.pressed.connect(func():
-			_selected_slot = cap_i
-			SfxManager.play("click", -12.0, 1.1)
-			_render_rack_view()
+
+func _make_part_row(pd: Dictionary, installed: bool, is_default: bool, stock: int, state: String) -> PanelContainer:
+	var pid := str(pd["id"])
+	var pcard := PanelContainer.new()
+	var pbg := Color(0.11, 0.16, 0.11, 0.96) if installed else (Color(0.13, 0.145, 0.16, 0.96) if stock > 0 else UIStyle.COL_BG_CARD)
+	var pbd := UIStyle.COL_GREEN if installed else (UIStyle.COL_GOLD_TEXT if stock > 0 else UIStyle.COL_BORDER)
+	pcard.add_theme_stylebox_override("panel", UIStyle.make_panel(pbg, pbd, 6, 1, 10, 7))
+
+	var prow := HBoxContainer.new()
+	prow.add_theme_constant_override("separation", 10)
+	pcard.add_child(prow)
+
+	var tag := str(pd.get("tag", ""))
+	if not tag.is_empty():
+		var chip := _make_chip(tr(tag), UIStyle.COL_GREEN if installed else UIStyle.COL_BLUE)
+		chip.custom_minimum_size = Vector2(62, 0)
+		prow.add_child(chip)
+
+	var pinfo := VBoxContainer.new()
+	pinfo.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	pinfo.add_theme_constant_override("separation", 3)
+	prow.add_child(pinfo)
+
+	var stock_tag := ("   •   " + tr("Im Lager: %d×") % stock) if stock > 0 else ""
+	pinfo.add_child(_make_label("%s%s" % [str(pd["name"]), stock_tag], 13,
+		UIStyle.COL_GREEN if installed else (UIStyle.COL_GOLD_TEXT if stock > 0 else UIStyle.COL_TEXT_MAIN)))
+
+	var bar_row := HBoxContainer.new()
+	bar_row.add_theme_constant_override("separation", 8)
+	pinfo.add_child(bar_row)
+	var pbar := _make_bar(HardwareCatalog.get_part_strength_pct(_selected_cat, pd), UIStyle.COL_GREEN if installed else UIStyle.COL_GOLD_TEXT, 6)
+	pbar.size_flags_horizontal = Control.SIZE_FILL
+	pbar.custom_minimum_size = Vector2(90, 6)
+	bar_row.add_child(pbar)
+	bar_row.add_child(_make_label(_format_catalog_part_specs(_selected_cat, pd), 11, UIStyle.COL_TEXT_SUB))
+
+	var ibtn := _make_btn("", "part_%s" % pid, Vector2(170, 34))
+	ibtn.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	if installed:
+		ibtn.text = tr("VERBAUT")
+		ibtn.disabled = true
+		_style_btn(ibtn, Color(0.16, 0.26, 0.16), UIStyle.COL_GREEN)
+	elif stock > 0 or is_default:
+		ibtn.text = tr("Einbauen (Lager)") if stock > 0 else tr("Basis einbauen")
+		ibtn.disabled = (state == "burning")
+		_style_btn(ibtn, Color(0.18, 0.30, 0.18), UIStyle.COL_GREEN)
+		var cap_cat := _selected_cat
+		ibtn.pressed.connect(func():
+			GameState.request_install_component(_entity_id, _selected_slot, cap_cat, pid)
 		)
-		srow.add_child(btn)
+	else:
+		var buy_cost := int(pd["cost"])
+		ibtn.text = tr("Kaufen & einbauen ($%d)") % buy_cost
+		ibtn.disabled = (state == "burning") or GameState.money < float(buy_cost)
+		_style_btn(ibtn, Color(0.20, 0.26, 0.12), UIStyle.COL_GOLD_TEXT)
+		var buy_cat := _selected_cat
+		ibtn.pressed.connect(func():
+			GameState.request_buy_install_component(_entity_id, _selected_slot, buy_cat, pid)
+		)
+	prow.add_child(ibtn)
+	return pcard
 
-	var cur_slot: Dictionary = slots[_selected_slot]
-	var cur_type := str(cur_slot["item_type"])
-	if cur_type == "":
-		var el := Label.new()
-		el.text = "Dieser Einschub ist leer — wähle oben einen belegten Slot für die drehbare 3D-Hardware-Ansicht!"
-		el.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-		el.modulate = UIStyle.COL_TEXT_SUB
-		_body_host.add_child(el)
+
+func _build_side_column(side: VBoxContainer, slot: Dictionary, itype: String) -> void:
+	side.add_child(_section_label("3D-VORSCHAU"))
+	if itype != "":
+		_preview_frame.custom_minimum_size = Vector2(0, PREVIEW_H)
+		_preview_frame.size_flags_vertical = Control.SIZE_EXPAND_FILL
+		side.add_child(_preview_frame)
+		_update_3d_preview(itype, slot.get("components", {}) as Dictionary)
+	else:
+		_update_3d_preview("", {})
+		var ph := PanelContainer.new()
+		ph.size_flags_vertical = Control.SIZE_EXPAND_FILL
+		ph.add_theme_stylebox_override("panel", UIStyle.make_panel(Color(0.08, 0.095, 0.115, 0.98), UIStyle.COL_BORDER, 8, 1, 14, 14))
+		side.add_child(ph)
+		var cv := VBoxContainer.new()
+		cv.alignment = BoxContainer.ALIGNMENT_CENTER
+		cv.add_theme_constant_override("separation", 8)
+		ph.add_child(cv)
+		var ic := _make_icon("info", UIStyle.COL_TEXT_SUB, 30)
+		ic.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+		cv.add_child(ic)
+		var l1 := _make_label(tr("Kein Server in U%d") % (_selected_slot + 1), 14, UIStyle.COL_TEXT_MAIN, true)
+		l1.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		cv.add_child(l1)
+		var l2 := _make_label(tr("Wähle links ein Mainboard,\ndann erscheint es hier in 3D."), 12, UIStyle.COL_TEXT_SUB)
+		l2.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		cv.add_child(l2)
 		return
 
-	var comps := HardwareCatalog.normalize_components(cur_slot.get("components", {}) as Dictionary, cur_type)
-	var info_card := PanelContainer.new()
-	info_card.add_theme_stylebox_override("panel", UIStyle.make_panel(UIStyle.COL_BG_CARD, UIStyle.COL_BORDER, 8, 1, 14, 10))
-	_body_host.add_child(info_card)
-	var il := Label.new()
-	if GameState.is_slot_upgradeable(cur_type):
-		il.text = "VERBAUT IN SLOT %d:   CPU %s   •   RAM %s   •   GPU %s   •   Speicher %s   •   Kühlung %s   •   Netzteil %s" % [
-			_selected_slot + 1,
-			str(HardwareCatalog.get_part("cpu", str(comps["cpu"])).get("name", "-")),
-			str(HardwareCatalog.get_part("ram", str(comps["ram"])).get("name", "-")),
-			str(HardwareCatalog.get_part("gpu", str(comps["gpu"])).get("name", "-")),
-			str(HardwareCatalog.get_part("storage", str(comps["storage"])).get("name", "-")),
-			str(HardwareCatalog.get_part("cooling", str(comps["cooling"])).get("name", "-")),
-			str(HardwareCatalog.get_part("psu", str(comps["psu"])).get("name", "-")),
-		]
+	var card := PanelContainer.new()
+	card.add_theme_stylebox_override("panel", UIStyle.make_panel(UIStyle.COL_BG_CARD, UIStyle.COL_BORDER, 6, 1, 12, 10))
+	side.add_child(card)
+	var v := VBoxContainer.new()
+	v.add_theme_constant_override("separation", 5)
+	card.add_child(v)
+	var st := GameState.get_slot_stats(slot)
+	v.add_child(_section_label(tr("EINSCHUB U%d") % (_selected_slot + 1)))
+	var watts := int(st["watts"])
+	if GameState.is_slot_upgradeable(itype):
+		var psu_max := maxi(int(st["psu_max_watts"]), 1)
+		var pct := float(watts) / float(psu_max) * 100.0
+		_add_load_bar_row(v, "Netzteil", "%d / %d W" % [watts, psu_max], pct, 70.0, 90.0)
 	else:
-		il.text = "VERBAUT IN SLOT %d:   24-Port Managed Ethernet Switch (leitet LAN an 3 weitere Racks weiter)" % (_selected_slot + 1)
-	il.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	il.add_theme_font_size_override("font_size", 12)
-	il.modulate = UIStyle.COL_TEXT_MAIN
-	info_card.add_child(il)
+		_add_kv_line(v, "Stromverbrauch", "%d W" % watts)
+	_add_kv_line(v, "Modulwert", "$%d" % int(roundf(float(st["total_value"]) * GameState.SELL_REFUND_RATIO)))
+
+
+# ------------------------------------------------------------------------------
+# Reiter VERMIETUNG
+# ------------------------------------------------------------------------------
+func _render_rack_rental(rack: Dictionary, hw: Dictionary) -> void:
+	var split := HBoxContainer.new()
+	split.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	split.add_theme_constant_override("separation", 14)
+	_body_host.add_child(split)
+
+	var lscroll := ScrollContainer.new()
+	lscroll.custom_minimum_size = Vector2(340, 0)
+	lscroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	split.add_child(lscroll)
+	var left := VBoxContainer.new()
+	left.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	left.add_theme_constant_override("separation", 10)
+	lscroll.add_child(left)
+
+	var hw_card := PanelContainer.new()
+	hw_card.add_theme_stylebox_override("panel", UIStyle.make_panel(UIStyle.COL_BG_CARD, UIStyle.COL_BORDER, 6, 1, 14, 12))
+	left.add_child(hw_card)
+	var hv := VBoxContainer.new()
+	hv.add_theme_constant_override("separation", 6)
+	hw_card.add_child(hv)
+	hv.add_child(_section_label("HARDWARE IM RACK"))
+	_add_kv_line(hv, "Aktive Server", tr("%d / %d online") % [int(hw["active_servers"]), int(hw["total_servers"])])
+	_add_kv_line(hv, "CPU-Leistung", tr("%d Pkt.") % int(hw["cpu_score"]))
+	_add_kv_line(hv, "Arbeitsspeicher", "%d GB RAM" % int(hw["ram_gb"]))
+	_add_kv_line(hv, "Grafik / VRAM", tr("%d Pkt. (%d GB)") % [int(hw["gpu_score"]), int(hw["vram_gb"])])
+	_add_kv_line(hv, "Speicherplatz", "%.1f TB" % float(hw["storage_tb"]))
+	_add_kv_line(hv, "Haus-Router", HardwareCatalog.format_speed_mbps(GameState.max_bandwidth_mbps))
+	if bool(hw.get("psu_overloaded", false)):
+		var pw := _make_label(tr("Mindestens ein Netzteil ist zu schwach für seine Bauteile."), 12, UIStyle.COL_RED)
+		pw.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		hv.add_child(pw)
+
+	var r_rent := str(rack.get("rental_type", "none"))
+	var load_card := PanelContainer.new()
+	left.add_child(load_card)
+	var lv := VBoxContainer.new()
+	lv.add_theme_constant_override("separation", 7)
+	load_card.add_child(lv)
+	if r_rent != "none" and HardwareCatalog.RENTAL_PROFILES.has(r_rent):
+		var prof: Dictionary = HardwareCatalog.RENTAL_PROFILES[r_rent]
+		var m: Dictionary = rack.get("metrics", {})
+		var bn := str(m.get("bottleneck", "ok"))
+		load_card.add_theme_stylebox_override("panel", UIStyle.make_panel(UIStyle.COL_BG_CARD, UIStyle.COL_RED if bn != "ok" else UIStyle.COL_GREEN, 8, 1, 14, 12))
+		lv.add_child(_section_label("LIVE-AUSLASTUNG"))
+		var lh := _make_label("%s  —  %s" % [tr(str(prof["short"])).to_upper(), str(rack.get("rental_customer", ""))], 14, UIStyle.COL_TEXT_MAIN, true)
+		lh.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		lv.add_child(lh)
+		_add_load_bar_row(lv, "RAM", "%.1f / %.0f GB" % [float(m.get("ram_used_gb", 0.0)), float(m.get("ram_total_gb", 0.0))], float(m.get("ram_pct", 0.0)))
+		_add_load_bar_row(lv, "CPU", tr("%.0f%% Last") % float(m.get("cpu_pct", 0.0)), float(m.get("cpu_pct", 0.0)))
+		_add_load_bar_row(lv, "Speicher", "%.2f / %.1f TB" % [float(m.get("storage_used_tb", 0.0)), float(m.get("storage_total_tb", 0.0))], float(m.get("storage_pct", 0.0)))
+		if float(prof["gpu_per_user"]) > 0.001:
+			_add_load_bar_row(lv, "GPU", tr("%.0f%% Last") % float(m.get("gpu_pct", 0.0)), float(m.get("gpu_pct", 0.0)))
+		_add_load_bar_row(lv, "Uplink", HardwareCatalog.format_speed_mbps(float(m.get("net_used_mbps", 0.0))), float(m.get("net_pct", 0.0)))
+	else:
+		load_card.add_theme_stylebox_override("panel", UIStyle.make_panel(UIStyle.COL_BG_CARD, UIStyle.COL_BORDER, 8, 1, 14, 12))
+		lv.add_child(_section_label("LIVE-AUSLASTUNG"))
+		var nr := _make_label(tr("Dieses Rack ist nicht vermietet. Wähle rechts einen Dienst, danach siehst du hier RAM, CPU, Speicher und Uplink live."), 12, UIStyle.COL_TEXT_SUB)
+		nr.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		lv.add_child(nr)
+
+	var rscroll := ScrollContainer.new()
+	rscroll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	rscroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	rscroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	rscroll.follow_focus = true
+	split.add_child(rscroll)
+	var rv := VBoxContainer.new()
+	rv.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	rv.add_theme_constant_override("separation", 8)
+	rscroll.add_child(rv)
+	rv.add_child(_section_label("DIENST WÄHLEN"))
+	var pick := _make_label(tr("Schätze selbst ein, ob RAM, CPU, Speicher und Router für den Dienst reichen."), 12, UIStyle.COL_TEXT_SUB)
+	pick.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	rv.add_child(pick)
+	for key in HardwareCatalog.RENTAL_ORDER:
+		rv.add_child(_make_rental_button(str(key), r_rent))
+
+
+func _make_rental_button(k: String, current: String) -> Button:
+	var prof: Dictionary = HardwareCatalog.RENTAL_PROFILES[k]
+	var is_cur := (k == current)
+	var btn := _make_btn("", "rent_%s" % k, Vector2(0, 76))
+	btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_style_btn(btn, Color(0.11, 0.19, 0.14, 0.96) if is_cur else UIStyle.COL_BG_CARD, UIStyle.COL_GREEN if is_cur else UIStyle.COL_BORDER)
+	var m := _btn_content(btn, 12, 8)
+	var row := HBoxContainer.new()
+	row.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	row.add_theme_constant_override("separation", 12)
+	m.add_child(row)
+
+	var iv := VBoxContainer.new()
+	iv.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	iv.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	iv.add_theme_constant_override("separation", 2)
+	row.add_child(iv)
+	var pay_s := ""
+	if k != "none":
+		pay_s = "   •   " + tr("$%.2f pro Nutzer") % float(prof.get("pay_per_user", 0.0))
+	iv.add_child(_make_label(tr(str(prof["label"])) + pay_s, 14, UIStyle.COL_GREEN if is_cur else UIStyle.COL_TEXT_MAIN, true))
+	var dl := _make_label(tr(str(prof.get("desc", ""))), 11, UIStyle.COL_TEXT_SUB)
+	dl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	dl.max_lines_visible = 2
+	iv.add_child(dl)
+
+	var act_txt := tr("AKTIV")
+	var act_col := UIStyle.COL_GREEN
+	if not is_cur:
+		act_txt = tr("Freigeben") if k == "none" else tr("Vermieten")
+		act_col = UIStyle.COL_GOLD_TEXT
+	var al := _make_label(act_txt, 12, act_col, true)
+	al.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	row.add_child(al)
+
+	if not is_cur:
+		btn.pressed.connect(func():
+			SfxManager.play("click", -10.0, 1.1)
+			GameState.request_set_rack_rental(_entity_id, k)
+		)
+	return btn
 
 
 # ==============================================================================
-# WALL ROUTER UPGRADE OVERLAY (Matching Slate & Gold, Real Mbit/s & Gbit/s!)
+# ROUTER
 # ==============================================================================
 func _render_router_view() -> void:
-	_clear(_stat_strip)
-	_clear(_tab_row)
-	_clear(_body_host)
+	_begin_render()
 	_tab_row.visible = false
 	_update_3d_preview("", {})
 
-	var rt := clampi(GameState.router_tier, 0, GameState.ROUTER_TIERS.size() - 1)
+	var tiers_n := GameState.ROUTER_TIERS.size()
+	var rt := clampi(GameState.router_tier, 0, tiers_n - 1)
 	var cur: Dictionary = GameState.ROUTER_TIERS[rt]
 	var used_ports := GameState.count_cables_on("network", GameState.WALL_ROUTER_ID)
-	var max_ports := int(cur["ports"])
-	var max_mbps := float(cur["max_mbps"])
-	var bottleneck := GameState.used_bandwidth_mbps > max_mbps
+	var max_ports := maxi(int(cur["ports"]), 1)
+	var max_mbps := maxf(float(cur["max_mbps"]), 0.001)
+	var used_mbps := float(GameState.used_bandwidth_mbps)
+	var bottleneck := used_mbps > max_mbps
+	var bw_ratio := used_mbps / max_mbps
 
-	_title_lbl.text = "INTERNET-ROUTER  —  %s" % str(cur["label"])
-	_subtitle_lbl.text = "Guthaben: $%.0f   •   Stufe %d / %d" % [GameState.money, rt + 1, GameState.ROUTER_TIERS.size()]
+	_title_lbl.text = tr("INTERNET-ROUTER  —  %s") % tr(str(cur["label"]))
+	_subtitle_lbl.text = tr("Guthaben: $%.0f   •   Stufe %d / %d") % [GameState.money, rt + 1, tiers_n]
+	_set_status(tr("ENGPASS") if bottleneck else tr("ONLINE"), UIStyle.COL_RED if bottleneck else UIStyle.COL_GREEN)
 
-	_stat_strip.visible = true
-	_add_stat_pill("GESCHWINDIGKEIT", str(cur["speed"]), UIStyle.COL_GOLD_TEXT)
-	_add_stat_pill("AUSLASTUNG", "%s / %s" % [HardwareCatalog.format_speed_mbps(GameState.used_bandwidth_mbps), str(cur["speed"])], UIStyle.COL_RED if bottleneck else UIStyle.COL_GREEN)
-	_add_stat_pill("LAN-PORTS", "%d / %d belegt" % [used_ports, max_ports], UIStyle.COL_AMBER if used_ports >= max_ports else UIStyle.COL_BLUE)
-	_add_stat_pill("DDOS-SCHUTZ", "+%.0f%%" % ((float(cur["ddos_mult"]) - 1.0) * 100.0), UIStyle.COL_GREEN)
+	_add_kpi("GESCHWINDIGKEIT", str(cur["speed"]), tr("Stufe %d / %d") % [rt + 1, tiers_n], UIStyle.COL_GOLD_TEXT, float(rt + 1) / float(maxi(tiers_n, 1)))
+	_add_kpi("AUSLASTUNG", HardwareCatalog.format_speed_mbps(used_mbps), tr("von %s") % str(cur["speed"]),
+		UIStyle.COL_RED if bottleneck else _load_color(bw_ratio * 100.0), bw_ratio)
+	_add_kpi("LAN-PORTS", tr("%d / %d belegt") % [used_ports, max_ports], "",
+		UIStyle.COL_AMBER if used_ports >= max_ports else UIStyle.COL_BLUE, float(used_ports) / float(max_ports))
+	_add_kpi("DDOS-SCHUTZ", "+%.0f%%" % ((float(cur["ddos_mult"]) - 1.0) * 100.0), "", UIStyle.COL_GREEN, -1.0, "check")
 
+	var has_next := rt + 1 < tiers_n
 	var card := PanelContainer.new()
-	card.add_theme_stylebox_override("panel", UIStyle.make_panel(UIStyle.COL_BG_CARD, UIStyle.COL_GOLD_TEXT if rt + 1 < GameState.ROUTER_TIERS.size() else UIStyle.COL_GREEN, 8, 1, 16, 14))
-	_body_host.add_child(card)
-	var v := VBoxContainer.new()
-	v.add_theme_constant_override("separation", 10)
-	card.add_child(v)
-
-	if rt + 1 < GameState.ROUTER_TIERS.size():
-		var nxt: Dictionary = GameState.ROUTER_TIERS[rt + 1]
-		var cost := int(nxt["cost"])
-		var h := Label.new()
-		h.text = "NÄCHSTE ROUTER-STUFE:  %s" % str(nxt["label"])
-		UIStyle.style_label(h, 16, UIStyle.COL_GOLD_TEXT, _display_font)
-		v.add_child(h)
-
-		var d := Label.new()
-		d.text = "• Geschwindigkeit: %s  →  %s\n• LAN-Ports am Wand-Router: %d  →  %d Ports\n• DDoS-Schutz: +%.0f%%  →  +%.0f%%\n• Das 3D-Wandgerät entwickelt sich sichtbar mit!" % [
-			str(cur["speed"]), str(nxt["speed"]), max_ports, int(nxt["ports"]),
-			(float(cur["ddos_mult"]) - 1.0) * 100.0, (float(nxt["ddos_mult"]) - 1.0) * 100.0
-		]
-		d.add_theme_font_size_override("font_size", 13)
-		d.modulate = UIStyle.COL_TEXT_MAIN
-		v.add_child(d)
-
-		var btn := Button.new()
-		btn.text = "Auf %s upgraden  ($%d)" % [str(nxt["speed"]), cost]
-		btn.custom_minimum_size = Vector2(0, 44)
-		btn.disabled = GameState.money < float(cost)
-		UIStyle.style_button(btn, Color(0.76, 0.50, 0.12), UIStyle.COL_GOLD_TEXT)
-		btn.pressed.connect(func(): GameState.request_upgrade_router())
-		v.add_child(btn)
-	else:
-		var ml := Label.new()
-		ml.text = "Höchste Stufe erreicht: 100-Gbit/s-Glasfaser-Anbindung"
-		ml.add_theme_font_size_override("font_size", 16)
-		ml.modulate = UIStyle.COL_GREEN
-		v.add_child(ml)
-
-
-# ==============================================================================
-# COOLER / UPS / CART DEVICE OVERLAY (Matching Slate & Gold)
-# ==============================================================================
-func _render_device_view(kind: String) -> void:
-	_clear(_stat_strip)
-	_clear(_tab_row)
-	_clear(_body_host)
-	_stat_strip.visible = false
-	_tab_row.visible = false
-	_update_3d_preview("", {})
-
-	var desc_txt := ""
-	if kind == "cooler":
-		var c: Dictionary = GameState.coolers[_entity_id]
-		var ctype := str(c.get("cooler_type", "cooler"))
-		var cat: Dictionary = GameState.ITEM_CATALOG[ctype]
-		_title_lbl.text = "%s  —  %s" % [_entity_id.to_upper(), str(cat["name"])]
-		desc_txt = "Status: %s\nKühlleistung: %.0f°C  •  Stromverbrauch: %d W" % [
-			"AKTIV" if bool(c["powered"]) else "KEIN STROM (gelbe Buchse verkabeln!)",
-			float(cat["heat"]), int(cat["watts"])
-		]
-	elif kind == "ups":
-		var u: Dictionary = GameState.ups_units[_entity_id]
-		_title_lbl.text = "%s  —  USV-Notstrom-Batterie" % _entity_id.to_upper()
-		desc_txt = "Ladestand: %.0f%%  •  Status: %s\nÜbernimmt bei Blackout sofort unterbrechungsfrei die Stromversorgung!" % [
-			float(u["charge"]),
-			"ENTLÄDT (NOTSTROM!)" if bool(u.get("discharging", false)) else ("VERBUNDEN" if bool(u.get("connected", false)) else "NICHT VERKABELT")
-		]
-	elif kind == "cart":
-		var k: Dictionary = GameState.carts[_entity_id]
-		var items: Array = k.get("items", [])
-		_title_lbl.text = "%s  —  Schwerlast-Rollwagen" % _entity_id.to_upper()
-		desc_txt = "Beladung: %d / %d Pakete\nMit [E] schieben und bis zu 4 Pakete gleichzeitig durch das Gebäude transportieren!" % [items.size(), GameState.CART_MAX_ITEMS]
-
-	var refund := GameState.get_device_sell_value(kind, _entity_id)
-	_subtitle_lbl.text = "Guthaben: $%.0f   •   Restwert: $%d" % [GameState.money, refund]
-
-	var card := PanelContainer.new()
-	card.add_theme_stylebox_override("panel", UIStyle.make_panel(UIStyle.COL_BG_CARD, UIStyle.COL_BORDER, 8, 1, 16, 14))
+	card.add_theme_stylebox_override("panel", UIStyle.make_panel(UIStyle.COL_BG_CARD, UIStyle.COL_GOLD_TEXT if has_next else UIStyle.COL_GREEN, 8, 1, 18, 16))
 	_body_host.add_child(card)
 	var v := VBoxContainer.new()
 	v.add_theme_constant_override("separation", 12)
 	card.add_child(v)
 
-	var dl := Label.new()
-	dl.text = desc_txt
-	dl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	UIStyle.style_label(dl, 14, UIStyle.COL_TEXT_MAIN)
-	v.add_child(dl)
+	if not has_next:
+		v.add_child(_section_label("AUSBAUSTUFE"))
+		v.add_child(_make_label(tr("Höchste Stufe erreicht: 100-Gbit/s-Glasfaser-Anbindung"), 16, UIStyle.COL_GREEN, true))
+		return
+
+	var nxt: Dictionary = GameState.ROUTER_TIERS[rt + 1]
+	var cost := int(nxt["cost"])
+	v.add_child(_section_label("NÄCHSTE STUFE"))
+	v.add_child(_make_label(tr(str(nxt["label"])), 18, UIStyle.COL_GOLD_TEXT, true))
+
+	var cmp := GridContainer.new()
+	cmp.columns = 3
+	cmp.add_theme_constant_override("h_separation", 24)
+	cmp.add_theme_constant_override("v_separation", 6)
+	v.add_child(cmp)
+	_add_compare_row(cmp, "Geschwindigkeit", str(cur["speed"]), str(nxt["speed"]))
+	_add_compare_row(cmp, "LAN-Ports", str(int(cur["ports"])), str(int(nxt["ports"])))
+	_add_compare_row(cmp, "DDoS-Schutz", "+%.0f%%" % ((float(cur["ddos_mult"]) - 1.0) * 100.0), "+%.0f%%" % ((float(nxt["ddos_mult"]) - 1.0) * 100.0))
+
+	var btn := _make_btn(tr("Auf %s upgraden  ($%d)") % [str(nxt["speed"]), cost], "primary", Vector2(0, 46))
+	btn.disabled = GameState.money < float(cost)
+	_style_btn(btn, Color(0.76, 0.50, 0.12), UIStyle.COL_GOLD_TEXT)
+	btn.add_theme_font_override("font", _display_font)
+	btn.pressed.connect(func(): GameState.request_upgrade_router())
+	v.add_child(btn)
+	if btn.disabled:
+		v.add_child(_make_label(tr("Dir fehlen noch $%.0f.") % (float(cost) - GameState.money), 12, UIStyle.COL_RED))
+
+
+func _add_compare_row(grid: GridContainer, k: String, cur_txt: String, next_txt: String) -> void:
+	grid.add_child(_make_label(tr(k), 13, UIStyle.COL_TEXT_SUB))
+	grid.add_child(_make_label(cur_txt, 13, UIStyle.COL_TEXT_MAIN))
+	grid.add_child(_make_label("→  " + next_txt, 13, UIStyle.COL_GOLD_TEXT, true))
+
+
+# ==============================================================================
+# KÜHLER / USV / ROLLWAGEN
+# ==============================================================================
+func _render_device_view(kind: String) -> void:
+	_begin_render()
+	_tab_row.visible = false
+	_update_3d_preview("", {})
+
+	var note := ""
+	match kind:
+		"cooler":
+			var c: Dictionary = GameState.coolers[_entity_id]
+			var ctype := str(c.get("cooler_type", "cooler"))
+			var cat: Dictionary = GameState.ITEM_CATALOG[ctype]
+			var on := bool(c["powered"])
+			_title_lbl.text = "%s  —  %s" % [_entity_id.to_upper(), tr(str(cat["name"]))]
+			_set_status(tr("AKTIV") if on else tr("KEIN STROM"), UIStyle.COL_GREEN if on else UIStyle.COL_RED)
+			_add_kpi("KÜHLLEISTUNG", "%.0f °C" % float(cat["heat"]), "", UIStyle.COL_BLUE, -1.0, "temp")
+			_add_kpi("STROMVERBRAUCH", "%d W" % int(cat["watts"]), "", UIStyle.COL_AMBER, -1.0, "power")
+			_add_kpi("ANSCHLUSS", tr("Strom OK") if on else tr("Strom FEHLT"), "",
+				UIStyle.COL_GREEN if on else UIStyle.COL_RED, -1.0, "check" if on else "warn")
+			if not on:
+				note = tr("Kein Strom: die gelbe Buchse verkabeln.")
+		"ups":
+			var u: Dictionary = GameState.ups_units[_entity_id]
+			var charge := float(u.get("charge", 0.0))
+			var dis := bool(u.get("discharging", false))
+			var conn := bool(u.get("connected", false))
+			_title_lbl.text = tr("%s  —  USV-Notstrom-Batterie") % _entity_id.to_upper()
+			if dis:
+				_set_status(tr("NOTSTROM"), UIStyle.COL_AMBER)
+			elif conn:
+				_set_status(tr("VERBUNDEN"), UIStyle.COL_GREEN)
+			else:
+				_set_status(tr("NICHT VERKABELT"), UIStyle.COL_AMBER)
+			var ch_col := UIStyle.COL_RED if charge < 20.0 else (UIStyle.COL_AMBER if charge < 50.0 else UIStyle.COL_GREEN)
+			_add_kpi("LADESTAND", "%.0f %%" % charge, "", ch_col, charge / 100.0)
+			_add_kpi("BETRIEB", tr("Entlädt") if dis else tr("Bereitschaft"), "", UIStyle.COL_AMBER if dis else UIStyle.COL_BLUE, -1.0, "power")
+			note = tr("Übernimmt bei Blackout sofort unterbrechungsfrei die Stromversorgung.")
+		"cart":
+			var cart: Dictionary = GameState.carts[_entity_id]
+			var items: Array = cart.get("items", [])
+			var max_i := maxi(int(GameState.CART_MAX_ITEMS), 1)
+			_title_lbl.text = tr("%s  —  Schwerlast-Rollwagen") % _entity_id.to_upper()
+			_set_status(tr("BEREIT"), UIStyle.COL_BLUE)
+			_add_kpi("BELADUNG", tr("%d / %d Pakete") % [items.size(), max_i], "",
+				UIStyle.COL_AMBER if items.size() >= max_i else UIStyle.COL_BLUE, float(items.size()) / float(max_i))
+			note = tr("Mit [E] schieben und bis zu %d Pakete gleichzeitig durch das Gebäude transportieren.") % max_i
+
+	var refund := GameState.get_device_sell_value(kind, _entity_id)
+	_subtitle_lbl.text = tr("Guthaben: $%.0f   •   Restwert: $%d") % [GameState.money, refund]
+
+	var card := PanelContainer.new()
+	card.add_theme_stylebox_override("panel", UIStyle.make_panel(UIStyle.COL_BG_CARD, UIStyle.COL_BORDER, 8, 1, 18, 16))
+	_body_host.add_child(card)
+	var v := VBoxContainer.new()
+	v.add_theme_constant_override("separation", 14)
+	card.add_child(v)
+	v.add_child(_section_label("AKTIONEN"))
+	if not note.is_empty():
+		var nl := _make_label(note, 14, UIStyle.COL_TEXT_MAIN)
+		nl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		v.add_child(nl)
 
 	var brow := HBoxContainer.new()
 	brow.add_theme_constant_override("separation", 10)
 	v.add_child(brow)
 
 	if kind == "cooler" or kind == "ups":
-		var pack_btn := Button.new()
-		pack_btn.text = "Abbauen und in die Hand nehmen"
+		var pack_btn := _make_btn(tr("[E]  Abbauen und in die Hand nehmen"), "primary", Vector2(0, 44))
 		pack_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		pack_btn.custom_minimum_size = Vector2(0, 40)
-		UIStyle.style_button(pack_btn, Color(0.15, 0.19, 0.23), UIStyle.COL_BLUE)
+		_style_btn(pack_btn, Color(0.15, 0.19, 0.23), UIStyle.COL_BLUE)
 		pack_btn.pressed.connect(func():
 			GameState.request_pack_device(kind, _entity_id)
 			close_requested.emit()
 		)
 		brow.add_child(pack_btn)
 
-	var sell_btn := Button.new()
+	var sell_btn := _make_btn("", "dev_sell", Vector2(0, 44))
 	sell_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	sell_btn.custom_minimum_size = Vector2(0, 40)
-	sell_btn.text = ("WIRKLICH VERKAUFEN? (+$%d)" % refund) if _confirm_sell_entity else ("Verkaufen (+$%d)" % refund)
-	UIStyle.style_button(sell_btn, Color(0.60, 0.16, 0.14) if _confirm_sell_entity else Color(0.28, 0.13, 0.14), UIStyle.COL_RED)
+	if _confirm_sell_entity:
+		sell_btn.text = tr("WIRKLICH VERKAUFEN? (+$%d)") % refund
+		_style_btn(sell_btn, Color(0.60, 0.16, 0.14), UIStyle.COL_RED)
+	else:
+		sell_btn.text = tr("Verkaufen (+$%d)") % refund
+		_style_btn(sell_btn, Color(0.28, 0.13, 0.14), UIStyle.COL_RED)
 	sell_btn.pressed.connect(func():
 		if not _confirm_sell_entity:
 			_confirm_sell_entity = true
 			SfxManager.play("click", -8.0, 0.9)
-			_render_device_view(kind)
+			_refresh()
 		else:
 			GameState.request_sell_device(kind, _entity_id)
 			close_requested.emit()
@@ -861,128 +1512,458 @@ func _render_device_view(kind: String) -> void:
 	brow.add_child(sell_btn)
 
 
+## Ende der Ansichten. Ab hier: Bausteine, Bedienung und 3D-Vorschau.
+
 # ==============================================================================
-# UI HELPERS & BUILD SHELL
+# BEDIENUNG MIT [E]
 # ==============================================================================
-## Statuskachel: farbige Akzentleiste links, optional ein gezeichnetes Symbol, Beschriftung und Wert.
-func _add_stat_pill(title: String, value_txt: String, accent: Color, icon_kind: String = "") -> void:
-	var card := PanelContainer.new()
-	card.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	card.add_theme_stylebox_override("panel", UIStyle.make_panel(UIStyle.COL_BG_CARD, UIStyle.COL_BORDER, 4, 1, 0, 0))
-	_stat_strip.add_child(card)
+var _close_btn: Button
 
-	var h := HBoxContainer.new()
-	h.add_theme_constant_override("separation", 10)
-	card.add_child(h)
 
-	var strip := ColorRect.new()
-	strip.custom_minimum_size = Vector2(3, 0)
-	strip.color = accent
-	h.add_child(strip)
+func _set_pointer_mode(on: bool) -> void:
+	if _pointer_mode == on:
+		return
+	_pointer_mode = on
+	# Beim Zeigen mit der Maus soll die Liste nicht mitscrollen, bei Pfeiltasten schon.
+	_apply_follow_focus(_body_host, not on)
 
-	if not icon_kind.is_empty():
-		h.add_child(_make_icon(icon_kind, accent, 18))
 
+func _apply_follow_focus(node: Node, on: bool) -> void:
+	if node == null:
+		return
+	for c in node.get_children():
+		if c is ScrollContainer:
+			(c as ScrollContainer).follow_focus = on
+		_apply_follow_focus(c, on)
+
+
+func _all_buttons() -> Array:
+	var arr: Array = []
+	for b in _buttons:
+		if is_instance_valid(b):
+			arr.append(b)
+	if is_instance_valid(_close_btn):
+		arr.append(_close_btn)
+	return arr
+
+
+func _point_visible_in(ctrl: Control, p: Vector2) -> bool:
+	if not ctrl.get_global_rect().has_point(p):
+		return false
+	var n: Node = ctrl.get_parent()
+	while n != null and n != self:
+		if n is ScrollContainer and not (n as Control).get_global_rect().has_point(p):
+			return false
+		n = n.get_parent()
+	return true
+
+
+func _button_under_pointer() -> Button:
+	var mp := get_global_mouse_position()
+	for b in _all_buttons():
+		var btn := b as Button
+		if btn != null and btn.is_visible_in_tree() and _point_visible_in(btn, mp):
+			return btn
+	return null
+
+
+func _focus_under_pointer() -> void:
+	if _preview_dragging:
+		return
+	var btn := _button_under_pointer()
+	if btn != null and not btn.has_focus():
+		btn.grab_focus()
+
+
+func _find_target_button() -> Button:
+	if _pointer_mode:
+		return _button_under_pointer()
+	var fo := get_viewport().gui_get_focus_owner()
+	if fo is Button and _all_buttons().has(fo):
+		return fo as Button
+	return null
+
+
+func _button_by_key(key: String) -> Button:
+	if key.is_empty():
+		return null
+	for b in _all_buttons():
+		var btn := b as Button
+		if btn != null and str(btn.get_meta("key", "")) == key and btn.is_visible_in_tree():
+			return btn
+	return null
+
+
+func _first_focusable() -> Button:
+	for b in _buttons:
+		if not is_instance_valid(b):
+			continue
+		var btn := b as Button
+		if btn != null and not btn.disabled and btn.is_visible_in_tree():
+			return btn
+	return _close_btn
+
+
+func _ensure_focus() -> void:
+	var fo := get_viewport().gui_get_focus_owner()
+	if fo != null and _all_buttons().has(fo):
+		return
+	var btn := _button_by_key(_focus_key)
+	if btn == null:
+		btn = _first_focusable()
+	if btn != null:
+		btn.grab_focus()
+
+
+func _restore_focus() -> void:
+	# Mit Mausbedienung scrollt kein Container automatisch zum fokussierten Knopf.
+	_apply_follow_focus(_body_host, not _pointer_mode and not MOUSE_CLICKS_ENABLED)
+	call_deferred("_deferred_focus")
+	_restore_scroll()
+
+
+## Kennung der aktuellen Ansicht. Ändert sie sich (anderer Einschub, Reiter, Kategorie),
+## beginnt die Liste wieder oben, sonst bleibt die Scroll-Position erhalten.
+func _scroll_view_key() -> String:
+	return "%s|%s|%d|%s|%s|%s|%s" % [str(_entity_id), str(_active_tab), _selected_slot,
+		str(_selected_cat), str(_selected_filter), str(_mb_picker_open), _mb_cat]
+
+
+## Setzt die Scroll-Position der Liste nach dem Neuaufbau wieder, sonst springt sie bei jedem
+## Spiel-Tick nach oben. Einmal verzögert und einmal nach dem nächsten Frame, weil der
+## ScrollContainer seine Höhe erst nach dem Layout kennt.
+func _restore_scroll() -> void:
+	var key := _scroll_view_key()
+	var same_view := key == _scroll_key
+	_scroll_key = key
+	var sc := _parts_scroll
+	var v := _parts_scroll_v if same_view else 0
+	_parts_scroll_v = v
+	if not is_instance_valid(sc) or v <= 0:
+		return
+	sc.set_deferred("scroll_vertical", v)
+	await get_tree().process_frame
+	if is_instance_valid(sc) and sc == _parts_scroll:
+		sc.scroll_vertical = v
+
+
+func _deferred_focus() -> void:
+	if not visible:
+		return
+	if _pointer_mode or MOUSE_CLICKS_ENABLED:
+		_focus_under_pointer()
+		return
+	var btn := _button_by_key(_focus_key)
+	if btn == null:
+		btn = _first_focusable()
+	if btn != null and not btn.has_focus():
+		btn.grab_focus()
+
+
+# ==============================================================================
+# BAUSTEINE
+# ==============================================================================
+## Schaltfläche im Rack-Menü. Mit MOUSE_CLICKS_ENABLED = true wird sie per Linksklick ausgelöst.
+func _make_btn(txt: String, key: String, min_size: Vector2) -> Button:
+	var b := Button.new()
+	b.text = txt
+	b.custom_minimum_size = min_size
+	b.focus_mode = Control.FOCUS_ALL
+	b.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
+	b.clip_contents = true
+	if not MOUSE_CLICKS_ENABLED:
+		b.button_mask = 0
+	b.set_meta("key", key)
+	b.focus_entered.connect(func(): _focus_key = key)
+	_buttons.append(b)
+	return b
+
+
+func _make_focus_box() -> StyleBoxFlat:
+	var focus := StyleBoxFlat.new()
+	focus.draw_center = false
+	focus.border_color = UIStyle.COL_GOLD_TEXT
+	focus.set_border_width_all(2)
+	focus.set_corner_radius_all(UIStyle.BUTTON_RADIUS)
+	focus.set_expand_margin_all(3.0)
+	focus.shadow_color = Color(UIStyle.COL_ACCENT, 0.35)
+	focus.shadow_size = 8
+	return focus
+
+
+func _style_btn(btn: Button, bg: Color, accent: Color) -> void:
+	UIStyle.style_button(btn, bg, accent)
+	btn.add_theme_stylebox_override("focus", _make_focus_box())
+
+
+## Innenabstand für Schaltflächen mit eigenem Inhalt (Kacheln, Zeilen).
+func _btn_content(btn: Button, pad_x: int, pad_y: int) -> MarginContainer:
 	var m := MarginContainer.new()
-	m.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	m.add_theme_constant_override("margin_left", 2)
-	m.add_theme_constant_override("margin_right", 12)
-	m.add_theme_constant_override("margin_top", 7)
-	m.add_theme_constant_override("margin_bottom", 8)
-	h.add_child(m)
-
-	var v := VBoxContainer.new()
-	v.add_theme_constant_override("separation", 1)
-	m.add_child(v)
-
-	var tl := Label.new()
-	tl.text = title
-	UIStyle.style_label(tl, 10, UIStyle.COL_TEXT_SUB, _display_font)
-	v.add_child(tl)
-
-	var vl := Label.new()
-	vl.text = value_txt
-	vl.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
-	UIStyle.style_label(vl, 15, accent, _display_font)
-	v.add_child(vl)
+	m.set_anchors_preset(Control.PRESET_FULL_RECT)
+	m.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	m.add_theme_constant_override("margin_left", pad_x)
+	m.add_theme_constant_override("margin_right", pad_x)
+	m.add_theme_constant_override("margin_top", pad_y)
+	m.add_theme_constant_override("margin_bottom", pad_y)
+	btn.add_child(m)
+	return m
 
 
-func _add_kv_line(parent: VBoxContainer, k: String, v_txt: String) -> void:
-	var r := HBoxContainer.new()
-	parent.add_child(r)
-	var kl := Label.new()
-	kl.text = k
-	kl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	UIStyle.style_label(kl, 13, UIStyle.COL_TEXT_SUB)
-	r.add_child(kl)
-	var vl := Label.new()
-	vl.text = v_txt
-	UIStyle.style_label(vl, 13, UIStyle.COL_TEXT_MAIN, _display_font)
-	r.add_child(vl)
-
-	var rule := ColorRect.new()
-	rule.custom_minimum_size = Vector2(0, 1)
-	rule.color = Color(UIStyle.COL_BORDER, 0.35)
-	parent.add_child(rule)
-
-
-func _add_load_bar_row(parent: VBoxContainer, label_txt: String, val_txt: String, pct: float) -> void:
-	var row := HBoxContainer.new()
-	row.add_theme_constant_override("separation", 8)
-	parent.add_child(row)
-
+func _make_label(txt: String, font_size: int, col: Color, bold: bool = false) -> Label:
 	var l := Label.new()
-	l.text = label_txt
-	l.custom_minimum_size = Vector2(142, 0)
-	l.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-	UIStyle.style_label(l, 12, UIStyle.COL_TEXT_SUB)
-	row.add_child(l)
+	l.text = txt
+	l.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	UIStyle.style_label(l, font_size, col, _display_font if bold else null)
+	return l
 
+
+func _make_bar(pct: float, col: Color, h: int) -> ProgressBar:
 	var pb := ProgressBar.new()
 	pb.min_value = 0.0
 	pb.max_value = 100.0
 	pb.value = clampf(pct, 0.0, 100.0)
 	pb.show_percentage = false
+	pb.custom_minimum_size = Vector2(0, h)
 	pb.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	pb.custom_minimum_size = Vector2(0, 8)
-	pb.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-	var col := UIStyle.COL_RED if pct >= 90.0 else (UIStyle.COL_AMBER if pct >= 72.0 else UIStyle.COL_GREEN)
-	var bstyles := UIStyle.make_bar_styles(col)
-	pb.add_theme_stylebox_override("background", bstyles[0])
-	pb.add_theme_stylebox_override("fill", bstyles[1])
-	row.add_child(pb)
+	pb.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	var st := UIStyle.make_bar_styles(col)
+	pb.add_theme_stylebox_override("background", st[0])
+	pb.add_theme_stylebox_override("fill", st[1])
+	return pb
 
-	var v := Label.new()
-	v.text = val_txt
-	v.custom_minimum_size = Vector2(148, 0)
+
+func _make_icon(kind: String, col: Color, px: int) -> Control:
+	var ic := Control.new()
+	ic.custom_minimum_size = Vector2(px, px)
+	ic.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	ic.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	ic.draw.connect(func() -> void: UIStyle.draw_icon(ic, kind, Rect2(Vector2.ZERO, ic.size), col))
+	return ic
+
+
+## Ringanzeige: dünner Kreis, der beim Öffnen des Menüs auf den Wert hochläuft.
+func _make_ring(ratio: float, col: Color) -> Control:
+	var target := clampf(ratio, 0.0, 1.0)
+	var ring := Control.new()
+	ring.custom_minimum_size = Vector2(RING_PX, RING_PX)
+	ring.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	ring.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	ring.set_meta("v", 0.0 if _animate_next else target)
+	ring.draw.connect(func() -> void:
+		var c := ring.size * 0.5
+		var r := minf(ring.size.x, ring.size.y) * 0.5 - 3.0
+		ring.draw_arc(c, r, 0.0, TAU, 48, Color(1.0, 1.0, 1.0, 0.08), 4.0, true)
+		var cur_v := float(ring.get_meta("v", 0.0))
+		if cur_v > 0.002:
+			ring.draw_arc(c, r, -PI * 0.5, -PI * 0.5 + TAU * cur_v, 48, col, 4.0, true)
+		ring.draw_circle(c, 2.5, Color(col, 0.8))
+	)
+	if _animate_next and target > 0.0:
+		var setter := func(x: float) -> void:
+			ring.set_meta("v", x)
+			ring.queue_redraw()
+		var starter := func() -> void:
+			var tw := ring.create_tween().set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
+			tw.tween_method(setter, 0.0, target, RING_ANIM_TIME)
+		ring.ready.connect(starter, CONNECT_ONE_SHOT)
+	return ring
+
+
+## Kennzahl-Kachel oben: Farbleiste, Ring (ratio >= 0) oder Symbol, Titel, Wert, Zusatzzeile.
+func _add_kpi(title: String, value_txt: String, sub_txt: String, col: Color, ratio: float, icon_kind: String = "") -> void:
+	var card := PanelContainer.new()
+	card.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	card.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	var sb := UIStyle.make_panel(UIStyle.COL_BG_CARD, UIStyle.COL_BORDER, 6, 1, 12, 9)
+	sb.shadow_size = 6
+	card.add_theme_stylebox_override("panel", sb)
+	_kpi_row.add_child(card)
+
+	var h := HBoxContainer.new()
+	h.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	h.add_theme_constant_override("separation", 10)
+	card.add_child(h)
+
+	var strip := ColorRect.new()
+	strip.custom_minimum_size = Vector2(3, 0)
+	strip.color = col
+	strip.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	h.add_child(strip)
+
+	if ratio >= 0.0:
+		h.add_child(_make_ring(ratio, col))
+	else:
+		h.add_child(_make_icon(icon_kind if not icon_kind.is_empty() else "info", col, 26))
+
+	var v := VBoxContainer.new()
+	v.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	v.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	v.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	v.add_theme_constant_override("separation", 1)
+	h.add_child(v)
+	v.add_child(_make_label(tr(title), 10, UIStyle.COL_TEXT_SUB, true))
+	var vl := _make_label(value_txt, 15, col, true)
+	vl.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+	v.add_child(vl)
+	if not sub_txt.is_empty():
+		var sl := _make_label(sub_txt, 10, UIStyle.COL_TEXT_SUB)
+		sl.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+		v.add_child(sl)
+
+
+func _add_tab(tab_id: String, label_txt: String) -> void:
+	var btn := _make_btn(label_txt, "tab_%s" % tab_id, Vector2(0, 38))
+	btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	btn.add_theme_font_size_override("font_size", 13)
+	_style_tab(btn, _active_tab == tab_id)
+	btn.pressed.connect(func():
+		if _active_tab == tab_id:
+			return
+		_active_tab = tab_id
+		_confirm_sell_module = false
+		_parts_scroll_v = 0
+		SfxManager.play("click", -12.0, 1.1)
+		_refresh()
+	)
+	_tab_row.add_child(btn)
+
+
+## Reiter: der aktive bekommt eine Amber-Unterkante und Amber-Schrift.
+func _style_tab(btn: Button, sel: bool) -> void:
+	var normal := StyleBoxFlat.new()
+	normal.bg_color = Color(UIStyle.COL_ACCENT, 0.14) if sel else Color(0.095, 0.10, 0.11, 0.92)
+	normal.border_color = UIStyle.COL_ACCENT if sel else UIStyle.COL_BORDER
+	normal.set_border_width_all(1)
+	normal.border_width_bottom = 3 if sel else 1
+	normal.set_corner_radius_all(3)
+	normal.content_margin_left = 12
+	normal.content_margin_right = 12
+	normal.content_margin_top = 6
+	normal.content_margin_bottom = 6
+	var hover := normal.duplicate() as StyleBoxFlat
+	hover.bg_color = normal.bg_color.lightened(0.08)
+	if not sel:
+		hover.border_color = Color(UIStyle.COL_ACCENT, 0.55)
+	var pressed := normal.duplicate() as StyleBoxFlat
+	pressed.bg_color = normal.bg_color.darkened(0.15)
+	btn.add_theme_stylebox_override("normal", normal)
+	btn.add_theme_stylebox_override("hover", hover)
+	btn.add_theme_stylebox_override("pressed", pressed)
+	btn.add_theme_stylebox_override("disabled", normal)
+	btn.add_theme_stylebox_override("focus", _make_focus_box())
+	var fc := UIStyle.COL_GOLD_TEXT if sel else UIStyle.COL_TEXT_SUB
+	btn.add_theme_color_override("font_color", fc)
+	btn.add_theme_color_override("font_focus_color", UIStyle.COL_GOLD_TEXT if sel else UIStyle.COL_TEXT_MAIN)
+	btn.add_theme_color_override("font_hover_color", UIStyle.COL_GOLD_TEXT if sel else UIStyle.COL_TEXT_MAIN)
+	btn.add_theme_color_override("font_pressed_color", UIStyle.COL_GOLD_TEXT)
+	btn.add_theme_font_override("font", _display_font)
+
+
+func _section_label(txt: String) -> Label:
+	return _make_label(tr(txt), 11, UIStyle.COL_GOLD_TEXT, true)
+
+
+## Kleines farbiges Etikett (z. B. "1U", "LEISTUNG 7", "+5 % EINNAHMEN").
+func _make_chip(txt: String, col: Color) -> PanelContainer:
+	var p := PanelContainer.new()
+	p.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	p.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	var sb := UIStyle.make_panel(Color(col, 0.16), Color(col, 0.55), 4, 1, 7, 2)
+	sb.shadow_size = 0
+	p.add_theme_stylebox_override("panel", sb)
+	var l := _make_label(txt, 10, col.lightened(0.15), true)
+	l.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	l.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	l.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	p.add_child(l)
+	return p
+
+
+func _add_kv_line(parent: VBoxContainer, k: String, v_txt: String) -> void:
+	var r := HBoxContainer.new()
+	parent.add_child(r)
+	var kl := _make_label(tr(k), 13, UIStyle.COL_TEXT_SUB)
+	kl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	r.add_child(kl)
+	r.add_child(_make_label(v_txt, 13, UIStyle.COL_TEXT_MAIN, true))
+	var rule := ColorRect.new()
+	rule.custom_minimum_size = Vector2(0, 1)
+	rule.color = Color(UIStyle.COL_BORDER, 0.35)
+	rule.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	parent.add_child(rule)
+
+
+func _add_load_bar_row(parent: VBoxContainer, label_txt: String, val_txt: String, pct: float, warn: float = LOAD_WARN_PCT, crit: float = LOAD_CRIT_PCT) -> void:
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 8)
+	parent.add_child(row)
+	var l := _make_label(tr(label_txt), 12, UIStyle.COL_TEXT_SUB)
+	l.custom_minimum_size = Vector2(70, 0)
+	l.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	row.add_child(l)
+	var col := UIStyle.COL_RED if pct >= crit else (UIStyle.COL_AMBER if pct >= warn else UIStyle.COL_GREEN)
+	var pb := _make_bar(pct, col, 8)
+	pb.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	row.add_child(pb)
+	var v := _make_label(val_txt, 12, UIStyle.COL_RED if pct >= crit else UIStyle.COL_TEXT_MAIN, true)
+	v.custom_minimum_size = Vector2(120, 0)
 	v.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
-	UIStyle.style_label(v, 12, UIStyle.COL_RED if pct >= 90.0 else UIStyle.COL_TEXT_MAIN, _display_font)
 	row.add_child(v)
+
+
+func _load_color(pct: float) -> Color:
+	if pct >= LOAD_CRIT_PCT:
+		return UIStyle.COL_RED
+	if pct >= LOAD_WARN_PCT:
+		return UIStyle.COL_AMBER
+	return UIStyle.COL_GREEN
+
+
+func _set_status(txt: String, col: Color) -> void:
+	_status_lbl.text = txt
+	_status_lbl.add_theme_color_override("font_color", col)
+	_status_lbl.modulate.a = 1.0
+	var sb := UIStyle.make_panel(Color(col, 0.14), Color(col, 0.8), 3, 1, 12, 5)
+	sb.shadow_size = 0
+	_status_panel.add_theme_stylebox_override("panel", sb)
+	_status_panel.visible = not txt.is_empty()
+	if col == UIStyle.COL_RED:
+		_pulse_nodes.append(_status_lbl)
 
 
 func _format_catalog_part_specs(cat: String, pd: Dictionary) -> String:
 	match cat:
 		"cpu":
-			return "Leistung %d Pkt.  •  %d W  •  +%.1f°C" % [int(pd.get("cpu_score", 0)), int(pd.get("watts", 0)), float(pd.get("heat", 0.0))]
+			return tr("Leistung %d Pkt.  •  %d W  •  +%.1f°C") % [int(pd.get("cpu_score", 0)), int(pd.get("watts", 0)), float(pd.get("heat", 0.0))]
 		"ram":
 			return "%d GB %s  •  %d W" % [int(pd.get("ram_gb", 0)), str(pd.get("tag", "")), int(pd.get("watts", 0))]
 		"gpu":
-			return "Leistung %d Pkt.  •  %d GB VRAM  •  %d W" % [int(pd.get("gpu_score", 0)), int(pd.get("vram_gb", 0)), int(pd.get("watts", 0))]
+			return tr("Leistung %d Pkt.  •  %d GB VRAM  •  %d W") % [int(pd.get("gpu_score", 0)), int(pd.get("vram_gb", 0)), int(pd.get("watts", 0))]
 		"storage":
 			return "%.1f TB  •  %d W" % [float(pd.get("storage_tb", 0.0)), int(pd.get("watts", 0))]
 		"cooling":
-			return "Kühlung %.1f°C  •  %d W" % [float(pd.get("heat", 0.0)), int(pd.get("watts", 0))]
+			return tr("Kühlung %.1f°C  •  %d W") % [float(pd.get("heat", 0.0)), int(pd.get("watts", 0))]
 		"psu":
-			return "Max. %d W  •  Effizienz %+d%%" % [int(pd.get("psu_max_watts", 350)), int(roundf((1.0 - float(pd.get("watt_mult", 1.0))) * 100.0))]
+			return tr("Max. %d W  •  Effizienz %+d%%") % [int(pd.get("psu_max_watts", 350)), int(roundf((1.0 - float(pd.get("watt_mult", 1.0))) * 100.0))]
 	return ""
 
 
+func _clear(node: Node) -> void:
+	if node == null:
+		return
+	for c in node.get_children():
+		c.queue_free()
+
+
+# ==============================================================================
+# GRUNDAUFBAU
+# ==============================================================================
 func _build_ui() -> void:
 	_display_font = UIStyle.make_display_font(get_theme_default_font(), 0.5, 1)
 
 	var dim := ColorRect.new()
 	dim.set_anchors_preset(Control.PRESET_FULL_RECT)
-	dim.color = Color(0.02, 0.022, 0.026, 0.66)
+	dim.color = Color(0.02, 0.022, 0.026, 0.70)
 	add_child(dim)
 	dim.add_child(UIStyle.make_gradient_rect(
 		PackedColorArray([Color(0.0, 0.0, 0.0, 0.0), Color(0.0, 0.0, 0.0, 0.6)]),
@@ -992,24 +1973,28 @@ func _build_ui() -> void:
 
 	var center := CenterContainer.new()
 	center.set_anchors_preset(Control.PRESET_FULL_RECT)
+	center.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	add_child(center)
 
 	_card = PanelContainer.new()
-	_card.custom_minimum_size = Vector2(980, 620)
-	_card.add_theme_stylebox_override("panel", UIStyle.make_panel(UIStyle.COL_BG_DARK, UIStyle.COL_BORDER, UIStyle.MAX_RADIUS, 1, 22, 18))
+	_card.custom_minimum_size = CARD_MIN_SIZE
+	var card_sb := UIStyle.make_panel(UIStyle.COL_BG_DARK, UIStyle.COL_BORDER, UIStyle.MAX_RADIUS, 1, 22, 18)
+	card_sb.shadow_size = 28
+	card_sb.shadow_color = Color(0.0, 0.0, 0.0, 0.6)
+	_card.add_theme_stylebox_override("panel", card_sb)
 	center.add_child(_card)
 
 	var root_v := VBoxContainer.new()
 	root_v.add_theme_constant_override("separation", 12)
 	_card.add_child(root_v)
 
-	# Kopfzeile: Logo, Titel, Untertitel, Schließen
+	# Kopfzeile: Logo, Titel, Status, Schließen
 	var header := HBoxContainer.new()
 	header.add_theme_constant_override("separation", 14)
 	root_v.add_child(header)
 
 	var logo := Control.new()
-	logo.custom_minimum_size = Vector2(36, 36)
+	logo.custom_minimum_size = Vector2(38, 38)
 	logo.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	logo.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	logo.draw.connect(func() -> void: UIStyle.draw_logo_mark(logo, Rect2(Vector2.ZERO, logo.size)))
@@ -1022,7 +2007,7 @@ func _build_ui() -> void:
 
 	_title_lbl = Label.new()
 	_title_lbl.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
-	UIStyle.style_label(_title_lbl, 20, UIStyle.COL_TEXT_MAIN, _display_font, true)
+	UIStyle.style_label(_title_lbl, 21, UIStyle.COL_TEXT_MAIN, _display_font, true)
 	title_box.add_child(_title_lbl)
 
 	_subtitle_lbl = Label.new()
@@ -1030,44 +2015,73 @@ func _build_ui() -> void:
 	UIStyle.style_label(_subtitle_lbl, 12, UIStyle.COL_TEXT_SUB)
 	title_box.add_child(_subtitle_lbl)
 
-	var close_btn := Button.new()
-	close_btn.text = "SCHLIESSEN  [ESC]"
-	close_btn.custom_minimum_size = Vector2(160, 36)
-	close_btn.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-	UIStyle.style_button(close_btn)
-	close_btn.add_theme_font_override("font", _display_font)
-	close_btn.pressed.connect(func(): close_requested.emit())
-	header.add_child(close_btn)
+	_status_panel = PanelContainer.new()
+	_status_panel.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	_status_panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_status_panel.visible = false
+	header.add_child(_status_panel)
+	_status_lbl = Label.new()
+	_status_lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	UIStyle.style_label(_status_lbl, 12, UIStyle.COL_GREEN, _display_font)
+	_status_panel.add_child(_status_lbl)
 
-	var accent := ColorRect.new()
-	accent.custom_minimum_size = Vector2(56, 2)
-	accent.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
-	accent.color = UIStyle.COL_ACCENT
-	root_v.add_child(accent)
+	_close_btn = Button.new()
+	_close_btn.text = tr("SCHLIESSEN  [ESC]")
+	_close_btn.custom_minimum_size = Vector2(170, 36)
+	_close_btn.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	_close_btn.focus_mode = Control.FOCUS_ALL
+	_close_btn.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
+	if not MOUSE_CLICKS_ENABLED:
+		_close_btn.button_mask = 0
+	_close_btn.set_meta("key", "close")
+	_close_btn.focus_entered.connect(func(): _focus_key = "close")
+	_style_btn(_close_btn, Color(0.165, 0.170, 0.182, 0.97), UIStyle.COL_ACCENT)
+	_close_btn.add_theme_font_override("font", _display_font)
+	_close_btn.pressed.connect(func(): close_requested.emit())
+	header.add_child(_close_btn)
 
-	# Compact 4-Pill Status Strip
-	_stat_strip = HBoxContainer.new()
-	_stat_strip.add_theme_constant_override("separation", 10)
-	root_v.add_child(_stat_strip)
+	var glow := UIStyle.make_gradient_rect(
+		PackedColorArray([UIStyle.COL_ACCENT, Color(UIStyle.COL_ACCENT, 0.0)]),
+		PackedFloat32Array([0.0, 1.0]),
+		Vector2(0.0, 0.5), Vector2(1.0, 0.5)
+	)
+	glow.custom_minimum_size = Vector2(0, 2)
+	root_v.add_child(glow)
 
-	# Clean 3-Tab Navigation Bar
+	_kpi_row = HBoxContainer.new()
+	_kpi_row.add_theme_constant_override("separation", 10)
+	root_v.add_child(_kpi_row)
+
 	_tab_row = HBoxContainer.new()
 	_tab_row.add_theme_constant_override("separation", 8)
 	root_v.add_child(_tab_row)
 
-	# Dynamic Body Container
 	_body_host = VBoxContainer.new()
 	_body_host.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	_body_host.add_theme_constant_override("separation", 10)
 	root_v.add_child(_body_host)
 
-	# Spacious 360° 3D Hardware Workbench Frame (shown ONLY on Tab 3!)
+	var footer := HBoxContainer.new()
+	footer.add_theme_constant_override("separation", 12)
+	root_v.add_child(footer)
+	var hint := _make_label(tr("[E] Auswählen / Kaufen    •    Mit der Maus zeigen oder mit den Pfeiltasten wählen    •    [ESC] Schließen"), 11, UIStyle.COL_TEXT_SUB)
+	hint.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	hint.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	hint.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+	footer.add_child(hint)
+	_footer_actions = HBoxContainer.new()
+	_footer_actions.add_theme_constant_override("separation", 8)
+	footer.add_child(_footer_actions)
+
+	_build_preview()
+
+
+## Die 3D-Vorschau wird einmal gebaut und bei jedem Aufbau in die rechte Spalte gehängt.
+func _build_preview() -> void:
 	_preview_frame = PanelContainer.new()
-	_preview_frame.visible = false
-	_preview_frame.custom_minimum_size = Vector2(0, 380)
+	_preview_frame.custom_minimum_size = Vector2(0, PREVIEW_H)
 	_preview_frame.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	_preview_frame.add_theme_stylebox_override("panel", UIStyle.make_panel(Color(0.08, 0.095, 0.115, 0.98), UIStyle.COL_BORDER, 8, 1, 4, 4))
-	root_v.add_child(_preview_frame)
 
 	var vp_overlay := Control.new()
 	vp_overlay.set_anchors_preset(Control.PRESET_FULL_RECT)
@@ -1128,7 +2142,7 @@ func _build_ui() -> void:
 	_preview_pivot.add_child(_preview_model_holder)
 
 	var hint_lbl := Label.new()
-	hint_lbl.text = "3D-WERKBANK   •   Linke Maustaste ziehen zum Drehen"
+	hint_lbl.text = tr("Maus ziehen zum Drehen")
 	UIStyle.style_label(hint_lbl, 11, UIStyle.COL_GOLD_TEXT, _display_font, true)
 	hint_lbl.position = Vector2(12, 10)
 	hint_lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -1136,22 +2150,20 @@ func _build_ui() -> void:
 
 
 func _on_preview_gui_input(event: InputEvent) -> void:
-	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT:
-		_preview_dragging = event.pressed
+	if event is InputEventMouseButton and (event as InputEventMouseButton).button_index == MOUSE_BUTTON_LEFT:
+		_preview_dragging = (event as InputEventMouseButton).pressed
 	elif event is InputEventMouseMotion and _preview_dragging:
-		_preview_yaw += event.relative.x * 0.012
-		_preview_pitch = clampf(_preview_pitch + event.relative.y * 0.008, -0.45, 0.35)
+		var mm := event as InputEventMouseMotion
+		_preview_yaw += mm.relative.x * 0.012
+		_preview_pitch = clampf(_preview_pitch + mm.relative.y * 0.008, -0.45, 0.35)
 
 
 func _update_3d_preview(item_type: String, comps: Dictionary) -> void:
-	if _preview_frame == null or _preview_vp == null:
+	if _preview_vp == null:
 		return
 	if item_type == "":
-		_preview_frame.visible = false
 		_preview_vp.render_target_update_mode = SubViewport.UPDATE_DISABLED
 		return
-
-	_preview_frame.visible = true
 	_preview_vp.render_target_update_mode = SubViewport.UPDATE_ALWAYS
 
 	var sig := "%s:%s:%s:%s:%s:%s:%s" % [
@@ -1173,53 +2185,7 @@ func _update_3d_preview(item_type: String, comps: Dictionary) -> void:
 	_preview_model_holder.add_child(srv)
 
 
-func _clear(node: Node) -> void:
-	for c in node.get_children():
-		c.queue_free()
-
-
-func _section_label(txt: String) -> Label:
-	var l := Label.new()
-	l.text = txt
-	UIStyle.style_label(l, 11, UIStyle.COL_GOLD_TEXT, _display_font)
-	return l
-
-
-func _make_icon(kind: String, col: Color, px: int) -> Control:
-	var ic := Control.new()
-	ic.custom_minimum_size = Vector2(px, px)
-	ic.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-	ic.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	ic.draw.connect(func() -> void: UIStyle.draw_icon(ic, kind, Rect2(Vector2.ZERO, ic.size), col))
-	return ic
-
-
-## Reiter: dunkle Fläche, der aktive Reiter bekommt eine Amber-Unterkante und Amber-Schrift.
-func _style_tab(btn: Button, sel: bool) -> void:
-	var normal := StyleBoxFlat.new()
-	normal.bg_color = Color(UIStyle.COL_ACCENT, 0.14) if sel else Color(0.095, 0.10, 0.11, 0.92)
-	normal.border_color = UIStyle.COL_ACCENT if sel else UIStyle.COL_BORDER
-	normal.set_border_width_all(1)
-	normal.border_width_bottom = 2 if sel else 1
-	normal.set_corner_radius_all(3)
-	normal.content_margin_left = 12
-	normal.content_margin_right = 12
-	normal.content_margin_top = 6
-	normal.content_margin_bottom = 6
-	var hover := normal.duplicate() as StyleBoxFlat
-	hover.bg_color = normal.bg_color.lightened(0.08)
-	if not sel:
-		hover.border_color = Color(UIStyle.COL_ACCENT, 0.55)
-	var pressed := normal.duplicate() as StyleBoxFlat
-	pressed.bg_color = normal.bg_color.darkened(0.15)
-	btn.add_theme_stylebox_override("normal", normal)
-	btn.add_theme_stylebox_override("hover", hover)
-	btn.add_theme_stylebox_override("pressed", pressed)
-	btn.add_theme_stylebox_override("disabled", normal)
-	btn.add_theme_stylebox_override("focus", StyleBoxEmpty.new())
-	var fc := UIStyle.COL_GOLD_TEXT if sel else UIStyle.COL_TEXT_SUB
-	btn.add_theme_color_override("font_color", fc)
-	btn.add_theme_color_override("font_focus_color", fc)
-	btn.add_theme_color_override("font_hover_color", UIStyle.COL_GOLD_TEXT if sel else UIStyle.COL_TEXT_MAIN)
-	btn.add_theme_color_override("font_pressed_color", UIStyle.COL_GOLD_TEXT)
-	btn.add_theme_font_override("font", _display_font)
+## Die Vorschau hängt zwischen zwei Aufbauten frei im Speicher und wird hier mit aufgeräumt.
+func _notification(what: int) -> void:
+	if what == NOTIFICATION_PREDELETE and is_instance_valid(_preview_frame) and _preview_frame.get_parent() == null:
+		_preview_frame.free()

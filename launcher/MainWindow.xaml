@@ -209,7 +209,8 @@
                                        Foreground="#C4D6E8" FontSize="15" TextWrapping="Wrap" MaxWidth="480" HorizontalAlignment="Left" Margin="0,0,0,18"/>
                             <WrapPanel>
                                 <Button x:Name="HeroCheckUpdatesBtn" Style="{StaticResource SecondaryButton}" Content="⟳ Nach Updates suchen" Margin="0,0,10,0" Click="CheckUpdateBtn_Click"/>
-                                <Button Style="{StaticResource SecondaryButton}" Content="📁 Spielstände" Click="OpenSavesBtn_Click"/>
+                                <Button Style="{StaticResource SecondaryButton}" Content="📁 Spielstände" Margin="0,0,10,0" Click="OpenSavesBtn_Click"/>
+                                <Button Style="{StaticResource SecondaryButton}" Content="Log-Ordner" ToolTip="Enthält godot.log. Schick diese Datei bei Fehlern mit." Click="OpenLogsBtn_Click"/>
                             </WrapPanel>
                         </StackPanel>
 

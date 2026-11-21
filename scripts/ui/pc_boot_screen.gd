@@ -53,7 +53,9 @@ func _init() -> void:
 
 
 func _ready() -> void:
-	set_anchors_preset(Control.PRESET_FULL_RECT)
+	# Per Code erzeugt startet das Control mit Größe 0 × 0. set_anchors_preset allein behält diese Größe,
+	# dann wird der Boot-/Anmeldebildschirm verkleinert oben links gezeichnet. Anker und Abstände zusammen setzen.
+	set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	if not _running:
 		visible = false
 		set_process(false)
@@ -198,7 +200,7 @@ func _draw_vendor(r: Rect2, k: float, t: float) -> void:
 	var bar_w := 220.0 * k
 	draw_rect(Rect2(c.x - bar_w * 0.5, c.y + fs * 0.5, bar_w, 5.0 * k), Color(0.86, 0.12, 0.16, a))
 	_text_center("PERFORMANCE WORKSTATION", c.y + fs * 0.5 + 34.0 * k, int(18.0 * k), Color(0.75, 0.77, 0.80, a), r.size.x, _font)
-	draw_string(_font, Vector2(30.0 * k, r.size.y - 30.0 * k), "ENTF: BIOS-Setup    F12: Bootmenü",
+	draw_string(_font, Vector2(30.0 * k, r.size.y - 30.0 * k), tr("ENTF: BIOS-Setup    F12: Bootmenü"),
 		HORIZONTAL_ALIGNMENT_LEFT, -1, int(15.0 * k), Color(0.70, 0.70, 0.70, a))
 
 
@@ -211,7 +213,7 @@ func _draw_post(r: Rect2, k: float, t: float) -> void:
 	draw_string(_font, Vector2(r.size.x - 140.0 * k, 60.0 * k), "NTX", HORIZONTAL_ALIGNMENT_LEFT, -1, int(40.0 * k), Color(1, 1, 1, 0.9))
 	var shown := mini(POST_LINES.size(), int(t / POST_LINE_STEP) + 1)
 	for i in range(shown):
-		var line: String = POST_LINES[i]
+		var line: String = tr(POST_LINES[i]) if not POST_LINES[i].is_empty() else ""
 		if line.contains("%MEM%"):
 			var line_t := t - float(i) * POST_LINE_STEP
 			var mb := int(clampf(line_t / MEMORY_COUNT_TIME, 0.0, 1.0) * float(MEMORY_MB))
@@ -242,7 +244,7 @@ func _draw_login(r: Rect2, k: float, t: float) -> void:
 	_text_center(shown_name, av_c.y + av_r + 50.0 * k, int(34.0 * k), Color.WHITE, r.size.x, _font)
 	var text_y := av_c.y + av_r + 110.0 * k
 	_draw_spinner(Vector2(c.x - 82.0 * k, text_y - 8.0 * k), 11.0 * k, t, 1.0)
-	draw_string(_font, Vector2(c.x - 58.0 * k, text_y), "Willkommen", HORIZONTAL_ALIGNMENT_LEFT, -1, int(22.0 * k), Color.WHITE)
+	draw_string(_font, Vector2(c.x - 58.0 * k, text_y), tr("Willkommen"), HORIZONTAL_ALIGNMENT_LEFT, -1, int(22.0 * k), Color.WHITE)
 	var fade := clampf(t / 0.3, 0.0, 1.0)
 	if fade < 1.0:
 		draw_rect(r, Color(0, 0, 0, 1.0 - fade))
@@ -253,7 +255,7 @@ func _draw_shutdown(r: Rect2, k: float, t: float) -> void:
 	draw_rect(r, Color(0.0, 0.0, 0.0, 0.35))
 	var c := r.get_center()
 	_draw_spinner(Vector2(c.x - 118.0 * k, c.y - 8.0 * k), 11.0 * k, t, 1.0)
-	draw_string(_font, Vector2(c.x - 96.0 * k, c.y), "Wird heruntergefahren", HORIZONTAL_ALIGNMENT_LEFT, -1, int(22.0 * k), Color.WHITE)
+	draw_string(_font, Vector2(c.x - 96.0 * k, c.y), tr("Wird heruntergefahren"), HORIZONTAL_ALIGNMENT_LEFT, -1, int(22.0 * k), Color.WHITE)
 	var black := clampf((t - (SHUTDOWN_DURATION - SHUTDOWN_FADE)) / SHUTDOWN_FADE, 0.0, 1.0)
 	if black > 0.0:
 		draw_rect(r, Color(0.0, 0.0, 0.0, black))
@@ -296,7 +298,11 @@ static func format_real_clock() -> String:
 
 static func format_real_date() -> String:
 	var d := Time.get_date_dict_from_system()
-	return "%s, %d. %s" % [WEEKDAYS[int(d["weekday"]) % 7], int(d["day"]), MONTHS[clampi(int(d["month"]) - 1, 0, 11)]]
+	return TranslationServer.translate("{weekday}, {day}. {month}").format({
+		"weekday": TranslationServer.translate(WEEKDAYS[int(d["weekday"]) % 7]),
+		"day": int(d["day"]),
+		"month": TranslationServer.translate(MONTHS[clampi(int(d["month"]) - 1, 0, 11)]),
+	})
 
 
 static func format_game_clock() -> String:

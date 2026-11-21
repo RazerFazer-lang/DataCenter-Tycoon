@@ -19,6 +19,8 @@ static func get_visual_tier(components: Dictionary, cat: String) -> int:
 
 
 static func build_open_server_chassis(item_type: String, components: Dictionary, out_fans: Array = []) -> Node3D:
+	# Mainboards nutzen das passende 1U/2U/4U-Gehäuse.
+	item_type = GameState.get_chassis_visual(item_type)
 	var root := Node3D.new()
 	var steel := MatLib.get_mat("galvanized_steel")
 	var dark_steel := MatLib.make_brushed_metal(Color(0.18, 0.19, 0.21), 0.38, 0.65)
@@ -144,41 +146,59 @@ static func build_cpu_assembly(tier: int) -> Node3D:
 	var cu_fin := MatLib.get_mat("heatsink_copper")
 	var copper := MatLib.get_mat("copper_metal")
 	var plastic := MatLib.get_mat("plastic_black")
+	var ic := MatLib.get_mat("ic_chip")
+	var etch := MatLib.make_brushed_metal(Color(0.50, 0.51, 0.53), 0.55, 0.55)
 
-	# Realistic LGA Server Socket Frame + Gold Pin Bed + Retention Lever
+	# LGA-Sockel: Kunststoffrahmen, goldenes Kontaktfeld, Trägerplatine und Heatspreader
 	_box(root, Vector3(0.0, 0.006, 0.0), Vector3(0.115, 0.012, 0.115), plastic)
 	_box(root, Vector3(0.0, 0.012, 0.0), Vector3(0.095, 0.005, 0.095), gold)
-	# CPU Green Substrate + Polished Metallic Silver IHS (Integrated Heat Spreader!)
 	_box(root, Vector3(0.0, 0.016, 0.0), Vector3(0.088, 0.006, 0.088), pcb)
 	_box(root, Vector3(0.0, 0.022, 0.0), Vector3(0.072, 0.009, 0.072), ihs)
-	# Silver LGA Locking Bracket & Side Tension Lever
+	# SMD-Kondensatoren auf der Trägerplatine vor und hinter dem Heatspreader
+	var smd: Array = []
+	for i in range(6):
+		var o := -0.025 + float(i) * 0.010
+		smd.append([Vector3(o, 0.0, -0.039), Vector3(0.004, 0.002, 0.003)])
+		smd.append([Vector3(o, 0.0, 0.039), Vector3(0.004, 0.002, 0.003)])
+	var smd_mi := merged_boxes(root, "cpu_smd", smd, ic)
+	smd_mi.position.y = 0.020
+	# Haltebügel mit Spannhebel, Hebelhaken und Scharnierachse
 	_box(root, Vector3(0.0, 0.020, -0.048), Vector3(0.096, 0.008, 0.012), steel)
 	_box(root, Vector3(0.0, 0.020, 0.048), Vector3(0.096, 0.008, 0.012), steel)
 	_box(root, Vector3(0.062, 0.016, 0.0), Vector3(0.008, 0.008, 0.115), steel)
+	_box(root, Vector3(0.068, 0.016, 0.058), Vector3(0.012, 0.006, 0.006), steel)
+	_cyl_z(root, Vector3(-0.050, 0.016, 0.0), 0.004, 0.100, steel)
 
 	if tier == 0:
-		# Tier 0: Exposed CPU IHS + low-profile aluminum fin cooler offset slightly or slim open-frame mount so the real CPU is clearly visible!
-		_box(root, Vector3(0.0, 0.030, -0.022), Vector3(0.076, 0.014, 0.032), alu_fin)
+		# Kleiner Passivkühler hinten. Der beschriftete Heatspreader bleibt vorne sichtbar.
+		_box(root, Vector3(0.0, 0.027, 0.016), Vector3(0.046, 0.001, 0.018), etch)
+		_box(root, Vector3(0.0, 0.0285, -0.022), Vector3(0.076, 0.004, 0.032), alu_fin)
+		fin_stack(root, Vector3(0.0, 0.0375, -0.022), Vector3(0.076, 0.014, 0.032), 10, 0, alu_fin)
 	elif tier == 1:
-		# Tier 1: Precision Aluminum Server Heatsink with 4 steel mounting screws
-		_box(root, Vector3(0.0, 0.046, 0.0), Vector3(0.105, 0.042, 0.105), alu_fin)
+		# Aluminium-Kühlkörper mit 18 Rippen und vier gefederten Schrauben
+		_box(root, Vector3(0.0, 0.030, 0.0), Vector3(0.105, 0.006, 0.105), alu_fin)
+		fin_stack(root, Vector3(0.0, 0.051, 0.0), Vector3(0.105, 0.036, 0.105), 18, 0, alu_fin)
 		for sx in [-0.048, 0.048]:
 			for sz in [-0.048, 0.048]:
-				_cyl(root, Vector3(float(sx), 0.068, float(sz)), 0.006, 0.012, steel)
+				_cyl(root, Vector3(float(sx), 0.071, float(sz)), 0.005, 0.006, steel)
 	elif tier == 2:
-		# Tier 2: Copper Base + 4 Copper Heatpipes + Tall Finned Tower Heatsink
+		# Kupferboden, vier U-Heatpipes und ein Turm aus waagerechten Lamellen
 		_box(root, Vector3(0.0, 0.032, 0.0), Vector3(0.096, 0.014, 0.096), copper)
-		_box(root, Vector3(0.0, 0.062, 0.0), Vector3(0.112, 0.056, 0.110), alu_fin)
 		for hx in [-0.036, -0.012, 0.012, 0.036]:
-			_cyl(root, Vector3(float(hx), 0.092, 0.0), 0.006, 0.018, copper)
+			for hz in [-0.022, 0.022]:
+				_cyl(root, Vector3(float(hx), 0.067, float(hz)), 0.004, 0.056, copper)
+				_cyl(root, Vector3(float(hx), 0.0995, float(hz)), 0.0045, 0.004, copper)
+		fin_stack(root, Vector3(0.0, 0.070, 0.0), Vector3(0.112, 0.050, 0.110), 14, 1, alu_fin)
+		_box(root, Vector3(0.0, 0.097, 0.0), Vector3(0.112, 0.004, 0.110), MatLib.make_brushed_metal(Color(0.20, 0.21, 0.23), 0.40, 0.70))
 	else:
-		# Tier 3: Enterprise Dual-Socket Skived Copper Server CPU Heatsink Array!
+		# Geschälter Kupferkühler mit 24 Rippen, Heatpipes oben und Montagebrücke
 		_box(root, Vector3(0.0, 0.032, 0.0), Vector3(0.125, 0.014, 0.125), copper)
-		_box(root, Vector3(0.0, 0.066, 0.0), Vector3(0.122, 0.062, 0.120), cu_fin)
+		fin_stack(root, Vector3(0.0, 0.066, 0.0), Vector3(0.122, 0.062, 0.120), 24, 0, cu_fin)
 		for hx in [-0.044, -0.022, 0.0, 0.022, 0.044]:
-			_cyl(root, Vector3(float(hx), 0.099, -0.03), 0.006, 0.016, copper)
-			_cyl(root, Vector3(float(hx), 0.099, 0.03), 0.006, 0.016, copper)
+			_cyl_z(root, Vector3(float(hx), 0.099, 0.0), 0.005, 0.110, copper)
 		_box(root, Vector3(0.0, 0.100, 0.0), Vector3(0.126, 0.008, 0.046), steel)
+		for sx in [-0.058, 0.058]:
+			_cyl(root, Vector3(float(sx), 0.106, 0.0), 0.006, 0.006, steel)
 
 	return root
 
@@ -188,16 +208,19 @@ static func build_gpu_card(tier: int, out_fans: Array = []) -> Node3D:
 	var plastic := MatLib.get_mat("plastic_black")
 	var steel := MatLib.get_mat("galvanized_steel")
 	var shroud := MatLib.make_brushed_metal(Color(0.16, 0.17, 0.19), 0.34, 0.62)
+	var backplate := MatLib.make_brushed_metal(Color(0.11, 0.12, 0.13), 0.40, 0.70)
+	var blade_mat := MatLib.make_brushed_metal(Color(0.22, 0.23, 0.25), 0.58, 0.20)
+	var label_mat := MatLib.make_brushed_metal(Color(0.80, 0.81, 0.83), 0.55, 0.25)
 	var pcb_b := MatLib.get_mat("pcb_black")
 	var gold := MatLib.get_mat("gold_contacts")
 	var copper := MatLib.get_mat("copper_metal")
 	var alu_fin := MatLib.get_mat("heatsink_aluminum")
 	var cu_fin := MatLib.get_mat("heatsink_copper")
+	var ic := MatLib.get_mat("ic_chip")
 
-	# PCIe x16 Slot on Motherboard (always present!)
+	# PCIe-x16-Steckplatz auf dem Mainboard (immer vorhanden)
 	_box(root, Vector3(0.0, 0.010, 0.0), Vector3(0.020, 0.016, 0.165), plastic)
 	_box(root, Vector3(0.0, 0.016, 0.0), Vector3(0.008, 0.006, 0.155), gold)
-	# Retention latch at front end of PCIe slot
 	_box(root, Vector3(0.0, 0.012, 0.092), Vector3(0.024, 0.016, 0.018), steel)
 
 	if tier <= 0:
@@ -212,39 +235,81 @@ static func build_gpu_card(tier: int, out_fans: Array = []) -> Node3D:
 
 		var card_len := 0.21 if tier == 1 else (0.28 if tier == 2 else 0.31)
 		var card_h := 0.072 if tier == 1 else 0.088
-		# Matte black GPU PCB + Gold PCIe Edge Fingers + Metal Rear I/O Bracket
-		_box(card, Vector3(0.0, card_h * 0.5, 0.0), Vector3(0.008, card_h, card_len), pcb_b)
-		_box(card, Vector3(0.0, 0.002, -0.01), Vector3(0.009, 0.012, 0.13), gold)
-		_box(card, Vector3(0.012, card_h * 0.5, -card_len * 0.5 - 0.004), Vector3(0.036, card_h + 0.012, 0.008), steel)
+		var half_len := card_len * 0.5
+		var mid_h := card_h * 0.5
+
+		# Leiterplatte, Kontaktleiste mit Codierkerbe und Rückplatte
+		_box(card, Vector3(0.0, mid_h, 0.0), Vector3(0.008, card_h, card_len), pcb_b)
+		_box(card, Vector3(0.0, 0.002, -0.034), Vector3(0.009, 0.012, 0.082), gold)
+		_box(card, Vector3(0.0, 0.002, 0.040), Vector3(0.009, 0.012, 0.030), gold)
+		_box(card, Vector3(-0.0055, mid_h, 0.004), Vector3(0.003, card_h - 0.004, card_len - 0.012), backplate)
+
+		# Slotblech mit Display-Anschlüssen und Lüftungsschlitzen
+		var bracket_z := -half_len - 0.004
+		_box(card, Vector3(0.012, mid_h, bracket_z), Vector3(0.036, card_h + 0.012, 0.008), steel)
+		var io: Array = []
+		for p in range(3):
+			io.append([Vector3(0.002, 0.014 + float(p) * 0.014, 0.0), Vector3(0.012, 0.007, 0.003)])
+		for v in range(4):
+			io.append([Vector3(0.022, 0.012 + float(v) * 0.013, 0.0), Vector3(0.010, 0.004, 0.003)])
+		var io_mi := merged_boxes(card, "gpu_io", io, plastic)
+		io_mi.position = Vector3(0.0, 0.0, bracket_z - 0.004)
 
 		if tier >= 3:
-			# Enterprise Passive Copper/Steel AI Accelerator (H100 / A100 Server Form Factor)
-			_box(card, Vector3(0.016, card_h * 0.5, 0.0), Vector3(0.026, card_h - 0.006, card_len - 0.008), shroud)
-			_box(card, Vector3(0.016, card_h * 0.5, card_len * 0.42), Vector3(0.028, card_h - 0.014, 0.048), cu_fin)
+			# Passiver KI-Beschleuniger: geschlossene Haube, Kupferlamellen am Lufteinlass
+			_box(card, Vector3(0.016, mid_h, -0.024), Vector3(0.026, card_h - 0.006, card_len - 0.056), shroud)
+			fin_stack(card, Vector3(0.016, mid_h, half_len - 0.028), Vector3(0.026, card_h - 0.012, 0.048), 10, 1, cu_fin)
+			_box(card, Vector3(0.016, card_h - 0.004, half_len - 0.028), Vector3(0.026, 0.004, 0.048), shroud)
+			_box(card, Vector3(0.016, 0.004, half_len - 0.028), Vector3(0.026, 0.004, 0.048), shroud)
 			_box(card, Vector3(0.016, card_h + 0.002, 0.0), Vector3(0.026, 0.006, card_len * 0.72), copper)
+			_box(card, Vector3(0.0295, mid_h, -0.05), Vector3(0.001, 0.018, 0.08), label_mat)
+			_box(card, Vector3(0.010, card_h + 0.008, -half_len + 0.025), Vector3(0.018, 0.012, 0.024), plastic)
 		else:
-			# Active Workstation GPU (Matte Metal Shroud + Internal Fin Stack + Spinning Axial Fans!)
-			_box(card, Vector3(0.016, card_h * 0.5, 0.0), Vector3(0.024, card_h - 0.006, card_len - 0.010), shroud)
-			_box(card, Vector3(0.012, card_h + 0.002, 0.0), Vector3(0.018, 0.007, card_len * 0.76), alu_fin)
-			# Exposed copper heatpipe along top edge
-			_cyl_z(card, Vector3(0.022, card_h - 0.004, 0.0), 0.0045, card_len * 0.78, copper)
-			var fan_count := 2 if tier >= 2 else 1
-			for fi in range(fan_count):
-				var fz := 0.0 if fan_count == 1 else (-0.062 + float(fi) * 0.124)
-				_cyl_x(card, Vector3(0.028, card_h * 0.5, fz), 0.030, 0.006, plastic)
-				var rotor := Node3D.new()
-				rotor.position = Vector3(0.031, card_h * 0.5, fz)
-				rotor.set_meta("spin_axis", "x")
-				card.add_child(rotor)
-				_box(rotor, Vector3.ZERO, Vector3(0.004, 0.052, 0.010), steel)
-				_box(rotor, Vector3.ZERO, Vector3(0.004, 0.010, 0.052), steel)
-				out_fans.append(rotor)
-			# 8-Pin PCIe Power Plug on top front edge
-			_box(card, Vector3(0.010, card_h + 0.008, card_len * 0.34), Vector3(0.018, 0.014, 0.024), plastic)
+			# Aktive Karte: Lamellen zwischen Platine und Haube, Haube mit runden Lüfteröffnungen
+			var face_x := 0.027
+			var fan_r := 0.027 if tier == 1 else 0.034
+			var fan_zs: Array[float] = []
+			if tier == 1:
+				fan_zs.append(0.0)
+			else:
+				fan_zs.append(-0.068)
+				fan_zs.append(0.068)
 
-	# NVLink Metal Bridge connecting twin AI GPUs at Tier 3!
+			fin_stack(card, Vector3(0.015, mid_h, 0.0), Vector3(0.018, card_h - 0.006, card_len - 0.020), 16 if tier == 1 else 22, 2, alu_fin)
+
+			_box(card, Vector3(face_x, card_h - 0.004, 0.0), Vector3(0.006, 0.008, card_len - 0.010), shroud)
+			_box(card, Vector3(face_x, 0.004, 0.0), Vector3(0.006, 0.008, card_len - 0.010), shroud)
+			var inner_h := card_h - 0.016
+			var cut_half := fan_r + 0.002
+			var seg_start := -half_len + 0.005
+			for fz in fan_zs:
+				var seg_end := fz - cut_half
+				if seg_end > seg_start:
+					_box(card, Vector3(face_x, mid_h, (seg_start + seg_end) * 0.5), Vector3(0.006, inner_h, seg_end - seg_start), shroud)
+				seg_start = fz + cut_half
+			var last_end := half_len - 0.005
+			if last_end > seg_start:
+				_box(card, Vector3(face_x, mid_h, (seg_start + last_end) * 0.5), Vector3(0.006, inner_h, last_end - seg_start), shroud)
+
+			for fz in fan_zs:
+				_cyl_x(card, Vector3(face_x - 0.001, mid_h, fz), fan_r + 0.002, 0.004, plastic)
+				var rotor := fan_rotor(card, Vector3(face_x + 0.005, mid_h, fz), fan_r, 9, true, blade_mat, steel)
+				out_fans.append(rotor)
+
+			# Heatpipes an der Oberkante, Typenschild und 8-Pin-Stromanschlüsse
+			for hp in range(2 if tier == 1 else 3):
+				_cyl_z(card, Vector3(0.010 + float(hp) * 0.006, card_h + 0.001, -card_len * 0.10), 0.0032, card_len * 0.50, copper)
+			_box(card, Vector3(face_x + 0.0035, mid_h, half_len - 0.018), Vector3(0.001, 0.010, 0.020), label_mat)
+			var plug_count := 1 if tier == 1 else 2
+			for pc in range(plug_count):
+				var pz := half_len * 0.60 + float(pc) * 0.026
+				_box(card, Vector3(0.012, card_h + 0.006, pz), Vector3(0.016, 0.012, 0.022), plastic)
+				_box(card, Vector3(0.012, card_h + 0.0125, pz), Vector3(0.010, 0.001, 0.016), ic)
+
+	# NVLink-Brücke zwischen den beiden KI-Karten
 	if tier >= 3:
 		_box(root, Vector3(0.038, 0.114, 0.06), Vector3(0.072, 0.012, 0.058), steel)
+		_box(root, Vector3(0.038, 0.121, 0.06), Vector3(0.050, 0.002, 0.036), label_mat)
 
 	return root
 
@@ -257,27 +322,55 @@ static func build_ram_bank(tier: int) -> Node3D:
 	var gold := MatLib.get_mat("gold_contacts")
 	var steel := MatLib.get_mat("galvanized_steel")
 	var dark_al := MatLib.make_brushed_metal(Color(0.22, 0.24, 0.27), 0.32, 0.72)
+	var paper := MatLib.make_brushed_metal(Color(0.86, 0.87, 0.89), 0.80, 0.0)
+
+	# Halteklammern an beiden Enden, leicht nach außen geklappt
+	var clip_parts: Array = [
+		[Vector3(0.0, 0.004, -0.078), Vector3(0.010, 0.020, 0.008), Basis(Vector3.RIGHT, deg_to_rad(-12.0))],
+		[Vector3(0.0, 0.004, 0.078), Vector3(0.010, 0.020, 0.008), Basis(Vector3.RIGHT, deg_to_rad(12.0))],
+	]
+	var gold_parts: Array = [
+		[Vector3(0.0, -0.0195, -0.026), Vector3(0.0018, 0.005, 0.080)],
+		[Vector3(0.0, -0.0195, 0.042), Vector3(0.0018, 0.005, 0.048)],
+	]
+	var chip_parts: Array = []
+	for c in range(8):
+		var cz := -0.056 + float(c) * 0.016
+		chip_parts.append([Vector3(0.0014, 0.004, cz), Vector3(0.0012, 0.012, 0.011)])
+		chip_parts.append([Vector3(-0.0014, 0.004, cz), Vector3(0.0012, 0.012, 0.011)])
+	var spreader_h := 0.036 if tier <= 1 else 0.040
+	var spreader_parts: Array = [
+		[Vector3(0.0018, 0.002, 0.0), Vector3(0.0012, spreader_h, 0.134)],
+		[Vector3(-0.0018, 0.002, 0.0), Vector3(0.0012, spreader_h, 0.134)],
+	]
+	if tier >= 2:
+		# Kühlrippen auf der Oberkante des Heatspreaders
+		for r in range(12):
+			spreader_parts.append([Vector3(0.0, 0.024, -0.060 + float(r) * 0.011), Vector3(0.0048, 0.006 if tier == 2 else 0.010, 0.005)])
 
 	var populated := clampi(2 + tier * 2, 2, 8)
 	for i in range(8):
 		var rx := -0.063 + float(i) * 0.018
-		# DIMM Slot Base + White/Grey Retention Clips at both ends
 		_box(root, Vector3(rx, 0.008, 0.0), Vector3(0.009, 0.012, 0.148), plastic)
-		_box(root, Vector3(rx, 0.012, -0.078), Vector3(0.010, 0.018, 0.010), steel)
-		_box(root, Vector3(rx, 0.012, 0.078), Vector3(0.010, 0.018, 0.010), steel)
+		var clips := merged_boxes(root, "dimm_clips", clip_parts, steel)
+		clips.position = Vector3(rx, 0.008, 0.0)
 
-		if i < populated:
-			var stick_mat: Material = pcb
-			if tier == 1:
-				stick_mat = dark_al
-			elif tier >= 2:
-				stick_mat = steel
-			_box(root, Vector3(rx, 0.034, 0.0), Vector3(0.005, 0.044, 0.138), stick_mat)
-			_box(root, Vector3(rx, 0.014, 0.0), Vector3(0.006, 0.006, 0.130), gold)
-			# Visible Black DRAM Memory ICs on bare Tier 0 sticks
-			if tier == 0:
-				for c in range(4):
-					_box(root, Vector3(rx + 0.003, 0.034, -0.048 + float(c) * 0.032), Vector3(0.003, 0.018, 0.020), ic)
+		if i >= populated:
+			continue
+		var stick := Node3D.new()
+		stick.position = Vector3(rx, 0.034, 0.0)
+		root.add_child(stick)
+		_box(stick, Vector3.ZERO, Vector3(0.0016, 0.044, 0.138), pcb)
+		merged_boxes(stick, "dimm_gold", gold_parts, gold)
+		if tier == 0:
+			# Blankes Modul: acht Speicherchips pro Seite und Typenaufkleber
+			merged_boxes(stick, "dimm_chips", chip_parts, ic)
+			_box(stick, Vector3(0.0015, 0.015, -0.03), Vector3(0.0004, 0.008, 0.040), paper)
+		else:
+			merged_boxes(stick, "dimm_spreader_%d" % tier, spreader_parts, dark_al if tier == 1 else steel)
+			_box(stick, Vector3(0.0025, 0.0, -0.02), Vector3(0.0003, 0.014, 0.060), paper)
+			if tier >= 3:
+				_box(stick, Vector3(0.0, 0.0225, 0.0), Vector3(0.0052, 0.003, 0.134), dark_al)
 
 	return root
 
@@ -291,24 +384,31 @@ static func build_storage_module(tier: int) -> Node3D:
 	var alu_fin := MatLib.get_mat("heatsink_aluminum")
 	var cu_fin := MatLib.get_mat("heatsink_copper")
 	var plastic := MatLib.get_mat("plastic_black")
+	var paper := MatLib.make_brushed_metal(Color(0.86, 0.87, 0.89), 0.80, 0.0)
 
 	var drive_count := clampi(1 + tier, 1, 3)
 	for i in range(drive_count):
 		var mz := -0.032 + float(i) * 0.034
-		# M.2 2280 Slot Connector + Standoff Screw
+		# M.2-Steckplatz, Platine mit Kerbe in der Kontaktleiste, Abstandsbolzen mit Schraube
 		_box(root, Vector3(-0.056, 0.009, mz), Vector3(0.014, 0.012, 0.026), plastic)
-		_box(root, Vector3(0.0, 0.011, mz), Vector3(0.105, 0.005, 0.024), pcb_b)
-		_box(root, Vector3(-0.048, 0.012, mz), Vector3(0.010, 0.006, 0.022), gold)
-		_cyl(root, Vector3(0.050, 0.014, mz), 0.004, 0.006, steel)
-		if tier >= 3:
-			_box(root, Vector3(0.004, 0.018, mz), Vector3(0.088, 0.012, 0.023), cu_fin)
-		elif tier >= 2:
-			_box(root, Vector3(0.004, 0.017, mz), Vector3(0.088, 0.010, 0.023), alu_fin)
+		_box(root, Vector3(0.002, 0.011, mz), Vector3(0.101, 0.0016, 0.022), pcb_b)
+		_box(root, Vector3(-0.0505, 0.011, mz - 0.004), Vector3(0.008, 0.0018, 0.012), gold)
+		_box(root, Vector3(-0.0505, 0.011, mz + 0.0075), Vector3(0.008, 0.0018, 0.005), gold)
+		_cyl(root, Vector3(0.050, 0.008, mz), 0.004, 0.006, steel)
+		_cyl(root, Vector3(0.050, 0.0125, mz), 0.0035, 0.002, steel)
+		if tier >= 2:
+			# Kühlkörper mit Längsrippen (Kupfer ab Stufe 3)
+			var sink_mat := cu_fin if tier >= 3 else alu_fin
+			var fin_h := 0.008 if tier >= 3 else 0.006
+			_box(root, Vector3(0.004, 0.0135, mz), Vector3(0.088, 0.0034, 0.023), sink_mat)
+			fin_stack(root, Vector3(0.004, 0.0152 + fin_h * 0.5, mz), Vector3(0.088, fin_h, 0.023), 5, 2, sink_mat)
 		else:
-			# Visible NAND Flash Packages + Silver Controller Chip!
-			_box(root, Vector3(-0.024, 0.015, mz), Vector3(0.018, 0.005, 0.016), steel)
-			_box(root, Vector3(0.008, 0.015, mz), Vector3(0.024, 0.005, 0.018), ic)
-			_box(root, Vector3(0.034, 0.015, mz), Vector3(0.020, 0.005, 0.018), ic)
+			# Controller mit Metalldeckel, DRAM-Cache, zwei NAND-Bausteine und Aufkleber
+			_box(root, Vector3(-0.030, 0.0125, mz), Vector3(0.014, 0.0016, 0.014), steel)
+			_box(root, Vector3(-0.014, 0.0125, mz), Vector3(0.008, 0.0014, 0.010), ic)
+			_box(root, Vector3(0.008, 0.0128, mz), Vector3(0.022, 0.002, 0.017), ic)
+			_box(root, Vector3(0.034, 0.0128, mz), Vector3(0.020, 0.002, 0.017), ic)
+			_box(root, Vector3(0.014, 0.0142, mz), Vector3(0.050, 0.0004, 0.016), paper)
 
 	return root
 
@@ -319,26 +419,51 @@ static func build_cooling_wall(tier: int, out_fans: Array = []) -> Node3D:
 	var steel := MatLib.get_mat("galvanized_steel")
 	var copper := MatLib.get_mat("copper_metal")
 	var cu_fin := MatLib.get_mat("heatsink_copper")
+	var blade_mat := MatLib.make_brushed_metal(Color(0.17, 0.18, 0.20), 0.60, 0.15)
+	var shade := MatLib.make_brushed_metal(Color(0.05, 0.05, 0.06), 0.85, 0.0)
+
+	# Lüftergehäuse: quadratischer Rahmen mit Motorstreben auf der Rückseite
+	var frame_parts: Array = [
+		[Vector3(0.0, 0.042, 0.0), Vector3(0.095, 0.008, 0.042)],
+		[Vector3(0.0, -0.042, 0.0), Vector3(0.095, 0.008, 0.042)],
+		[Vector3(-0.0435, 0.0, 0.0), Vector3(0.008, 0.076, 0.042)],
+		[Vector3(0.0435, 0.0, 0.0), Vector3(0.008, 0.076, 0.042)],
+		[Vector3(0.0, 0.0, -0.018), Vector3(0.110, 0.004, 0.004), Basis(Vector3.BACK, deg_to_rad(45.0))],
+		[Vector3(0.0, 0.0, -0.018), Vector3(0.110, 0.004, 0.004), Basis(Vector3.BACK, deg_to_rad(-45.0))],
+	]
+	# Fingerschutz vorne, Eckschrauben und Griff zum Tauschen im laufenden Betrieb
+	var guard_parts: Array = [
+		[Vector3(0.0, -0.020, 0.0215), Vector3(0.080, 0.0016, 0.0016)],
+		[Vector3(0.0, 0.0, 0.0215), Vector3(0.080, 0.0016, 0.0016)],
+		[Vector3(0.0, 0.020, 0.0215), Vector3(0.080, 0.0016, 0.0016)],
+		[Vector3(0.0, 0.0, 0.0215), Vector3(0.0016, 0.078, 0.0016)],
+		[Vector3(0.0, 0.049, 0.012), Vector3(0.030, 0.004, 0.008)],
+	]
+	for sx in [-0.040, 0.040]:
+		for sy in [-0.039, 0.039]:
+			guard_parts.append([Vector3(float(sx), float(sy), 0.0215), Vector3(0.005, 0.005, 0.002)])
 
 	var fan_count := clampi(3 + tier, 3, 5)
 	var spacing := 0.115
 	var start_x := -float(fan_count - 1) * spacing * 0.5
 	for i in range(fan_count):
-		var fx := start_x + float(i) * spacing
-		_box(root, Vector3(fx, 0.048, 0.0), Vector3(0.095, 0.092, 0.042), plastic)
-		# Fan circular recess & spinning multi-blade rotor
-		var rotor := Node3D.new()
-		rotor.position = Vector3(fx, 0.048, 0.023)
-		root.add_child(rotor)
-		_box(rotor, Vector3.ZERO, Vector3(0.072, 0.014, 0.006), steel)
-		_box(rotor, Vector3.ZERO, Vector3(0.014, 0.072, 0.006), steel)
-		var diag := _box(rotor, Vector3.ZERO, Vector3(0.068, 0.012, 0.006), steel)
-		diag.rotation_degrees.z = 45.0
+		var fan := Node3D.new()
+		fan.position = Vector3(start_x + float(i) * spacing, 0.048, 0.0)
+		root.add_child(fan)
+		merged_boxes(fan, "fan80_frame", frame_parts, plastic)
+		merged_boxes(fan, "fan80_guard", guard_parts, steel)
+		_cyl_z(fan, Vector3(0.0, 0.0, -0.019), 0.040, 0.002, shade)
+		_cyl_z(fan, Vector3(0.0, 0.0, -0.010), 0.013, 0.014, plastic)
+		var rotor := fan_rotor(fan, Vector3(0.0, 0.0, 0.006), 0.037, 7, false, blade_mat, steel)
 		out_fans.append(rotor)
 
 	if tier >= 3:
-		# Liquid Cooling Copper Radiator Manifold + Dual Braided Black Coolant Tubes!
-		_box(root, Vector3(0.0, 0.048, -0.034), Vector3(0.56, 0.088, 0.024), cu_fin)
+		# Wasserkühlung: Kupferradiator mit 70 Lamellen, Endkammern und zwei Schläuchen
+		fin_stack(root, Vector3(0.0, 0.048, -0.034), Vector3(0.56, 0.080, 0.024), 70, 0, cu_fin)
+		_box(root, Vector3(0.0, 0.090, -0.034), Vector3(0.56, 0.004, 0.026), copper)
+		_box(root, Vector3(0.0, 0.006, -0.034), Vector3(0.56, 0.004, 0.026), copper)
+		_box(root, Vector3(-0.288, 0.048, -0.034), Vector3(0.016, 0.092, 0.030), plastic)
+		_box(root, Vector3(0.288, 0.048, -0.034), Vector3(0.016, 0.092, 0.030), plastic)
 		_cyl_z(root, Vector3(-0.08, 0.096, -0.11), 0.009, 0.18, plastic)
 		_cyl_z(root, Vector3(-0.05, 0.096, -0.11), 0.009, 0.18, plastic)
 		_cyl(root, Vector3(-0.08, 0.096, -0.03), 0.011, 0.014, copper)
@@ -349,31 +474,70 @@ static func build_cooling_wall(tier: int, out_fans: Array = []) -> Node3D:
 
 static func build_psu_unit(tier: int) -> Node3D:
 	var root := Node3D.new()
+	var plastic := MatLib.get_mat("plastic_black")
+	var copper := MatLib.get_mat("copper_metal")
+
+	if tier >= 2:
+		# Zwei redundante Hot-Swap-Netzteile, davor die Verteilerplatine
+		for u in range(2):
+			_psu_module(root, Vector3(-0.034 + float(u) * 0.068, 0.0, 0.0), Vector3(0.060, 0.094, 0.32), true)
+		_box(root, Vector3(0.0, 0.048, 0.166), Vector3(0.130, 0.080, 0.010), MatLib.get_mat("pcb_green"))
+	else:
+		_psu_module(root, Vector3.ZERO, Vector3(0.125, 0.092, 0.30), false)
+
+	# Kabelstrang zum 24-Pin-Anschluss des Mainboards
+	_cyl_z(root, Vector3(-0.04, 0.032, 0.165), 0.010, 0.08, plastic)
+	_cyl_z(root, Vector3(-0.02, 0.038, 0.165), 0.008, 0.08, copper)
+	_box(root, Vector3(-0.03, 0.035, 0.208), Vector3(0.034, 0.016, 0.012), plastic)
+
+	return root
+
+
+## Ein Netzteilgehäuse: Lochblech oben, Aufkleber an der Seite, hinten Lüfter mit Gitter,
+## Kaltgerätebuchse und je nach Bauart Hot-Swap-Griff oder Netzschalter.
+static func _psu_module(parent: Node3D, offset: Vector3, size: Vector3, hot_swap: bool) -> void:
 	var steel := MatLib.get_mat("galvanized_steel")
 	var perf := MatLib.get_mat("perforated_mesh")
 	var plastic := MatLib.get_mat("plastic_black")
-	var copper := MatLib.get_mat("copper_metal")
 	var handle_mat := MatLib.make_brushed_metal(Color(0.24, 0.56, 0.34), 0.42, 0.30)
+	var shade := MatLib.make_brushed_metal(Color(0.05, 0.05, 0.06), 0.85, 0.0)
+	var paper := MatLib.make_brushed_metal(Color(0.86, 0.87, 0.89), 0.80, 0.0)
+	var blade_mat := MatLib.make_brushed_metal(Color(0.17, 0.18, 0.20), 0.60, 0.15)
 
-	var is_redundant := (tier >= 2)
-	if is_redundant:
-		# Dual Hot-Swap Redundant Enterprise Server PSUs!
-		for u in range(2):
-			var ux := -0.034 + float(u) * 0.068
-			_box(root, Vector3(ux, 0.048, 0.0), Vector3(0.060, 0.094, 0.32), steel)
-			_box(root, Vector3(ux, 0.096, 0.0), Vector3(0.052, 0.005, 0.24), perf)
-			# Rear hot-swap pull handle
-			_box(root, Vector3(ux, 0.048, -0.172), Vector3(0.046, 0.024, 0.020), handle_mat)
+	var half := size * 0.5
+	var cy := 0.048
+	_box(parent, offset + Vector3(0.0, cy, 0.0), size, steel)
+	_box(parent, offset + Vector3(0.0, cy + half.y + 0.0015, 0.02), Vector3(size.x - 0.010, 0.003, size.z * 0.70), perf)
+	_box(parent, offset + Vector3(half.x + 0.0005, cy, 0.03), Vector3(0.001, size.y * 0.5, size.z * 0.35), paper)
+
+	var rear := offset + Vector3(0.0, 0.0, -half.z)
+	var fan_r := minf(size.x, size.y) * 0.36
+	var fan_c := rear + Vector3(0.0, cy + size.y * 0.12, -0.001)
+	_cyl_z(parent, fan_c, fan_r + 0.002, 0.002, shade)
+	var blades := Node3D.new()
+	blades.position = fan_c + Vector3(0.0, 0.0, -0.004)
+	parent.add_child(blades)
+	fan_blades(blades, fan_r, 7, blade_mat, steel)
+	var guard: Array = []
+	for g in range(3):
+		guard.append([Vector3(0.0, (float(g) - 1.0) * fan_r * 0.55, 0.0), Vector3(fan_r * 2.0, 0.0016, 0.0016)])
+	guard.append([Vector3.ZERO, Vector3(0.0016, fan_r * 2.0, 0.0016)])
+	var guard_mi := merged_boxes(parent, "psu_guard_%.4f" % fan_r, guard, steel)
+	guard_mi.position = fan_c + Vector3(0.0, 0.0, -0.010)
+
+	if hot_swap:
+		var handle_parts: Array = [
+			[Vector3(-0.022, 0.0, -0.008), Vector3(0.005, 0.006, 0.016)],
+			[Vector3(0.022, 0.0, -0.008), Vector3(0.005, 0.006, 0.016)],
+			[Vector3(0.0, 0.0, -0.0165), Vector3(0.050, 0.006, 0.005)],
+		]
+		var handle := merged_boxes(parent, "psu_handle", handle_parts, steel)
+		handle.position = rear + Vector3(0.0, 0.010, 0.0)
+		_box(parent, rear + Vector3(-0.012, 0.024, -0.003), Vector3(0.018, 0.014, 0.006), plastic)
+		_box(parent, rear + Vector3(0.018, 0.024, -0.003), Vector3(0.010, 0.012, 0.006), handle_mat)
 	else:
-		_box(root, Vector3(0.0, 0.048, 0.0), Vector3(0.125, 0.092, 0.30), steel)
-		_box(root, Vector3(0.0, 0.095, 0.0), Vector3(0.105, 0.006, 0.22), perf)
-		_box(root, Vector3(0.0, 0.048, -0.156), Vector3(0.056, 0.036, 0.014), plastic)
-
-	# Braided Power Cable Harness routing to motherboard 24-pin header
-	_cyl_z(root, Vector3(-0.04, 0.032, 0.165), 0.010, 0.08, plastic)
-	_cyl_z(root, Vector3(-0.02, 0.038, 0.165), 0.008, 0.08, copper)
-
-	return root
+		_box(parent, rear + Vector3(-0.048, 0.020, -0.003), Vector3(0.022, 0.016, 0.006), plastic)
+		_box(parent, rear + Vector3(-0.048, 0.050, -0.003), Vector3(0.010, 0.014, 0.006), plastic)
 
 
 ## Builds a realistic 3D Workbench hardware display (loose Motherboard, CPU in ESD tray,
@@ -442,8 +606,12 @@ static func build_workbench_display() -> Node3D:
 
 ## Builds a realistic 3D handheld / crate-interior hardware model for ANY catalog item!
 static func build_item_visual(item_type: String) -> Node3D:
-	if item_type == "web_server" or item_type == "storage_server" or item_type == "gpu_server" or item_type == "net_switch":
-		var comps := {"cpu": 1, "gpu": (1 if item_type == "gpu_server" else 0), "ram": 1, "storage": 1, "cooling": 0, "psu": 0}
+	if item_type == "old_fuse":
+		var blown := ModelLoader.instantiate_custom_model("fuse_d02_blown")
+		if blown != null:
+			return blown
+	if GameState.is_slot_upgradeable(item_type) or item_type == "net_switch":
+		var comps := {"cpu": 1, "gpu": (1 if GameState.get_chassis_visual(item_type) == "gpu_server" else 0), "ram": 1, "storage": 1, "cooling": 0, "psu": 0}
 		var srv := build_open_server_chassis(item_type, comps)
 		srv.scale = Vector3(0.76, 0.76, 0.76)
 		return srv
@@ -479,6 +647,81 @@ static func _box(parent: Node3D, pos: Vector3, size: Vector3, mat: Material) -> 
 	mi.position = pos
 	parent.add_child(mi)
 	return mi
+
+
+## Zwischenspeicher für zusammengefügte Meshes. Gleiche Form ergibt dasselbe Mesh,
+## damit volle Racks nicht tausende Einzel-Meshes für Rippen und Lüfterblätter erzeugen.
+static var _merged_cache: Dictionary = {}
+
+
+## Fügt viele Quader zu einem einzigen Mesh zusammen.
+## parts: Array aus [Vector3 Position, Vector3 Größe] oder [Position, Größe, Basis].
+## cache_key muss die Form eindeutig beschreiben, weil das Mesh danach wiederverwendet wird.
+static func merged_boxes(parent: Node3D, cache_key: String, parts: Array, mat: Material) -> MeshInstance3D:
+	var mesh := _merged_cache.get(cache_key) as Mesh
+	if mesh == null:
+		var st := SurfaceTool.new()
+		st.begin(Mesh.PRIMITIVE_TRIANGLES)
+		for part in parts:
+			var p: Array = part
+			var bm := BoxMesh.new()
+			bm.size = p[1]
+			var rot: Basis = p[2] if p.size() > 2 else Basis.IDENTITY
+			st.append_from(bm, 0, Transform3D(rot, p[0]))
+		mesh = st.commit()
+		_merged_cache[cache_key] = mesh
+	var mi := MeshInstance3D.new()
+	mi.mesh = mesh
+	mi.material_override = mat
+	parent.add_child(mi)
+	return mi
+
+
+## Kühlrippen: count dünne Platten, gleichmäßig entlang einer Achse verteilt (0 = X, 1 = Y, 2 = Z).
+static func fin_stack(parent: Node3D, center: Vector3, size: Vector3, count: int, axis: int, mat: Material) -> MeshInstance3D:
+	var n := maxi(count, 1)
+	var span: float = size[axis]
+	var pitch := span / float(n)
+	var fin_size := size
+	fin_size[axis] = pitch * 0.38
+	var parts: Array = []
+	for i in range(n):
+		var offset := Vector3.ZERO
+		offset[axis] = -span * 0.5 + (float(i) + 0.5) * pitch
+		parts.append([offset, fin_size])
+	var key := "fins_%d_%d_%.4f_%.4f_%.4f" % [axis, n, size.x, size.y, size.z]
+	var mi := merged_boxes(parent, key, parts, mat)
+	mi.position = center
+	return mi
+
+
+## Nabe und angestellte Lüfterblätter um die lokale Z-Achse von parent.
+static func fan_blades(parent: Node3D, radius: float, blade_count: int, blade_mat: Material, hub_mat: Material) -> void:
+	var parts: Array = []
+	var blade_len := radius * 0.66
+	var blade_w := radius * 0.44
+	var pitch_rad := deg_to_rad(28.0)
+	var dist := radius * 0.30 + blade_len * 0.5
+	for i in range(blade_count):
+		var ang := TAU * float(i) / float(blade_count)
+		var rot := Basis(Vector3.BACK, ang) * Basis(Vector3.RIGHT, pitch_rad)
+		parts.append([Vector3(cos(ang), sin(ang), 0.0) * dist, Vector3(blade_len, blade_w, radius * 0.04), rot])
+	merged_boxes(parent, "blades_%d_%.4f" % [blade_count, radius], parts, blade_mat)
+	_cyl_z(parent, Vector3.ZERO, radius * 0.30, radius * 0.24, hub_mat)
+
+
+## Drehbares Lüfterrad. Dreht um Z oder mit axis_x um X (Meta "spin_axis", ausgewertet in rack_prop).
+static func fan_rotor(parent: Node3D, pos: Vector3, radius: float, blade_count: int, axis_x: bool, blade_mat: Material, hub_mat: Material) -> Node3D:
+	var rotor := Node3D.new()
+	rotor.position = pos
+	parent.add_child(rotor)
+	var holder := Node3D.new()
+	if axis_x:
+		rotor.set_meta("spin_axis", "x")
+		holder.rotation_degrees.y = 90.0
+	rotor.add_child(holder)
+	fan_blades(holder, radius, blade_count, blade_mat, hub_mat)
+	return rotor
 
 
 static func _cyl(parent: Node3D, pos: Vector3, rad: float, height: float, mat: Material) -> MeshInstance3D:

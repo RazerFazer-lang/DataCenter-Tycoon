@@ -12,7 +12,8 @@ var _power_mat: StandardMaterial3D
 var _net_mat: StandardMaterial3D
 var _boot_mat: StandardMaterial3D
 var _preview_mesh: MeshInstance3D
-var _preview_mat: StandardMaterial3D
+var _preview_plug: Node3D
+var _preview_plug_type: String = ""
 
 
 func _ready() -> void:
@@ -34,18 +35,14 @@ func _ready() -> void:
 	_boot_mat.roughness = 0.52
 	_boot_mat.metallic = 0.18
 
-	_preview_mat = StandardMaterial3D.new()
-	_preview_mat.albedo_color = Color(1.0, 1.0, 1.0, 0.72)
-	_preview_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	_preview_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
-	_preview_mat.emission_enabled = true
-	_preview_mat.emission = Color(0.85, 0.75, 0.25)
-	_preview_mat.emission_energy_multiplier = 0.55
-
+	# Das Kabel in der Hand ist ein echtes 3D-Kabel (gleiches Material wie verlegte Kabel) mit Stecker am Ende.
 	_preview_mesh = MeshInstance3D.new()
 	_preview_mesh.visible = false
-	_preview_mesh.material_override = _preview_mat
 	add_child(_preview_mesh)
+
+	_preview_plug = Node3D.new()
+	_preview_plug.visible = false
+	add_child(_preview_plug)
 
 
 func rebuild_cables(cables_dict: Dictionary, port_resolver: Callable) -> void:
@@ -100,12 +97,20 @@ func _add_plug_connector(parent: Node3D, pos: Vector3, accent_mat: Material) -> 
 func update_preview_cable(active: bool, cable_type: String, start_pos: Vector3, end_pos: Vector3) -> void:
 	if not active:
 		_preview_mesh.visible = false
+		_preview_plug.visible = false
 		return
+	var cmat := _power_mat if cable_type == "power" else _net_mat
 	_preview_mesh.visible = true
-	var col := Color(1.0, 0.82, 0.16, 0.85) if cable_type == "power" else Color(0.18, 0.86, 1.0, 0.85)
-	_preview_mat.albedo_color = col
-	_preview_mat.emission = Color(col.r, col.g, col.b)
+	_preview_mesh.material_override = cmat
 	_preview_mesh.mesh = _build_tube_mesh(start_pos, end_pos)
+
+	if _preview_plug_type != cable_type:
+		for c in _preview_plug.get_children():
+			c.queue_free()
+		_add_plug_connector(_preview_plug, Vector3.ZERO, cmat)
+		_preview_plug_type = cable_type
+	_preview_plug.position = end_pos
+	_preview_plug.visible = true
 
 
 func _build_tube_mesh(a: Vector3, b: Vector3) -> ArrayMesh:

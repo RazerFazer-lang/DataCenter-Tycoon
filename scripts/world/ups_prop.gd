@@ -83,8 +83,8 @@ func _refresh_visuals() -> void:
 			m.emission_energy_multiplier = 0.75
 
 	if _label != null:
-		var state_txt := "NOTSTROM!" if discharging else ("LÄDT/BEREIT" if connected else "KEIN KABEL")
-		_label.text = "%s (USV)\n%s  %.0f%%" % [ups_id.to_upper(), state_txt, charge]
+		var state_txt := tr("NOTSTROM!") if discharging else (tr("LÄDT/BEREIT") if connected else tr("KEIN KABEL"))
+		_label.text = tr("%s (USV)\n%s  %.0f%%") % [ups_id.to_upper(), state_txt, charge]
 		_label.modulate = Color(0.96, 0.70, 0.28) if discharging else (Color(0.90, 0.92, 0.94) if connected else Color(0.90, 0.80, 0.46))
 
 

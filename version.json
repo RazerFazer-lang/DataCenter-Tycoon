@@ -1,8 +1,17 @@
 {
-  "version": "1.0.0",
-  "codename": "v1.0 Full Realism, Warenkorb & Teile-Lager, 66 Teile (DDR2–DDR5) & Support-Desk",
-  "release_date": "2026-11-19",
+  "version": "1.0.1",
+  "codename": "v1.0.1 Co-op-Spielermodell",
+  "release_date": "2026-11-21",
   "changelog": [
+    {
+      "version": "v1.0.1",
+      "title": "Neues Co-op-Spielermodell",
+      "items": [
+        "Mitspieler erscheinen im Multiplayer als richtiger Techniker mit Arbeitsjacke, Reflexstreifen, Rucksack, Kappe, Schutzbrille und Stiefeln statt als Box-Figur.",
+        "Die Jacke und die Kappe haben die Farbe des jeweiligen Spielers. Laufen, Sitzen am PC, Tippen und Tragen sind wie bisher animiert.",
+        "Enthält alle Neuerungen aus v1.0.0."
+      ]
+    },
     {
       "version": "v1.0.0",
       "title": "Mega-Release v1.0: Einheitlicher AAA-Look, Warenkorb & Teile-Lager, 66 Hardware-Teile (DDR2–DDR5) & Live-Support",

@@ -237,17 +237,43 @@ public static class UpdateService
 
                 progress.Report((startPercent + (96.0 - startPercent) * 0.5, "Installiere Spiel in Zielordner..."));
 
-                if (Directory.Exists(installDir))
-                    Directory.Delete(installDir, recursive: true);
+                // Neue Version erst daneben aufbauen, dann tauschen. So bleibt die alte
+                // Installation erhalten, falls Kopieren oder Tauschen fehlschlägt.
+                var targetDir = Path.TrimEndingDirectorySeparator(Path.GetFullPath(installDir));
+                var newDir = targetDir + ".new";
+                var oldDir = targetDir + ".old";
 
-                CopyDirectory(sourceRoot, installDir);
+                if (Directory.Exists(newDir))
+                    Directory.Delete(newDir, recursive: true);
 
-                // Ensure version.json exists inside installDir so launcher remembers version
-                var vFile = Path.Combine(installDir, "version.json");
+                CopyDirectory(sourceRoot, newDir);
+
+                // Ensure version.json exists so launcher remembers version
+                var vFile = Path.Combine(newDir, "version.json");
                 if (!File.Exists(vFile) && !string.IsNullOrWhiteSpace(versionHint))
                 {
                     File.WriteAllText(vFile, JsonSerializer.Serialize(new { version = versionHint }));
                 }
+
+                if (Directory.Exists(oldDir))
+                    Directory.Delete(oldDir, recursive: true);
+
+                bool hadOld = Directory.Exists(targetDir);
+                if (hadOld)
+                    Directory.Move(targetDir, oldDir);
+
+                try
+                {
+                    Directory.Move(newDir, targetDir);
+                }
+                catch
+                {
+                    if (hadOld && !Directory.Exists(targetDir) && Directory.Exists(oldDir))
+                        Directory.Move(oldDir, targetDir);
+                    throw;
+                }
+
+                try { if (Directory.Exists(oldDir)) Directory.Delete(oldDir, recursive: true); } catch { }
             });
 
             try { Directory.Delete(stagingDir, recursive: true); } catch { }

@@ -192,8 +192,8 @@ func _rpc_sync(data: Dictionary) -> void:
 
 
 @rpc("authority", "call_remote", "reliable")
-func _rpc_feedback(ok: bool, message: String) -> void:
-	action_result.emit(ok, message)
+func _rpc_feedback(ok: bool, message: String, args: Array) -> void:
+	action_result.emit(ok, format_text(message, args))
 
 
 func _broadcast() -> void:
@@ -202,11 +202,34 @@ func _broadcast() -> void:
 		_rpc_sync.rpc(export_data())
 
 
-func _feedback(peer: int, ok: bool, message: String) -> void:
+func _feedback(peer: int, ok: bool, message: String, args: Array = []) -> void:
 	if peer == _me():
-		action_result.emit(ok, message)
+		action_result.emit(ok, format_text(message, args))
 	elif peer > 0:
-		_rpc_feedback.rpc_id(peer, ok, message)
+		_rpc_feedback.rpc_id(peer, ok, message, args)
+
+
+## Übersetzt eine Vorlage in der Sprache dieses Spielers und setzt die Werte ein.
+## Alte Einträge ohne Werte werden nur übersetzt (bzw. unverändert angezeigt).
+func format_text(text: String, args: Variant = []) -> String:
+	var t := tr(text)
+	var a := _as_array(args)
+	if a.is_empty():
+		return t
+	return t % _tr_args(a)
+
+
+## Übersetzt eingesetzte Werte, die selbst Schlüssel sind (Kredittitel, Rollen,
+## Rechnungsarten). Namen und Beträge sind keine Schlüssel und bleiben gleich.
+func _tr_args(args: Array) -> Array:
+	var out: Array = []
+	for v in args:
+		out.append(tr(v) if v is String else v)
+	return out
+
+
+func _detail(text: String, args: Array = []) -> Dictionary:
+	return {"text": text, "args": args}
 
 
 func _as_dict(v: Variant) -> Dictionary:
@@ -328,13 +351,20 @@ func get_offer_daily(offer: Dictionary) -> int:
 
 
 func get_offer_block_reason(offer: Dictionary) -> String:
+	var parts := _offer_block_parts(offer)
+	if parts.is_empty():
+		return ""
+	return format_text(str(parts[0]), parts[1])
+
+
+func _offer_block_parts(offer: Dictionary) -> Array:
 	if loans.size() >= MAX_ACTIVE_LOANS:
-		return "Höchstens %d Kredite gleichzeitig." % MAX_ACTIVE_LOANS
+		return ["Höchstens %d Kredite gleichzeitig.", [MAX_ACTIVE_LOANS]]
 	if credit_score < int(offer["min_score"]):
-		return "Bonität ab %d nötig (aktuell %d)." % [int(offer["min_score"]), credit_score]
+		return ["Bonität ab %d nötig (aktuell %d).", [int(offer["min_score"]), credit_score]]
 	if float(get_offer_total(offer)) > get_free_credit():
-		return "Übersteigt deinen freien Kreditrahmen (%s)." % format_money(get_free_credit())
-	return ""
+		return ["Übersteigt deinen freien Kreditrahmen (%s).", [format_money(get_free_credit())]]
+	return []
 
 
 func get_loans_sorted() -> Array:
@@ -461,12 +491,12 @@ func _do_hire(pool_idx: int, peer: int) -> void:
 		_feedback(peer, false, "Diese Bewerbung gibt es nicht mehr.")
 		return
 	if employees.size() >= MAX_EMPLOYEES:
-		_feedback(peer, false, "Das Team ist voll (%d Personen)." % MAX_EMPLOYEES)
+		_feedback(peer, false, "Das Team ist voll (%d Personen).", [MAX_EMPLOYEES])
 		return
 	var c: Dictionary = CANDIDATE_POOL[pool_idx]
 	var wage := int(c["wage"])
 	if GameState.money < float(wage):
-		_feedback(peer, false, "Für die Startprämie fehlen %s." % format_money(float(wage) - GameState.money))
+		_feedback(peer, false, "Für die Startprämie fehlen %s.", [format_money(float(wage) - GameState.money)])
 		return
 	var day: int = GameState.day_number
 	var eid := "E-%d" % _next_emp_num
@@ -482,11 +512,11 @@ func _do_hire(pool_idx: int, peer: int) -> void:
 		"work_done": 0,
 	}
 	hired_pool.append(pool_idx)
-	_debit(float(wage), "Startprämie %s" % str(c["name"]), day)
-	GameState.post_event("%s hat %s als %s eingestellt (%s pro Tag)." % [
+	_debit(float(wage), "Startprämie %s", day, [str(c["name"])])
+	GameState.post_event_f("%s hat %s als %s eingestellt (%s pro Tag).", [
 		NetworkManager.get_player_name(peer), str(c["name"]), get_role_title(str(c["role"])), format_money(float(wage))
 	], "good")
-	_feedback(peer, true, "%s eingestellt." % str(c["name"]))
+	_feedback(peer, true, "%s eingestellt.", [str(c["name"])])
 	_broadcast()
 
 
@@ -496,14 +526,14 @@ func _do_fire(emp_id: String, peer: int) -> void:
 		return
 	var e: Dictionary = employees[emp_id]
 	var severance := float(int(e["wage"]) * SEVERANCE_DAYS)
-	_debit(severance, "Abfindung %s" % str(e["name"]), GameState.day_number)
+	_debit(severance, "Abfindung %s", GameState.day_number, [str(e["name"])])
 	hired_pool.erase(int(e.get("pool_idx", -1)))
 	employees.erase(emp_id)
 	_work_accum.erase(emp_id)
-	GameState.post_event("%s hat %s entlassen (Abfindung %s)." % [
+	GameState.post_event_f("%s hat %s entlassen (Abfindung %s).", [
 		NetworkManager.get_player_name(peer), str(e["name"]), format_money(severance)
 	], "warn")
-	_feedback(peer, true, "%s entlassen." % str(e["name"]))
+	_feedback(peer, true, "%s entlassen.", [str(e["name"])])
 	_broadcast()
 
 
@@ -512,9 +542,9 @@ func _do_take_loan(offer_id: String, peer: int) -> void:
 	if offer.is_empty():
 		_feedback(peer, false, "Kreditangebot nicht gefunden.")
 		return
-	var reason := get_offer_block_reason(offer)
-	if not reason.is_empty():
-		_feedback(peer, false, reason)
+	var block := _offer_block_parts(offer)
+	if not block.is_empty():
+		_feedback(peer, false, str(block[0]), _as_array(block[1]))
 		return
 	var amount := float(offer["amount"])
 	var total := float(get_offer_total(offer))
@@ -536,11 +566,11 @@ func _do_take_loan(offer_id: String, peer: int) -> void:
 		"missed": 0,
 	}
 	GameState.money += amount
-	_add_statement(day, "Auszahlung %s %s" % [str(offer["title"]), lid], amount)
-	GameState.post_event("%s hat einen %s über %s aufgenommen (Rate %s pro Tag)." % [
+	_add_statement(day, "Auszahlung %s %s", amount, [str(offer["title"]), lid])
+	GameState.post_event_f("%s hat einen %s über %s aufgenommen (Rate %s pro Tag).", [
 		NetworkManager.get_player_name(peer), str(offer["title"]), format_money(amount), format_money(float(get_offer_daily(offer)))
 	], "info")
-	_feedback(peer, true, "%s ausgezahlt: +%s" % [str(offer["title"]), format_money(amount)])
+	_feedback(peer, true, "%s ausgezahlt: +%s", [str(offer["title"]), format_money(amount)])
 	_broadcast()
 
 
@@ -551,15 +581,15 @@ func _do_repay_loan(loan_id: String, peer: int) -> void:
 	var ln: Dictionary = loans[loan_id]
 	var cost := float(get_loan_repay_cost(ln))
 	if GameState.money < cost:
-		_feedback(peer, false, "Für die Sondertilgung fehlen %s." % format_money(cost - GameState.money))
+		_feedback(peer, false, "Für die Sondertilgung fehlen %s.", [format_money(cost - GameState.money)])
 		return
-	_debit(cost, "Sondertilgung %s" % loan_id, GameState.day_number)
+	_debit(cost, "Sondertilgung %s", GameState.day_number, [loan_id])
 	loans.erase(loan_id)
 	_change_score(20)
-	GameState.post_event("%s hat Kredit %s vorzeitig abbezahlt (%s)." % [
+	GameState.post_event_f("%s hat Kredit %s vorzeitig abbezahlt (%s).", [
 		NetworkManager.get_player_name(peer), loan_id, format_money(cost)
 	], "good")
-	_feedback(peer, true, "Kredit %s abbezahlt." % loan_id)
+	_feedback(peer, true, "Kredit %s abbezahlt.", [loan_id])
 	_broadcast()
 
 
@@ -570,10 +600,10 @@ func _do_pay_bill(bill_id: String, peer: int) -> void:
 	var b: Dictionary = bills[bill_id]
 	var amount := float(b["amount"])
 	if GameState.money < amount:
-		_feedback(peer, false, "Für Rechnung %s fehlen %s." % [bill_id, format_money(amount - GameState.money)])
+		_feedback(peer, false, "Für Rechnung %s fehlen %s.", [bill_id, format_money(amount - GameState.money)])
 		return
 	_settle_bill(b, NetworkManager.get_player_name(peer))
-	_feedback(peer, true, "Rechnung %s bezahlt (%s)." % [bill_id, format_money(amount)])
+	_feedback(peer, true, "Rechnung %s bezahlt (%s).", [bill_id, format_money(amount)])
 	_broadcast()
 
 
@@ -591,10 +621,10 @@ func _do_pay_all(peer: int) -> void:
 	if paid == 0:
 		_feedback(peer, false, "Keine Rechnung bezahlt: zu wenig Geld oder nichts offen.")
 		return
-	var msg := "%d Rechnung(en) bezahlt." % paid
 	if skipped > 0:
-		msg += " %d offen geblieben (zu wenig Geld)." % skipped
-	_feedback(peer, true, msg)
+		_feedback(peer, true, "%d Rechnung(en) bezahlt. %d offen geblieben (zu wenig Geld).", [paid, skipped])
+	else:
+		_feedback(peer, true, "%d Rechnung(en) bezahlt.", [paid])
 	_broadcast()
 
 
@@ -617,11 +647,11 @@ func _pay_wages(day: int) -> void:
 	var total := get_daily_wage_total()
 	if total <= 0:
 		return
-	_debit(float(total), "Löhne Tag %d (%d Mitarbeiter)" % [day - 1, employees.size()], day)
+	_debit(float(total), "Löhne Tag %d (%d Mitarbeiter)", day, [day - 1, employees.size()])
 	if GameState.money < 0.0:
-		GameState.post_event("Löhne bezahlt (%s). Das Konto ist im Minus!" % format_money(float(total)), "warn")
+		GameState.post_event_f("Löhne bezahlt (%s). Das Konto ist im Minus!", [format_money(float(total))], "warn")
 	else:
-		GameState.post_event("Löhne für Tag %d bezahlt: %s." % [day - 1, format_money(float(total))], "info")
+		GameState.post_event_f("Löhne für Tag %d bezahlt: %s.", [day - 1, format_money(float(total))], "info")
 
 
 func _collect_loan_rates(day: int) -> void:
@@ -629,53 +659,53 @@ func _collect_loan_rates(day: int) -> void:
 		var ln: Dictionary = loans[lid]
 		var pay := minf(float(ln["daily_payment"]), float(ln["remaining"]))
 		if GameState.money >= pay:
-			_debit(pay, "Kreditrate %s" % str(lid), day)
+			_debit(pay, "Kreditrate %s", day, [str(lid)])
 			ln["remaining"] = maxf(0.0, float(ln["remaining"]) - pay)
 			ln["days_left"] = maxi(0, int(ln["days_left"]) - 1)
 			if float(ln["remaining"]) <= 0.01:
 				loans.erase(lid)
 				_change_score(15)
-				GameState.post_event("Kredit %s ist vollständig getilgt." % str(lid), "good")
+				GameState.post_event_f("Kredit %s ist vollständig getilgt.", [str(lid)], "good")
 		else:
 			var penalty := ceilf(float(ln["remaining"]) * LOAN_LATE_PENALTY_PCT)
 			ln["remaining"] = float(ln["remaining"]) + penalty
 			ln["missed"] = int(ln["missed"]) + 1
 			_change_score(-25)
-			GameState.post_event("Kreditrate %s geplatzt! Verzugszins %s, Bonität sinkt." % [str(lid), format_money(penalty)], "warn")
+			GameState.post_event_f("Kreditrate %s geplatzt! Verzugszins %s, Bonität sinkt.", [str(lid), format_money(penalty)], "warn")
 
 
 func _issue_power_bill(day: int) -> void:
 	var amount := float(GameState.last_daily_bill)
 	if amount <= 0.0:
 		return
-	var rate := float(GameState.ELECTRICITY_RATE_PER_KWH)
+	var rate := float(GameState.last_bill_rate)
 	var kwh := amount / rate if rate > 0.0 else 0.0
 	_issue_bill("power", amount, day, [
-		"Abrechnungszeitraum: Tag %d" % (day - 1),
-		"Verbrauch: %.1f kWh" % kwh,
-		"Arbeitspreis: $%.2f pro kWh" % rate,
+		_detail("Abrechnungszeitraum: Tag %d", [day - 1]),
+		_detail("Verbrauch: %.1f kWh", [kwh]),
+		_detail("Arbeitspreis: $%.2f pro kWh", [rate]),
 	])
 
 
 func _issue_weekly_bills(day: int) -> void:
-	var period := "Tag %d bis %d" % [day, day + WEEK_DAYS - 1]
+	var last_day := day + WEEK_DAYS - 1
 	_issue_bill("rent", RENT_WEEKLY, day, [
-		"Mietzeitraum: %s" % period,
-		"Gewerbegarage inkl. Nebenkosten",
+		_detail("Mietzeitraum: Tag %d bis %d", [day, last_day]),
+		_detail("Gewerbegarage inkl. Nebenkosten"),
 	])
 	var mbps := float(GameState.max_bandwidth_mbps)
 	var net_cost := roundf(INTERNET_BASE + mbps * INTERNET_PER_MBPS)
 	_issue_bill("internet", net_cost, day, [
-		"Leistungszeitraum: %s" % period,
-		"Tarif: Business %s" % HardwareCatalog.format_speed_mbps(mbps),
-		"Grundgebühr $%.0f + $%.2f pro Mbit/s" % [INTERNET_BASE, INTERNET_PER_MBPS],
+		_detail("Leistungszeitraum: Tag %d bis %d", [day, last_day]),
+		_detail("Tarif: Business %s", [HardwareCatalog.format_speed_mbps(mbps)]),
+		_detail("Grundgebühr $%.0f + $%.2f pro Mbit/s", [INTERNET_BASE, INTERNET_PER_MBPS]),
 	])
 	var rack_count: int = GameState.racks.size()
 	var ins_cost := INSURANCE_BASE + INSURANCE_PER_RACK * float(rack_count)
 	_issue_bill("insurance", ins_cost, day, [
-		"Versicherungszeitraum: %s" % period,
-		"Inventar- und Elektronikversicherung",
-		"%d versicherte Racks à $%.0f" % [rack_count, INSURANCE_PER_RACK],
+		_detail("Versicherungszeitraum: Tag %d bis %d", [day, last_day]),
+		_detail("Inventar- und Elektronikversicherung"),
+		_detail("%d versicherte Racks à $%.0f", [rack_count, INSURANCE_PER_RACK]),
 	])
 
 
@@ -694,9 +724,9 @@ func _issue_bill(kind: String, amount: float, day: int, details: Array) -> void:
 		"issued_day": day,
 		"due_day": day + int(k["due_days"]),
 		"dunning": 0,
-		"details": details.duplicate(),
+		"details": details.duplicate(true),
 	}
-	GameState.post_event("Neue Rechnung %s von %s: %s, fällig an Tag %d." % [
+	GameState.post_event_f("Neue Rechnung %s von %s: %s, fällig an Tag %d.", [
 		bid, str(k["vendor"]), format_money(amount), day + int(k["due_days"])
 	], "info")
 
@@ -709,10 +739,10 @@ func _process_dunning(day: int) -> void:
 		var lvl := int(b["dunning"])
 		if lvl >= MAX_DUNNING_LEVEL:
 			var cost := ceilf(float(b["amount"]) * (1.0 + COLLECTION_FEE_PCT))
-			_debit(cost, "Inkasso %s %s" % [str(bid), str(b["vendor"])], day)
+			_debit(cost, "Inkasso %s %s", day, [str(bid), str(b["vendor"])])
 			bills.erase(bid)
 			_change_score(-40)
-			GameState.post_event("Inkasso! Rechnung %s wurde mit %s Aufschlag eingezogen: %s." % [
+			GameState.post_event_f("Inkasso! Rechnung %s wurde mit %s Aufschlag eingezogen: %s.", [
 				str(bid), "%d%%" % int(COLLECTION_FEE_PCT * 100.0), format_money(cost)
 			], "warn")
 			continue
@@ -722,20 +752,21 @@ func _process_dunning(day: int) -> void:
 		b["amount"] = float(b["amount"]) + fee
 		b["due_day"] = day + DUNNING_GRACE_DAYS
 		var details: Array = b["details"]
-		details.append("Mahngebühr Stufe %d: %s" % [lvl, format_money(fee)])
+		details.append(_detail("Mahngebühr Stufe %d: %s", [lvl, format_money(fee)]))
 		_change_score(-15)
-		GameState.post_event("%d. Mahnung für %s (%s): jetzt %s, neue Frist Tag %d." % [
+		GameState.post_event_f("%d. Mahnung für %s (%s): jetzt %s, neue Frist Tag %d.", [
 			lvl, str(bid), str(b["vendor"]), format_money(float(b["amount"])), int(b["due_day"])
 		], "warn")
 
 
-func _settle_bill(b: Dictionary, paid_by: String) -> void:
+func _settle_bill(b: Dictionary, paid_by: String, paid_by_args: Array = []) -> void:
 	var bid := str(b["id"])
 	var day: int = GameState.day_number
-	_debit(float(b["amount"]), "Rechnung %s %s" % [bid, str(b["vendor"])], day)
+	_debit(float(b["amount"]), "Rechnung %s %s", day, [bid, str(b["vendor"])])
 	var rec: Dictionary = b.duplicate(true)
 	rec["paid_day"] = day
 	rec["paid_by"] = paid_by
+	rec["paid_by_args"] = paid_by_args.duplicate()
 	paid_bills.push_front(rec)
 	while paid_bills.size() > PAID_HISTORY_MAX:
 		paid_bills.pop_back()
@@ -783,16 +814,16 @@ func _accountant_pay() -> void:
 		return
 	var day: int = GameState.day_number
 	var lookahead := 1 if int(acc["skill"]) >= 3 else 0
-	var who := "Buchhaltung (%s)" % str(acc["name"])
+	var acc_name := str(acc["name"])
 	var paid := 0
 	for b_v in get_open_bills():
 		var b: Dictionary = b_v
 		if int(b["due_day"]) <= day + lookahead and GameState.money >= float(b["amount"]):
-			_settle_bill(b, who)
+			_settle_bill(b, "Buchhaltung (%s)", [acc_name])
 			paid += 1
 	if paid > 0:
 		acc["work_done"] = int(acc["work_done"]) + paid
-		GameState.post_event("%s hat %d Rechnung(en) bezahlt." % [who, paid], "info")
+		GameState.post_event_f("Buchhaltung (%s) hat %d Rechnung(en) bezahlt.", [acc_name, paid], "info")
 		_broadcast()
 
 
@@ -806,15 +837,15 @@ func _find_offer(offer_id: String) -> Dictionary:
 	return {}
 
 
-func _debit(amount: float, text: String, day: int) -> void:
+func _debit(amount: float, text: String, day: int, args: Array = []) -> void:
 	if amount <= 0.0:
 		return
 	GameState.money -= amount
-	_add_statement(day, text, -amount)
+	_add_statement(day, text, -amount, args)
 
 
-func _add_statement(day: int, text: String, amount: float) -> void:
-	statement.push_front({"day": day, "text": text, "amount": amount, "balance": GameState.money})
+func _add_statement(day: int, text: String, amount: float, args: Array = []) -> void:
+	statement.push_front({"day": day, "text": text, "args": args.duplicate(), "amount": amount, "balance": GameState.money})
 	while statement.size() > STATEMENT_MAX:
 		statement.pop_back()
 

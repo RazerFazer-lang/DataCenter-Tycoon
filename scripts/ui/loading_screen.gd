@@ -7,7 +7,7 @@ extends Control
 signal loading_finished
 
 const TIPS: Array[String] = [
-	"TIPP: Du startest in einer leeren Garage mit $1.800 — lege im PC-Shop [E] dein erstes Rack, ein Server-Chassis & Teile in den Warenkorb!",
+	"TIPP: Du startest in einer leeren Garage mit $1.800 — kaufe im PC-Shop dein erstes Rack und wähle am Rack [E] per Mausklick ein Mainboard für einen freien Einschub!",
 	"TIPP: Kaufe CPUs, DDR2–DDR5 RAM, GPUs, NVMe-SSDs & Netzteile im PC-Shop ins Teile-Lager — und schraube sie am Rack [E] direkt ein!",
 	"TIPP: Vermiete deine Racks für Webhosting, Game-Server, Cloud-Storage, Streaming, Datenbanken oder KI — und prüfe live, ob der RAM (GB) reicht!",
 	"TIPP: Überlastete Kunden schreiben Tickets in der Support-App oder rufen live am PC an — rechtzeitiges Antworten kauft dir Zeit zum Aufrüsten!",
@@ -143,7 +143,7 @@ func start_loading(headline: String = "LADE RECHENZENTRUM…", duration: float =
 	_fading_out = false
 	_elapsed = 0.0
 	_duration = maxf(0.8, duration)
-	_subtitle_lbl.text = headline.to_upper()
+	_subtitle_lbl.text = tr(headline).to_upper()
 	_show_tip(randi() % TIPS.size(), false)
 	_tip_t = 0.0
 	_progress_bar.value = 0.0
@@ -205,7 +205,7 @@ func _on_fade_out_done() -> void:
 
 func _set_stage(idx: int, animate: bool) -> void:
 	_stage_idx = idx
-	_stage_lbl.text = STAGES[idx]
+	_stage_lbl.text = tr(STAGES[idx])
 	var done := idx == STAGES.size() - 1
 	_stage_lbl.add_theme_color_override("font_color", UIStyle.COL_GREEN if done else UIStyle.COL_TEXT_MAIN)
 	if animate:
@@ -217,7 +217,7 @@ func _set_stage(idx: int, animate: bool) -> void:
 
 func _show_tip(idx: int, animate: bool) -> void:
 	_tip_idx = idx
-	_tip_lbl.text = TIPS[idx].trim_prefix("TIPP: ")
+	_tip_lbl.text = tr(TIPS[idx]).trim_prefix(tr("TIPP: "))
 	_tip_count_lbl.text = "%d / %d" % [idx + 1, TIPS.size()]
 	if animate:
 		_tip_lbl.modulate.a = 0.0
@@ -404,7 +404,7 @@ func _build_ui() -> void:
 	row.add_child(_spinner)
 
 	_stage_lbl = Label.new()
-	_stage_lbl.text = STAGES[0]
+	_stage_lbl.text = tr(STAGES[0])
 	_stage_lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_stage_lbl.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	_stage_lbl.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS

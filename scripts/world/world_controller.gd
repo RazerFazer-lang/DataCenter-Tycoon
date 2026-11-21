@@ -97,6 +97,28 @@ func _ready() -> void:
 			_world_env.environment.sky.sky_material = sky_mat
 
 	_apply_graphics_quality()
+	_prewarm_shaders()
+
+
+## Anzahl Bilder, in denen alle Hallen und Lampenschatten hinter dem Ladebildschirm gerendert werden.
+const SHADER_PREWARM_FRAMES := 4
+
+
+func _prewarm_shaders() -> void:
+	if _garage == null or not _garage.has_method("begin_shader_prewarm"):
+		return
+	_garage.begin_shader_prewarm()
+	for i in range(SHADER_PREWARM_FRAMES):
+		if not is_inside_tree():
+			return
+		await get_tree().process_frame
+	if not is_inside_tree():
+		return
+	# Echten Zustand wiederherstellen: Lampenschatten nach Qualitätsstufe, Wände nach room_level.
+	if _garage != null and _garage.has_method("end_shader_prewarm"):
+		_garage.end_shader_prewarm()
+	_apply_graphics_quality()
+	_sync_room_level()
 
 
 func _process(_delta: float) -> void:
@@ -109,55 +131,88 @@ func _apply_graphics_quality() -> void:
 	var env := _world_env.environment
 	var q := SettingsManager.graphics_quality
 	env.tonemap_mode = Environment.TONE_MAPPER_ACES
-	env.tonemap_exposure = 1.02
-	# Realistic natural highlights ONLY (zero cyberpunk neon bloom!)
-	env.glow_enabled = (q >= 2)
-	env.glow_intensity = 0.22 if q >= 2 else 0.12
-	env.glow_bloom = 0.025
-	env.glow_hdr_threshold = 1.45
+	env.tonemap_exposure = 1.05
+	# Dezentes Bloom: nur echte Lichtquellen (Lampenleisten, LEDs, Bildschirme) strahlen über.
+	env.glow_enabled = (q >= 1)
+	env.glow_intensity = 0.32 if q >= 2 else 0.22
+	env.glow_strength = 1.0
+	env.glow_bloom = 0.04
+	env.glow_hdr_threshold = 1.05
+	env.glow_hdr_scale = 2.0
+	env.glow_blend_mode = Environment.GLOW_BLEND_MODE_SOFTLIGHT
 
-	# Natural photographic color balance (neutral saturation, clean contrast)
-	env.adjustment_enabled = (q >= 1)
-	env.adjustment_contrast = 1.03
-	env.adjustment_saturation = 0.98
+	# Mehr Kontrast und Farbe gegen das flache, graue Bild. Kostet praktisch nichts, daher auf allen Stufen.
+	env.adjustment_enabled = true
+	env.adjustment_contrast = 1.10
+	env.adjustment_saturation = 1.12
 	env.adjustment_brightness = 1.00
 
-	# Forward+ Ambient Occlusion, Indirect Lighting, Reflections & Subtle Natural Air Haze
+	# Umgebungsverdeckung: kräftiger und mit Kontaktschatten in Ecken, an Rack-Füßen und Kabeln.
 	env.ssao_enabled = (q >= 1)
-	env.ssao_radius = 0.85
-	env.ssao_intensity = 1.45
+	env.ssao_radius = 1.0
+	env.ssao_intensity = 2.0
+	env.ssao_power = 1.5
+	env.ssao_detail = 0.6
+	env.ssao_horizon = 0.06
+	env.ssao_light_affect = 0.15
 	env.ssil_enabled = (q >= 2)
-	env.ssil_intensity = 0.65
-	env.ssr_enabled = (q >= 2)
-	env.ssr_max_steps = 48 if q >= 3 else 32
+	env.ssil_intensity = 0.8
+	env.ssil_radius = 4.0
+	# Spiegelungen auf den glänzenden Böden schon ab Mittel.
+	env.ssr_enabled = (q >= 1)
+	# Ultra wie Hoch: 64 statt 48 Schritte kosteten ~0,5 ms, sichtbar nur an sehr flachen Blickwinkeln.
+	env.ssr_max_steps = 48 if q >= 2 else 32
+	env.ssr_fade_in = 0.15
+	env.ssr_fade_out = 2.0
+	env.ssr_depth_tolerance = 0.2
 	env.sdfgi_enabled = (q >= 3)
 	env.sdfgi_use_occlusion = true
 	env.sdfgi_energy = 0.78
+	env.sdfgi_cascades = 3
 	env.volumetric_fog_enabled = (q >= 3)
 	env.volumetric_fog_density = 0.0022
 	env.volumetric_fog_albedo = Color(0.88, 0.89, 0.90)
 	env.volumetric_fog_emission_energy = 0.0
-	env.ssr_max_steps = 32
-	env.sdfgi_cascades = 3
 
-	# Kosten begrenzen (gemessen auf Ultra: MSAA 4x ~68 ms, Himmels-Reflexion 256 ~58 ms, SDFGI ~62 ms pro Frame).
+	# Kosten begrenzen. Gemessen auf Ultra in 2560x1440 (21.11.2026): SSIL MEDIUM ~1,2 ms, SDFGI ~1,1 ms,
+	# SSR 48 Schritte ~0,7 ms, Nebel 32x48 ~0,3 ms pro Bild. MSAA ist bei FSR 2.2 aus (settings_manager.gd).
 	RenderingServer.gi_set_use_half_resolution(true)
-	RenderingServer.environment_set_volumetric_fog_volume_size(48, 48)
-	RenderingServer.environment_set_ssao_quality(RenderingServer.ENV_SSAO_QUALITY_MEDIUM, true, 0.5, 2, 50.0, 300.0)
-	RenderingServer.environment_set_ssil_quality(RenderingServer.ENV_SSIL_QUALITY_MEDIUM, true, 0.5, 2, 50.0, 300.0)
+	# Nebel-Volumen 32 x 32 x 48 statt 48 x 48 x 48: ~55 % weniger Zellen. Der Nebel ist sehr dünn (0.0022)
+	# und wird gefiltert, die geringere Breiten-Auflösung fällt kaum auf.
+	RenderingServer.environment_set_volumetric_fog_volume_size(32, 48)
+	var ao_q := RenderingServer.ENV_SSAO_QUALITY_HIGH if q >= 3 else RenderingServer.ENV_SSAO_QUALITY_MEDIUM
+	# SSIL auf allen Stufen MEDIUM: HIGH war auf Ultra mit ~2,8 ms der teuerste Effekt.
+	var il_q := RenderingServer.ENV_SSIL_QUALITY_MEDIUM
+	RenderingServer.environment_set_ssao_quality(ao_q, true, 0.5, 2, 50.0, 300.0)
+	RenderingServer.environment_set_ssil_quality(il_q, true, 0.5, 2, 50.0, 300.0)
+	# Die Halle ist weitgehend statisch: Lichtänderungen auf 8 statt 4 Bilder verteilen.
+	# Folge: Indirektes Licht reagiert bei Flackern oder USV-Wechsel ~0,1 s träger.
+	RenderingServer.environment_set_sdfgi_frames_to_update_light(RenderingServer.ENV_SDFGI_UPDATE_LIGHT_IN_8_FRAMES)
+
+	# Schatten: höher aufgelöste Shadow-Maps und weichere Kanten je nach Stufe.
+	var shadow_q := RenderingServer.SHADOW_QUALITY_SOFT_LOW
+	if q >= 3:
+		shadow_q = RenderingServer.SHADOW_QUALITY_SOFT_HIGH
+	elif q >= 2:
+		shadow_q = RenderingServer.SHADOW_QUALITY_SOFT_MEDIUM
+	RenderingServer.directional_soft_shadow_filter_set_quality(shadow_q)
+	RenderingServer.positional_soft_shadow_filter_set_quality(shadow_q)
+	RenderingServer.directional_shadow_atlas_set_size(4096 if q >= 2 else 2048, true)
+	var vp := get_viewport()
+	if vp != null:
+		vp.positional_shadow_atlas_size = 4096 if q >= 2 else 2048
 	if env.sky != null:
 		env.sky.process_mode = Sky.PROCESS_MODE_INCREMENTAL
 		env.sky.radiance_size = Sky.RADIANCE_SIZE_128 if q >= 3 else Sky.RADIANCE_SIZE_64
 
-	# Kantenglättung: FXAA (und TAA auf Ultra) statt MSAA 4x.
-	var vp := get_viewport()
-	if vp != null:
-		vp.msaa_3d = Viewport.MSAA_DISABLED
-		vp.screen_space_aa = Viewport.SCREEN_SPACE_AA_FXAA if q >= 1 else Viewport.SCREEN_SPACE_AA_DISABLED
-		vp.use_taa = (q >= 3)
+	# Kantenglättung, Auflösung und Texturfilter setzt jetzt SettingsManager.apply_graphics_settings()
+	# (eigene Optionen im Menü). Früher erzwangen FXAA und TAA hier ein weiches Bild.
 
 	if _sun_light != null:
 		_sun_light.shadow_enabled = (q >= 1)
+		_sun_light.directional_shadow_mode = DirectionalLight3D.SHADOW_PARALLEL_4_SPLITS if q >= 2 else DirectionalLight3D.SHADOW_PARALLEL_2_SPLITS
+		_sun_light.directional_shadow_max_distance = 60.0
+		_sun_light.shadow_blur = 1.2
 	if _garage != null and _garage.has_method("apply_graphics_quality"):
 		_garage.apply_graphics_quality(q)
 
@@ -188,7 +243,7 @@ func _update_day_night_atmosphere() -> void:
 		var noon_col := Color(1.0, 0.97, 0.92)
 		var sunset_col := Color(1.0, 0.54, 0.24)
 		_sun_light.light_color = noon_col.lerp(sunset_col, sunset_factor * 0.88)
-		_sun_light.light_energy = lerpf(0.24, 1.45, day_factor)
+		_sun_light.light_energy = lerpf(0.24, 1.6, day_factor)
 	else:
 		_sun_light.light_color = Color(0.42, 0.62, 0.98)
 		_sun_light.light_energy = 0.28
@@ -207,7 +262,8 @@ func _update_day_night_atmosphere() -> void:
 			sky_sh.set_shader_parameter("sunset_factor", sunset_factor)
 
 	env.ambient_light_color = Color(0.08, 0.13, 0.24).lerp(Color(0.28, 0.33, 0.40), day_factor)
-	env.ambient_light_energy = lerpf(0.24, 0.56, day_factor)
+	# Etwas weniger Grundhelligkeit, damit Lampen und Schatten das Bild formen statt flachem Einheitslicht.
+	env.ambient_light_energy = lerpf(0.20, 0.45, day_factor)
 
 
 func show_menu_showcase() -> void:

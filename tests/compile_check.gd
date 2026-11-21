@@ -11,6 +11,14 @@ const SCRIPTS: Array[String] = [
 	"res://scripts/autoload/game_state.gd",
 	"res://scripts/autoload/pc_screen_state.gd",
 	"res://scripts/world/garage_builder.gd",
+	"res://scripts/autoload/network_manager.gd",
+	"res://scripts/autoload/settings_manager.gd",
+	"res://scripts/ui/hud.gd",
+	"res://scripts/ui/main_menu.gd",
+	"res://scripts/ui/ui_theme.gd",
+	"res://scripts/ui/perf_overlay.gd",
+	"res://scripts/ui/history_chart.gd",
+	"res://scripts/autoload/stats_history.gd",
 ]
 
 

@@ -276,7 +276,7 @@ static func build_office_chair() -> Node3D:
 
 
 static func build_terminal_desk_details(root: Node3D) -> void:
-	var wood := MatLib.get_mat("wood_desk")
+	var cable_mat := _mat(Color(0.05, 0.05, 0.06), 0.80, 0.0)
 	var metal := MatLib.make_brushed_metal(Color(0.16, 0.17, 0.19), 0.40, 0.60)
 	var galv := MatLib.get_mat("galvanized_steel")
 	var pad := _mat(Color(0.13, 0.14, 0.16), 0.88, 0.0)
@@ -285,28 +285,22 @@ static func build_terminal_desk_details(root: Node3D) -> void:
 	var mug_mat := _mat(Color(0.88, 0.87, 0.84), 0.28, 0.04)
 	var coffee := _mat(Color(0.12, 0.07, 0.04), 0.12, 0.02)
 
-	# 1. Under-Desk 3-Drawer Steel Rolling Pedestal Cabinet (Right Side)
+	# 1. Unterschrank: 3-Schubladen-Rollcontainer aus Stahl, rechts unter der Platte
 	var ped := Node3D.new()
 	ped.position = Vector3(0.64, 0.0, 0.02)
 	root.add_child(ped)
-	_box(ped, Vector3(0.0, 0.34, 0.0), Vector3(0.42, 0.60, 0.56), metal)
-	for dy in [0.14, 0.34, 0.53]:
-		_box(ped, Vector3(0.0, float(dy), 0.284), Vector3(0.38, 0.165, 0.012), _mat(Color(0.22, 0.23, 0.25), 0.46, 0.45))
-		_box(ped, Vector3(0.0, float(dy) + 0.02, 0.298), Vector3(0.14, 0.014, 0.016), galv)
+	_box(ped, Vector3(0.0, 0.385, 0.0), Vector3(0.42, 0.72, 0.56), metal)
+	for dy in [0.14, 0.37, 0.60]:
+		_box(ped, Vector3(0.0, float(dy), 0.284), Vector3(0.38, 0.19, 0.012), _mat(Color(0.22, 0.23, 0.25), 0.46, 0.45))
+		_box(ped, Vector3(0.0, float(dy) + 0.02, 0.300), Vector3(0.14, 0.014, 0.016), galv)
 	for cx in [-0.16, 0.16]:
 		for cz in [-0.22, 0.22]:
 			_cyl_x(ped, Vector3(float(cx), 0.024, float(cz)), 0.022, 0.026, pad)
 
-	# 2. Articulated Dual-Monitor Steel Desk Clamp Arm (replaces floating blocks!)
-	_box(root, Vector3(-0.34, 0.815, -0.40), Vector3(0.10, 0.06, 0.10), metal)
-	_cyl(root, Vector3(-0.34, 1.06, -0.40), 0.020, 0.48, galv)
-	# Horizontal jointed arm reaching to primary monitor (-0.10, 1.24, -0.18) & side monitor (-0.74, 1.20, -0.08)
-	_box(root, Vector3(-0.22, 1.22, -0.30), Vector3(0.28, 0.032, 0.032), metal)
-	_box(root, Vector3(-0.54, 1.20, -0.26), Vector3(0.44, 0.032, 0.032), metal)
-
+	# Monitorarm: wird in garage_builder.gd (_build_terminal_desk) gebaut.
 	# 3. Sculpted Mechanical Keyboard (angled aluminum wedge + 5 sculpted keycap clusters!)
 	var kb := Node3D.new()
-	kb.position = Vector3(-0.18, 0.830, 0.16)
+	kb.position = Vector3(-0.18, 0.826, 0.16)
 	kb.rotation_degrees.x = 5.5
 	root.add_child(kb)
 	_box(kb, Vector3.ZERO, Vector3(0.44, 0.020, 0.145), metal)
@@ -320,7 +314,7 @@ static func build_terminal_desk_details(root: Node3D) -> void:
 
 	# 4. Sculpted Ergonomic Mouse (rounded sphere shell + scroll wheel)
 	var mouse := Node3D.new()
-	mouse.position = Vector3(0.19, 0.828, 0.16)
+	mouse.position = Vector3(0.19, 0.812, 0.16)
 	root.add_child(mouse)
 	var ms := MeshInstance3D.new()
 	var sph := SphereMesh.new()
@@ -329,13 +323,41 @@ static func build_terminal_desk_details(root: Node3D) -> void:
 	ms.mesh = sph
 	ms.scale = Vector3(0.82, 0.58, 1.38)
 	ms.material_override = metal
-	ms.position = Vector3(0.0, 0.012, 0.0)
+	ms.position = Vector3(0.0, 0.020, 0.0)
 	mouse.add_child(ms)
-	_cyl_x(mouse, Vector3(0.0, 0.026, -0.026), 0.008, 0.008, galv)
+	_cyl_x(mouse, Vector3(0.0, 0.040, -0.028), 0.008, 0.008, galv)
+
+	# Mauspad unter Maus und Tastatur (flache Gummiplatte mit Stoffoberfläche)
+	var mouse_pad_mat := _mat(Color(0.08, 0.08, 0.09), 0.92, 0.0)
+	_box(root, Vector3(0.19, 0.810, 0.16), Vector3(0.30, 0.004, 0.24), mouse_pad_mat)
+
+	# Steckdosenleiste mit Schalter, hinten links auf der Platte
+	var strip_mat := _mat(Color(0.10, 0.10, 0.11), 0.50, 0.10)
+	_box(root, Vector3(-0.72, 0.823, 0.36), Vector3(0.28, 0.030, 0.060), strip_mat)
+	for sx_i in [-0.82, -0.77, -0.72, -0.67]:
+		_box(root, Vector3(float(sx_i), 0.839, 0.36), Vector3(0.018, 0.002, 0.012), galv)
+	_box(root, Vector3(-0.60, 0.823, 0.392), Vector3(0.012, 0.010, 0.006), _mat(Color(0.82, 0.20, 0.14), 0.40, 0.10))
+
+	# Haftnotiz und Kugelschreiber neben der Tastatur
+	_box(root, Vector3(-0.36, 0.809, 0.34), Vector3(0.070, 0.002, 0.070), _mat(Color(0.96, 0.86, 0.30), 0.90, 0.0))
+	_cyl_x(root, Vector3(-0.20, 0.816, 0.36), 0.005, 0.14, _mat(Color(0.10, 0.20, 0.55), 0.40, 0.10))
+	# Smartphone mit Display, rechts neben dem Mauspad
+	_box(root, Vector3(0.50, 0.812, 0.30), Vector3(0.072, 0.008, 0.144), _mat(Color(0.06, 0.06, 0.07), 0.25, 0.40))
+	_box(root, Vector3(0.50, 0.8165, 0.30), Vector3(0.064, 0.002, 0.128), _mat(Color(0.12, 0.18, 0.28), 0.20, 0.0))
+
+	# Dosen-Getränk neben der Tastatur
+	var can_mat := _mat(Color(0.12, 0.30, 0.70), 0.30, 0.60)
+	_cyl(root, Vector3(-0.56, 0.868, 0.28), 0.033, 0.12, can_mat)
+	_cyl(root, Vector3(-0.56, 0.932, 0.28), 0.030, 0.006, galv)
+
+	# Kabeldurchführung in der Platte und Kabel vom PC-Turm in den Kabelkanal
+	_cyl(root, Vector3(0.50, 0.808, -0.12), 0.030, 0.004, cable_mat)
+	_cyl(root, Vector3(0.50, 0.769, -0.12), 0.010, 0.078, cable_mat)
+	_cyl_z(root, Vector3(0.50, 0.762, -0.225), 0.010, 0.21, cable_mat)
 
 	# 5. Articulated Architect Desk Lamp (Left Back Corner)
 	var lamp := Node3D.new()
-	lamp.position = Vector3(-0.80, 0.818, -0.28)
+	lamp.position = Vector3(-0.80, 0.808, -0.28)
 	lamp.rotation_degrees.y = -32.0
 	root.add_child(lamp)
 	_cyl(lamp, Vector3(0.0, 0.014, 0.0), 0.078, 0.024, metal)
@@ -356,7 +378,7 @@ static func build_terminal_desk_details(root: Node3D) -> void:
 
 	# 6. Ceramic Coffee Mug with real C-Handle & Coffee Liquid Inside!
 	var mug := Node3D.new()
-	mug.position = Vector3(-0.68, 0.818, 0.22)
+	mug.position = Vector3(-0.68, 0.808, 0.22)
 	root.add_child(mug)
 	_cyl(mug, Vector3(0.0, 0.048, 0.0), 0.040, 0.096, mug_mat)
 	_cyl(mug, Vector3(0.0, 0.090, 0.0), 0.034, 0.016, coffee)
@@ -368,7 +390,7 @@ static func build_terminal_desk_details(root: Node3D) -> void:
 	# 7. Gaming-PC-Tower: hohles Gehäuse mit Glas-Seitenwand (zeigt zum Schreibtisch, -X),
 	# damit Mainboard, Kühler, RAM, Grafikkarte und RGB-Lüfter tatsächlich sichtbar sind.
 	var pc := Node3D.new()
-	pc.position = Vector3(0.68, 0.818, -0.10)
+	pc.position = Vector3(0.68, 0.808, -0.10)
 	root.add_child(pc)
 	var case_mat := MatLib.make_brushed_metal(Color(0.07, 0.07, 0.08), 0.42, 0.55)
 	var shroud := MatLib.make_brushed_metal(Color(0.12, 0.12, 0.13), 0.36, 0.70)
@@ -490,53 +512,93 @@ static func build_whiteboard_tray(wb: Node3D) -> void:
 	_box(wb, Vector3(0.38, -0.504, 0.056), Vector3(0.13, 0.012, 0.048), felt)
 
 
-static func build_realistic_tree(parent: Node3D, pos: Vector3) -> void:
-	var trunk_mat := _mat(Color(0.32, 0.24, 0.17), 0.92, 0.0)
-	var leaf_dark := _mat(Color(0.18, 0.34, 0.15), 0.88, 0.0)
-	var leaf_mid := _mat(Color(0.24, 0.42, 0.18), 0.86, 0.0)
-	var leaf_light := _mat(Color(0.30, 0.48, 0.21), 0.84, 0.0)
+static func build_realistic_tree(parent: Node3D, pos: Vector3, scale_f: float = 1.0) -> void:
+	# Zufallswerte hängen vom Standort ab: jeder Baum ist anders, sieht aber bei jedem Start gleich aus.
+	var rng := RandomNumberGenerator.new()
+	rng.seed = hash(Vector2i(roundi(pos.x * 10.0), roundi(pos.z * 10.0)))
+	var s := scale_f * rng.randf_range(0.88, 1.12)
+	var trunk_mat := _mat(Color(0.29, 0.22, 0.16), 0.95, 0.0)
+	var hue_shift := rng.randf_range(-0.025, 0.025)
+	var leaf_mats: Array[Material] = []
+	for base in [Color(0.15, 0.29, 0.11), Color(0.20, 0.37, 0.14), Color(0.26, 0.44, 0.17), Color(0.32, 0.50, 0.20)]:
+		var col: Color = base
+		col.h = wrapf(col.h + hue_shift, 0.0, 1.0)
+		leaf_mats.append(_mat(col, 0.9, 0.0))
 
-	# Tapered trunk + 3 angled branches
+	# Konischer Stamm mit verbreitertem Fuß
+	var trunk_h := 2.5 * s
 	var trunk := MeshInstance3D.new()
 	var tc := CylinderMesh.new()
-	tc.top_radius = 0.13
-	tc.bottom_radius = 0.24
-	tc.height = 2.3
+	tc.top_radius = 0.11 * s
+	tc.bottom_radius = 0.19 * s
+	tc.height = trunk_h
+	tc.radial_segments = 16
 	trunk.mesh = tc
 	trunk.material_override = trunk_mat
-	trunk.position = pos + Vector3(0.0, 1.15, 0.0)
+	trunk.position = pos + Vector3(0.0, trunk_h * 0.5, 0.0)
 	parent.add_child(trunk)
+	var flare := MeshInstance3D.new()
+	var fc := CylinderMesh.new()
+	fc.top_radius = 0.19 * s
+	fc.bottom_radius = 0.30 * s
+	fc.height = 0.28 * s
+	fc.radial_segments = 16
+	flare.mesh = fc
+	flare.material_override = trunk_mat
+	flare.position = pos + Vector3(0.0, 0.14 * s, 0.0)
+	parent.add_child(flare)
 
-	var branch_offsets: Array = [
-		{"off": Vector3(-0.38, 2.15, 0.22), "rot": Vector3(14.0, 0.0, 32.0)},
-		{"off": Vector3(0.40, 2.25, -0.18), "rot": Vector3(-12.0, 0.0, -34.0)},
-		{"off": Vector3(0.08, 2.30, 0.34), "rot": Vector3(28.0, 0.0, -8.0)},
-	]
-	for bo in branch_offsets:
-		var bd: Dictionary = bo
-		var br := _cyl(parent, pos + (bd["off"] as Vector3), 0.065, 1.05, trunk_mat)
-		br.rotation_degrees = bd["rot"]
+	# Äste wachsen schräg nach außen in die Krone
+	var branch_count := 4
+	var yaw0 := rng.randf() * TAU
+	for i in range(branch_count):
+		var yaw := yaw0 + TAU * float(i) / float(branch_count) + rng.randf_range(-0.35, 0.35)
+		var tilt := rng.randf_range(0.55, 0.9)
+		var dir := Vector3(sin(tilt) * cos(yaw), cos(tilt), sin(tilt) * sin(yaw))
+		var blen := rng.randf_range(0.9, 1.3) * s
+		var start := pos + Vector3(0.0, rng.randf_range(1.7, 2.3) * s, 0.0)
+		var bm := CylinderMesh.new()
+		bm.top_radius = 0.035 * s
+		bm.bottom_radius = 0.075 * s
+		bm.height = blen
+		bm.radial_segments = 10
+		var br := MeshInstance3D.new()
+		br.mesh = bm
+		br.material_override = trunk_mat
+		br.transform = Transform3D(Basis(Quaternion(Vector3.UP, dir)), start + dir * (blen * 0.5))
+		parent.add_child(br)
 
-	# Multi-cluster organic layered foliage canopy (5 overlapping varied lobes!)
-	var clusters: Array = [
-		{"p": Vector3(0.0, 2.95, 0.0), "r": 1.15, "m": leaf_dark},
-		{"p": Vector3(-0.78, 2.60, 0.35), "r": 0.92, "m": leaf_mid},
-		{"p": Vector3(0.82, 2.70, -0.28), "r": 0.96, "m": leaf_mid},
-		{"p": Vector3(0.12, 2.65, 0.72), "r": 0.85, "m": leaf_dark},
-		{"p": Vector3(0.18, 3.65, -0.12), "r": 0.88, "m": leaf_light},
-	]
-	for cl in clusters:
-		var cd: Dictionary = cl
-		var mi := MeshInstance3D.new()
+	# Krone aus vielen unregelmäßigen Blattballen: unten dunkler, oben heller
+	var crown := pos + Vector3(0.0, 3.05 * s, 0.0)
+	for _i in range(11):
+		var a := rng.randf() * TAU
+		var rad_xz := rng.randf_range(0.2, 1.0)
+		var off := Vector3(cos(a) * rad_xz * 1.05, rng.randf_range(-0.55, 0.75), sin(a) * rad_xz * 1.05) * s
+		var r := rng.randf_range(0.62, 0.92) * s
 		var sm := SphereMesh.new()
-		sm.radius = float(cd["r"])
-		sm.height = float(cd["r"]) * 1.55
-		sm.radial_segments = 14
-		sm.rings = 8
-		mi.mesh = sm
-		mi.material_override = cd["m"]
-		mi.position = pos + (cd["p"] as Vector3)
-		parent.add_child(mi)
+		sm.radius = r
+		sm.height = r * 1.7
+		sm.radial_segments = 16
+		sm.rings = 10
+		var lobe := MeshInstance3D.new()
+		lobe.mesh = sm
+		var shade := clampi(int((off.y / s + 0.55) / 1.3 * 4.0), 0, 3)
+		lobe.material_override = leaf_mats[shade]
+		lobe.position = crown + off
+		lobe.rotation.y = rng.randf() * TAU
+		lobe.scale = Vector3(rng.randf_range(0.9, 1.15), 1.0, rng.randf_range(0.9, 1.15))
+		parent.add_child(lobe)
+	# Kern schließt Lücken zwischen den Ballen
+	var core := MeshInstance3D.new()
+	var cm := SphereMesh.new()
+	cm.radius = 1.05 * s
+	cm.height = 1.75 * s
+	cm.radial_segments = 16
+	cm.rings = 10
+	core.mesh = cm
+	core.material_override = leaf_mats[0]
+	core.position = crown
+	parent.add_child(core)
 
 
 static func _box(parent: Node3D, pos: Vector3, size: Vector3, mat: Material) -> MeshInstance3D:

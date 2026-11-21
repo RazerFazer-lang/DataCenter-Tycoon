@@ -24,6 +24,32 @@ var _street_lamp_mat: StandardMaterial3D
 var _breaker_lever: MeshInstance3D
 var _breaker_led_mat: StandardMaterial3D
 var _breaker_load_bar: MeshInstance3D
+## Drehpunkt des Hauptschalters aus dem Blender-Modell (ersetzt _breaker_lever für die Animation).
+var _breaker_lever_pivot: Node3D
+var _breaker_lever_on_deg: float = -28.0
+var _breaker_lever_off_deg: float = 34.0
+var _breaker_load_base_sx: float = 1.0
+## Steckdosendeckel der Einspeisung (Blender-Modell): klappen auf, sobald dort ein Stromkabel steckt.
+var _socket_lids: Array[Node3D] = []
+var _socket_lid_closed: Array[float] = []
+var _socket_lid_open: Array[float] = []
+## Öffenbare Türen und Seitenwände aus den Blender-Modellen: panel_id -> {node, prop, closed, open, is_open, tween, label}
+var _panels: Dictionary = {}
+## 3D-Schraubsicherungen F1–F4 im Sicherungskasten (Kappe sichtbar = Sicherung steckt).
+var _fuse_caps: Array[Node3D] = []
+var _fuse_cap_mats: Array[StandardMaterial3D] = []
+var _fuse_ind_mats: Array[StandardMaterial3D] = []
+var _fuse_visual_key: String = ""
+## Ablage neben dem Sicherungskasten: Ersatzsicherungen (Lagerbestand) und ausgebaute, durchgebrannte Sicherungen.
+const FUSE_TRAY_POS := Vector3(0.52, -0.30, -0.055)
+const FUSE_TRAY_TOP := 0.006
+const FUSE_TRAY_STOCK_MAX := 6
+const FUSE_TRAY_SCRAP_MAX := 3
+var _fuse_tray_stock: Node3D
+var _fuse_tray_scrap: Node3D
+var _fuse_ok_tpl: Node3D
+var _fuse_blown_tpl: Node3D
+var _fuse_prev_states: Array = []
 var _breaker_load_mat: StandardMaterial3D
 var _breaker_label: Label3D
 
@@ -58,6 +84,7 @@ func _ready() -> void:
 	_build_wall_decor()
 	_build_workshop_props()
 	apply_graphics_quality(SettingsManager.graphics_quality)
+	GameState.panel_states_changed.connect(_on_panel_states_changed)
 
 
 func _process(delta: float) -> void:
@@ -70,14 +97,16 @@ func _process(delta: float) -> void:
 func apply_graphics_quality(quality: int) -> void:
 	for i in range(_ceiling_lights.size()):
 		# Enable soft SpotLight shadows on High/Ultra for dramatic depth!
-		# Ultra wie Hoch: 4 Lampen mit Schatten. Alle 6 kosteten ~56 ms pro Frame, weil sich drehende Lüfter die Schatten ständig neu rendern lassen.
-		_ceiling_lights[i].shadow_enabled = (quality >= 2 and i < 4)
+		# Hoch: 4 Lampen mit Schatten, Ultra: alle 6. Gemessen mit allen Hallen frei kosten die Lampen 4-5
+		# zusammen ~0,55 ms pro Frame, drehende Lüfter machen dabei keinen messbaren Unterschied.
+		_ceiling_lights[i].shadow_enabled = (quality >= 3) or (quality >= 2 and i < 4)
 		_ceiling_lights[i].distance_fade_enabled = true
 		_ceiling_lights[i].distance_fade_begin = 16.0
 		_ceiling_lights[i].distance_fade_shadow = 9.0
 		_ceiling_lights[i].distance_fade_length = 4.0
+	# Die Proben rendern nur einmal (UPDATE_ONCE) und kosten danach kaum etwas.
 	for rp in _reflection_probes:
-		rp.visible = (quality >= 2)
+		rp.visible = (quality >= 1)
 	if _desk_glow_light != null:
 		_desk_glow_light.visible = (quality >= 1)
 
@@ -85,6 +114,26 @@ func apply_graphics_quality(quality: int) -> void:
 func set_room_level(level: int) -> void:
 	_set_wall_open(_partition_b, level >= 1)
 	_set_wall_open(_partition_c, level >= 2)
+
+
+## Shader vorwärmen: Für ein paar Bilder alle Hallen öffnen und alle Lampen mit Schatten und ohne
+## Distanz-Ausblendung rendern. So kompiliert Godot die Schatten- und Materialvarianten hinter dem
+## Ladebildschirm statt beim Freischalten einer Halle. Zurückgesetzt wird durch den Aufrufer über
+## set_room_level() und apply_graphics_quality().
+var _shader_prewarm_active := false
+
+
+func begin_shader_prewarm() -> void:
+	_shader_prewarm_active = true
+	_set_wall_open(_partition_b, true)
+	_set_wall_open(_partition_c, true)
+	for light in _ceiling_lights:
+		light.shadow_enabled = true
+		light.distance_fade_enabled = false
+
+
+func end_shader_prewarm() -> void:
+	_shader_prewarm_active = false
 
 
 func _set_wall_open(wall: StaticBody3D, opened: bool) -> void:
@@ -118,7 +167,7 @@ func _update_dynamic_visuals() -> void:
 			allowed = GameState.room_level >= 2
 		elif i >= 2:
 			allowed = GameState.room_level >= 1
-		var enabled := power_alive and allowed
+		var enabled := (power_alive and allowed) or _shader_prewarm_active
 		var ups_dim := 0.72 if on_ups else 1.0
 		light.light_energy = (4.4 * flicker * ups_dim) if enabled else 0.0
 		light.light_color = Color(1.0, 0.88, 0.72) if on_ups else Color(0.98, 0.97, 0.95)
@@ -187,8 +236,9 @@ func _update_dynamic_visuals() -> void:
 	if not GameState.is_active:
 		return
 
-	if _breaker_lever != null:
-		_breaker_lever.rotation_degrees.x = -28.0 if GameState.breaker_on else 34.0
+	var lever_node: Node3D = _breaker_lever_pivot if _breaker_lever_pivot != null else _breaker_lever
+	if lever_node != null:
+		lever_node.rotation_degrees.x = _breaker_lever_on_deg if GameState.breaker_on else _breaker_lever_off_deg
 	if _breaker_led_mat != null:
 		if not GameState.breaker_on:
 			_breaker_led_mat.emission = Color(0.95, 0.56, 0.12) if on_ups else Color(0.95, 0.16, 0.14)
@@ -201,7 +251,7 @@ func _update_dynamic_visuals() -> void:
 			_breaker_led_mat.emission_energy_multiplier = 0.75
 	if _breaker_load_bar != null and _breaker_load_mat != null:
 		var ratio := clampf(float(GameState.total_watts) / float(maxi(GameState.max_watts, 1)), 0.04, 1.0)
-		_breaker_load_bar.scale.x = ratio if power_alive else 0.04
+		_breaker_load_bar.scale.x = _breaker_load_base_sx * (ratio if power_alive else 0.04)
 		if not power_alive or ratio >= 1.0:
 			_breaker_load_mat.emission = Color(0.92, 0.18, 0.14)
 		elif ratio >= 0.8 or on_ups:
@@ -210,24 +260,33 @@ func _update_dynamic_visuals() -> void:
 			_breaker_load_mat.emission = Color(0.24, 0.74, 0.38)
 		_breaker_load_mat.emission_energy_multiplier = 0.72
 
+	_update_fuse_visuals()
+
 	if _breaker_label != null:
 		var used_p := GameState.count_cables_on("power", GameState.WALL_BREAKER_ID)
 		var max_p := GameState.get_max_ports("power", GameState.WALL_BREAKER_ID)
-		var state_txt := "EIN" if GameState.breaker_on else ("USV-NOTSTROM!" if on_ups else "AUS (BLACKOUT!)")
-		_breaker_label.text = "SICHERUNGSKASTEN\nStatus: %s\n%dW / %dW\nPorts: %d / %d" % [
+		var state_txt := tr("EIN") if GameState.breaker_on else (tr("USV-NOTSTROM!") if on_ups else tr("AUS (BLACKOUT!)"))
+		_breaker_label.text = tr("SICHERUNGSKASTEN\nStatus: %s\n%dW / %dW\nSteckdosen: %d / %d") % [
 			state_txt, GameState.total_watts, GameState.max_watts, used_p, max_p
 		]
 		_breaker_label.modulate = Color(0.95, 0.28, 0.24) if not power_alive else (Color(0.92, 0.64, 0.16) if (overloading or on_ups) else Color(0.18, 0.20, 0.22))
 
+	if not _socket_lids.is_empty():
+		var plugged := GameState.count_cables_on("power", GameState.WALL_BREAKER_ID)
+		for i in range(_socket_lids.size()):
+			var lid := _socket_lids[i]
+			var lid_target: float = _socket_lid_open[i] if i < plugged else _socket_lid_closed[i]
+			lid.rotation.x = lerpf(lid.rotation.x, lid_target, 0.2)
+
 	if _hall_c_breaker_label != null:
 		var used_cp := GameState.count_cables_on("power", GameState.HALL_C_BREAKER_ID)
 		var max_cp := GameState.get_max_ports("power", GameState.HALL_C_BREAKER_ID)
-		_hall_c_breaker_label.text = "HALLE-C STROMBUS\nPorts: %d / %d" % [used_cp, max_cp]
+		_hall_c_breaker_label.text = tr("HALLE-C STROMBUS\nSteckdosen: %d / %d") % [used_cp, max_cp]
 
 	if _hall_c_router_label != null:
 		var used_cn := GameState.count_cables_on("network", GameState.HALL_C_ROUTER_ID)
 		var max_cn := GameState.get_max_ports("network", GameState.HALL_C_ROUTER_ID)
-		_hall_c_router_label.text = "HALLE-C 10G FIBER\nPorts: %d / %d" % [used_cn, max_cn]
+		_hall_c_router_label.text = tr("HALLE-C 10G FIBER\nPorts: %d / %d") % [used_cn, max_cn]
 
 	if _router_led_mat != null:
 		if not power_alive:
@@ -243,10 +302,10 @@ func _update_dynamic_visuals() -> void:
 		var rt_info: Dictionary = GameState.ROUTER_TIERS[clampi(GameState.router_tier, 0, GameState.ROUTER_TIERS.size() - 1)]
 		var used_n := GameState.count_cables_on("network", GameState.WALL_ROUTER_ID)
 		var max_n := GameState.get_max_ports("network", GameState.WALL_ROUTER_ID)
-		var net_txt := "DDOS-ANGRIFF! [E]" if GameState.ddos_active else ("ONLINE" if power_alive else "OFFLINE")
+		var net_txt := tr("DDOS-ANGRIFF! [E]") if GameState.ddos_active else ("ONLINE" if power_alive else "OFFLINE")
 		var cap_warn := " ⚠ LIMIT!" if GameState.used_bandwidth_mbps > GameState.max_bandwidth_mbps else ""
-		_router_label.text = "%s\n%s • %s / %s%s\nPorts: %d/%d  ([E] Kabel | [F] Upgrade)" % [
-			str(rt_info["label"]), net_txt,
+		_router_label.text = tr("%s\n%s • %s / %s%s\nPorts: %d/%d  ([E] Kabel | [F] Upgrade)") % [
+			tr(str(rt_info["label"])), net_txt,
 			HardwareCatalog.format_speed_mbps(GameState.used_bandwidth_mbps),
 			str(rt_info["speed"]), cap_warn, used_n, max_n
 		]
@@ -290,14 +349,14 @@ func _build_architecture() -> void:
 	_add_box_visual(self, Vector3(8.0, 4.08, 4.72), Vector3(27.8, 0.32, 0.28), _mat(Color(0.24, 0.25, 0.27), 0.55, 0.30))
 
 	# Perimeter Walls
-	_add_box_static(self, Vector3(8.0, 1.9, -4.6), Vector3(27.5, 3.8, 0.25), wall_mat)
-	_add_box_static(self, Vector3(-5.6, 1.9, 0.0), Vector3(0.25, 3.8, 9.4), wall_mat)
-	_add_box_static(self, Vector3(21.6, 1.9, 0.0), Vector3(0.25, 3.8, 9.4), wall_mat)
+	_add_box_static_occluded(self, Vector3(8.0, 1.9, -4.6), Vector3(27.5, 3.8, 0.25), wall_mat)
+	_add_box_static_occluded(self, Vector3(-5.6, 1.9, 0.0), Vector3(0.25, 3.8, 9.4), wall_mat)
+	_add_box_static_occluded(self, Vector3(21.6, 1.9, 0.0), Vector3(0.25, 3.8, 9.4), wall_mat)
 
 	# South Wall with Open Garage Doorway (X -2.2..+2.2)
-	_add_box_static(self, Vector3(-3.85, 1.9, 4.6), Vector3(3.3, 3.8, 0.25), wall_mat)
-	_add_box_static(self, Vector3(11.85, 1.9, 4.6), Vector3(19.3, 3.8, 0.25), wall_mat)
-	_add_box_static(self, Vector3(0.0, 3.4, 4.6), Vector3(4.4, 0.8, 0.25), wall_mat)
+	_add_box_static_occluded(self, Vector3(-3.85, 1.9, 4.6), Vector3(3.3, 3.8, 0.25), wall_mat)
+	_add_box_static_occluded(self, Vector3(11.85, 1.9, 4.6), Vector3(19.3, 3.8, 0.25), wall_mat)
+	_add_box_static_occluded(self, Vector3(0.0, 3.4, 4.6), Vector3(4.4, 0.8, 0.25), wall_mat)
 
 	# Two-Tone Industrial Lower Wall Paint + Matte Charcoal Rubber Bumper Rail (no neon stripe!)
 	_add_box_visual(self, Vector3(8.0, 0.55, -4.46), Vector3(27.0, 1.10, 0.03), wainscot_mat)
@@ -365,6 +424,14 @@ func _build_expansion_wall(wname: String, x_pos: float, sign_text: String, sign_
 	col.shape = shape
 	wall.add_child(col)
 
+	# Verdeckt alles hinter der geschlossenen Wand. Beim Freischalten wird die Wand unsichtbar,
+	# damit ist auch der Occluder abgeschaltet.
+	var occ := OccluderInstance3D.new()
+	var box_occ := BoxOccluder3D.new()
+	box_occ.size = Vector3(0.22, 3.8, 8.95)
+	occ.occluder = box_occ
+	wall.add_child(occ)
+
 	var lock_sign := Label3D.new()
 	lock_sign.text = sign_text
 	lock_sign.font_size = 40
@@ -409,25 +476,186 @@ func _build_structural_details() -> void:
 		_add_box_visual(self, Vector3(0.0, 3.12, 3.95 - float(p_idx) * 0.68), Vector3(4.32, 0.07, 0.62), door_mat)
 
 
+## Rasenmaterial mit großflächiger Farbvariation (saftig, trocken, dunkle Flecken) in Weltkoordinaten.
+func _make_meadow_material(grass_mat: Material) -> Material:
+	var sh := Shader.new()
+	sh.code = """
+shader_type spatial;
+
+uniform sampler2D grass_tex : source_color, filter_linear_mipmap, repeat_enable, hint_default_white;
+uniform sampler2D grass_norm : hint_normal, filter_linear_mipmap, repeat_enable;
+uniform sampler2D var_noise : filter_linear_mipmap, repeat_enable, hint_default_white;
+uniform float tex_scale = 0.45;
+uniform float normal_strength = 0.6;
+uniform vec3 tint_lush : source_color = vec3(0.86, 1.0, 0.80);
+uniform vec3 tint_dry : source_color = vec3(1.10, 1.02, 0.68);
+uniform vec3 tint_dark : source_color = vec3(0.62, 0.76, 0.58);
+
+varying vec3 wpos;
+
+void vertex() {
+	wpos = (MODEL_MATRIX * vec4(VERTEX, 1.0)).xyz;
+}
+
+void fragment() {
+	vec2 uv = wpos.xz * tex_scale;
+	vec3 base = texture(grass_tex, uv).rgb;
+	float big = texture(var_noise, wpos.xz * 0.012).r;
+	float mid = texture(var_noise, wpos.xz * 0.05 + vec2(0.37, 0.71)).r;
+	float fine = texture(var_noise, wpos.xz * 0.22 + vec2(0.13, 0.52)).r;
+	vec3 tint = mix(tint_lush, tint_dry, smoothstep(0.45, 0.75, big));
+	tint = mix(tint, tint_dark, smoothstep(0.5, 0.8, mid) * 0.6);
+	tint *= 0.9 + fine * 0.2;
+	ALBEDO = base * tint;
+	NORMAL_MAP = texture(grass_norm, uv).rgb;
+	NORMAL_MAP_DEPTH = normal_strength;
+	ROUGHNESS = 0.95;
+	SPECULAR = 0.3;
+}
+"""
+	var noise := FastNoiseLite.new()
+	noise.noise_type = FastNoiseLite.TYPE_SIMPLEX
+	noise.frequency = 0.01
+	noise.fractal_octaves = 4
+	noise.seed = 2024
+	var noise_tex := NoiseTexture2D.new()
+	noise_tex.width = 512
+	noise_tex.height = 512
+	noise_tex.seamless = true
+	noise_tex.noise = noise
+	var sm := ShaderMaterial.new()
+	sm.shader = sh
+	sm.set_shader_parameter("var_noise", noise_tex)
+	var std := grass_mat as StandardMaterial3D
+	if std != null:
+		if std.albedo_texture != null:
+			sm.set_shader_parameter("grass_tex", std.albedo_texture)
+		if std.normal_enabled and std.normal_texture != null:
+			sm.set_shader_parameter("grass_norm", std.normal_texture)
+	return sm
+
+
 func _build_exterior_environment() -> void:
 	var asp_mat := MatLib.get_mat("asphalt")
 	var grass_mat := MatLib.get_mat("grass")
+	var meadow_mat := _make_meadow_material(grass_mat)
 	var curb_mat := _mat(Color(0.55, 0.56, 0.58), 0.88, 0.0)
-	var wood_fence := MatLib.get_mat("wood_desk")
 	var trunk_mat := _mat(Color(0.32, 0.22, 0.14), 0.9, 0.0)
 	var leaf_mat := _mat(Color(0.20, 0.48, 0.22), 0.85, 0.0)
 	var pole_mat := MatLib.make_brushed_metal(Color(0.22, 0.25, 0.28), 0.45, 0.6)
 
 	# Concrete Driveway + Surrounding Lawn + Street beyond Z=10.6
 	_add_box_static(self, Vector3(0.0, -0.11, 7.6), Vector3(7.4, 0.2, 6.2), asp_mat)
-	_add_box_static(self, Vector3(-11.5, -0.13, 7.6), Vector3(15.6, 0.2, 6.4), grass_mat)
-	_add_box_static(self, Vector3(13.5, -0.13, 7.6), Vector3(19.6, 0.2, 6.4), grass_mat)
-	# Street & dashed lane lines
-	_add_box_visual(self, Vector3(2.0, -0.12, 14.5), Vector3(48.0, 0.2, 7.6), asp_mat)
-	_add_box_visual(self, Vector3(2.0, -0.14, 23.0), Vector3(48.0, 0.2, 10.0), grass_mat)
+	_add_box_static(self, Vector3(-11.5, -0.13, 7.6), Vector3(15.6, 0.2, 6.4), meadow_mat)
+	_add_box_static(self, Vector3(13.5, -0.13, 7.6), Vector3(19.6, 0.2, 6.4), meadow_mat)
+	# Großer Rasen bis zum Horizont (keine graue Kante mehr hinter der Straße)
+	_add_box_visual(self, Vector3(2.0, -0.16, 65.8), Vector3(240.0, 0.2, 110.0), meadow_mat)
+	# Straße mit Mittel- und Randlinien
+	_add_box_visual(self, Vector3(2.0, -0.12, 14.5), Vector3(160.0, 0.2, 7.6), asp_mat)
 	var stripe_mat := _mat(Color(0.92, 0.92, 0.90), 0.75, 0.0)
-	for sx in range(-18, 22, 4):
-		_add_box_visual(self, Vector3(float(sx), -0.01, 14.5), Vector3(1.8, 0.01, 0.16), stripe_mat)
+	for sx in range(-78, 82, 4):
+		_add_box_visual(self, Vector3(float(sx), -0.015, 14.5), Vector3(1.8, 0.01, 0.14), stripe_mat)
+	for lz in [11.05, 17.95]:
+		_add_box_visual(self, Vector3(2.0, -0.015, float(lz)), Vector3(160.0, 0.01, 0.12), stripe_mat)
+	# Bordsteine: vorne mit Absenkung an der Einfahrt, hinten durchgehend
+	_add_box_visual(self, Vector3(-40.85, 0.0, 10.79), Vector3(74.3, 0.12, 0.18), curb_mat)
+	_add_box_visual(self, Vector3(42.85, 0.0, 10.79), Vector3(78.3, 0.12, 0.18), curb_mat)
+	_add_box_visual(self, Vector3(0.0, -0.03, 10.79), Vector3(7.4, 0.06, 0.18), curb_mat)
+	_add_box_visual(self, Vector3(2.0, 0.0, 18.39), Vector3(160.0, 0.12, 0.18), curb_mat)
+	# Gehweg mit Plattenfugen auf der anderen Straßenseite
+	var walk_mat := _mat(Color(0.60, 0.60, 0.58), 0.9, 0.0)
+	var joint_mat := _mat(Color(0.36, 0.36, 0.35), 0.95, 0.0)
+	_add_box_visual(self, Vector3(2.0, -0.05, 19.38), Vector3(160.0, 0.2, 1.8), walk_mat)
+	for jx in range(-30, 36, 2):
+		_add_box_visual(self, Vector3(float(jx), 0.051, 19.38), Vector3(0.025, 0.004, 1.8), joint_mat)
+	# Durchgehende Hecke hinter dem Gehweg: Körper, gerundete Oberkante, unregelmäßige Blattbuckel
+	var hedge_mat: Material = leaf_mat
+	var grass_std := grass_mat as StandardMaterial3D
+	if grass_std != null:
+		var hm := grass_std.duplicate() as StandardMaterial3D
+		hm.albedo_color = Color(0.78, 0.92, 0.55)
+		# Leichte Eigenhelligkeit, damit die Straßenseite im Schatten nicht schwarz wird
+		hm.emission_enabled = true
+		hm.emission = Color(0.12, 0.22, 0.06)
+		hm.emission_energy_multiplier = 0.9
+		# Weltkoordinaten statt Box-UVs: sonst wird die Textur über die ganze Heckenlänge gestreckt
+		hm.uv1_triplanar = true
+		hm.uv1_world_triplanar = true
+		hm.uv1_scale = Vector3(0.9, 0.9, 0.9)
+		hedge_mat = hm
+	var hedge_x0 := -40.0
+	var hedge_x1 := 44.0
+	var hedge_len := hedge_x1 - hedge_x0
+	var hedge_mid := (hedge_x0 + hedge_x1) * 0.5
+	var hedge_z := 20.75
+	_add_box_visual(self, Vector3(hedge_mid, 0.36, hedge_z), Vector3(hedge_len, 0.82, 0.74), hedge_mat)
+	var hedge_crown := MeshInstance3D.new()
+	var hedge_cm := CylinderMesh.new()
+	hedge_cm.top_radius = 0.37
+	hedge_cm.bottom_radius = 0.37
+	hedge_cm.height = hedge_len
+	hedge_cm.radial_segments = 20
+	hedge_crown.mesh = hedge_cm
+	hedge_crown.material_override = hedge_mat
+	hedge_crown.rotation_degrees.z = 90.0
+	hedge_crown.scale = Vector3(0.45, 1.0, 1.0) # flach gewölbt: ca. 17 cm über der Kastenkante
+	hedge_crown.position = Vector3(hedge_mid, 0.77, hedge_z)
+	add_child(hedge_crown)
+	# Blattbuckel oben und an der Straßenseite brechen die gerade Silhouette auf (eine MultiMesh = ein Draw Call)
+	var bump_mesh := SphereMesh.new()
+	bump_mesh.radius = 0.3
+	bump_mesh.height = 0.6
+	bump_mesh.radial_segments = 12
+	bump_mesh.rings = 6
+	var bump_step := 0.5
+	var bump_count := int(hedge_len / bump_step)
+	var bumps := MultiMesh.new()
+	bumps.transform_format = MultiMesh.TRANSFORM_3D
+	bumps.use_colors = true # muss vor instance_count gesetzt werden
+	bumps.mesh = bump_mesh
+	bumps.instance_count = bump_count * 4
+	var hrng := RandomNumberGenerator.new()
+	hrng.seed = 4711
+	# Vier Grundtöne (dunkles Grün, frisches Hellgrün, gelbliche Spitzen, bläuliches Grün), pro Buckel gewürfelt
+	var hedge_tints: Array[Color] = [
+		Color(0.60, 0.78, 0.40),
+		Color(0.80, 0.96, 0.52),
+		Color(1.0, 0.98, 0.64),
+		Color(0.56, 0.78, 0.60),
+	]
+	var tint_light := Color(1.0, 1.0, 0.80)
+	for bi in range(bump_count):
+		var bx := hedge_x0 + (float(bi) + hrng.randf()) * bump_step
+		# Oberseite: runde Buckel, unten tief im Kasten versenkt, damit nichts schwebt
+		var s_top := Vector3(hrng.randf_range(1.0, 1.7), hrng.randf_range(0.55, 0.9), hrng.randf_range(0.9, 1.3))
+		var p_top := Vector3(bx, 0.64 + hrng.randf_range(-0.03, 0.05), hedge_z + hrng.randf_range(-0.1, 0.1))
+		bumps.set_instance_transform(bi * 4, Transform3D(Basis.from_scale(s_top), p_top))
+		bumps.set_instance_color(bi * 4, hedge_tints[hrng.randi() % hedge_tints.size()].lerp(tint_light, hrng.randf_range(0.0, 0.3)))
+		# Vordere Oberkante: überdeckt den Übergang zwischen Kastenkante und Krone
+		var s_edge := Vector3(hrng.randf_range(0.8, 1.2), hrng.randf_range(0.6, 0.9), hrng.randf_range(0.8, 1.1))
+		var p_edge := Vector3(bx + hrng.randf_range(-0.2, 0.2), 0.60 + hrng.randf_range(-0.04, 0.04), hedge_z - 0.14)
+		bumps.set_instance_transform(bi * 4 + 1, Transform3D(Basis.from_scale(s_edge), p_edge))
+		bumps.set_instance_color(bi * 4 + 1, hedge_tints[hrng.randi() % hedge_tints.size()].lerp(tint_light, hrng.randf_range(0.0, 0.3)))
+		# Straßenseite: flache Buckel dicht an der Kastenfront
+		var s_side := Vector3(hrng.randf_range(0.9, 1.4), hrng.randf_range(0.7, 1.0), hrng.randf_range(0.45, 0.65))
+		var p_side := Vector3(bx, hrng.randf_range(0.40, 0.66), hedge_z - 0.25)
+		bumps.set_instance_transform(bi * 4 + 2, Transform3D(Basis.from_scale(s_side), p_side))
+		bumps.set_instance_color(bi * 4 + 2, hedge_tints[hrng.randi() % hedge_tints.size()].lerp(tint_light, hrng.randf_range(0.0, 0.3)))
+		# Untere Reihe an der Front: versetzt, damit die Kastenwand nicht als dunkle Fläche stehen bleibt
+		var s_low := Vector3(hrng.randf_range(0.9, 1.4), hrng.randf_range(0.7, 1.0), hrng.randf_range(0.45, 0.65))
+		var p_low := Vector3(bx + bump_step * 0.5, hrng.randf_range(0.10, 0.38), hedge_z - 0.25)
+		bumps.set_instance_transform(bi * 4 + 3, Transform3D(Basis.from_scale(s_low), p_low))
+		bumps.set_instance_color(bi * 4 + 3, hedge_tints[hrng.randi() % hedge_tints.size()].lerp(tint_light, hrng.randf_range(0.0, 0.3)))
+	var bump_mat: Material = hedge_mat
+	var hedge_std := hedge_mat as StandardMaterial3D
+	if hedge_std != null:
+		var bm := hedge_std.duplicate() as StandardMaterial3D
+		bm.vertex_color_use_as_albedo = true
+		bump_mat = bm
+	var bumps_mi := MultiMeshInstance3D.new()
+	bumps_mi.multimesh = bumps
+	bumps_mi.material_override = bump_mat
+	add_child(bumps_mi)
 
 	# Driveway curbs
 	_add_box_visual(self, Vector3(-3.75, 0.03, 7.6), Vector3(0.16, 0.08, 6.0), curb_mat)
@@ -438,21 +666,43 @@ func _build_exterior_environment() -> void:
 	_add_invisible_wall(Vector3(13.2, 2.0, 7.5), Vector3(0.3, 4.0, 6.2))
 	_add_invisible_wall(Vector3(3.5, 2.0, 10.4), Vector3(20.0, 4.0, 0.3))
 
-	# Wooden Perimeter Yard Fence along left/right front
-	_add_box_visual(self, Vector3(-7.4, 0.65, 10.4), Vector3(6.8, 1.3, 0.12), wood_fence)
-	_add_box_visual(self, Vector3(8.5, 0.65, 10.4), Vector3(9.2, 1.3, 0.12), wood_fence)
+	# Weißer Lattenzaun links und rechts der Einfahrt (statt massiver Holzwand)
+	var fence_mat := _mat(Color(0.93, 0.92, 0.88), 0.7, 0.0)
+	for seg in [Vector2(-10.8, -4.0), Vector2(3.9, 13.1)]:
+		var seg_v: Vector2 = seg
+		var seg_len := seg_v.y - seg_v.x
+		var mid := (seg_v.x + seg_v.y) * 0.5
+		_add_box_visual(self, Vector3(mid, 0.25, 10.4), Vector3(seg_len, 0.07, 0.04), fence_mat)
+		_add_box_visual(self, Vector3(mid, 0.80, 10.4), Vector3(seg_len, 0.07, 0.04), fence_mat)
+		var n := int(seg_len / 0.16)
+		for i in range(n + 1):
+			var px := seg_v.x + seg_len * float(i) / float(n)
+			_add_box_visual(self, Vector3(px, 0.5, 10.43), Vector3(0.07, 1.0, 0.025), fence_mat)
+		var posts := int(ceil(seg_len / 2.0))
+		for p in range(posts + 1):
+			var post_x := seg_v.x + seg_len * float(p) / float(posts)
+			_add_box_visual(self, Vector3(post_x, 0.56, 10.37), Vector3(0.10, 1.12, 0.10), fence_mat)
 
 	# Organic multi-branch realistic trees across yard & street
 	var tree_spots: Array[Vector3] = [
 		Vector3(-6.8, 0.0, 7.8),
 		Vector3(6.8, 0.0, 7.5),
-		Vector3(-9.5, 0.0, 19.5),
-		Vector3(-1.5, 0.0, 19.8),
-		Vector3(7.2, 0.0, 19.5),
-		Vector3(14.5, 0.0, 19.2),
+		Vector3(-19.0, 0.0, 22.2),
+		Vector3(-9.5, 0.0, 22.0),
+		Vector3(-1.5, 0.0, 22.4),
+		Vector3(7.2, 0.0, 22.1),
+		Vector3(15.5, 0.0, 22.3),
+		Vector3(24.0, 0.0, 22.0),
 	]
 	for tp in tree_spots:
 		BuildingPropFactory.build_realistic_tree(self, tp)
+	# Baumreihe im Hintergrund, damit der Horizont nicht leer wirkt
+	var trng := RandomNumberGenerator.new()
+	trng.seed = 1337
+	var tx := -38.0
+	while tx < 46.0:
+		BuildingPropFactory.build_realistic_tree(self, Vector3(tx, 0.0, trng.randf_range(30.0, 38.0)), trng.randf_range(1.2, 1.6))
+		tx += trng.randf_range(5.0, 8.0)
 
 	# Architectural Exterior Brick Cladding, Gutter, Spinning Exterior AC Condenser & Recycling Bin
 	var brick_mat := MatLib.get_mat("exterior_brick")
@@ -462,14 +712,73 @@ func _build_exterior_environment() -> void:
 	# Aluminum Rain Gutter & Vertical Downspout
 	_add_box_visual(self, Vector3(8.0, 3.92, 4.88), Vector3(27.8, 0.11, 0.12), pole_mat)
 	_add_box_visual(self, Vector3(-5.35, 1.95, 4.86), Vector3(0.09, 3.9, 0.09), pole_mat)
-	# Exterior Wall-Mounted AC Condenser Unit with Spinning Fan
-	_add_box_visual(self, Vector3(3.75, 0.56, 5.12), Vector3(0.95, 0.72, 0.42), MatLib.make_brushed_metal(Color(0.76, 0.80, 0.84), 0.45, 0.25))
-	_add_box_visual(self, Vector3(3.60, 0.56, 5.34), Vector3(0.50, 0.50, 0.03), _mat(Color(0.10, 0.12, 0.14), 0.7, 0.2))
+	# Außen-Klimagerät auf Wandkonsole: Gehäuse, rundes Lüftergitter, Lamellen, Kältemittelleitungen
+	var ac_body_mat := _mat(Color(0.86, 0.87, 0.85), 0.5, 0.12)
+	var ac_dark := _mat(Color(0.08, 0.09, 0.10), 0.8, 0.2)
+	var copper_mat := _mat(Color(0.72, 0.45, 0.28), 0.35, 0.85)
+	var insul_mat := _mat(Color(0.12, 0.12, 0.12), 0.9, 0.0)
+	var badge_mat := _mat(Color(0.16, 0.34, 0.62), 0.45, 0.1)
+	var blade_mat := _mat(Color(0.20, 0.22, 0.24), 0.55, 0.3)
+	var ac_c := Vector3(3.75, 0.62, 5.13)
+	var front_z := ac_c.z + 0.21
+	var fan_c := Vector3(ac_c.x - 0.13, ac_c.y, front_z)
+	var add_disc := func(par: Node3D, p: Vector3, r: float, h: float, m: Material) -> void:
+		var mi := MeshInstance3D.new()
+		var cm := CylinderMesh.new()
+		cm.top_radius = r
+		cm.bottom_radius = r
+		cm.height = h
+		cm.radial_segments = 32
+		mi.mesh = cm
+		mi.material_override = m
+		mi.rotation_degrees.x = 90.0
+		mi.position = p
+		par.add_child(mi)
+	for bxv in [-0.36, 0.36]:
+		var bxf := float(bxv)
+		_add_box_visual(self, Vector3(ac_c.x + bxf, 0.235, 5.07), Vector3(0.05, 0.05, 0.50), pole_mat)
+		_add_box_visual(self, Vector3(ac_c.x + bxf, 0.13, 4.835), Vector3(0.05, 0.26, 0.05), pole_mat)
+	_add_box_visual(self, ac_c, Vector3(0.95, 0.72, 0.42), ac_body_mat)
+	_add_box_visual(self, ac_c + Vector3(0.0, 0.375, 0.0), Vector3(0.98, 0.03, 0.45), ac_body_mat)
+	_add_box_visual(self, ac_c + Vector3(0.0, -0.37, 0.0), Vector3(0.97, 0.025, 0.44), ac_dark)
+	add_disc.call(self, fan_c + Vector3(0.0, 0.0, 0.006), 0.27, 0.012, ac_dark)
+	# Lamellen und Typenschild rechts neben dem Lüfter
+	_add_box_visual(self, Vector3(ac_c.x + 0.33, ac_c.y, front_z + 0.002), Vector3(0.22, 0.60, 0.004), ac_dark)
+	for li in range(8):
+		_add_box_visual(self, Vector3(ac_c.x + 0.33, ac_c.y - 0.26 + float(li) * 0.074, front_z + 0.008), Vector3(0.22, 0.018, 0.012), ac_body_mat)
+	_add_box_visual(self, Vector3(ac_c.x + 0.33, ac_c.y + 0.325, front_z + 0.004), Vector3(0.12, 0.022, 0.006), badge_mat)
+	# Drehender Lüfter mit drei angestellten Blättern
 	_ext_ac_fan = Node3D.new()
-	_ext_ac_fan.position = Vector3(3.60, 0.56, 5.36)
+	_ext_ac_fan.position = fan_c + Vector3(0.0, 0.0, 0.018)
 	add_child(_ext_ac_fan)
-	_add_box_visual(_ext_ac_fan, Vector3.ZERO, Vector3(0.42, 0.06, 0.02), pole_mat)
-	_add_box_visual(_ext_ac_fan, Vector3.ZERO, Vector3(0.06, 0.42, 0.02), pole_mat)
+	for bi in range(3):
+		var piv := Node3D.new()
+		piv.rotation.z = TAU * float(bi) / 3.0
+		_ext_ac_fan.add_child(piv)
+		var blade_tilt := Node3D.new()
+		blade_tilt.position = Vector3(0.12, 0.0, 0.0)
+		blade_tilt.rotation.x = 0.35
+		piv.add_child(blade_tilt)
+		_add_box_visual(blade_tilt, Vector3.ZERO, Vector3(0.20, 0.10, 0.006), blade_mat)
+	add_disc.call(_ext_ac_fan, Vector3.ZERO, 0.045, 0.03, blade_mat)
+	# Schutzgitter: Rand, konzentrische Ringe, Kreuzstreben
+	for rr in [0.285, 0.20, 0.12]:
+		var ring := MeshInstance3D.new()
+		var tm := TorusMesh.new()
+		tm.inner_radius = float(rr) - (0.02 if float(rr) > 0.28 else 0.008)
+		tm.outer_radius = float(rr)
+		tm.rings = 40
+		tm.ring_segments = 6
+		ring.mesh = tm
+		ring.material_override = pole_mat
+		ring.rotation_degrees.x = 90.0
+		ring.position = fan_c + Vector3(0.0, 0.0, 0.045)
+		add_child(ring)
+	_add_box_visual(self, fan_c + Vector3(0.0, 0.0, 0.045), Vector3(0.54, 0.012, 0.008), pole_mat)
+	_add_box_visual(self, fan_c + Vector3(0.0, 0.0, 0.045), Vector3(0.012, 0.54, 0.008), pole_mat)
+	# Kältemittelleitungen von der Geräterückseite in die Wand
+	add_disc.call(self, Vector3(ac_c.x + 0.30, 0.42, 4.865), 0.012, 0.13, copper_mat)
+	add_disc.call(self, Vector3(ac_c.x + 0.38, 0.50, 4.865), 0.02, 0.13, insul_mat)
 	# Recycling Bin beside Garage Door
 	_add_box_visual(self, Vector3(-3.35, 0.46, 5.20), Vector3(0.56, 0.88, 0.56), _mat(Color(0.18, 0.34, 0.56), 0.55, 0.10))
 	_add_box_visual(self, Vector3(-3.35, 0.93, 5.20), Vector3(0.60, 0.08, 0.60), _mat(Color(0.14, 0.26, 0.44), 0.50, 0.10))
@@ -617,71 +926,174 @@ func _build_breaker_box() -> void:
 	root.position = Vector3(-4.2, 1.55, -4.38)
 	add_child(root)
 
-	var metal := MatLib.make_brushed_metal(Color(0.28, 0.32, 0.37), 0.42, 0.55)
-	var dark := _mat(Color(0.12, 0.14, 0.17), 0.55, 0.35)
+	# Blender-Modell (assets/models/breaker_box.glb) ersetzt das prozedurale Modell, falls vorhanden.
+	var bb_model := ModelLoader.instantiate_custom_model("breaker_box")
+	if bb_model != null:
+		root.add_child(bb_model)
+		_setup_breaker_model(bb_model, root)
+	else:
+		# Unterverteilung wie im Technikraum: lichtgraues Stahlblechgehäuse, Abdeckung mit zwei Reihen
+		# Reiheneinbaugeräten auf Hutschienen, Lastanzeige oben und gelben Einspeisedosen unten.
+		# Außenmaße, Hebel, LED, Lastbalken und Port-Position entsprechen dem alten Modell.
+		var housing := _mat(Color(0.74, 0.75, 0.74), 0.52, 0.18)
+		var housing_edge := _mat(Color(0.63, 0.64, 0.63), 0.46, 0.25)
+		var mount_plate := MatLib.make_brushed_metal(Color(0.46, 0.49, 0.52), 0.40, 0.70)
+		var galv := MatLib.get_mat("galvanized_steel")
+		var module_white := _mat(Color(0.93, 0.93, 0.91), 0.36, 0.0)
+		var module_grey := _mat(Color(0.32, 0.34, 0.36), 0.45, 0.0)
+		var toggle_blue := _mat(Color(0.14, 0.38, 0.72), 0.32, 0.0)
+		var toggle_dark := _mat(Color(0.16, 0.17, 0.19), 0.40, 0.0)
+		var window_grey := _mat(Color(0.22, 0.24, 0.26), 0.25, 0.0)
+		var window_green := _mat(Color(0.18, 0.62, 0.30), 0.40, 0.0)
+		var label_paper := _mat(Color(0.96, 0.95, 0.88), 0.85, 0.0)
+		var dark := _mat(Color(0.10, 0.11, 0.13), 0.55, 0.20)
+		var screen := _mat(Color(0.04, 0.06, 0.05), 0.15, 0.0)
+		var screw_mat := MatLib.make_brushed_metal(Color(0.72, 0.74, 0.76), 0.30, 0.90)
+		var lever_red := _mat(Color(0.86, 0.14, 0.12), 0.30, 0.10)
+		var warn_yellow := _mat(Color(0.95, 0.78, 0.10), 0.5, 0.1)
+		var test_yellow := _mat(Color(0.95, 0.80, 0.16), 0.4, 0.0)
+		var port_mat := _mat(Color(0.84, 0.66, 0.14), 0.48, 0.08)
+		var conduit := _mat(Color(0.45, 0.49, 0.54), 0.4, 0.65)
+		var gland := _mat(Color(0.20, 0.21, 0.23), 0.6, 0.0)
 
-	_add_box_visual(root, Vector3.ZERO, Vector3(0.76, 1.02, 0.20), metal)
-	_add_box_visual(root, Vector3(0.0, 0.02, 0.085), Vector3(0.64, 0.72, 0.05), dark)
-	_add_box_visual(root, Vector3(0.0, 0.43, 0.105), Vector3(0.68, 0.08, 0.02), _mat(Color(0.95, 0.78, 0.10), 0.5, 0.1))
+		# Gehäuse, umlaufende Kante und Montageplatte (in den Ausschnitten sichtbar)
+		_add_box_visual(root, Vector3(0.0, 0.0, -0.01), Vector3(0.76, 1.02, 0.18), housing)
+		_add_box_visual(root, Vector3(0.0, 0.4925, 0.09), Vector3(0.76, 0.035, 0.02), housing_edge)
+		_add_box_visual(root, Vector3(0.0, -0.4925, 0.09), Vector3(0.76, 0.035, 0.02), housing_edge)
+		_add_box_visual(root, Vector3(-0.3625, 0.0, 0.09), Vector3(0.035, 0.95, 0.02), housing_edge)
+		_add_box_visual(root, Vector3(0.3625, 0.0, 0.09), Vector3(0.035, 0.95, 0.02), housing_edge)
+		_add_box_visual(root, Vector3(0.0, 0.0, 0.082), Vector3(0.69, 0.95, 0.006), mount_plate)
 
-	for cx in [-0.22, 0.22]:
-		var pipe := MeshInstance3D.new()
-		var cm := CylinderMesh.new()
-		cm.top_radius = 0.032
-		cm.bottom_radius = 0.032
-		cm.height = 1.65
-		pipe.mesh = cm
-		pipe.material_override = _mat(Color(0.45, 0.49, 0.54), 0.4, 0.65)
-		pipe.position = Vector3(float(cx), 1.32, -0.02)
-		root.add_child(pipe)
+		# Abdeckung mit zwei Ausschnitten: Reihe 1 bei y 0.04..0.16, Reihe 2 bei y -0.20..-0.08
+		_add_box_visual(root, Vector3(0.0, 0.3175, 0.09), Vector3(0.69, 0.315, 0.012), housing)
+		_add_box_visual(root, Vector3(0.0, -0.02, 0.09), Vector3(0.69, 0.12, 0.012), housing)
+		_add_box_visual(root, Vector3(0.0, -0.3375, 0.09), Vector3(0.69, 0.275, 0.012), housing)
+		_add_box_visual(root, Vector3(0.0, 0.10, 0.087), Vector3(0.66, 0.035, 0.006), galv)
+		_add_box_visual(root, Vector3(0.0, -0.14, 0.087), Vector3(0.66, 0.035, 0.006), galv)
+		for i in range(4):
+			var sx := -0.32 if i % 2 == 0 else 0.32
+			var sy := 0.455 if i < 2 else -0.455
+			_add_cyl_visual(root, Vector3(sx, sy, 0.098), 0.008, 0.008, 0.004, screw_mat, Vector3(90, 0, 0), 12)
+			_add_box_visual(root, Vector3(sx, sy, 0.1002), Vector3(0.011, 0.002, 0.001), dark)
 
-	for b_idx in range(6):
-		var bx := -0.22 + float(b_idx) * 0.088
-		_add_box_visual(root, Vector3(bx, -0.14, 0.115), Vector3(0.055, 0.12, 0.03), _mat(Color(0.22, 0.25, 0.30), 0.5, 0.2))
-		_add_box_visual(root, Vector3(bx, -0.12, 0.138), Vector3(0.03, 0.04, 0.03), _mat(Color(0.12, 0.52, 0.85), 0.4, 0.1))
+		# Warnschild und Lastanzeige
+		_add_box_visual(root, Vector3(0.0, 0.40, 0.0975), Vector3(0.66, 0.05, 0.003), warn_yellow)
+		_add_small_label(root, Vector3(0.0, 0.40, 0.0995), "ACHTUNG  400 V", 26, 0.0015, Color(0.08, 0.08, 0.09))
+		_add_small_label(root, Vector3(0.0, 0.335, 0.0965), "NETZLAST", 22, 0.0014, Color(0.20, 0.22, 0.24))
+		_add_box_visual(root, Vector3(0.0, 0.26, 0.100), Vector3(0.60, 0.10, 0.010), dark)
+		_add_box_visual(root, Vector3(0.0, 0.26, 0.1065), Vector3(0.56, 0.07, 0.003), screen)
+		for i in range(5):
+			_add_box_visual(root, Vector3(-0.26 + 0.13 * float(i), 0.287, 0.1085), Vector3(0.002, 0.008, 0.001), label_paper)
+		_breaker_load_mat = StandardMaterial3D.new()
+		_breaker_load_mat.albedo_color = Color(0.18, 0.92, 0.45)
+		_breaker_load_mat.emission_enabled = true
+		_breaker_load_mat.emission = Color(0.18, 0.92, 0.45)
+		_breaker_load_mat.emission_energy_multiplier = 1.6
+		_breaker_load_bar = _add_box_visual(root, Vector3(0.0, 0.255, 0.109), Vector3(0.52, 0.035, 0.003), _breaker_load_mat)
 
-	_add_box_visual(root, Vector3(0.0, 0.26, 0.112), Vector3(0.56, 0.07, 0.02), _mat(Color(0.08, 0.10, 0.12), 0.7, 0.1))
-	_breaker_load_mat = StandardMaterial3D.new()
-	_breaker_load_mat.albedo_color = Color(0.18, 0.92, 0.45)
-	_breaker_load_mat.emission_enabled = true
-	_breaker_load_mat.emission = Color(0.18, 0.92, 0.45)
-	_breaker_load_mat.emission_energy_multiplier = 1.6
-	_breaker_load_bar = _add_box_visual(root, Vector3(0.0, 0.26, 0.122), Vector3(0.52, 0.045, 0.015), _breaker_load_mat)
+		# Reihe 1: Hauptschalter mit rotem Kipphebel (EIN = oben), Meldemodul mit Status-LED,
+		# 6 Leitungsschutzschalter, FI-Schutzschalter mit Prüftaste, Überspannungsschutz
+		_add_box_visual(root, Vector3(-0.27, 0.10, 0.105), Vector3(0.106, 0.11, 0.05), module_white)
+		_add_box_visual(root, Vector3(-0.27, 0.060, 0.1305), Vector3(0.05, 0.012, 0.002), window_grey)
+		_breaker_lever = MeshInstance3D.new()
+		var lever_bm := BoxMesh.new()
+		lever_bm.size = Vector3(0.07, 0.026, 0.06)
+		_breaker_lever.mesh = lever_bm
+		_breaker_lever.material_override = lever_red
+		_breaker_lever.position = Vector3(-0.27, 0.10, 0.132)
+		_breaker_lever.rotation_degrees.x = -28.0
+		root.add_child(_breaker_lever)
+		_add_box_visual(_breaker_lever, Vector3(0.0, 0.0, 0.034), Vector3(0.082, 0.032, 0.014), lever_red)
 
-	_breaker_lever = MeshInstance3D.new()
-	var lever_bm := BoxMesh.new()
-	lever_bm.size = Vector3(0.28, 0.075, 0.16)
-	_breaker_lever.mesh = lever_bm
-	_breaker_lever.material_override = _mat(Color(0.88, 0.16, 0.14), 0.35, 0.25)
-	_breaker_lever.position = Vector3(-0.06, 0.06, 0.14)
-	root.add_child(_breaker_lever)
+		_breaker_led_mat = StandardMaterial3D.new()
+		_breaker_led_mat.albedo_color = Color(0.2, 1.0, 0.4)
+		_breaker_led_mat.emission_enabled = true
+		_breaker_led_mat.emission = Color(0.2, 1.0, 0.4)
+		_breaker_led_mat.emission_energy_multiplier = 2.0
+		_add_box_visual(root, Vector3(-0.18, 0.10, 0.105), Vector3(0.036, 0.11, 0.05), module_white)
+		_add_cyl_visual(root, Vector3(-0.18, 0.125, 0.1325), 0.010, 0.010, 0.005, _breaker_led_mat, Vector3(90, 0, 0), 16)
+		_add_box_visual(root, Vector3(-0.18, 0.075, 0.1305), Vector3(0.022, 0.024, 0.002), window_grey)
 
-	_breaker_led_mat = StandardMaterial3D.new()
-	_breaker_led_mat.albedo_color = Color(0.2, 1.0, 0.4)
-	_breaker_led_mat.emission_enabled = true
-	_breaker_led_mat.emission = Color(0.2, 1.0, 0.4)
-	_breaker_led_mat.emission_energy_multiplier = 2.0
-	_add_box_visual(root, Vector3(0.22, 0.08, 0.115), Vector3(0.08, 0.08, 0.03), _breaker_led_mat)
+		for i in range(6):
+			_add_breaker_module(root, Vector3(-0.13 + 0.038 * float(i), 0.10, 0.0), 0.038, module_white, toggle_blue, window_grey)
+		_add_breaker_module(root, Vector3(0.135, 0.10, 0.0), 0.072, module_white, toggle_dark, window_grey)
+		_add_cyl_visual(root, Vector3(0.158, 0.138, 0.1325), 0.007, 0.007, 0.006, test_yellow, Vector3(90, 0, 0), 12)
+		_add_breaker_module(root, Vector3(0.215, 0.10, 0.0), 0.072, module_grey, toggle_dark, window_green)
+		_add_box_visual(root, Vector3(0.30, 0.10, 0.09), Vector3(0.09, 0.12, 0.012), module_white)
 
-	_add_box_visual(root, Vector3(0.0, -0.37, 0.11), Vector3(0.36, 0.16, 0.07), dark)
-	var port_mat := _mat(Color(0.84, 0.66, 0.14), 0.48, 0.08)
-	_add_box_visual(root, Vector3(0.0, -0.37, 0.135), Vector3(0.24, 0.09, 0.055), port_mat)
+		# Reihe 2: Vier Schraubsicherungen F1–F4 (per [E] einsetzen), zweiter FI, Rest mit Blindabdeckung
+		var brass := MatLib.make_brushed_metal(Color(0.78, 0.62, 0.30), 0.35, 0.85)
+		_fuse_caps.clear()
+		_fuse_cap_mats.clear()
+		_fuse_ind_mats.clear()
+		_fuse_visual_key = ""
+		for i in range(GameState.FUSE_SLOT_COUNT):
+			var fx := -0.27 + 0.11 * float(i)
+			var fy := -0.14
+			# Sockel mit Messing-Gewindering und dunkler Öffnung (sichtbar, wenn der Steckplatz leer ist)
+			_add_box_visual(root, Vector3(fx, fy, 0.105), Vector3(0.10, 0.11, 0.05), module_white)
+			_add_cyl_visual(root, Vector3(fx, fy, 0.1315), 0.031, 0.031, 0.003, brass, Vector3(90, 0, 0), 20)
+			_add_cyl_visual(root, Vector3(fx, fy, 0.1335), 0.022, 0.022, 0.002, dark, Vector3(90, 0, 0), 20)
+
+			# Schraubkappe mit Kennmelder: grün = intakt, rot und verrußt = durchgebrannt
+			var cap := Node3D.new()
+			cap.position = Vector3(fx, fy, 0.133)
+			root.add_child(cap)
+			var cap_mat := StandardMaterial3D.new()
+			cap_mat.albedo_color = Color(0.86, 0.86, 0.84)
+			cap_mat.roughness = 0.55
+			var ind_mat := StandardMaterial3D.new()
+			ind_mat.emission_enabled = true
+			_add_cyl_visual(cap, Vector3(0.0, 0.0, 0.006), 0.029, 0.029, 0.012, cap_mat, Vector3(90, 0, 0), 20)
+			_add_cyl_visual(cap, Vector3(0.0, 0.0, 0.021), 0.024, 0.026, 0.018, cap_mat, Vector3(90, 0, 0), 20)
+			_add_cyl_visual(cap, Vector3(0.0, 0.0, 0.0315), 0.010, 0.010, 0.003, ind_mat, Vector3(90, 0, 0), 16)
+			_fuse_caps.append(cap)
+			_fuse_cap_mats.append(cap_mat)
+			_fuse_ind_mats.append(ind_mat)
+
+			_add_small_label(root, Vector3(fx, -0.212, 0.0990), "F%d" % (i + 1), 22, 0.0012, Color(0.12, 0.12, 0.14))
+
+			var slot_area := _make_interact_area(Vector3(0.105, 0.12, 0.30), {
+				"interact_type": "fuse_slot",
+				"entity_id": "wall_breaker_fuse_%d" % i,
+				"slot_idx": i,
+			})
+			slot_area.set_meta("slot_idx", i)
+			slot_area.position = Vector3(fx, fy, 0.12)
+			root.add_child(slot_area)
+		_add_breaker_module(root, Vector3(0.17, -0.14, 0.0), 0.072, module_white, toggle_dark, window_grey)
+		_add_box_visual(root, Vector3(0.2775, -0.14, 0.09), Vector3(0.135, 0.12, 0.012), module_white)
+
+		# Beschriftungsstreifen unter den Reihen
+		_add_box_visual(root, Vector3(0.0, 0.028, 0.097), Vector3(0.66, 0.016, 0.002), label_paper)
+		_add_box_visual(root, Vector3(0.0, -0.212, 0.097), Vector3(0.66, 0.016, 0.002), label_paper)
+
+		# Einspeisung unten: Klemmengehäuse mit 3 gelben Steckdosen mit Klappdeckel
+		_add_box_visual(root, Vector3(0.0, -0.37, 0.112), Vector3(0.40, 0.17, 0.04), dark)
+		_add_small_label(root, Vector3(0.0, -0.305, 0.1325), "EINSPEISUNG 230 V", 18, 0.0012, Color(0.85, 0.86, 0.86))
+		for i in range(3):
+			var px := -0.12 + 0.12 * float(i)
+			_add_cyl_visual(root, Vector3(px, -0.378, 0.145), 0.030, 0.030, 0.03, port_mat, Vector3(90, 0, 0), 20)
+			_add_cyl_visual(root, Vector3(px, -0.378, 0.161), 0.021, 0.021, 0.003, dark, Vector3(90, 0, 0), 20)
+			_add_box_visual(root, Vector3(px, -0.338, 0.150), Vector3(0.05, 0.012, 0.014), port_mat)
+
+		# Kabelschutzrohre nach oben mit Verschraubung und Rohrschellen
+		for i in range(2):
+			var cx := -0.22 + 0.44 * float(i)
+			_add_cyl_visual(root, Vector3(cx, 1.32, -0.02), 0.032, 0.032, 1.65, conduit, Vector3.ZERO, 20)
+			_add_cyl_visual(root, Vector3(cx, 0.525, -0.02), 0.044, 0.044, 0.035, gland, Vector3.ZERO, 20)
+			for k in range(2):
+				_add_box_visual(root, Vector3(cx, 0.95 + 0.6 * float(k), -0.045), Vector3(0.09, 0.022, 0.03), galv)
+
 	breaker_port_pos = root.position + Vector3(0.0, -0.37, 0.18)
 
-	_breaker_label = Label3D.new()
-	_breaker_label.text = "SICHERUNGSKASTEN"
-	_breaker_label.font_size = 26
-	_breaker_label.pixel_size = 0.0040
-	_breaker_label.position = Vector3(0.0, 0.78, 0.11)
-	_breaker_label.modulate = Color(0.18, 0.20, 0.22)
-	root.add_child(_breaker_label)
-
 	# Separate Contextual Interaction Zones: Upper Switch Lever vs Lower Yellow Power Socket!
-	var sw_area := _make_interact_area(Vector3(0.84, 0.66, 0.40), {
+	# Hauptschalter-Zone endet oberhalb der Sicherungsreihe, damit sich die Zonen nicht überlappen.
+	var sw_area := _make_interact_area(Vector3(0.84, 0.50, 0.40), {
 		"interact_type": "wall_breaker",
 		"entity_id": GameState.WALL_BREAKER_ID,
 	})
-	sw_area.position = Vector3(0.0, 0.18, 0.08)
+	sw_area.position = Vector3(0.0, 0.27, 0.08)
 	root.add_child(sw_area)
 
 	var port_area := _make_interact_area(Vector3(0.56, 0.34, 0.42), {
@@ -700,6 +1112,30 @@ func _build_breaker_box() -> void:
 	root.add_child(_breaker_audio)
 
 
+func _update_fuse_visuals() -> void:
+	var fuses: Array = GameState.breaker_fuses
+	var key := "%s#%d" % [str(fuses), GameState.fuse_stock]
+	if key == _fuse_visual_key:
+		return
+	_fuse_visual_key = key
+	_update_fuse_tray(fuses)
+	for i in range(_fuse_caps.size()):
+		var fz_state := str(fuses[i]) if i < fuses.size() else "empty"
+		_fuse_caps[i].visible = fz_state != "empty"
+		var cap_mat := _fuse_cap_mats[i]
+		var ind_mat := _fuse_ind_mats[i]
+		if fz_state == "blown":
+			cap_mat.albedo_color = Color(0.24, 0.21, 0.19)
+			ind_mat.albedo_color = Color(0.90, 0.15, 0.12)
+			ind_mat.emission = Color(0.90, 0.15, 0.12)
+			ind_mat.emission_energy_multiplier = 1.6
+		else:
+			cap_mat.albedo_color = Color(0.86, 0.86, 0.84)
+			ind_mat.albedo_color = Color(0.22, 0.85, 0.38)
+			ind_mat.emission = Color(0.22, 0.85, 0.38)
+			ind_mat.emission_energy_multiplier = 1.1
+
+
 func _build_hall_c_subpanel() -> void:
 	# Dedicated Secondary Power Bus & 10G Fiber Switch inside Enterprise Hall C!
 	var p_root := Node3D.new()
@@ -709,14 +1145,6 @@ func _build_hall_c_subpanel() -> void:
 	var y_mat := _mat(Color(0.84, 0.66, 0.14), 0.48, 0.08)
 	_add_box_visual(p_root, Vector3(0.0, -0.34, 0.13), Vector3(0.30, 0.11, 0.055), y_mat)
 	hall_c_breaker_port_pos = p_root.position + Vector3(0.0, -0.34, 0.18)
-
-	_hall_c_breaker_label = Label3D.new()
-	_hall_c_breaker_label.text = "HALLE-C STROMBUS"
-	_hall_c_breaker_label.font_size = 25
-	_hall_c_breaker_label.pixel_size = 0.0040
-	_hall_c_breaker_label.position = Vector3(0.0, 0.68, 0.11)
-	_hall_c_breaker_label.modulate = Color(0.18, 0.20, 0.22)
-	p_root.add_child(_hall_c_breaker_label)
 
 	var p_area := _make_interact_area(Vector3(0.84, 1.04, 0.44), {
 		"interact_type": "power_port",
@@ -733,14 +1161,6 @@ func _build_hall_c_subpanel() -> void:
 	_add_box_visual(n_root, Vector3(0.0, -0.10, 0.13), Vector3(0.42, 0.09, 0.055), c_mat)
 	hall_c_router_port_pos = n_root.position + Vector3(0.0, -0.10, 0.18)
 
-	_hall_c_router_label = Label3D.new()
-	_hall_c_router_label.text = "HALLE-C 10G FIBER"
-	_hall_c_router_label.font_size = 25
-	_hall_c_router_label.pixel_size = 0.0040
-	_hall_c_router_label.position = Vector3(0.0, 0.44, 0.11)
-	_hall_c_router_label.modulate = Color(0.18, 0.20, 0.22)
-	n_root.add_child(_hall_c_router_label)
-
 	var n_area := _make_interact_area(Vector3(0.84, 0.60, 0.42), {
 		"interact_type": "net_port",
 		"entity_id": GameState.HALL_C_ROUTER_ID,
@@ -749,69 +1169,417 @@ func _build_hall_c_subpanel() -> void:
 	n_root.add_child(n_area)
 
 
+## Sicherungskasten aus assets/models/breaker_box.glb an die Spiellogik anbinden:
+## Status-LED, Lastbalken, Hauptschalter, Sicherungen F1–F4, Kastentür und Steckdosendeckel.
+func _setup_breaker_model(model: Node3D, root: Node3D) -> void:
+	_breaker_led_mat = _glb_bind_mat(model, "DCT_U_StatusLED")
+	if _breaker_led_mat != null:
+		_breaker_led_mat.emission_enabled = true
+
+	var load_node := _glb_find(model, "_LoadBar")
+	if load_node is MeshInstance3D:
+		_breaker_load_bar = load_node as MeshInstance3D
+		_breaker_load_base_sx = _breaker_load_bar.scale.x
+		_breaker_load_mat = _glb_bind_mat(_breaker_load_bar, "DCT_U_LoadBar")
+		if _breaker_load_mat != null:
+			_breaker_load_mat.emission_enabled = true
+
+	var lever := _glb_find(model, "_Pivot_MainLever")
+	if lever != null:
+		_breaker_lever_pivot = lever
+		_breaker_lever_on_deg = _glb_extra(lever, "dct_on_deg_x", -28.0)
+		_breaker_lever_off_deg = _glb_extra(lever, "dct_off_deg_x", 28.0)
+
+	# Schraubsicherungen F1–F4 (so im Modell angelegt): jede Kappe bekommt eigene Materialkopien,
+	# damit "durchgebrannt" pro Slot sichtbar ist
+	_fuse_caps.clear()
+	_fuse_cap_mats.clear()
+	_fuse_ind_mats.clear()
+	_fuse_visual_key = ""
+	for i in range(4):
+		var fx := -0.27 + 0.11 * float(i)
+		var cap := _glb_find(model, "_FuseCap_F%d" % (i + 1))
+		if cap != null:
+			var cap_mat := _glb_bind_mat(cap, "DCT_U_FuseCap")
+			if cap_mat == null:
+				cap_mat = StandardMaterial3D.new()
+			var ind_mat := _glb_bind_mat(cap, "DCT_U_FuseIndicator")
+			if ind_mat == null:
+				ind_mat = StandardMaterial3D.new()
+			ind_mat.emission_enabled = true
+			_fuse_caps.append(cap)
+			_fuse_cap_mats.append(cap_mat)
+			_fuse_ind_mats.append(ind_mat)
+		var slot_area := _make_interact_area(Vector3(0.105, 0.12, 0.30), {
+			"interact_type": "fuse_slot",
+			"entity_id": "wall_breaker_fuse_%d" % i,
+			"slot_idx": i,
+		})
+		slot_area.position = Vector3(fx, -0.14, 0.12)
+		root.add_child(slot_area)
+
+	# Glastür: Griffbereich an der freien Kante, ragt vor die Hauptschalter-Zone
+	var door_h := _glb_find(model, "_Hinge_Door")
+	if door_h != null:
+		_register_panel(door_h, "breaker:door", tr("Kastentür"), "rotation:y",
+			deg_to_rad(_glb_extra(door_h, "dct_open_deg", -110.0)), GameState.WALL_BREAKER_ID,
+			Vector3(0.68, -0.12, 0.10), Vector3(0.10, 0.34, 0.26))
+
+	_socket_lids.clear()
+	_socket_lid_closed.clear()
+	_socket_lid_open.clear()
+	for i in range(1, 4):
+		var lid := _glb_find(model, "_Hinge_SocketLid_%d" % i)
+		if lid == null:
+			continue
+		_socket_lids.append(lid)
+		_socket_lid_closed.append(lid.rotation.x)
+		_socket_lid_open.append(lid.rotation.x + deg_to_rad(_glb_extra(lid, "dct_open_deg_x", -100.0)))
+
+	_build_fuse_tray(root)
+
+
+## Feuerlöscher aus assets/models/extinguisher_station.glb: beim Abnehmen verschwindet nur der Löscher,
+## Halterung und Brandschutzzeichen bleiben an der Wand.
+func _setup_extinguisher_model(model: Node3D) -> void:
+	_extinguisher_mesh_root = _glb_find(model, "extinguisher_Body")
+	if _extinguisher_mesh_root == null:
+		push_warning("extinguisher_station.glb: Knoten extinguisher_Body fehlt")
+
+
+## Router-Modell einer Stufe: LEDs an das gemeinsame Status-Material hängen, Schranktür und Seitenwände öffenbar machen.
+func _setup_router_model(model: Node3D) -> void:
+	_glb_bind_mat(model, "DCT_U_RouterLED", _router_led_mat)
+	var door_h := _glb_find(model, "_Hinge_Door")
+	if door_h != null:
+		_register_panel(door_h, "router:door", tr("Schranktür"), "rotation:y",
+			deg_to_rad(_glb_extra(door_h, "dct_open_deg", -110.0)), GameState.WALL_ROUTER_ID,
+			Vector3(0.78, 0.0, 0.10), Vector3(0.10, 0.40, 0.26))
+	for side in ["L", "R"]:
+		var sp := _glb_find(model, "_Panel_Side_" + str(side))
+		if sp == null:
+			continue
+		var closed_x := _glb_extra(sp, "dct_closed_x", sp.position.x)
+		var slide := _glb_extra(sp, "dct_slide_x", signf(closed_x) * 0.25)
+		var label := tr("Seitenwand links") if str(side) == "L" else tr("Seitenwand rechts")
+		_register_panel(sp, "router:side_" + str(side), label, "position:x", slide, GameState.WALL_ROUTER_ID,
+			Vector3(signf(closed_x) * 0.03, 0.0, 0.0), Vector3(0.12, 0.30, 0.30))
+	# DSL-Router: Stummelantenne lässt sich mit [E] schwenken
+	var ant := _glb_find(model, "_Pivot_Antenna")
+	if ant != null:
+		_register_panel(ant, "router:antenna", tr("Antenne"), "rotation:y",
+			deg_to_rad(_glb_extra(ant, "dct_tilt_deg_y", 18.0)), GameState.WALL_ROUTER_ID,
+			Vector3(0.0, 0.14, 0.0), Vector3(0.07, 0.26, 0.07))
+
+
+func _register_panel(node: Node3D, panel_id: String, label: String, prop: String, open_offset: float,
+		entity_id: String, handle_pos: Vector3, handle_size: Vector3) -> void:
+	var closed := node.rotation.y if prop == "rotation:y" else node.position.x
+	_panels[panel_id] = {
+		"node": node,
+		"prop": prop,
+		"closed": closed,
+		"open": closed + open_offset,
+		"is_open": false,
+		"tween": null,
+		"label": label,
+		"entity_id": entity_id,
+	}
+	var area := _make_interact_area(handle_size, {
+		"interact_type": "rack_panel",
+		"entity_id": entity_id,
+		"panel_id": panel_id,
+		"rack_prop": self,
+	})
+	area.position = handle_pos
+	node.add_child(area)
+	# Zustand vom Server übernehmen (nach Router-Upgrade oder für später beitretende Spieler)
+	_set_panel_open(panel_id, GameState.is_shared_panel_open(entity_id, panel_id), false)
+
+
+## Fragt beim Server an. Bewegt wird erst, wenn der Server den neuen Zustand an alle schickt.
+func toggle_panel(panel_id: String) -> void:
+	if not _panels.has(panel_id):
+		return
+	GameState.request_toggle_panel(str((_panels[panel_id] as Dictionary).get("entity_id", "")), panel_id)
+
+
+func _on_panel_states_changed() -> void:
+	for pid in _panels.keys():
+		if not _panels.has(pid):
+			continue
+		var eid := str((_panels[pid] as Dictionary).get("entity_id", ""))
+		_set_panel_open(str(pid), GameState.is_shared_panel_open(eid, str(pid)), true)
+
+
+func _set_panel_open(panel_id: String, opening: bool, animate: bool) -> void:
+	if not _panels.has(panel_id):
+		return
+	var p: Dictionary = _panels[panel_id]
+	var node_v: Variant = p["node"]
+	if not is_instance_valid(node_v):
+		_panels.erase(panel_id)
+		return
+	if bool(p["is_open"]) == opening:
+		return
+	p["is_open"] = opening
+	var old_tw: Variant = p.get("tween")
+	if old_tw is Tween and (old_tw as Tween).is_valid():
+		(old_tw as Tween).kill()
+	var prop := str(p["prop"])
+	var target := float(p["open"] if opening else p["closed"])
+	var node := node_v as Node3D
+	if not animate or not node.is_inside_tree():
+		node.set_indexed(NodePath(prop), target)
+		p["tween"] = null
+		return
+	var tw := create_tween()
+	tw.tween_property(node, prop, target, 0.55 if prop == "rotation:y" else 0.40) \
+		.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
+	p["tween"] = tw
+	SfxManager.play("click", -10.0, 0.85 if opening else 0.7)
+
+
+## Eigener Prompt-Text für Garagen-Abdeckungen (die Antenne wird geschwenkt statt geöffnet).
+func get_panel_prompt(panel_id: String) -> String:
+	var label := get_panel_label(panel_id)
+	if panel_id == "router:antenna":
+		return tr("[E] %s schwenken") % label
+	if is_panel_open(panel_id):
+		return tr("[E] %s schließen") % label
+	return tr("[E] %s öffnen") % label
+
+
+func is_panel_open(panel_id: String) -> bool:
+	if not _panels.has(panel_id):
+		return false
+	return bool((_panels[panel_id] as Dictionary).get("is_open", false))
+
+
+func get_panel_label(panel_id: String) -> String:
+	if not _panels.has(panel_id):
+		return tr("Abdeckung")
+	return str((_panels[panel_id] as Dictionary).get("label", tr("Abdeckung")))
+
+
+func _glb_nodes(root: Node) -> Array[Node]:
+	var out: Array[Node] = [root]
+	var i := 0
+	while i < out.size():
+		for c in out[i].get_children():
+			out.append(c)
+		i += 1
+	return out
+
+
+func _glb_find(root: Node, suffix: String) -> Node3D:
+	for n in _glb_nodes(root):
+		if n is Node3D and String(n.name).ends_with(suffix):
+			return n as Node3D
+	return null
+
+
+## glTF-Extras kommen je nach Importweg als Meta "extras" (Dictionary) oder als einzelne Meta-Keys an.
+func _glb_extra(n: Node, key: String, fallback: float) -> float:
+	if n.has_meta("extras"):
+		var ex: Variant = n.get_meta("extras")
+		if ex is Dictionary and (ex as Dictionary).has(key):
+			return float((ex as Dictionary)[key])
+	if n.has_meta(key):
+		return float(n.get_meta(key))
+	return fallback
+
+
+## Ersetzt alle Oberflächen mit dem glTF-Material `mat_name` unter `root` durch `shared` oder,
+## ohne `shared`, durch eine eigene Kopie des Originals, damit die Spiellogik Farbe und Leuchten steuern kann.
+func _glb_bind_mat(root: Node, mat_name: String, shared: StandardMaterial3D = null) -> StandardMaterial3D:
+	var bound: StandardMaterial3D = shared
+	for n in _glb_nodes(root):
+		if not (n is MeshInstance3D):
+			continue
+		var mi := n as MeshInstance3D
+		if mi.mesh == null:
+			continue
+		for s in range(mi.mesh.get_surface_count()):
+			var src := mi.mesh.surface_get_material(s)
+			if src == null or src.resource_name != mat_name:
+				continue
+			if bound == null:
+				bound = (src.duplicate() as StandardMaterial3D) if src is StandardMaterial3D else StandardMaterial3D.new()
+			mi.set_surface_override_material(s, bound)
+	return bound
+
+
+## Ablage rechts neben dem Sicherungskasten: zeigt bis zu 6 Ersatzsicherungen aus dem Lager (fuse_d02_ok.glb)
+## und die zuletzt ausgebauten, durchgebrannten Sicherungen (fuse_d02_blown.glb).
+func _build_fuse_tray(root: Node3D) -> void:
+	_fuse_tray_stock = null
+	_fuse_tray_scrap = null
+	_fuse_ok_tpl = null
+	_fuse_blown_tpl = null
+	_fuse_prev_states.clear()
+	var ok_tpl := ModelLoader.instantiate_custom_model("fuse_d02_ok")
+	if ok_tpl == null:
+		return
+	var tray := Node3D.new()
+	tray.name = "FuseTray"
+	tray.position = FUSE_TRAY_POS
+	root.add_child(tray)
+
+	var steel := MatLib.get_mat("galvanized_steel")
+	var shelf := MeshInstance3D.new()
+	var shelf_mesh := BoxMesh.new()
+	shelf_mesh.size = Vector3(0.22, FUSE_TRAY_TOP * 2.0, 0.09)
+	shelf.mesh = shelf_mesh
+	shelf.material_override = steel
+	tray.add_child(shelf)
+	var lip := MeshInstance3D.new()
+	var lip_mesh := BoxMesh.new()
+	lip_mesh.size = Vector3(0.22, 0.02, 0.004)
+	lip.mesh = lip_mesh
+	lip.material_override = steel
+	lip.position = Vector3(0.0, 0.01, 0.043)
+	tray.add_child(lip)
+
+	# Vorlagen bleiben unsichtbar im Baum und werden pro Sicherung dupliziert
+	var templates := Node3D.new()
+	templates.name = "Templates"
+	templates.visible = false
+	tray.add_child(templates)
+	templates.add_child(ok_tpl)
+	_fuse_ok_tpl = ok_tpl
+	var blown_tpl := ModelLoader.instantiate_custom_model("fuse_d02_blown")
+	if blown_tpl != null:
+		templates.add_child(blown_tpl)
+		_fuse_blown_tpl = blown_tpl
+
+	_fuse_tray_stock = Node3D.new()
+	_fuse_tray_stock.name = "Stock"
+	tray.add_child(_fuse_tray_stock)
+	_fuse_tray_scrap = Node3D.new()
+	_fuse_tray_scrap.name = "Scrap"
+	tray.add_child(_fuse_tray_scrap)
+
+
+func _update_fuse_tray(fuses: Array) -> void:
+	if _fuse_tray_stock == null or _fuse_ok_tpl == null:
+		return
+	# Wechselt ein Steckplatz von "blown" auf "ok", liegt die ausgebaute Sicherung danach auf der Ablage
+	if _fuse_prev_states.size() == fuses.size():
+		for i in range(fuses.size()):
+			if str(_fuse_prev_states[i]) == "blown" and str(fuses[i]) == "ok":
+				_add_scrap_fuse()
+	_fuse_prev_states = fuses.duplicate()
+
+	for c in _fuse_tray_stock.get_children():
+		_fuse_tray_stock.remove_child(c)
+		c.queue_free()
+	var want := mini(maxi(GameState.fuse_stock, 0), FUSE_TRAY_STOCK_MAX)
+	for i in range(want):
+		var f := _fuse_ok_tpl.duplicate() as Node3D
+		f.position = Vector3(-0.085 + 0.032 * float(i % 3), FUSE_TRAY_TOP + 0.024,
+			-0.018 + 0.036 * floorf(float(i) / 3.0))
+		_fuse_tray_stock.add_child(f)
+
+
+func _add_scrap_fuse() -> void:
+	if _fuse_tray_scrap == null or _fuse_blown_tpl == null:
+		return
+	var kids := _fuse_tray_scrap.get_children()
+	if kids.size() >= FUSE_TRAY_SCRAP_MAX:
+		var oldest := kids[0]
+		_fuse_tray_scrap.remove_child(oldest)
+		oldest.queue_free()
+	_fuse_tray_scrap.add_child(_fuse_blown_tpl.duplicate() as Node3D)
+	var i := 0
+	for c in _fuse_tray_scrap.get_children():
+		var n3 := c as Node3D
+		# liegend, damit man sie von den Ersatzsicherungen unterscheidet
+		n3.position = Vector3(0.07, FUSE_TRAY_TOP + 0.012, -0.025 + 0.025 * float(i))
+		n3.rotation_degrees = Vector3(0.0, 0.0, 90.0)
+		i += 1
+
+
 func _build_extinguisher_station() -> void:
 	var root := Node3D.new()
 	root.position = Vector3(-2.8, 1.22, -4.36)
 	add_child(root)
 
-	_add_box_visual(root, Vector3(0.0, 0.12, -0.06), Vector3(0.34, 0.78, 0.03), _mat(Color(0.75, 0.12, 0.12), 0.55, 0.1))
-	_add_box_visual(root, Vector3(0.0, -0.05, -0.03), Vector3(0.24, 0.42, 0.06), _mat(Color(0.20, 0.22, 0.25), 0.45, 0.5))
+	# Blender-Modell (assets/models/extinguisher_station.glb) ersetzt das prozedurale Modell, falls vorhanden.
+	var ext_model := ModelLoader.instantiate_custom_model("extinguisher_station")
+	if ext_model != null:
+		root.add_child(ext_model)
+		_setup_extinguisher_model(ext_model)
+	else:
+		var red_paint := _mat(Color(0.80, 0.06, 0.05), 0.22, 0.25)
+		var sign_red := _mat(Color(0.78, 0.08, 0.07), 0.55, 0.0)
+		var white := _mat(Color(0.95, 0.95, 0.93), 0.55, 0.0)
+		var black_rubber := _mat(Color(0.07, 0.07, 0.08), 0.75, 0.0)
+		var black_plastic := _mat(Color(0.10, 0.10, 0.11), 0.42, 0.0)
+		var chrome := MatLib.make_brushed_metal(Color(0.82, 0.83, 0.85), 0.16, 0.95)
+		var steel := MatLib.get_mat("galvanized_steel")
+		var seal_yellow := _mat(Color(0.95, 0.80, 0.10), 0.5, 0.0)
+		var gauge_green := _mat(Color(0.16, 0.66, 0.30), 0.5, 0.0)
+		var sticker_green := _mat(Color(0.20, 0.58, 0.30), 0.6, 0.0)
 
-	_extinguisher_mesh_root = Node3D.new()
-	root.add_child(_extinguisher_mesh_root)
+		# Brandschutzzeichen über der Halterung: weißer Rand, rotes Feld, vereinfachtes Piktogramm
+		_add_box_visual(root, Vector3(0.0, 0.47, -0.068), Vector3(0.20, 0.20, 0.006), white)
+		_add_box_visual(root, Vector3(0.0, 0.47, -0.064), Vector3(0.184, 0.184, 0.006), sign_red)
+		_add_box_visual(root, Vector3(-0.025, 0.45, -0.0605), Vector3(0.036, 0.08, 0.002), white)
+		_add_box_visual(root, Vector3(-0.025, 0.50, -0.0605), Vector3(0.016, 0.02, 0.002), white)
+		var pic_hose := _add_box_visual(root, Vector3(0.003, 0.48, -0.0605), Vector3(0.006, 0.05, 0.002), white)
+		pic_hose.rotation_degrees.z = -35.0
+		for i in range(3):
+			var flame := _add_box_visual(root, Vector3(0.03 + 0.02 * float(i), 0.42 + 0.014 * float(i % 2), -0.0605), Vector3(0.017, 0.017, 0.002), white)
+			flame.rotation_degrees.z = 45.0
 
-	var red_mat := _mat(Color(0.88, 0.12, 0.12), 0.28, 0.38)
-	var black_mat := _mat(Color(0.12, 0.13, 0.15), 0.45, 0.5)
+		# Wandhalterung mit Spannband. Sie bleibt hängen, wenn ein Spieler den Löscher nimmt.
+		_add_box_visual(root, Vector3(0.0, 0.02, -0.066), Vector3(0.07, 0.22, 0.008), steel)
+		_add_box_visual(root, Vector3(0.0, 0.05, -0.03), Vector3(0.03, 0.025, 0.064), steel)
+		_add_torus_visual(root, Vector3(0.0, 0.05, 0.09), 0.086, 0.095, steel)
 
-	var body := MeshInstance3D.new()
-	var cyl := CylinderMesh.new()
-	cyl.top_radius = 0.10
-	cyl.bottom_radius = 0.10
-	cyl.height = 0.50
-	body.mesh = cyl
-	body.material_override = red_mat
-	body.position = Vector3(0.0, 0.0, 0.09)
-	_extinguisher_mesh_root.add_child(body)
+		_extinguisher_mesh_root = Node3D.new()
+		root.add_child(_extinguisher_mesh_root)
+		var e := _extinguisher_mesh_root
+		var cz := 0.09
 
-	var dome := MeshInstance3D.new()
-	var sph := SphereMesh.new()
-	sph.radius = 0.10
-	sph.height = 0.14
-	dome.mesh = sph
-	dome.material_override = red_mat
-	dome.position = Vector3(0.0, 0.25, 0.09)
-	_extinguisher_mesh_root.add_child(dome)
+		# 6-kg-Pulverlöscher: Behälter mit gewölbter Schulter und Kunststofffuß
+		_add_cyl_visual(e, Vector3(0.0, -0.03, cz), 0.085, 0.085, 0.40, red_paint, Vector3.ZERO, 32)
+		_add_sphere_visual(e, Vector3(0.0, 0.17, cz), 0.085, 0.11, red_paint)
+		_add_cyl_visual(e, Vector3(0.0, -0.225, cz), 0.087, 0.087, 0.03, black_plastic, Vector3.ZERO, 32)
+		_add_cyl_visual(e, Vector3(0.0, -0.245, cz), 0.080, 0.084, 0.012, black_plastic, Vector3.ZERO, 32)
 
-	var band := MeshInstance3D.new()
-	var bcyl := CylinderMesh.new()
-	bcyl.top_radius = 0.103
-	bcyl.bottom_radius = 0.103
-	bcyl.height = 0.16
-	band.mesh = bcyl
-	band.material_override = _mat(Color(0.92, 0.92, 0.90), 0.6, 0.0)
-	band.position = Vector3(0.0, 0.04, 0.09)
-	_extinguisher_mesh_root.add_child(band)
+		# Etikett und Prüfplakette
+		_add_cyl_visual(e, Vector3(0.0, -0.05, cz), 0.0865, 0.0865, 0.15, white, Vector3.ZERO, 32)
+		_add_small_label(e, Vector3(0.0, -0.035, cz + 0.0875), "ABC-PULVER\n6 kg", 28, 0.0009, Color(0.10, 0.10, 0.12))
+		_add_cyl_visual(e, Vector3(0.0, -0.165, cz + 0.0855), 0.016, 0.016, 0.002, sticker_green, Vector3(90, 0, 0), 16)
 
-	_add_box_visual(_extinguisher_mesh_root, Vector3(0.0, 0.34, 0.09), Vector3(0.05, 0.10, 0.05), black_mat)
-	_add_box_visual(_extinguisher_mesh_root, Vector3(-0.07, 0.37, 0.09), Vector3(0.14, 0.025, 0.03), black_mat)
-	_add_box_visual(_extinguisher_mesh_root, Vector3(0.09, 0.24, 0.11), Vector3(0.03, 0.28, 0.03), black_mat)
-	var horn := MeshInstance3D.new()
-	var hcyl := CylinderMesh.new()
-	hcyl.top_radius = 0.02
-	hcyl.bottom_radius = 0.055
-	hcyl.height = 0.14
-	horn.mesh = hcyl
-	horn.material_override = black_mat
-	horn.position = Vector3(0.09, 0.08, 0.12)
-	_extinguisher_mesh_root.add_child(horn)
+		# Armatur: Hals, Ventilkopf, Manometer, Schlaghebel, Tragegriff, Sicherungsstift mit Plombe
+		_add_cyl_visual(e, Vector3(0.0, 0.235, cz), 0.024, 0.024, 0.05, chrome, Vector3.ZERO, 20)
+		_add_cyl_visual(e, Vector3(0.0, 0.275, cz), 0.030, 0.030, 0.045, chrome, Vector3.ZERO, 20)
+		_add_cyl_visual(e, Vector3(0.0, 0.282, cz + 0.036), 0.022, 0.022, 0.016, chrome, Vector3(90, 0, 0), 20)
+		_add_cyl_visual(e, Vector3(0.0, 0.282, cz + 0.0445), 0.018, 0.018, 0.002, white, Vector3(90, 0, 0), 20)
+		_add_box_visual(e, Vector3(0.0, 0.292, cz + 0.0458), Vector3(0.016, 0.004, 0.001), gauge_green)
+		var needle := _add_box_visual(e, Vector3(0.003, 0.284, cz + 0.0462), Vector3(0.002, 0.014, 0.001), black_plastic)
+		needle.rotation_degrees.z = -35.0
+		var lever := _add_box_visual(e, Vector3(-0.045, 0.316, cz), Vector3(0.17, 0.016, 0.034), black_plastic)
+		lever.rotation_degrees.z = -10.0
+		var carry := _add_box_visual(e, Vector3(-0.04, 0.293, cz), Vector3(0.15, 0.016, 0.034), black_plastic)
+		carry.rotation_degrees.z = 3.0
+		_add_torus_visual(e, Vector3(0.032, 0.30, cz + 0.025), 0.007, 0.012, chrome, Vector3(90, 0, 0))
+		_add_box_visual(e, Vector3(0.032, 0.287, cz + 0.027), Vector3(0.008, 0.012, 0.004), seal_yellow)
 
-	var lbl := Label3D.new()
-	lbl.text = "FEUERLÖSCHER"
-	lbl.font_size = 24
-	lbl.pixel_size = 0.0042
-	lbl.position = Vector3(0.0, 0.62, 0.06)
-	lbl.modulate = Color(1.0, 0.42, 0.38)
-	root.add_child(lbl)
+		# Schlauch vom Ventil seitlich nach unten, Löschpistole in der Klammer
+		_add_cyl_visual(e, Vector3(0.03, 0.265, cz), 0.014, 0.014, 0.02, chrome, Vector3(0, 0, 90), 12)
+		_add_hose_visual(e, PackedVector3Array([
+			Vector3(0.035, 0.265, cz),
+			Vector3(0.075, 0.255, cz + 0.02),
+			Vector3(0.11, 0.215, cz + 0.03),
+			Vector3(0.115, -0.08, cz + 0.03),
+		]), 0.011, black_rubber)
+		_add_cyl_visual(e, Vector3(0.115, -0.075, cz + 0.03), 0.0135, 0.0135, 0.02, chrome, Vector3.ZERO, 12)
+		_add_cyl_visual(e, Vector3(0.115, -0.135, cz + 0.03), 0.013, 0.026, 0.11, black_plastic, Vector3.ZERO, 16)
+		_add_box_visual(e, Vector3(0.098, 0.04, cz + 0.022), Vector3(0.03, 0.018, 0.03), steel)
 
 	var area := _make_interact_area(Vector3(0.48, 0.82, 0.42), {
 		"interact_type": "extinguisher_station",
@@ -826,16 +1594,20 @@ func _build_wall_router() -> void:
 	_router_root.position = Vector3(-1.0, 1.62, -4.38)
 	add_child(_router_root)
 
-	var silver_mat := MatLib.get_mat("galvanized_steel")
-	var fpipe := MeshInstance3D.new()
-	var fcm := CylinderMesh.new()
-	fcm.top_radius = 0.024
-	fcm.bottom_radius = 0.024
-	fcm.height = 1.65
-	fpipe.mesh = fcm
-	fpipe.material_override = silver_mat
-	fpipe.position = Vector3(0.0, 1.02, -0.02)
-	_router_root.add_child(fpipe)
+	var conduit_model := ModelLoader.instantiate_custom_model("router_conduit")
+	if conduit_model != null:
+		_router_root.add_child(conduit_model)
+	else:
+		var silver_mat := MatLib.get_mat("galvanized_steel")
+		var fpipe := MeshInstance3D.new()
+		var fcm := CylinderMesh.new()
+		fcm.top_radius = 0.024
+		fcm.bottom_radius = 0.024
+		fcm.height = 1.65
+		fpipe.mesh = fcm
+		fpipe.material_override = silver_mat
+		fpipe.position = Vector3(0.0, 1.02, -0.02)
+		_router_root.add_child(fpipe)
 
 	_router_mesh_holder = Node3D.new()
 	_router_root.add_child(_router_mesh_holder)
@@ -847,14 +1619,6 @@ func _build_wall_router() -> void:
 	_router_led_mat.emission_energy_multiplier = 0.70
 
 	router_port_pos = _router_root.position + Vector3(0.0, -0.09, 0.18)
-
-	_router_label = Label3D.new()
-	_router_label.text = "ALTER DSL-ROUTER (50 Mbit/s)"
-	_router_label.font_size = 24
-	_router_label.pixel_size = 0.0038
-	_router_label.position = Vector3(0.0, 0.56, 0.10)
-	_router_label.modulate = Color(0.18, 0.20, 0.22)
-	_router_root.add_child(_router_label)
 
 	var area := _make_interact_area(Vector3(0.84, 0.70, 0.44), {
 		"interact_type": "wall_router",
@@ -873,71 +1637,243 @@ func _rebuild_router_visuals(tier: int) -> void:
 	for c in _router_mesh_holder.get_children():
 		c.queue_free()
 
-	var dark_metal := MatLib.make_brushed_metal(Color(0.16, 0.18, 0.21), 0.40, 0.55)
+	for pid in _panels.keys():
+		if str(pid).begins_with("router:"):
+			_panels.erase(pid)
+
+	var h := _router_mesh_holder
+	var model_ids: Array[String] = ["router_t0_dsl", "router_t1_vdsl", "router_t2_gateway", "router_t3_core10g", "router_t4_core100g"]
+	var r_model := ModelLoader.instantiate_custom_model(model_ids[clampi(tier, 0, model_ids.size() - 1)])
+	if r_model != null:
+		h.add_child(r_model)
+		_setup_router_model(r_model)
+	elif tier == 0:
+		_build_router_tier_dsl(h)
+	elif tier == 1:
+		_build_router_tier_vdsl(h)
+	elif tier == 2:
+		_build_router_tier_gateway(h)
+	else:
+		_build_router_tier_cabinet(h, tier >= 4)
+
+
+## Stufe 0: vergilbter Heim-DSL-Router aus Kunststoff mit Stummelantenne, LED-Reihe und 2 LAN-Buchsen.
+func _build_router_tier_dsl(h: Node3D) -> void:
+	var plastic := _mat(Color(0.84, 0.81, 0.73), 0.62, 0.0)
+	var plastic_dark := _mat(Color(0.74, 0.71, 0.63), 0.66, 0.0)
+	var bezel := _mat(Color(0.42, 0.41, 0.39), 0.40, 0.0)
+	var slot := _mat(Color(0.12, 0.12, 0.12), 0.80, 0.0)
+	var rubber := _mat(Color(0.09, 0.09, 0.10), 0.70, 0.0)
+	var sticker := _mat(Color(0.93, 0.92, 0.84), 0.85, 0.0)
+	var galv := MatLib.get_mat("galvanized_steel")
+	var port_blue := _mat(Color(0.20, 0.44, 0.72), 0.45, 0.22)
+	var jack := _mat(Color(0.04, 0.04, 0.05), 0.75, 0.0)
+	var contact := _mat(Color(0.86, 0.68, 0.26), 0.30, 0.90)
+
+	_add_box_visual(h, Vector3(0.0, -0.02, -0.105), Vector3(0.30, 0.12, 0.01), galv)
+	_add_box_visual(h, Vector3(0.0, -0.04, -0.02), Vector3(0.44, 0.20, 0.16), plastic)
+	_add_box_visual(h, Vector3(0.0, 0.075, -0.025), Vector3(0.42, 0.03, 0.15), plastic_dark)
+	_add_box_visual(h, Vector3(0.0, 0.094, -0.025), Vector3(0.40, 0.008, 0.14), plastic)
+	_add_box_visual(h, Vector3(0.0, -0.04, 0.066), Vector3(0.40, 0.16, 0.012), bezel)
+
+	for i in range(4):
+		_add_cyl_visual(h, Vector3(-0.16 + 0.04 * float(i), 0.01, 0.073), 0.006, 0.006, 0.004, _router_led_mat, Vector3(90, 0, 0), 12)
+	_add_small_label(h, Vector3(0.10, 0.03, 0.0725), "SpeedPort 50", 22, 0.0012, Color(0.80, 0.80, 0.76))
+	for i in range(4):
+		_add_box_visual(h, Vector3(0.11, -0.01 - 0.022 * float(i), 0.0725), Vector3(0.10, 0.006, 0.002), slot)
+	_add_box_visual(h, Vector3(0.13, -0.11, 0.0725), Vector3(0.07, 0.03, 0.002), sticker)
+	for p_i in range(2):
+		_add_rj45_port(h, Vector3(-0.12 + 0.08 * float(p_i), -0.08, 0.074), port_blue, jack, contact)
+
+	var ant := Node3D.new()
+	ant.position = Vector3(0.15, 0.10, -0.04)
+	ant.rotation_degrees.z = -18.0
+	h.add_child(ant)
+	_add_sphere_visual(ant, Vector3.ZERO, 0.017, 0.034, rubber)
+	_add_cyl_visual(ant, Vector3(0.0, 0.13, 0.0), 0.007, 0.011, 0.24, rubber, Vector3.ZERO, 12)
+	_add_cyl_visual(ant, Vector3(0.0, 0.045, 0.0), 0.0125, 0.0125, 0.012, bezel, Vector3.ZERO, 12)
+	_add_cyl_visual(ant, Vector3(0.0, 0.10, 0.0), 0.0105, 0.0105, 0.010, bezel, Vector3.ZERO, 12)
+	_add_sphere_visual(ant, Vector3(0.0, 0.25, 0.0), 0.008, 0.016, rubber)
+
+
+## Stufe 1: mattschwarzer VDSL-Business-Router mit Hochglanzfront, Lüftungsgitter, 2 MIMO-Antennen und 3 Ports.
+func _build_router_tier_vdsl(h: Node3D) -> void:
+	var body := MatLib.make_brushed_metal(Color(0.12, 0.13, 0.15), 0.45, 0.35)
+	var gloss := _mat(Color(0.05, 0.05, 0.06), 0.12, 0.10)
+	var silver := MatLib.make_brushed_metal(Color(0.72, 0.74, 0.77), 0.25, 0.90)
+	var perf := MatLib.get_mat("perforated_mesh")
+	var galv := MatLib.get_mat("galvanized_steel")
+	var rubber := _mat(Color(0.08, 0.08, 0.09), 0.60, 0.0)
+	var port_blue := _mat(Color(0.20, 0.44, 0.72), 0.45, 0.22)
+	var jack := _mat(Color(0.04, 0.04, 0.05), 0.75, 0.0)
+	var contact := _mat(Color(0.86, 0.68, 0.26), 0.30, 0.90)
+
+	_add_box_visual(h, Vector3(0.0, 0.0, -0.115), Vector3(0.40, 0.16, 0.01), galv)
+	_add_box_visual(h, Vector3.ZERO, Vector3(0.58, 0.30, 0.20), body)
+	_add_box_visual(h, Vector3(0.0, 0.158, -0.005), Vector3(0.56, 0.016, 0.19), body)
+	_add_box_visual(h, Vector3(0.0, 0.1675, -0.01), Vector3(0.40, 0.003, 0.12), perf)
+	_add_box_visual(h, Vector3(0.0, -0.01, 0.106), Vector3(0.54, 0.24, 0.012), gloss)
+	_add_box_visual(h, Vector3(0.0, 0.09, 0.1135), Vector3(0.54, 0.006, 0.003), silver)
+	for i in range(5):
+		_add_box_visual(h, Vector3(-0.23 + 0.035 * float(i), 0.06, 0.1135), Vector3(0.018, 0.006, 0.003), _router_led_mat)
+	_add_small_label(h, Vector3(0.13, 0.06, 0.1125), "VDSL 250  BUSINESS", 22, 0.0012, Color(0.75, 0.77, 0.80))
+	for p_i in range(3):
+		_add_rj45_port(h, Vector3(-0.14 + 0.14 * float(p_i), -0.06, 0.12), port_blue, jack, contact)
+	_add_cyl_visual(h, Vector3(0.235, -0.06, 0.117), 0.012, 0.012, 0.010, rubber, Vector3(90, 0, 0), 16)
+
+	for side in range(2):
+		var sx := -0.22 if side == 0 else 0.22
+		_add_cyl_visual(h, Vector3(sx, 0.168, -0.06), 0.018, 0.018, 0.034, rubber, Vector3(0, 0, 90), 16)
+		var ant := Node3D.new()
+		ant.position = Vector3(sx, 0.168, -0.06)
+		ant.rotation_degrees.z = 10.0 if side == 0 else -10.0
+		h.add_child(ant)
+		_add_box_visual(ant, Vector3(0.0, 0.13, 0.0), Vector3(0.034, 0.21, 0.014), rubber)
+		_add_cyl_visual(ant, Vector3(0.0, 0.235, 0.0), 0.017, 0.017, 0.014, rubber, Vector3(90, 0, 0), 16)
+		_add_cyl_visual(ant, Vector3(0.0, 0.025, 0.0), 0.017, 0.017, 0.014, rubber, Vector3(90, 0, 0), 16)
+
+
+## Stufe 2: 1G-Glasfaser-Gateway mit Rack-Winkeln, SFP-Käfigen samt LC-Stecker,
+## Status-Display, Konsolenport und 5 LAN-Ports. Die Faser läuft nach oben ins Leerrohr.
+func _build_router_tier_gateway(h: Node3D) -> void:
+	var body := MatLib.make_brushed_metal(Color(0.16, 0.18, 0.21), 0.40, 0.55)
+	var face := _mat(Color(0.09, 0.10, 0.12), 0.50, 0.30)
 	var galv := MatLib.get_mat("galvanized_steel")
 	var perf := MatLib.get_mat("perforated_mesh")
+	var jack := _mat(Color(0.04, 0.04, 0.05), 0.75, 0.0)
+	var contact := _mat(Color(0.86, 0.68, 0.26), 0.30, 0.90)
 	var port_blue := _mat(Color(0.20, 0.44, 0.72), 0.45, 0.22)
+	var console_blue := _mat(Color(0.48, 0.72, 0.90), 0.45, 0.10)
+	var screen := _mat(Color(0.03, 0.05, 0.07), 0.15, 0.0)
+	var fiber := _mat(Color(0.95, 0.78, 0.10), 0.45, 0.0)
+	var lc_blue := _mat(Color(0.20, 0.45, 0.85), 0.40, 0.0)
+	var screw := MatLib.make_brushed_metal(Color(0.72, 0.74, 0.76), 0.30, 0.90)
 
-	if tier == 0:
-		# Tier 0: Old weathered 2005 plastic beige/cream home DSL router with 1 crooked antenna & 2 LAN ports!
-		var old_plastic := _mat(Color(0.84, 0.81, 0.73), 0.72, 0.02)
-		var grey_trim := _mat(Color(0.45, 0.44, 0.42), 0.65, 0.05)
-		_add_box_visual(_router_mesh_holder, Vector3(0.0, -0.02, -0.02), Vector3(0.44, 0.24, 0.16), old_plastic)
-		_add_box_visual(_router_mesh_holder, Vector3(0.0, -0.02, 0.062), Vector3(0.38, 0.18, 0.012), grey_trim)
-		# Single crooked black DSL antenna
-		var ant := MeshInstance3D.new()
-		var ac := CylinderMesh.new()
-		ac.top_radius = 0.007
-		ac.bottom_radius = 0.011
-		ac.height = 0.26
-		ant.mesh = ac
-		ant.material_override = dark_metal
-		ant.position = Vector3(0.15, 0.21, -0.03)
-		ant.rotation_degrees.z = -18.0
-		_router_mesh_holder.add_child(ant)
-		# 2 small LAN jacks + 1 tiny LED
-		_add_box_visual(_router_mesh_holder, Vector3(-0.12, 0.03, 0.070), Vector3(0.028, 0.018, 0.012), _router_led_mat)
-		for p_i in range(2):
-			_add_box_visual(_router_mesh_holder, Vector3(-0.06 + float(p_i) * 0.12, -0.07, 0.072), Vector3(0.07, 0.055, 0.03), port_blue)
-	elif tier == 1:
-		# Tier 1: Matte-Black VDSL Business Router with 2 MIMO Antennas & 3 Ports
-		_add_box_visual(_router_mesh_holder, Vector3.ZERO, Vector3(0.58, 0.30, 0.20), dark_metal)
-		_add_box_visual(_router_mesh_holder, Vector3(0.0, 0.0, 0.102), Vector3(0.52, 0.22, 0.012), _mat(Color(0.10, 0.11, 0.13), 0.6, 0.2))
-		for ax in [-0.22, 0.22]:
-			var ant := MeshInstance3D.new()
-			var ac := CylinderMesh.new()
-			ac.top_radius = 0.008
-			ac.bottom_radius = 0.013
-			ac.height = 0.30
-			ant.mesh = ac
-			ant.material_override = dark_metal
-			ant.position = Vector3(float(ax), 0.28, -0.02)
-			ant.rotation_degrees.z = -10.0 if ax > 0 else 10.0
-			_router_mesh_holder.add_child(ant)
-		_add_box_visual(_router_mesh_holder, Vector3(-0.18, 0.06, 0.112), Vector3(0.045, 0.020, 0.012), _router_led_mat)
-		for p_i in range(3):
-			_add_box_visual(_router_mesh_holder, Vector3(-0.14 + float(p_i) * 0.14, -0.06, 0.112), Vector3(0.075, 0.060, 0.035), port_blue)
-	elif tier == 2:
-		# Tier 2: 1U Wall-Mount Brushed Steel 1G Glasfaser-Gateway with SFP cage & 5 ports!
-		_add_box_visual(_router_mesh_holder, Vector3.ZERO, Vector3(0.74, 0.36, 0.24), dark_metal)
-		_add_box_visual(_router_mesh_holder, Vector3(0.0, 0.0, 0.122), Vector3(0.68, 0.28, 0.015), perf)
-		_add_box_visual(_router_mesh_holder, Vector3(-0.24, 0.07, 0.134), Vector3(0.08, 0.045, 0.022), galv) # SFP Fiber Cage
-		_add_box_visual(_router_mesh_holder, Vector3(0.24, 0.07, 0.134), Vector3(0.045, 0.022, 0.012), _router_led_mat)
-		for p_i in range(5):
-			_add_box_visual(_router_mesh_holder, Vector3(-0.22 + float(p_i) * 0.11, -0.07, 0.134), Vector3(0.065, 0.055, 0.03), port_blue)
+	_add_box_visual(h, Vector3.ZERO, Vector3(0.74, 0.36, 0.24), body)
+	_add_box_visual(h, Vector3(0.0, 0.0, 0.1225), Vector3(0.66, 0.30, 0.005), face)
+	for side in range(2):
+		var sx := -0.385 if side == 0 else 0.385
+		_add_box_visual(h, Vector3(sx, 0.0, 0.11), Vector3(0.03, 0.36, 0.03), galv)
+		for k in range(2):
+			_add_cyl_visual(h, Vector3(sx, -0.12 + 0.24 * float(k), 0.1265), 0.008, 0.008, 0.004, screw, Vector3(90, 0, 0), 12)
+
+	# Obere Reihe: Statusdisplay, 2 SFP-Käfige (einer mit LC-Stecker), Status-LEDs
+	_add_box_visual(h, Vector3(-0.23, 0.08, 0.127), Vector3(0.14, 0.07, 0.004), screen)
+	_add_small_label(h, Vector3(-0.23, 0.08, 0.1295), "1G FIBER\nUPLINK OK", 20, 0.0010, Color(0.35, 0.85, 0.95))
+	for i in range(2):
+		var cx := -0.07 + 0.10 * float(i)
+		_add_box_visual(h, Vector3(cx, 0.08, 0.134), Vector3(0.075, 0.045, 0.022), galv)
+		_add_box_visual(h, Vector3(cx, 0.08, 0.1455), Vector3(0.06, 0.03, 0.002), jack)
+	_add_box_visual(h, Vector3(-0.07, 0.08, 0.152), Vector3(0.03, 0.022, 0.016), lc_blue)
+	_add_hose_visual(h, PackedVector3Array([
+		Vector3(-0.07, 0.08, 0.16),
+		Vector3(-0.06, 0.15, 0.18),
+		Vector3(-0.03, 0.205, 0.13),
+		Vector3(0.0, 0.215, -0.02),
+	]), 0.005, fiber)
+	for i in range(4):
+		_add_cyl_visual(h, Vector3(0.15 + 0.04 * float(i), 0.10, 0.127), 0.006, 0.006, 0.004, _router_led_mat, Vector3(90, 0, 0), 12)
+	_add_small_label(h, Vector3(0.21, 0.055, 0.1255), "GLASFASER-GATEWAY 1G", 20, 0.0010, Color(0.75, 0.77, 0.80))
+
+	# Untere Reihe: 5 LAN-Ports, Konsolenport, Lüftungsschlitz
+	for p_i in range(5):
+		_add_rj45_port(h, Vector3(-0.27 + 0.09 * float(p_i), -0.06, 0.14), port_blue, jack, contact)
+	_add_rj45_port(h, Vector3(0.23, -0.06, 0.14), console_blue, jack, contact)
+	_add_box_visual(h, Vector3(0.0, -0.135, 0.126), Vector3(0.66, 0.025, 0.003), perf)
+
+
+## Stufe 3 und 4: Wand-Netzwerkschrank mit 19"-Profilschienen, Patchpanel samt Glasfaser-Jumpern,
+## Kabelführung und Switch. Stufe 4 bekommt zusätzlich eine 100G-Einschubkarte mit belegten SFP-Ports.
+func _build_router_tier_cabinet(h: Node3D, is_100g: bool) -> void:
+	var dark_metal := MatLib.make_brushed_metal(Color(0.16, 0.18, 0.21), 0.40, 0.55)
+	var inner := _mat(Color(0.06, 0.07, 0.08), 0.70, 0.20)
+	var face := _mat(Color(0.10, 0.11, 0.13), 0.45, 0.35)
+	var galv := MatLib.get_mat("galvanized_steel")
+	var perf := MatLib.get_mat("perforated_mesh")
+	var hole := _mat(Color(0.03, 0.03, 0.03), 0.90, 0.0)
+	var label_paper := _mat(Color(0.96, 0.95, 0.88), 0.85, 0.0)
+	var port_blue := _mat(Color(0.20, 0.44, 0.72), 0.45, 0.22)
+	var jack := _mat(Color(0.04, 0.04, 0.05), 0.75, 0.0)
+	var contact := _mat(Color(0.86, 0.68, 0.26), 0.30, 0.90)
+	var fiber := _mat(Color(0.95, 0.78, 0.10), 0.45, 0.0)
+	var lc_blue := _mat(Color(0.20, 0.45, 0.85), 0.40, 0.0)
+	var screw := MatLib.make_brushed_metal(Color(0.72, 0.74, 0.76), 0.30, 0.90)
+	var cab_h := 0.72 if is_100g else 0.56
+	var cy := 0.06
+	var top := cy + cab_h * 0.5
+	var bottom := cy - cab_h * 0.5
+
+	# Korpus mit dunklem Innenraum und Lüftungsgitter im Deckel
+	_add_box_visual(h, Vector3(0.0, cy, -0.14), Vector3(0.84, cab_h, 0.02), dark_metal)
+	_add_box_visual(h, Vector3(-0.41, cy, 0.0), Vector3(0.02, cab_h, 0.30), dark_metal)
+	_add_box_visual(h, Vector3(0.41, cy, 0.0), Vector3(0.02, cab_h, 0.30), dark_metal)
+	_add_box_visual(h, Vector3(0.0, top - 0.01, 0.0), Vector3(0.84, 0.02, 0.30), dark_metal)
+	_add_box_visual(h, Vector3(0.0, bottom + 0.01, 0.0), Vector3(0.84, 0.02, 0.30), dark_metal)
+	_add_box_visual(h, Vector3(0.0, cy, -0.128), Vector3(0.80, cab_h - 0.04, 0.004), inner)
+	_add_box_visual(h, Vector3(0.0, top + 0.002, -0.02), Vector3(0.50, 0.004, 0.18), perf)
+
+	# 19"-Profilschienen mit Rasterlöchern
+	var hole_count := int((cab_h - 0.08) / 0.0445)
+	for side in range(2):
+		var rx := -0.375 if side == 0 else 0.375
+		_add_box_visual(h, Vector3(rx, cy, 0.14), Vector3(0.035, cab_h - 0.04, 0.02), galv)
+		for k in range(hole_count):
+			_add_box_visual(h, Vector3(rx, bottom + 0.06 + 0.0445 * float(k), 0.1505), Vector3(0.009, 0.009, 0.002), hole)
+
+	# Typenschild oben, bei Stufe 4 mit zusätzlicher Lüftungsblende
+	_add_box_visual(h, Vector3(0.0, 0.285, 0.148), Vector3(0.72, 0.06, 0.006), face)
+	_add_small_label(h, Vector3(0.0, 0.285, 0.1515), "CORE 100G" if is_100g else "CORE 10G", 26, 0.0016, Color(0.80, 0.82, 0.85))
+	if is_100g:
+		_add_box_visual(h, Vector3(0.0, 0.36, 0.150), Vector3(0.72, 0.06, 0.004), perf)
+
+	# Patchpanel mit 12 Keystone-Buchsen, Beschriftungsstreifen und 2 gelben Glasfaser-Jumpern
+	_add_box_visual(h, Vector3(0.0, 0.20, 0.155), Vector3(0.72, 0.08, 0.01), galv)
+	for i in range(12):
+		_add_box_visual(h, Vector3(-0.275 + 0.05 * float(i), 0.195, 0.1605), Vector3(0.03, 0.026, 0.002), hole)
+	_add_box_visual(h, Vector3(0.0, 0.228, 0.1605), Vector3(0.60, 0.010, 0.002), label_paper)
+	for side in range(2):
+		_add_cyl_visual(h, Vector3(-0.345 if side == 0 else 0.345, 0.20, 0.1615), 0.007, 0.007, 0.004, screw, Vector3(90, 0, 0), 12)
+	for i in range(2):
+		var px := -0.275 + 0.05 * float(i)
+		_add_box_visual(h, Vector3(px, 0.195, 0.168), Vector3(0.02, 0.022, 0.014), lc_blue)
+		_add_hose_visual(h, PackedVector3Array([
+			Vector3(px, 0.195, 0.175),
+			Vector3(px - 0.01, 0.15, 0.19),
+			Vector3(-0.33 - 0.008 * float(i), 0.09, 0.185),
+			Vector3(-0.335 - 0.008 * float(i), 0.03, 0.17),
+		]), 0.0045, fiber)
+
+	# Kabelführung mit Bürstenleiste und Führungsbügeln
+	_add_box_visual(h, Vector3(0.0, 0.05, 0.150), Vector3(0.72, 0.07, 0.006), face)
+	_add_box_visual(h, Vector3(0.0, 0.05, 0.1535), Vector3(0.66, 0.015, 0.001), hole)
+	for i in range(6):
+		_add_box_visual(h, Vector3(-0.25 + 0.10 * float(i), 0.05, 0.162), Vector3(0.012, 0.06, 0.018), galv)
+
+	# Switch mit 6 Ports und Port-LEDs (Port-Höhe wie beim alten Modell)
+	_add_box_visual(h, Vector3(0.0, -0.09, 0.152), Vector3(0.72, 0.08, 0.012), face)
+	for p_i in range(6):
+		var sx := -0.26 + 0.104 * float(p_i)
+		_add_rj45_port(h, Vector3(sx, -0.095, 0.166), port_blue, jack, contact)
+		_add_box_visual(h, Vector3(sx, -0.058, 0.1585), Vector3(0.012, 0.005, 0.002), _router_led_mat)
+
+	if is_100g:
+		# 100G-Einschub mit 8 SFP-Käfigen, 3 davon mit Glasfaser belegt
+		_add_box_visual(h, Vector3(0.0, -0.21, 0.152), Vector3(0.72, 0.08, 0.012), face)
+		for i in range(8):
+			var qx := -0.28 + 0.08 * float(i)
+			_add_box_visual(h, Vector3(qx, -0.215, 0.163), Vector3(0.06, 0.036, 0.012), galv)
+			_add_box_visual(h, Vector3(qx, -0.215, 0.1695), Vector3(0.046, 0.024, 0.002), hole)
+			_add_box_visual(h, Vector3(qx, -0.183, 0.1585), Vector3(0.010, 0.005, 0.002), _router_led_mat)
+			if i < 3:
+				_add_box_visual(h, Vector3(qx, -0.215, 0.177), Vector3(0.024, 0.02, 0.016), lc_blue)
+				_add_hose_visual(h, PackedVector3Array([
+					Vector3(qx, -0.215, 0.185),
+					Vector3(qx + 0.01, -0.25, 0.20),
+					Vector3(qx + 0.03, -0.32, 0.19),
+				]), 0.0045, fiber)
+		_add_box_visual(h, Vector3(0.0, -0.272, 0.150), Vector3(0.72, 0.03, 0.004), perf)
 	else:
-		# Tier 3 & 4: Full Wall-Mounted Enterprise 10G/100G Fiber Patch Cabinet with Dual Switch Blades & 24-Port Metallic Patch Panel!
-		var cab_h := 0.56 if tier == 3 else 0.72
-		_add_box_visual(_router_mesh_holder, Vector3(0.0, 0.06, 0.0), Vector3(0.84, cab_h, 0.30), dark_metal)
-		_add_box_visual(_router_mesh_holder, Vector3(-0.39, 0.06, 0.14), Vector3(0.035, cab_h - 0.04, 0.03), galv)
-		_add_box_visual(_router_mesh_holder, Vector3(0.39, 0.06, 0.14), Vector3(0.035, cab_h - 0.04, 0.03), galv)
-		# Upper metallic 24-port patch panel + yellow fiber patch jumper
-		_add_box_visual(_router_mesh_holder, Vector3(0.0, 0.20, 0.152), Vector3(0.72, 0.12, 0.022), galv)
-		_add_box_visual(_router_mesh_holder, Vector3(0.0, 0.05, 0.152), Vector3(0.72, 0.12, 0.022), perf)
-		_add_box_visual(_router_mesh_holder, Vector3(-0.24, 0.20, 0.168), Vector3(0.14, 0.025, 0.020), _mat(Color(0.86, 0.68, 0.14), 0.45, 0.05))
-		_add_box_visual(_router_mesh_holder, Vector3(0.28, 0.20, 0.168), Vector3(0.055, 0.026, 0.016), _router_led_mat)
-		for p_i in range(6):
-			_add_box_visual(_router_mesh_holder, Vector3(-0.26 + float(p_i) * 0.104, -0.09, 0.156), Vector3(0.064, 0.055, 0.032), port_blue)
+		_add_box_visual(h, Vector3(0.0, -0.175, 0.150), Vector3(0.72, 0.07, 0.004), perf)
 
 
 func _build_terminal_desk() -> void:
@@ -945,26 +1881,18 @@ func _build_terminal_desk() -> void:
 	root.position = Vector3(3.0, 0.0, -3.72)
 	add_child(root)
 
-	var wood_mat := MatLib.get_mat("wood_desk")
-	var metal_mat := MatLib.make_brushed_metal(Color(0.14, 0.16, 0.20), 0.40, 0.58)
-	var pad_mat := _mat(Color(0.10, 0.12, 0.16), 0.85, 0.0)
-	var glass_mat := StandardMaterial3D.new()
-	glass_mat.albedo_color = Color(0.14, 0.20, 0.26, 0.55)
-	glass_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	glass_mat.roughness = 0.12
+	# Blender-Modell (assets/models/terminal_desk.glb) ersetzt die prozeduralen Tischteile, falls vorhanden.
+	var desk_model := ModelLoader.instantiate_custom_model("terminal_desk")
+	if desk_model != null:
+		root.add_child(desk_model)
+		# Die Bildschirmfläche aus dem Modell fliegt raus, weil unten der Live-Spiegel eine eigene Fläche setzt.
+		var model_screen := desk_model.find_child("PcScreenQuad", true, false)
+		if model_screen != null:
+			model_screen.queue_free()
+		_add_desk_collider(root)
+	else:
+		_build_desk_procedural(root)
 
-	_add_box_static(root, Vector3(0.0, 0.78, 0.0), Vector3(1.92, 0.055, 0.90), wood_mat)
-	# Sleek metal desk frame legs (not thick blocky columns!)
-	_add_box_visual(root, Vector3(-0.88, 0.39, -0.38), Vector3(0.045, 0.76, 0.045), metal_mat)
-	_add_box_visual(root, Vector3(0.88, 0.39, -0.38), Vector3(0.045, 0.76, 0.045), metal_mat)
-	_add_box_visual(root, Vector3(-0.88, 0.39, 0.38), Vector3(0.045, 0.76, 0.045), metal_mat)
-	_add_box_visual(root, Vector3(0.88, 0.39, 0.38), Vector3(0.045, 0.76, 0.045), metal_mat)
-	_add_box_visual(root, Vector3(-0.88, 0.14, 0.0), Vector3(0.040, 0.040, 0.76), metal_mat)
-	_add_box_visual(root, Vector3(0.0, 0.22, -0.38), Vector3(1.74, 0.040, 0.040), metal_mat)
-	_add_box_visual(root, Vector3(-0.10, 0.812, 0.14), Vector3(0.95, 0.008, 0.38), pad_mat)
-
-	# Dual Thin-Bezel Monitors held on the Articulated Steel Clamp Arm!
-	_add_box_visual(root, Vector3(-0.10, 1.24, -0.18), Vector3(0.86, 0.48, 0.030), metal_mat)
 	var os_quad := MeshInstance3D.new()
 	var oqm := QuadMesh.new()
 	oqm.size = Vector2(0.82, 0.44)
@@ -981,19 +1909,6 @@ func _build_terminal_desk() -> void:
 	os_quad.add_to_group("pc_screen")
 	root.add_child(os_quad)
 
-	var side_mon := Node3D.new()
-	side_mon.position = Vector3(-0.74, 1.20, -0.08)
-	side_mon.rotation_degrees.y = 24.0
-	root.add_child(side_mon)
-	_add_box_visual(side_mon, Vector3.ZERO, Vector3(0.50, 0.40, 0.028), metal_mat)
-	var tel_quad := MeshInstance3D.new()
-	var tqm := QuadMesh.new()
-	tqm.size = Vector2(0.46, 0.36)
-	tel_quad.mesh = tqm
-	tel_quad.material_override = MatLib.get_telemetry_screen_material()
-	tel_quad.position = Vector3(0.0, 0.0, 0.017)
-	side_mon.add_child(tel_quad)
-
 	_desk_glow_light = OmniLight3D.new()
 	_desk_glow_light.position = Vector3(-0.18, 1.28, 0.26)
 	_desk_glow_light.light_color = Color(0.96, 0.96, 0.94)
@@ -1002,8 +1917,9 @@ func _build_terminal_desk() -> void:
 	_desk_glow_light.shadow_enabled = false
 	root.add_child(_desk_glow_light)
 
-	# Detailed Workstation Props (Monitor Clamp Arm, 3-Drawer Pedestal, Sculpted Keyboard, Mouse, Mug with Handle, Desk Lamp, Detailed ATX Tower)
-	BuildingPropFactory.build_terminal_desk_details(root)
+	if desk_model == null:
+		# Detailed Workstation Props (Monitor Clamp Arm, 3-Drawer Pedestal, Sculpted Keyboard, Mouse, Mug with Handle, Desk Lamp, Detailed ATX Tower)
+		BuildingPropFactory.build_terminal_desk_details(root)
 
 	# 3D Spatial ATX Workstation Fan Whisper right at the Desk PC!
 	_pc_audio = AudioStreamPlayer3D.new()
@@ -1014,19 +1930,30 @@ func _build_terminal_desk() -> void:
 	_pc_audio.volume_db = -60.0
 	root.add_child(_pc_audio)
 
-	# Realistic Ergonomic 5-Caster Swivel Office Chair!
-	var chair := BuildingPropFactory.build_office_chair()
-	chair.position = Vector3(-0.22, 0.0, 0.86)
-	chair.rotation_degrees.y = -18.0
-	root.add_child(chair)
+	if desk_model == null:
+		# Realistic Ergonomic 5-Caster Swivel Office Chair!
+		var chair := BuildingPropFactory.build_office_chair()
+		chair.position = Vector3(-0.22, 0.0, 0.86)
+		chair.rotation_degrees.y = -18.0
+		root.add_child(chair)
 
+	# Schild über dem PC: hohe Glyphen-Auflösung bei kleiner Pixelgröße (scharf statt verwaschen),
+	# helle Schrift auf dunkler Metallplatte statt frei schwebender dunkler Schrift.
 	var lbl := Label3D.new()
 	lbl.text = "WINDOWS SERVER-PC [E]\nShop • Support • Upgrades"
-	lbl.font_size = 26
-	lbl.pixel_size = 0.0040
+	lbl.font_size = 56
+	lbl.pixel_size = 0.0011
+	lbl.outline_size = 4
+	lbl.outline_modulate = Color(0.02, 0.02, 0.03)
+	lbl.modulate = Color(0.90, 0.93, 0.96)
 	lbl.position = root.position + Vector3(-0.08, 1.76, -0.14)
-	lbl.modulate = Color(0.18, 0.20, 0.22)
 	add_child(lbl)
+
+	var sign_font: Font = lbl.font if lbl.font != null else ThemeDB.fallback_font
+	var text_px := sign_font.get_multiline_string_size(lbl.text, HORIZONTAL_ALIGNMENT_CENTER, -1, lbl.font_size)
+	var plate_size := Vector3(text_px.x * lbl.pixel_size + 0.08, text_px.y * lbl.pixel_size + 0.05, 0.012)
+	var plate_mat := MatLib.make_brushed_metal(Color(0.09, 0.10, 0.12), 0.40, 0.55)
+	_add_box_visual(self, lbl.position + Vector3(0.0, 0.0, -0.012), plate_size, plate_mat)
 
 	var area := _make_interact_area(Vector3(1.85, 1.25, 1.05), {
 		"interact_type": "terminal",
@@ -1051,21 +1978,8 @@ func _build_wall_decor() -> void:
 	brand.position = Vector3(3.0, 2.96, -4.42)
 	brand.modulate = Color(0.92, 0.93, 0.94)
 	add_child(brand)
-
-	var wb := Node3D.new()
-	wb.position = Vector3(-5.44, 1.98, 0.45)
-	wb.rotation_degrees.y = 90.0
-	add_child(wb)
-	_add_box_visual(wb, Vector3.ZERO, Vector3(1.75, 1.05, 0.04), _mat(Color(0.55, 0.57, 0.60), 0.42, 0.55))
-	_add_box_visual(wb, Vector3(0.0, 0.0, 0.022), Vector3(1.65, 0.95, 0.02), _mat(Color(0.94, 0.94, 0.92), 0.35, 0.0))
-	BuildingPropFactory.build_whiteboard_tray(wb)
-	var wb_txt := Label3D.new()
-	wb_txt.text = "BETRIEBS-CHECKLISTE\n[✓] Alles mit der Hand [E]!\n[✓] Gelb=Strom, Blau=Netzwerk\n[✓] [E]/[F] am Rack: Hardware\n[ ] Alten DSL-Router upgraden!"
-	wb_txt.font_size = 22
-	wb_txt.pixel_size = 0.0042
-	wb_txt.position = Vector3(0.0, 0.02, 0.04)
-	wb_txt.modulate = Color(0.14, 0.16, 0.18)
-	wb.add_child(wb_txt)
+	# Das Whiteboard mit der statischen Betriebs-Checkliste wurde entfernt.
+	# Die Aufgaben zeigt jetzt die Live-Checkliste im HUD.
 
 
 func _build_workshop_props() -> void:
@@ -1120,6 +2034,17 @@ func _add_box_static(parent: Node3D, pos: Vector3, size: Vector3, mat: Material)
 	return body
 
 
+## Statische Wand mit Occluder, damit Hallen hinter der Außenwand nicht verarbeitet werden.
+func _add_box_static_occluded(parent: Node3D, pos: Vector3, size: Vector3, mat: Material) -> StaticBody3D:
+	var body := _add_box_static(parent, pos, size, mat)
+	var occ := OccluderInstance3D.new()
+	var box_occ := BoxOccluder3D.new()
+	box_occ.size = size
+	occ.occluder = box_occ
+	body.add_child(occ)
+	return body
+
+
 func _add_invisible_wall(pos: Vector3, size: Vector3) -> void:
 	var body := StaticBody3D.new()
 	body.collision_layer = 1
@@ -1142,6 +2067,168 @@ func _add_box_visual(parent: Node3D, pos: Vector3, size: Vector3, mat: Material)
 	mi.position = pos
 	parent.add_child(mi)
 	return mi
+
+
+## Zylinder oder Kegelstumpf als reines Sichtteil. `rot_deg` dreht ihn, z. B. Vector3(90, 0, 0) für eine Scheibe zur Front.
+func _add_cyl_visual(parent: Node3D, pos: Vector3, top_r: float, bottom_r: float, height: float, mat: Material, rot_deg: Vector3 = Vector3.ZERO, segments: int = 16) -> MeshInstance3D:
+	var cm := CylinderMesh.new()
+	cm.top_radius = top_r
+	cm.bottom_radius = bottom_r
+	cm.height = height
+	cm.radial_segments = segments
+	cm.rings = 0
+	var mi := MeshInstance3D.new()
+	mi.mesh = cm
+	mi.material_override = mat
+	mi.position = pos
+	mi.rotation_degrees = rot_deg
+	parent.add_child(mi)
+	return mi
+
+
+## Kugel oder Ellipsoid (height < 2 × radius staucht sie) als reines Sichtteil.
+func _add_sphere_visual(parent: Node3D, pos: Vector3, radius: float, height: float, mat: Material) -> MeshInstance3D:
+	var sm := SphereMesh.new()
+	sm.radius = radius
+	sm.height = height
+	sm.radial_segments = 24
+	sm.rings = 12
+	var mi := MeshInstance3D.new()
+	mi.mesh = sm
+	mi.material_override = mat
+	mi.position = pos
+	parent.add_child(mi)
+	return mi
+
+
+## Ring (Spannband, Sicherungsstift). Ohne Drehung liegt er waagerecht um die Y-Achse.
+func _add_torus_visual(parent: Node3D, pos: Vector3, inner_r: float, outer_r: float, mat: Material, rot_deg: Vector3 = Vector3.ZERO) -> MeshInstance3D:
+	var tm := TorusMesh.new()
+	tm.inner_radius = inner_r
+	tm.outer_radius = outer_r
+	tm.rings = 32
+	tm.ring_segments = 8
+	var mi := MeshInstance3D.new()
+	mi.mesh = tm
+	mi.material_override = mat
+	mi.position = pos
+	mi.rotation_degrees = rot_deg
+	parent.add_child(mi)
+	return mi
+
+
+## Kleine aufgedruckte Beschriftung ohne Outline und ohne Schatten, nur von vorn sichtbar.
+func _add_small_label(parent: Node3D, pos: Vector3, text: String, font_size: int, px_size: float, col: Color) -> Label3D:
+	var l := Label3D.new()
+	l.text = text
+	l.font_size = font_size
+	l.pixel_size = px_size
+	l.outline_size = 0
+	l.modulate = col
+	l.double_sided = false
+	l.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	l.position = pos
+	parent.add_child(l)
+	return l
+
+
+## Reiheneinbaugerät auf der Hutschiene: Gehäuse, Kipphebel und Schaltstellungsfenster.
+## pos.x/pos.y ist die Mitte, pos.z ein Versatz zur Standardtiefe des Sicherungskastens.
+func _add_breaker_module(parent: Node3D, pos: Vector3, width: float, body_mat: Material, toggle_mat: Material, window_mat: Material) -> void:
+	_add_box_visual(parent, Vector3(pos.x, pos.y, pos.z + 0.105), Vector3(width - 0.002, 0.11, 0.05), body_mat)
+	_add_box_visual(parent, Vector3(pos.x, pos.y + 0.004, pos.z + 0.1335), Vector3(width * 0.42, 0.03, 0.007), toggle_mat)
+	_add_box_visual(parent, Vector3(pos.x, pos.y - 0.034, pos.z + 0.1305), Vector3(width * 0.5, 0.010, 0.002), window_mat)
+
+
+## Schlauch oder Kabel als Kette von Zylindern durch `points`, mit Kugeln an den Knickstellen.
+func _add_hose_visual(parent: Node3D, points: PackedVector3Array, radius: float, mat: Material) -> void:
+	for i in range(points.size() - 1):
+		var a := points[i]
+		var b := points[i + 1]
+		var seg := b - a
+		var length := seg.length()
+		if length < 0.0001:
+			continue
+		var dir := seg / length
+		var cm := CylinderMesh.new()
+		cm.top_radius = radius
+		cm.bottom_radius = radius
+		cm.height = length
+		cm.radial_segments = 10
+		cm.rings = 0
+		var mi := MeshInstance3D.new()
+		mi.mesh = cm
+		mi.material_override = mat
+		var q: Quaternion = Quaternion(Vector3.UP, dir) if dir.dot(Vector3.UP) > -0.9999 else Quaternion(Vector3.RIGHT, PI)
+		mi.transform = Transform3D(Basis(q), (a + b) * 0.5)
+		parent.add_child(mi)
+	for i in range(1, points.size() - 1):
+		_add_sphere_visual(parent, points[i], radius, radius * 2.0, mat)
+
+
+## RJ45-Buchse: farbiger Rahmen, dunkle Öffnung mit Rastnase und goldene Kontakte.
+func _add_rj45_port(parent: Node3D, pos: Vector3, frame_mat: Material, jack_mat: Material, contact_mat: Material) -> void:
+	_add_box_visual(parent, pos, Vector3(0.07, 0.055, 0.03), frame_mat)
+	_add_box_visual(parent, pos + Vector3(0.0, -0.002, 0.0155), Vector3(0.044, 0.034, 0.002), jack_mat)
+	_add_box_visual(parent, pos + Vector3(0.0, -0.022, 0.0158), Vector3(0.016, 0.008, 0.002), jack_mat)
+	_add_box_visual(parent, pos + Vector3(0.0, 0.010, 0.0168), Vector3(0.030, 0.004, 0.001), contact_mat)
+
+
+## Unsichtbarer Kollisionskörper für die Tischplatte, wenn das GLB-Modell die Optik übernimmt.
+func _add_desk_collider(parent: Node3D) -> void:
+	var body := StaticBody3D.new()
+	body.collision_layer = 1
+	body.collision_mask = 0
+	body.position = Vector3(0.0, 0.78, 0.0)
+	parent.add_child(body)
+	var col := CollisionShape3D.new()
+	var shape := BoxShape3D.new()
+	shape.size = Vector3(1.92, 0.055, 0.90)
+	col.shape = shape
+	body.add_child(col)
+
+
+## Prozeduraler Tisch mit Platte, Gestell, USV und Monitorständer, falls kein GLB-Modell vorhanden ist.
+func _build_desk_procedural(root: Node3D) -> void:
+	var wood_mat := MatLib.get_mat("wood_desk")
+	var metal_mat := MatLib.make_brushed_metal(Color(0.14, 0.16, 0.20), 0.40, 0.58)
+	var edge_mat := _mat(Color(0.12, 0.09, 0.06), 0.55, 0.0)
+	var frame_mat := MatLib.make_brushed_metal(Color(0.20, 0.21, 0.23), 0.42, 0.70)
+	var glide_mat := _mat(Color(0.06, 0.06, 0.07), 0.80, 0.10)
+
+	# Tischplatte aus Holz mit dunkler Kantenleiste rundum
+	_add_box_static(root, Vector3(0.0, 0.78, 0.0), Vector3(1.92, 0.055, 0.90), wood_mat)
+	_add_box_visual(root, Vector3(0.0, 0.78, 0.452), Vector3(1.92, 0.055, 0.016), edge_mat)
+	_add_box_visual(root, Vector3(0.0, 0.78, -0.452), Vector3(1.92, 0.055, 0.016), edge_mat)
+	_add_box_visual(root, Vector3(0.952, 0.78, 0.0), Vector3(0.016, 0.055, 0.90), edge_mat)
+	_add_box_visual(root, Vector3(-0.952, 0.78, 0.0), Vector3(0.016, 0.055, 0.90), edge_mat)
+
+	# Stahlgestell: vier Beine mit Fußgleitern, Zargen unter der Platte
+	for lx in [-0.875, 0.875]:
+		for lz in [-0.40, 0.40]:
+			_add_box_visual(root, Vector3(float(lx), 0.36, float(lz)), Vector3(0.045, 0.72, 0.045), frame_mat)
+			_add_box_visual(root, Vector3(float(lx), 0.012, float(lz)), Vector3(0.06, 0.024, 0.06), glide_mat)
+	_add_box_visual(root, Vector3(0.0, 0.72, -0.40), Vector3(1.75, 0.06, 0.03), frame_mat)
+	_add_box_visual(root, Vector3(0.0, 0.72, 0.40), Vector3(1.75, 0.06, 0.03), frame_mat)
+	_add_box_visual(root, Vector3(-0.875, 0.72, 0.0), Vector3(0.03, 0.06, 0.80), frame_mat)
+	_add_box_visual(root, Vector3(0.875, 0.72, 0.0), Vector3(0.03, 0.06, 0.80), frame_mat)
+	# Untere Querstrebe hinten verbindet die Beine
+	_add_box_visual(root, Vector3(0.0, 0.14, -0.40), Vector3(1.75, 0.030, 0.030), frame_mat)
+	# Kabelkanal unter der Platte, hinten
+	_add_box_visual(root, Vector3(0.0, 0.735, -0.33), Vector3(1.50, 0.030, 0.10), frame_mat)
+
+	# USV unter der Platte, links, mit grüner Status-LED an der Front
+	_add_box_visual(root, Vector3(-0.66, 0.11, -0.10), Vector3(0.30, 0.22, 0.40), _mat(Color(0.16, 0.17, 0.19), 0.55, 0.30))
+	_add_box_visual(root, Vector3(-0.66, 0.19, 0.103), Vector3(0.10, 0.012, 0.004), BuildingPropFactory._emissive(Color(0.20, 0.90, 0.30), 1.2))
+
+	# Monitorständer: runde Fußplatte, Säule und Gelenkarm zur Monitorrückseite
+	BuildingPropFactory._cyl(root, Vector3(-0.10, 0.8175, -0.30), 0.11, 0.02, metal_mat)
+	BuildingPropFactory._cyl(root, Vector3(-0.10, 0.9775, -0.30), 0.018, 0.30, metal_mat)
+	_add_box_visual(root, Vector3(-0.10, 1.12, -0.2475), Vector3(0.03, 0.03, 0.12), metal_mat)
+	_add_box_visual(root, Vector3(-0.10, 1.12, -0.19), Vector3(0.05, 0.05, 0.02), metal_mat)
+
+	# Dual Thin-Bezel Monitors held on the Articulated Steel Clamp Arm!
+	_add_box_visual(root, Vector3(-0.10, 1.24, -0.18), Vector3(0.86, 0.48, 0.030), metal_mat)
 
 
 func _mat(col: Color, rough: float, metal: float) -> StandardMaterial3D:

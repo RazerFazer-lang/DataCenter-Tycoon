@@ -69,6 +69,7 @@ var _boot_started_msec: int = -1
 
 const FINANCE_APPS: Array[String] = ["staff", "bank", "bills"]
 const APP_ORDER: Array[String] = ["shop", "support", "upgrades", "monitor", "staff", "bank", "bills"]
+const HISTORY_CHART := preload("res://scripts/ui/history_chart.gd")
 const APP_META := {
 	"shop": {"icon": "cart", "name": "Shop", "title": "CloudParts.de — Hardware-Shop, Warenkorb & Teile-Lager"},
 	"support": {"icon": "headset", "name": "Support", "title": "ServiceDesk & Kunden-Hub — Tickets, Verträge & AI"},
@@ -80,20 +81,60 @@ const APP_META := {
 }
 
 
+## Dark Mode des PCs: eigene kleine Datei, damit die Spiel-Einstellungen unberührt bleiben.
+const PC_DESKTOP_CFG := "user://pc_desktop.cfg"
+## Kehrt die Helligkeit um und behält den Farbton. Weiße Flächen werden dunkelgrau, dunkle Schrift wird hell.
+## Abgerundete Ecken werden ausgespart, damit am Rand kein Hintergrund mit umgefärbt wird.
+const DARK_FILTER_SHADER := """
+shader_type canvas_item;
+render_mode unshaded;
+
+uniform sampler2D screen_tex : hint_screen_texture, filter_linear;
+uniform vec2 rect_size = vec2(1.0, 1.0);
+uniform float corner_radius = 0.0;
+
+void fragment() {
+	vec2 p = UV * rect_size;
+	vec2 half_size = rect_size * 0.5;
+	float r = min(corner_radius, min(half_size.x, half_size.y));
+	vec2 q = abs(p - half_size) - (half_size - vec2(r));
+	if (length(max(q, vec2(0.0))) - r > 0.0) {
+		discard;
+	}
+	vec3 src = texture(screen_tex, SCREEN_UV).rgb;
+	float luma = dot(src, vec3(0.299, 0.587, 0.114));
+	vec3 chroma = src - vec3(luma);
+	float inv = mix(0.10, 0.93, 1.0 - luma);
+	COLOR = vec4(clamp(vec3(inv) + chroma * 0.9, 0.0, 1.0), 1.0);
+}
+"""
+
+var _dark_mode: bool = false
+var _dark_toggle_btn: Button
+var _taskbar_panel: Control
+var _dark_targets: Array[Control] = []
+var _dark_filters: Array[ColorRect] = []
+var _price_overlay: Control = null
+
+
 func _ready() -> void:
 	set_anchors_preset(Control.PRESET_FULL_RECT)
 	visible = false
+	_load_dark_mode()
 	_build_ui()
+	_build_dark_filter()
 	GameState.state_updated.connect(_on_state_tick)
 	GameState.room_level_changed.connect(_refresh_all)
 	GameState.van_updated.connect(_refresh_all)
 	GameState.racks_changed.connect(_refresh_all)
 	GameState.inventory_changed.connect(_refresh_all)
+	GameState.fuses_changed.connect(_refresh_all)
 	GameState.tickets_changed.connect(_refresh_all)
 	GameState.call_changed.connect(_refresh_call_popup)
 	FinanceManager.finance_changed.connect(_on_finance_changed)
 	FinanceManager.action_result.connect(_on_finance_result)
 	visibility_changed.connect(_on_visibility_changed)
+	visibility_changed.connect(_close_price_overlay)
 
 
 func _process(delta: float) -> void:
@@ -102,6 +143,8 @@ func _process(delta: float) -> void:
 			_last_emitted_typing = false
 			typing_state_changed.emit(false)
 		return
+
+	_update_dark_filter()
 
 	if _save_toast_timer > 0.0:
 		_save_toast_timer = maxf(0.0, _save_toast_timer - delta)
@@ -174,7 +217,7 @@ func _on_state_tick() -> void:
 
 
 func open_terminal() -> void:
-	GameState.checklist_opened_pc = true
+	GameState.request_mark_checklist_opened_pc()
 	_start_menu.visible = false
 	# Keine App automatisch öffnen: nach dem Hochfahren erscheint der Homescreen.
 	# Läuft der PC schon, bleibt die zuletzt geöffnete App offen (power_on_pc übernimmt sie).
@@ -356,11 +399,11 @@ func _trigger_quick_save() -> void:
 	_start_menu.visible = false
 	if multiplayer.is_server():
 		GameState.save_current_world("", false)
-		_save_toast_text = "Gespeichert!"
+		_save_toast_text = tr("Gespeichert!")
 		_save_toast_timer = 3.0
 		SfxManager.play("cash", -10.0, 1.2)
 	else:
-		_save_toast_text = "Nur Host kann speichern"
+		_save_toast_text = tr("Nur Host kann speichern")
 		_save_toast_timer = 3.0
 	_refresh_tray()
 
@@ -369,7 +412,7 @@ func _refresh_window_subtitle() -> void:
 	if _win_subtitle_lbl == null:
 		return
 	var bw_warn := " LIMIT!" if GameState.used_bandwidth_mbps > GameState.max_bandwidth_mbps else ""
-	_win_subtitle_lbl.text = "Guthaben: $%.0f   •   Strom: %d / %d W   •   Internet: %s / %s%s   •   Teile-Lager: %d   •   Tickets: %d" % [
+	_win_subtitle_lbl.text = tr("Guthaben: $%.0f   •   Strom: %d / %d W   •   Internet: %s / %s%s   •   Teile-Lager: %d   •   Tickets: %d") % [
 		GameState.money, GameState.total_watts, GameState.max_watts,
 		HardwareCatalog.format_speed_mbps(GameState.used_bandwidth_mbps),
 		HardwareCatalog.format_speed_mbps(GameState.max_bandwidth_mbps),
@@ -405,7 +448,7 @@ func _refresh_all() -> void:
 
 	_app_window.visible = true
 	var meta: Dictionary = APP_META[_active_app]
-	_win_title_lbl.text = str(meta["title"])
+	_win_title_lbl.text = tr(str(meta["title"]))
 	_set_win_icon_kind(_win_title_icon, str(meta["icon"]))
 	_refresh_window_subtitle()
 
@@ -437,7 +480,7 @@ func _refresh_tray() -> void:
 		_tray_money.text = "$%.0f" % GameState.money
 		_tray_money.modulate = Color(0.10, 0.45, 0.24)
 
-	var ups_txt := (" (USV %.0f%%)" % GameState.avg_ups_charge) if not GameState.ups_units.is_empty() else ""
+	var ups_txt := (" " + tr("(USV %.0f%%)") % GameState.avg_ups_charge) if not GameState.ups_units.is_empty() else ""
 	_tray_power.text = "%d/%dW%s" % [GameState.total_watts, GameState.max_watts, ups_txt]
 	_tray_power.modulate = Color(0.78, 0.16, 0.14) if GameState.total_watts > GameState.max_watts else Color(0.18, 0.20, 0.24)
 	_tray_power_icon.modulate = _tray_power.modulate
@@ -452,7 +495,7 @@ func _refresh_tray() -> void:
 		_tray_net.text = "DDoS!"
 		_tray_net.modulate = Color(0.80, 0.16, 0.14)
 	elif is_throttled:
-		_tray_net.text = "%s LIMIT!" % spd_str
+		_tray_net.text = tr("%s LIMIT!") % spd_str
 		_tray_net.modulate = Color(0.76, 0.42, 0.06)
 	else:
 		_tray_net.text = spd_str
@@ -464,7 +507,7 @@ func _refresh_tray() -> void:
 	_tray_clock.text = "%s\n%02d.%02d.%d" % [
 		PcBootScreen.format_real_clock(), int(today["day"]), int(today["month"]), int(today["year"])
 	]
-	_tray_clock.tooltip_text = "Spieltag %d" % GameState.day_number
+	_tray_clock.tooltip_text = tr("Spieltag %d") % GameState.day_number
 
 
 func _refresh_taskbar_highlights() -> void:
@@ -481,11 +524,11 @@ func _refresh_taskbar_highlights() -> void:
 		# Windows 11: nur Symbole. Zähler stehen als kleines Abzeichen neben dem Symbol.
 		if aid == "support" and (open_t > 0 or has_call):
 			btn.text = str(open_t)
-			btn.tooltip_text = "%s: %d offene Tickets%s" % [app_name, open_t, " · eingehender Anruf" if has_call else ""]
+			btn.tooltip_text = tr("%s: %d offene Tickets%s") % [app_name, open_t, (" · " + tr("eingehender Anruf")) if has_call else ""]
 			_style_taskbar_btn(btn, is_open, true)
 		elif aid == "shop" and cart_n > 0:
 			btn.text = str(cart_n)
-			btn.tooltip_text = "%s: %d Artikel im Warenkorb" % [app_name, cart_n]
+			btn.tooltip_text = tr("%s: %d Artikel im Warenkorb") % [app_name, cart_n]
 			_style_taskbar_btn(btn, is_open, false)
 		else:
 			btn.text = ""
@@ -496,7 +539,7 @@ func _refresh_taskbar_highlights() -> void:
 		var dbtn: Button = _desktop_btns["support"]
 		_set_win_icon_kind(_btn_icon(dbtn), "phone" if has_call else "headset")
 		if open_t > 0 or has_call:
-			dbtn.text = "Support (%d)" % open_t
+			dbtn.text = tr("Support (%d)") % open_t
 			_style_win_btn(dbtn, Color(0.62, 0.16, 0.14, 0.88), Color(0.95, 0.42, 0.36, 0.82), Color.WHITE)
 		else:
 			dbtn.text = "Support"
@@ -522,7 +565,7 @@ func _refresh_call_popup() -> void:
 	hdr_icon.modulate = hdr_col
 	hdr_row.add_child(hdr_icon)
 	var hdr := Label.new()
-	hdr.text = "EINGEHENDER KUNDENANRUF!" if is_ringing else "AKTIVES TELEFONAT — VOIP"
+	hdr.text = tr("EINGEHENDER KUNDENANRUF!") if is_ringing else tr("AKTIVES TELEFONAT — VOIP")
 	hdr.add_theme_font_size_override("font_size", 14)
 	hdr.modulate = hdr_col
 	hdr_row.add_child(hdr)
@@ -552,7 +595,7 @@ func _refresh_call_popup() -> void:
 		var msg_card := _make_light_card(Color(0.95, 0.97, 1.0), Color(0.76, 0.84, 0.92), 6, 10, 8)
 		_call_body.add_child(msg_card)
 		var ml := Label.new()
-		ml.text = str(call_d.get("message", ""))
+		ml.text = GameState.format_message(str(call_d.get("message", "")), call_d.get("message_args", []))
 		ml.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 		ml.add_theme_font_size_override("font_size", 12)
 		ml.modulate = Color(0.12, 0.16, 0.22)
@@ -569,7 +612,7 @@ func _refresh_call_popup() -> void:
 		_call_body.add_child(b1)
 
 		var b2 := Button.new()
-		b2.text = "Neustart & $60 Gutschrift (+26%)"
+		b2.text = tr("Neustart & $60 Gutschrift (+26%)")
 		b2.custom_minimum_size = Vector2(0, 32)
 		b2.disabled = GameState.money < 60.0
 		_style_win_btn(b2, Color(0.14, 0.56, 0.32), Color(0.10, 0.44, 0.24), Color.WHITE)
@@ -655,6 +698,45 @@ func _checkout_cart() -> void:
 # ==============================================================================
 # APP 1: HARDWARE SHOP (CLOUDPARTS.DE) + REAL SHOPPING CART + TEILE-LAGER!
 # ==============================================================================
+## Sicherungen werden ohne Lieferung direkt ins Lager gebucht und am Sicherungskasten eingesetzt.
+func _add_fuse_shop_card(list: VBoxContainer) -> void:
+	var fz_card := _make_light_card(Color(0.99, 0.97, 0.92), Color(0.86, 0.70, 0.36), 6, 12, 8)
+	list.add_child(fz_card)
+	var fz_row := HBoxContainer.new()
+	fz_row.add_theme_constant_override("separation", 10)
+	fz_card.add_child(fz_row)
+
+	var fz_info := VBoxContainer.new()
+	fz_info.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	fz_info.add_theme_constant_override("separation", 3)
+	fz_row.add_child(fz_info)
+
+	var fz_title := Label.new()
+	fz_title.text = tr("Schraubsicherung 63 A (Sicherungskasten)")
+	fz_title.add_theme_font_size_override("font_size", 13)
+	fz_title.modulate = Color(0.12, 0.16, 0.24)
+	fz_info.add_child(fz_title)
+
+	var fz_desc := Label.new()
+	fz_desc.text = tr("Kommt sofort ins Lager, ohne Lieferung. Am Sicherungskasten mit [E] in einen leeren oder durchgebrannten Steckplatz stecken.") + "\n" + (tr("Im Lager: %d  •  Intakt im Kasten: %d / %d") % [GameState.fuse_stock, GameState.count_working_fuses(), GameState.FUSE_SLOT_COUNT])
+	fz_desc.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	fz_desc.add_theme_font_size_override("font_size", 11)
+	fz_desc.modulate = Color(0.32, 0.36, 0.44)
+	fz_info.add_child(fz_desc)
+
+	var fz_buy := Button.new()
+	fz_buy.text = tr("Kaufen  $%d") % GameState.FUSE_PRICE
+	fz_buy.custom_minimum_size = Vector2(110, 32)
+	fz_buy.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	fz_buy.disabled = GameState.money < float(GameState.FUSE_PRICE)
+	_style_win_btn(fz_buy, Color(0.10, 0.46, 0.82), Color(0.08, 0.36, 0.68), Color.WHITE)
+	fz_buy.pressed.connect(func():
+		SfxManager.play("click", -12.0, 1.1)
+		GameState.request_buy_fuse()
+	)
+	fz_row.add_child(fz_buy)
+
+
 func _render_shop_app() -> void:
 	# Clean Browser Navigation + Category Ribbon
 	var nav_bar := _make_light_card(Color(0.95, 0.96, 0.98), Color(0.80, 0.83, 0.87), 6, 10, 6)
@@ -670,19 +752,13 @@ func _render_shop_app() -> void:
 	var tabs: Array = [
 		{"id": "chassis", "label": "Racks & Chassis"},
 		{"id": "infra", "label": "Klima & USV"},
-		{"id": "cpu", "label": "CPUs"},
-		{"id": "ram", "label": "RAM"},
-		{"id": "gpu", "label": "GPUs"},
-		{"id": "storage", "label": "Speicher"},
-		{"id": "cooling", "label": "Kühler"},
-		{"id": "psu", "label": "Netzteile"},
-		{"id": "warehouse", "label": "Lager (%d)" % GameState.get_total_inventory_parts()},
+		{"id": "warehouse", "label": tr("Lager (%d)") % GameState.get_total_inventory_parts()},
 	]
 	for t in tabs:
 		var td: Dictionary = t
 		var tid := str(td["id"])
 		var tb := Button.new()
-		tb.text = str(td["label"])
+		tb.text = tr(str(td["label"]))
 		tb.custom_minimum_size = Vector2(0, 28)
 		tb.add_theme_font_size_override("font_size", 11)
 		var sel := (_shop_tab == tid)
@@ -706,14 +782,14 @@ func _render_shop_app() -> void:
 		frow.add_theme_constant_override("separation", 6)
 		nav_v.add_child(frow)
 		var flbl := Label.new()
-		flbl.text = "Filter:"
+		flbl.text = tr("Filter:")
 		flbl.add_theme_font_size_override("font_size", 11.5)
 		flbl.modulate = Color(0.32, 0.36, 0.44)
 		frow.add_child(flbl)
 		for f in HardwareCatalog.CATEGORY_FILTERS[_shop_tab]:
 			var fn := str(f)
 			var fb := Button.new()
-			fb.text = fn
+			fb.text = tr(fn)
 			fb.custom_minimum_size = Vector2(0, 24)
 			fb.add_theme_font_size_override("font_size", 11)
 			var fsel := (_shop_subfilter == fn)
@@ -750,16 +826,17 @@ func _render_shop_app() -> void:
 		var tip := _make_light_card(Color(0.93, 0.98, 0.92), Color(0.36, 0.72, 0.44), 6, 12, 8)
 		left_list.add_child(tip)
 		var tl := Label.new()
-		tl.text = "START-TIPP: Lege 1× Server-Rack (4U), 1× 1U Standard-Chassis und z. B. 16 GB DDR3 RAM in den Warenkorb → 1× Bestellen → der Cloud Express Sprinter liefert alles auf einmal!"
+		tl.text = "START-TIPP: Lege 1× Server-Rack (4U) in den Warenkorb → Bestellen → der Cloud Express Sprinter liefert es. Am Rack drückst du [E], klickst einen freien Einschub an und wählst mit der Maus dein Mainboard. CPU, RAM, GPU, SSD & Co. kaufst du danach direkt im Einschub."
 		tl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 		tl.add_theme_font_size_override("font_size", 11.5)
 		tl.modulate = Color(0.12, 0.38, 0.18)
 		tip.add_child(tl)
 
 	if _shop_tab == "chassis":
-		_populate_physical_shop_list(left_list, ["rack", "rack_pro", "web_server", "storage_server", "gpu_server", "net_switch"])
+		_populate_physical_shop_list(left_list, ["rack", "rack_pro", "net_switch"])
 	elif _shop_tab == "infra":
 		_populate_physical_shop_list(left_list, ["cooler", "chiller", "ups", "cart"])
+		_add_fuse_shop_card(left_list)
 	elif _shop_tab == "warehouse":
 		_populate_warehouse_list(left_list)
 	elif HardwareCatalog.PARTS.has(_shop_tab):
@@ -776,7 +853,7 @@ func _render_shop_app() -> void:
 	cart_panel.add_child(cv)
 
 	var chdr := Label.new()
-	chdr.text = "WARENKORB (%d)" % _get_cart_item_count()
+	chdr.text = tr("WARENKORB (%d)") % _get_cart_item_count()
 	chdr.add_theme_font_size_override("font_size", 14)
 	chdr.modulate = Color(0.10, 0.24, 0.44)
 	cv.add_child(chdr)
@@ -791,7 +868,7 @@ func _render_shop_app() -> void:
 
 	if _cart.is_empty():
 		var ce := Label.new()
-		ce.text = "Dein Warenkorb ist leer.\n\nSammle links Racks, Server-Chassis und Einzelteile (CPUs, DDR2–DDR5 RAM, GPUs…) und bestelle alles gemeinsam per Sprinter!"
+		ce.text = tr("Dein Warenkorb ist leer.") + "\n\n" + tr("Sammle links Racks, Server-Chassis und Einzelteile (CPUs, DDR2–DDR5 RAM, GPUs…) und bestelle alles gemeinsam per Sprinter!")
 		ce.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 		ce.add_theme_font_size_override("font_size", 11.5)
 		ce.modulate = Color(0.42, 0.46, 0.54)
@@ -805,7 +882,7 @@ func _render_shop_app() -> void:
 			rv.add_theme_constant_override("separation", 3)
 			row_c.add_child(rv)
 			var nl := Label.new()
-			nl.text = str(d["name"])
+			nl.text = tr(str(d["name"]))
 			nl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 			nl.add_theme_font_size_override("font_size", 11.5)
 			nl.modulate = Color(0.12, 0.14, 0.18)
@@ -839,13 +916,13 @@ func _render_shop_app() -> void:
 	cv.add_child(HSeparator.new())
 	var tot := _get_cart_total()
 	var tot_lbl := Label.new()
-	tot_lbl.text = "Gesamtsumme:  $%d" % tot
+	tot_lbl.text = tr("Gesamtsumme:  $%d") % tot
 	tot_lbl.add_theme_font_size_override("font_size", 14)
 	tot_lbl.modulate = Color(0.78, 0.16, 0.14) if GameState.money < float(tot) else Color(0.10, 0.44, 0.24)
 	cv.add_child(tot_lbl)
 
 	var order_btn := Button.new()
-	order_btn.text = " Alles bestellen ($%d)" % tot if not _cart.is_empty() else "Warenkorb leer"
+	order_btn.text = (" " + tr("Alles bestellen ($%d)") % tot) if not _cart.is_empty() else tr("Warenkorb leer")
 	order_btn.custom_minimum_size = Vector2(0, 40)
 	order_btn.disabled = _cart.is_empty() or GameState.money < float(tot)
 	_style_win_btn(
@@ -892,20 +969,20 @@ func _populate_physical_shop_list(parent: VBoxContainer, keys: Array) -> void:
 		hb.add_child(iv)
 
 		var nl := Label.new()
-		nl.text = str(cat["name"])
+		nl.text = tr(str(cat["name"]))
 		nl.add_theme_font_size_override("font_size", 14)
 		nl.modulate = Color(0.10, 0.12, 0.16)
 		iv.add_child(nl)
 
 		var dl := Label.new()
-		dl.text = str(cat["desc"])
+		dl.text = tr(str(cat["desc"]))
 		dl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 		dl.add_theme_font_size_override("font_size", 11.5)
 		dl.modulate = Color(0.36, 0.40, 0.46)
 		iv.add_child(dl)
 
 		var btn := Button.new()
-		btn.text = "+ Warenkorb ($%d)" % price
+		btn.text = tr("+ Warenkorb ($%d)") % price
 		btn.custom_minimum_size = Vector2(148, 34)
 		_style_win_btn(btn, Color(0.10, 0.48, 0.84), Color(0.08, 0.38, 0.70), Color.WHITE)
 		var cap_it := it
@@ -937,8 +1014,8 @@ func _populate_parts_shop_list(parent: VBoxContainer, cat: String) -> void:
 		hb.add_child(iv)
 
 		var nl := Label.new()
-		var st_txt := ("   (Lager: %d×)" % stock) if stock > 0 else ""
-		nl.text = "[%s]  %s%s" % [str(pd.get("tag", "")), str(pd["name"]), st_txt]
+		var st_txt := ("   " + tr("(Lager: %d×)") % stock) if stock > 0 else ""
+		nl.text = "[%s]  %s%s" % [tr(str(pd.get("tag", ""))), str(pd["name"]), st_txt]
 		nl.add_theme_font_size_override("font_size", 13)
 		nl.modulate = Color(0.10, 0.14, 0.20)
 		iv.add_child(nl)
@@ -969,7 +1046,7 @@ func _populate_parts_shop_list(parent: VBoxContainer, cat: String) -> void:
 		brow.add_child(sl)
 
 		var btn := Button.new()
-		btn.text = "+ Warenkorb ($%d)" % cost
+		btn.text = tr("+ Warenkorb ($%d)") % cost
 		btn.custom_minimum_size = Vector2(148, 34)
 		_style_win_btn(btn, Color(0.10, 0.48, 0.84), Color(0.08, 0.38, 0.70), Color.WHITE)
 		var cap_pid := pid
@@ -985,7 +1062,7 @@ func _populate_warehouse_list(parent: VBoxContainer) -> void:
 	var hdr := _make_light_card(Color(0.93, 0.96, 1.0), Color(0.72, 0.82, 0.92), 6, 12, 8)
 	parent.add_child(hdr)
 	var hl := Label.new()
-	hl.text = "MEIN TEILE-LAGER (%d Bauteile auf Lager) — Am Rack mit [E] → Tab „Hardware-Bau“ kostenlos einbauen oder ungenutzte Teile hier verkaufen!" % inv_n
+	hl.text = tr("MEIN TEILE-LAGER (%d Bauteile auf Lager) — Am Rack mit [E] → Tab „Hardware-Bau“ kostenlos einbauen oder ungenutzte Teile hier verkaufen!") % inv_n
 	hl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	hl.add_theme_font_size_override("font_size", 12)
 	hl.modulate = Color(0.12, 0.24, 0.38)
@@ -1014,14 +1091,14 @@ func _populate_warehouse_list(parent: VBoxContainer) -> void:
 		row.add_child(hb)
 
 		var nl := Label.new()
-		nl.text = "%d×  [%s] %s   (%s)" % [cnt, str(pd.get("tag", "")), str(pd.get("name", pid)), _format_part_specs_short(cat, pd)]
+		nl.text = "%d×  [%s] %s   (%s)" % [cnt, tr(str(pd.get("tag", ""))), str(pd.get("name", pid)), _format_part_specs_short(cat, pd)]
 		nl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		nl.add_theme_font_size_override("font_size", 12.5)
 		nl.modulate = Color(0.12, 0.14, 0.18)
 		hb.add_child(nl)
 
 		var sbtn := Button.new()
-		sbtn.text = "Verkaufen (+$%d)" % refund
+		sbtn.text = tr("Verkaufen (+$%d)") % refund
 		sbtn.custom_minimum_size = Vector2(138, 30)
 		_style_win_btn(sbtn, Color(0.82, 0.24, 0.20), Color(0.66, 0.16, 0.14), Color.WHITE)
 		var cap_p := pid
@@ -1032,17 +1109,17 @@ func _populate_warehouse_list(parent: VBoxContainer) -> void:
 func _format_part_specs_short(cat: String, pd: Dictionary) -> String:
 	match cat:
 		"cpu":
-			return "Leistung %d Pkt. • %d W • +%.1f°C" % [int(pd.get("cpu_score", 0)), int(pd.get("watts", 0)), float(pd.get("heat", 0.0))]
+			return tr("Leistung %d Pkt. • %d W • +%.1f°C") % [int(pd.get("cpu_score", 0)), int(pd.get("watts", 0)), float(pd.get("heat", 0.0))]
 		"ram":
 			return "%d GB %s • %d W" % [int(pd.get("ram_gb", 0)), str(pd.get("tag", "")), int(pd.get("watts", 0))]
 		"gpu":
-			return "GPU %d Pkt. • %d GB VRAM • %d W" % [int(pd.get("gpu_score", 0)), int(pd.get("vram_gb", 0)), int(pd.get("watts", 0))]
+			return tr("GPU %d Pkt. • %d GB VRAM • %d W") % [int(pd.get("gpu_score", 0)), int(pd.get("vram_gb", 0)), int(pd.get("watts", 0))]
 		"storage":
 			return "%.1f TB • %d W" % [float(pd.get("storage_tb", 0.0)), int(pd.get("watts", 0))]
 		"cooling":
-			return "Kühlung %.1f°C • %d W" % [float(pd.get("heat", 0.0)), int(pd.get("watts", 0))]
+			return tr("Kühlung %.1f°C • %d W") % [float(pd.get("heat", 0.0)), int(pd.get("watts", 0))]
 		"psu":
-			return "Max. %d W • Effizienz %+d%%" % [int(pd.get("psu_max_watts", 350)), int(roundf((1.0 - float(pd.get("watt_mult", 1.0))) * 100.0))]
+			return tr("Max. %d W • Effizienz %+d%%") % [int(pd.get("psu_max_watts", 350)), int(roundf((1.0 - float(pd.get("watt_mult", 1.0))) * 100.0))]
 	return ""
 
 
@@ -1057,15 +1134,15 @@ func _render_support_hub_app() -> void:
 	sub_bar.add_child(srow)
 
 	var stabs: Array = [
-		{"id": "tickets", "label": "Tickets & Vermietung (%d)" % GameState.get_open_ticket_count()},
-		{"id": "contracts", "label": "Großkunden-Verträge (%d/4)" % GameState.get_active_contract_count()},
-		{"id": "ai", "label": "AI-Cluster & Firewall%s" % (" (DDoS!)" if GameState.ddos_active else "")},
+{"id": "tickets", "label": tr("Tickets & Vermietung (%d)") % GameState.get_open_ticket_count()},
+{"id": "contracts", "label": tr("Großkunden-Verträge (%d/4)") % GameState.get_active_contract_count()},
+{"id": "ai", "label": tr("AI-Cluster & Firewall") + (" (DDoS!)" if GameState.ddos_active else "")},
 	]
 	for t in stabs:
 		var td: Dictionary = t
 		var tid := str(td["id"])
 		var sb := Button.new()
-		sb.text = str(td["label"])
+		sb.text = tr(str(td["label"]))
 		sb.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		sb.custom_minimum_size = Vector2(0, 30)
 		var sel := (_support_tab == tid)
@@ -1110,7 +1187,7 @@ func _render_support_tickets_subtab(content: VBoxContainer) -> void:
 	var banner := _make_light_card(Color(0.93, 0.96, 1.0), Color(0.70, 0.80, 0.92), 6, 12, 8)
 	content.add_child(banner)
 	var bl := Label.new()
-	bl.text = "Offene Tickets: %d   •   Vermietete Racks: %d   •   Aktive User: %d   •   Miete: +$%.0f / 5s" % [
+	bl.text = tr("Offene Tickets: %d   •   Vermietete Racks: %d   •   Aktive User: %d   •   Miete: +$%.0f / 5s") % [
 		GameState.get_open_ticket_count(), rented_count, total_users, GameState.total_rental_income_per_cycle
 	]
 	bl.add_theme_font_size_override("font_size", 13)
@@ -1144,8 +1221,8 @@ func _render_support_tickets_subtab(content: VBoxContainer) -> void:
 			tv.add_child(top_r)
 			var ttl := Label.new()
 			ttl.text = "[%s]  %s — %s (%s) • %s" % [
-				str(t.get("priority", "HOCH")), str(tid), str(t.get("customer", "")),
-				str(t.get("rack_id", "")).to_upper(), str(t.get("title", ""))
+				tr(str(t.get("priority", "HOCH"))), str(tid), str(t.get("customer", "")),
+				str(t.get("rack_id", "")).to_upper(), GameState.format_message(str(t.get("title", "")), t.get("title_args", []))
 			]
 			ttl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 			ttl.add_theme_font_size_override("font_size", 13.5)
@@ -1159,14 +1236,14 @@ func _render_support_tickets_subtab(content: VBoxContainer) -> void:
 			top_r.add_child(st_l)
 
 			var msg := Label.new()
-			msg.text = str(t.get("message", ""))
+			msg.text = GameState.format_message(str(t.get("message", "")), t.get("message_args", []))
 			msg.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 			msg.add_theme_font_size_override("font_size", 12)
 			msg.modulate = Color(0.20, 0.24, 0.30)
 			tv.add_child(msg)
 
 			var reply_in := LineEdit.new()
-			reply_in.placeholder_text = "Optional: Eigene Antwort tippen (mechanischer Tastatur-Sound)…"
+			reply_in.placeholder_text = tr("Optional: Eigene Antwort tippen (mechanischer Tastatur-Sound)…")
 			reply_in.text = str(_ticket_drafts.get(str(tid), ""))
 			var cap_in := str(tid)
 			reply_in.text_changed.connect(func(nt: String): _ticket_drafts[cap_in] = nt)
@@ -1200,7 +1277,7 @@ func _render_support_tickets_subtab(content: VBoxContainer) -> void:
 
 			var bcomp := Button.new()
 			bcomp.custom_minimum_size = Vector2(0, 32)
-			bcomp.text = "Rabatt erteilt" if bool(t.get("compensated", false)) else "$60 Rabatt"
+			bcomp.text = tr("Rabatt erteilt") if bool(t.get("compensated", false)) else tr("$60 Rabatt")
 			bcomp.disabled = bool(t.get("compensated", false)) or GameState.money < 60.0
 			_style_win_btn(bcomp, Color(0.76, 0.48, 0.12), Color(0.60, 0.36, 0.08), Color.WHITE)
 			bcomp.pressed.connect(func(): GameState.request_reply_ticket(cap_tid, "compensate"))
@@ -1208,7 +1285,7 @@ func _render_support_tickets_subtab(content: VBoxContainer) -> void:
 
 			var bdone := Button.new()
 			bdone.custom_minimum_size = Vector2(0, 32)
-			bdone.text = "Lösen (+$35)" if is_fixed else "Erst fixen"
+			bdone.text = tr("Lösen (+$35)") if is_fixed else tr("Erst fixen")
 			bdone.disabled = not is_fixed
 			_style_win_btn(bdone, Color(0.12, 0.58, 0.30) if is_fixed else Color(0.84, 0.86, 0.89), Color(0.08, 0.44, 0.22), Color.WHITE if is_fixed else Color(0.45, 0.48, 0.52))
 			bdone.pressed.connect(func(): GameState.request_reply_ticket(cap_tid, "resolve"))
@@ -1231,7 +1308,7 @@ func _render_support_tickets_subtab(content: VBoxContainer) -> void:
 			var rc := _make_light_card(Color(1.0, 0.94, 0.93) if bn != "ok" else Color.WHITE, Color(0.84, 0.30, 0.24) if bn != "ok" else Color(0.78, 0.83, 0.88), 6, 12, 8)
 			content.add_child(rc)
 			var rl := Label.new()
-			rl.text = "%s %s (%s) • %d User • RAM: %.1f/%.0f GB (%.0f%%) • CPU: %.0f%% • %.1f/%.1f TB • %.0f%% • +$%.0f/5s" % [
+			rl.text = tr("%s %s (%s) • %d User • RAM: %.1f/%.0f GB (%.0f%%) • CPU: %.0f%% • %.1f/%.1f TB • %.0f%% • +$%.0f/5s") % [
 				str(prof["icon"]), str(rid).to_upper(), str(r.get("rental_customer", "")),
 				int(r.get("active_users", 0)),
 				float(m.get("ram_used_gb", 0.0)), float(m.get("ram_total_gb", 0.0)), float(m.get("ram_pct", 0.0)),
@@ -1248,15 +1325,15 @@ func _render_contracts_subtab(content: VBoxContainer) -> void:
 	var b := _make_light_card(Color(0.94, 0.96, 0.99), Color(0.76, 0.82, 0.90), 6, 12, 8)
 	content.add_child(b)
 	var hl := Label.new()
-	hl.text = "Aktive Großkunden-Verträge: %d / 4   •   Verfügbarer RAM: %d GB   •   Router: %s" % [
+	hl.text = tr("Aktive Großkunden-Verträge: %d / 4   •   Verfügbarer RAM: %d GB   •   Router: %s") % [
 		GameState.get_active_contract_count(), GameState.total_ram_gb, HardwareCatalog.format_speed_mbps(GameState.max_bandwidth_mbps)
 	]
 	hl.add_theme_font_size_override("font_size", 12.5)
 	hl.modulate = Color(0.14, 0.22, 0.32)
 	b.add_child(hl)
 
-	for tmpl in GameState.CONTRACTS_TEMPLATE:
-		var cid := str(tmpl["id"])
+	for cid_v in GameState.get_contract_display_order():
+		var cid := str(cid_v)
 		if not GameState.contracts.has(cid):
 			continue
 		var c: Dictionary = GameState.contracts[cid]
@@ -1276,25 +1353,32 @@ func _render_contracts_subtab(content: VBoxContainer) -> void:
 		iv.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		hb.add_child(iv)
 
-		var badge := ("  [AKTIV]" if status == "ok" else "  [UNTERVERSORGT]") if active else ""
+		var badge := ("  " + tr("[AKTIV]") if status == "ok" else "  " + tr("[UNTERVERSORGT]")) if active else ""
 		var tl := Label.new()
-		tl.text = "%s (%s)%s" % [str(c["title"]), str(c["client"]), badge]
+		tl.text = "%s (%s)%s" % [tr(str(c["title"])), str(c["client"]), badge]
 		tl.add_theme_font_size_override("font_size", 14)
 		tl.modulate = Color(0.10, 0.48, 0.24) if (active and status == "ok") else (Color(0.76, 0.16, 0.14) if active else Color(0.10, 0.12, 0.16))
 		iv.add_child(tl)
 
 		var eff_pay := int(roundf(float(c["payout_per_cycle"]) * GameState.revenue_bonus_mult))
 		var sl := Label.new()
-		sl.text = "Bedarf: %d GB RAM  •  %s Bandbreite  •  Einnahmen: +$%d / 5s  •  Strafe: -$%d" % [
+		sl.text = tr("Bedarf: %d GB RAM  •  %s Bandbreite  •  Einnahmen: +$%d / 5s  •  Strafe: -$%d") % [
 			int(c.get("req_ram_gb", 4)), HardwareCatalog.format_speed_mbps(float(c.get("req_mbps", 15.0))),
 			eff_pay, int(c["penalty_per_cycle"])
 		]
+		if bool(c.get("random", false)):
+			if active:
+				sl.text += "\n" + tr("Befristet  •  Laufzeit: noch %d Tag(e)") % int(c.get("days_left", 0))
+			else:
+				sl.text += "\n" + tr("Befristet  •  Laufzeit: %d Tag(e)  •  Angebot gilt noch %d Tag(e)") % [
+					int(c.get("duration_days", 1)), int(c.get("offer_days_left", 1))
+				]
 		sl.add_theme_font_size_override("font_size", 11.5)
 		sl.modulate = Color(0.34, 0.38, 0.44)
 		iv.add_child(sl)
 
 		var btn := Button.new()
-		btn.text = "Kündigen" if active else "Annehmen"
+		btn.text = tr("Kündigen") if active else tr("Annehmen")
 		btn.custom_minimum_size = Vector2(130, 34)
 		btn.disabled = (not active) and GameState.get_active_contract_count() >= 4
 		_style_win_btn(
@@ -1328,13 +1412,13 @@ func _render_ai_firewall_subtab(content: VBoxContainer) -> void:
 	dt.modulate = Color(0.10, 0.12, 0.16)
 	di.add_child(dt)
 	var dd := Label.new()
-	dd.text = "ALARM: Aktiver DDoS-Angriff blockiert alle Einnahmen!" if GameState.ddos_active else "Geschützt — Netzwerkverkehr und Kunden laufen störungsfrei."
+	dd.text = tr("ALARM: Aktiver DDoS-Angriff blockiert alle Einnahmen!") if GameState.ddos_active else tr("Geschützt — Netzwerkverkehr und Kunden laufen störungsfrei.")
 	dd.add_theme_font_size_override("font_size", 12)
 	dd.modulate = Color(0.76, 0.14, 0.12) if GameState.ddos_active else Color(0.14, 0.48, 0.24)
 	di.add_child(dd)
 
 	var dbtn := Button.new()
-	dbtn.text = "DDoS abwehren!" if GameState.ddos_active else "Kein Angriff"
+	dbtn.text = tr("DDoS abwehren!") if GameState.ddos_active else tr("Kein Angriff")
 	dbtn.custom_minimum_size = Vector2(158, 36)
 	dbtn.disabled = not GameState.ddos_active
 	_style_win_btn(dbtn, Color(0.82, 0.18, 0.16) if GameState.ddos_active else Color(0.86, 0.88, 0.90), Color(0.66, 0.12, 0.10), Color.WHITE if GameState.ddos_active else Color(0.45, 0.48, 0.52))
@@ -1350,13 +1434,13 @@ func _render_ai_firewall_subtab(content: VBoxContainer) -> void:
 	ai_c.add_child(av)
 
 	var at := Label.new()
-	at.text = "Eigene AI-Plattform: %s" % str(cur_tier["label"])
+	at.text = tr("Eigene AI-Plattform: %s") % tr(str(cur_tier["label"]))
 	at.add_theme_font_size_override("font_size", 16)
 	at.modulate = Color(0.12, 0.26, 0.52)
 	av.add_child(at)
 
 	var ast := Label.new()
-	ast.text = "Monetarisiert freie Server-Kapazität automatisch nebenbei.\nLive-Einnahmen: +$%.2f / Sek.  •  Gesamt: %d GB RAM & GPU-Power %d Pkt." % [
+	ast.text = (tr("Monetarisiert freie Server-Kapazität automatisch nebenbei.") + "\n" + tr("Live-Einnahmen: +$%.2f / Sek.  •  Gesamt: %d GB RAM & GPU-Power %d Pkt.")) % [
 		GameState.ai_revenue_per_sec, GameState.total_ram_gb, GameState.total_gpu_score
 	]
 	ast.add_theme_font_size_override("font_size", 12.5)
@@ -1369,7 +1453,7 @@ func _render_ai_firewall_subtab(content: VBoxContainer) -> void:
 		var mram := int(nxt.get("min_ram_gb", 16))
 		var mgpu := int(nxt.get("min_gpu", 30))
 		var ubtn := Button.new()
-		ubtn.text = "Freischalten: %s ($%d  |  benötigt %d GB RAM & %d GPU)" % [str(nxt["label"]), ncost, mram, mgpu]
+		ubtn.text = tr("Freischalten: %s ($%d  |  benötigt %d GB RAM & %d GPU)") % [tr(str(nxt["label"])), ncost, mram, mgpu]
 		ubtn.custom_minimum_size = Vector2(0, 38)
 		ubtn.disabled = (GameState.money < float(ncost)) or (GameState.total_ram_gb < mram) or (GameState.total_gpu_score < mgpu)
 		_style_win_btn(ubtn, Color(0.10, 0.48, 0.84) if not ubtn.disabled else Color(0.84, 0.86, 0.89), Color(0.08, 0.38, 0.70), Color.WHITE if not ubtn.disabled else Color(0.45, 0.48, 0.52))
@@ -1377,7 +1461,7 @@ func _render_ai_firewall_subtab(content: VBoxContainer) -> void:
 		av.add_child(ubtn)
 	else:
 		var ml := Label.new()
-		ml.text = "Maximale AI-Plattform-Stufe erreicht!"
+		ml.text = tr("Maximale AI-Plattform-Stufe erreicht!")
 		ml.modulate = Color(0.12, 0.52, 0.26)
 		av.add_child(ml)
 
@@ -1408,13 +1492,13 @@ func _render_upgrades_app() -> void:
 	rti.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	rth.add_child(rti)
 	var rtt := Label.new()
-	rtt.text = "Internet-Router (Stufe %d/%d): %s" % [rt_idx + 1, GameState.ROUTER_TIERS.size(), str(cur_rt["label"])]
+	rtt.text = tr("Internet-Router (Stufe %d/%d): %s") % [rt_idx + 1, GameState.ROUTER_TIERS.size(), tr(str(cur_rt["label"]))]
 	rtt.add_theme_font_size_override("font_size", 15)
 	rtt.modulate = Color(0.68, 0.28, 0.06) if rt_lim else Color(0.10, 0.12, 0.16)
 	rti.add_child(rtt)
 	var rtd := Label.new()
 	var used_ports := GameState.count_cables_on("network", GameState.WALL_ROUTER_ID)
-	rtd.text = "Auslastung: %s / %s  •  LAN-Ports: %d/%d  •  DDoS-Schutz: +%.0f%%" % [
+	rtd.text = tr("Auslastung: %s / %s  •  LAN-Ports: %d/%d  •  DDoS-Schutz: +%.0f%%") % [
 		HardwareCatalog.format_speed_mbps(GameState.used_bandwidth_mbps), str(cur_rt["speed"]),
 		used_ports, int(cur_rt["ports"]), (float(cur_rt["ddos_mult"]) - 1.0) * 100.0
 	]
@@ -1426,7 +1510,7 @@ func _render_upgrades_app() -> void:
 	rtbtn.custom_minimum_size = Vector2(210, 38)
 	if rt_idx + 1 < GameState.ROUTER_TIERS.size():
 		var nxt: Dictionary = GameState.ROUTER_TIERS[rt_idx + 1]
-		rtbtn.text = "Auf %s ($%d)" % [str(nxt["speed"]), int(nxt["cost"])]
+		rtbtn.text = "$%d" % int(nxt["cost"])
 		rtbtn.disabled = GameState.money < float(nxt["cost"])
 		_style_win_btn(rtbtn, Color(0.10, 0.48, 0.84) if not rtbtn.disabled else Color(0.84, 0.86, 0.89), Color(0.08, 0.38, 0.70), Color.WHITE if not rtbtn.disabled else Color(0.45, 0.48, 0.52))
 		rtbtn.pressed.connect(func(): GameState.request_upgrade_router())
@@ -1447,25 +1531,29 @@ func _render_upgrades_app() -> void:
 	ph.add_child(pi)
 	var cur_p: Dictionary = GameState.POWER_TIERS[GameState.power_tier]
 	var pt := Label.new()
-	pt.text = "Hausanschluss & Transformator: %s" % str(cur_p["label"])
+	pt.text = tr("Sicherungskasten & Transformator: %s") % tr(str(cur_p["label"]))
 	pt.add_theme_font_size_override("font_size", 15)
 	pt.modulate = Color(0.10, 0.12, 0.16)
 	pi.add_child(pt)
 	var pd := Label.new()
-	pd.text = "Erhöht das Watt-Limit vor Sicherungs-Blackouts & gibt +2 Strom-Ports am Sicherungskasten."
+	pd.text = tr("Erhöht das Watt-Limit vor Sicherungs-Blackouts & gibt +2 Steckdosen (Verlängerungskabel) am Sicherungskasten.")
 	pd.add_theme_font_size_override("font_size", 12)
 	pd.modulate = Color(0.36, 0.40, 0.46)
 	pi.add_child(pd)
 	var pbtn := Button.new()
 	pbtn.custom_minimum_size = Vector2(210, 38)
-	if GameState.power_tier + 1 < GameState.POWER_TIERS.size():
+	if GameState.power_fuse_stock > 0:
+		pbtn.text = tr("Im Lager: am Kasten in F2 einsetzen")
+		pbtn.disabled = true
+		_style_win_btn(pbtn, Color(0.88, 0.90, 0.93), Color(0.76, 0.79, 0.82), Color(0.32, 0.36, 0.42))
+	elif GameState.power_tier + 1 < GameState.POWER_TIERS.size():
 		var np: Dictionary = GameState.POWER_TIERS[GameState.power_tier + 1]
-		pbtn.text = "Auf %d W ($%d)" % [int(np["watts"]), int(np["cost"])]
-		pbtn.disabled = GameState.money < float(np["cost"])
-		_style_win_btn(pbtn, Color(0.12, 0.56, 0.32) if not pbtn.disabled else Color(0.84, 0.86, 0.89), Color(0.08, 0.44, 0.24), Color.WHITE if not pbtn.disabled else Color(0.45, 0.48, 0.52))
-		pbtn.pressed.connect(func(): GameState.request_upgrade_power())
+		var can_afford := GameState.money >= float(np["cost"])
+		pbtn.text = "$%d" % int(np["cost"])
+		_style_win_btn(pbtn, Color(0.12, 0.56, 0.32) if can_afford else Color(0.84, 0.86, 0.89), Color(0.08, 0.44, 0.24), Color.WHITE if can_afford else Color(0.45, 0.48, 0.52))
+		pbtn.pressed.connect(_open_power_overlay)
 	else:
-		pbtn.text = "Max. Strom-Stufe"
+		pbtn.text = tr("Max. Strom-Stufe")
 		pbtn.disabled = true
 		_style_win_btn(pbtn, Color(0.88, 0.90, 0.93), Color(0.76, 0.79, 0.82), Color(0.32, 0.36, 0.42))
 	ph.add_child(pbtn)
@@ -1479,14 +1567,14 @@ func _render_upgrades_app() -> void:
 	var ri := VBoxContainer.new()
 	ri.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	rh.add_child(ri)
-	var htitle := "Gebäude-Ausbau: Garage (Stufe 1/3)"
-	var hdesc := "Öffnet HALLE B (+63 m² Doppelboden-Serverraum)."
+	var htitle := tr("Gebäude-Ausbau: Garage (Stufe 1/3)")
+	var hdesc := tr("Öffnet HALLE B (+63 m² Doppelboden-Serverraum).")
 	if GameState.room_level == 1:
-		htitle = "Gebäude-Ausbau: Garage + Halle B (Stufe 2/3)"
-		hdesc = "Öffnet HALLE C — ENTERPRISE RECHENZENTRUM (+81 m²) mit eigenem Strom- & Glasfaserbus!"
+		htitle = tr("Gebäude-Ausbau: Garage + Halle B (Stufe 2/3)")
+		hdesc = tr("Öffnet HALLE C — ENTERPRISE RECHENZENTRUM (+81 m²) mit eigenem Strom- & Glasfaserbus!")
 	elif GameState.room_level >= 2:
-		htitle = "Gebäude-Ausbau: Vollausbau (3/3 Hallen)"
-		hdesc = "Alle Rechenzentrums-Hallen sind vollständig freigeschaltet!"
+		htitle = tr("Gebäude-Ausbau: Vollausbau (3/3 Hallen)")
+		hdesc = tr("Alle Rechenzentrums-Hallen sind vollständig freigeschaltet!") + "\n" + GameState.get_company_goal_text()
 	var rt_l := Label.new()
 	rt_l.text = htitle
 	rt_l.add_theme_font_size_override("font_size", 15)
@@ -1501,7 +1589,7 @@ func _render_upgrades_app() -> void:
 	rbtn.custom_minimum_size = Vector2(210, 38)
 	if GameState.room_level < 2:
 		var rcost := GameState.HALL_B_COST if GameState.room_level == 0 else GameState.HALL_C_COST
-		rbtn.text = ("Halle B ($%d)" if GameState.room_level == 0 else "Halle C ($%d)") % rcost
+		rbtn.text = (tr("Halle B ($%d)") if GameState.room_level == 0 else tr("Halle C ($%d)")) % rcost
 		rbtn.disabled = GameState.money < float(rcost)
 		_style_win_btn(rbtn, Color(0.10, 0.48, 0.84) if not rbtn.disabled else Color(0.84, 0.86, 0.89), Color(0.08, 0.38, 0.70), Color.WHITE if not rbtn.disabled else Color(0.45, 0.48, 0.52))
 		rbtn.pressed.connect(func(): GameState.request_expand_room())
@@ -1518,17 +1606,27 @@ func _render_upgrades_app() -> void:
 	bv.add_theme_constant_override("separation", 4)
 	bc.add_child(bv)
 	var bt := Label.new()
-	bt.text = "Stromzähler & Tagesabrechnung (Tag %d • %s)" % [GameState.day_number, GameState.get_time_string()]
+	bt.text = tr("Stromzähler & Tagesabrechnung (Tag %d • %s)") % [GameState.day_number, GameState.get_time_string()]
 	bt.add_theme_font_size_override("font_size", 14.5)
 	bt.modulate = Color(0.56, 0.38, 0.08)
 	bv.add_child(bt)
 	var bd := Label.new()
-	bd.text = "Heute verbraucht: %.1f kWh   •   Geschätzte Rechnung um 00:00 Uhr: ~$%d   (Gestern: $%d)" % [
+	bd.text = tr("Heute verbraucht: %.1f kWh   •   Geschätzte Rechnung um 00:00 Uhr: ~$%d   (Gestern: $%d)") % [
 		GameState.daily_kwh, GameState.get_estimated_daily_bill(), GameState.last_daily_bill
 	]
 	bd.add_theme_font_size_override("font_size", 12)
 	bd.modulate = Color(0.28, 0.26, 0.22)
 	bv.add_child(bd)
+	var bp := Label.new()
+	bp.text = tr("Strompreis heute: $%.2f pro kWh   (Gestern: $%.2f pro kWh)") % [
+		GameState.electricity_rate, GameState.last_bill_rate
+	]
+	bp.add_theme_font_size_override("font_size", 12)
+	bp.modulate = Color(0.28, 0.26, 0.22)
+	bv.add_child(bp)
+
+	# 5. Forschung
+	_add_research_card(content)
 
 
 # ==============================================================================
@@ -1550,15 +1648,17 @@ func _render_monitor_app() -> void:
 	content.add_child(grid)
 
 	var p_pct := clampf(float(GameState.total_watts) / float(maxi(GameState.max_watts, 1)) * 100.0, 0.0, 100.0)
-	_add_monitor_card(grid, "Stromnetz", "%d / %d W (%.0f%%)" % [GameState.total_watts, GameState.max_watts, p_pct], "Tagesverbrauch: %.1f kWh • USV: %d" % [GameState.daily_kwh, GameState.ups_units.size()], p_pct, Color(0.82, 0.20, 0.16) if p_pct >= 90.0 else Color(0.12, 0.50, 0.84))
+	_add_monitor_card(grid, "Stromnetz", "%d / %d W (%.0f%%)" % [GameState.total_watts, GameState.max_watts, p_pct], tr("Tagesverbrauch: %.1f kWh • USV: %d") % [GameState.daily_kwh, GameState.ups_units.size()], p_pct, Color(0.82, 0.20, 0.16) if p_pct >= 90.0 else Color(0.12, 0.50, 0.84))
 
 	var bw_pct := clampf(GameState.used_bandwidth_mbps / maxf(1.0, GameState.max_bandwidth_mbps) * 100.0, 0.0, 100.0)
-	_add_monitor_card(grid, "Internet-Uplink", "%s / %s" % [HardwareCatalog.format_speed_mbps(GameState.used_bandwidth_mbps), HardwareCatalog.format_speed_mbps(GameState.max_bandwidth_mbps)], "Router-Stufe %d/5 • DDoS: %s" % [GameState.router_tier + 1, "AKTIV!" if GameState.ddos_active else "Geschützt"], bw_pct, Color(0.84, 0.36, 0.10) if bw_pct >= 90.0 else Color(0.14, 0.58, 0.34))
+	_add_monitor_card(grid, "Internet-Uplink", "%s / %s" % [HardwareCatalog.format_speed_mbps(GameState.used_bandwidth_mbps), HardwareCatalog.format_speed_mbps(GameState.max_bandwidth_mbps)], tr("Router-Stufe %d/5 • DDoS: %s") % [GameState.router_tier + 1, tr("AKTIV!") if GameState.ddos_active else tr("Geschützt")], bw_pct, Color(0.84, 0.36, 0.10) if bw_pct >= 90.0 else Color(0.14, 0.58, 0.34))
 
 	var t_pct := clampf((GameState.room_temp - 18.0) / 72.0 * 100.0, 0.0, 100.0)
-	_add_monitor_card(grid, "Raumtemperatur", "%.1f °C" % GameState.room_temp, "Kühlgeräte: %d • Kritisch ab 74°C" % GameState.coolers.size(), t_pct, Color(0.84, 0.24, 0.14) if GameState.room_temp >= 68.0 else Color(0.16, 0.56, 0.72))
+	_add_monitor_card(grid, "Raumtemperatur", "%.1f °C" % GameState.room_temp, tr("Kühlgeräte: %d • Kritisch ab 74°C") % GameState.coolers.size(), t_pct, Color(0.84, 0.24, 0.14) if GameState.room_temp >= 68.0 else Color(0.16, 0.56, 0.72))
 
-	_add_monitor_card(grid, "Gesamt-Hardware (Online)", "%d GB RAM  •  %.1f TB" % [GameState.total_ram_gb, GameState.total_storage_tb], "CPU: %d • GPU: %d • Racks: %d • Lager: %d Teile" % [GameState.total_cpu_score, GameState.total_gpu_score, GameState.racks.size(), GameState.get_total_inventory_parts()], minf(100.0, float(GameState.racks.size()) * 20.0), Color(0.32, 0.44, 0.64))
+	_add_monitor_card(grid, "Gesamt-Hardware (Online)", "%d GB RAM  •  %.1f TB" % [GameState.total_ram_gb, GameState.total_storage_tb], tr("CPU: %d • GPU: %d • Racks: %d • Lager: %d Teile") % [GameState.total_cpu_score, GameState.total_gpu_score, GameState.racks.size(), GameState.get_total_inventory_parts()], minf(100.0, float(GameState.racks.size()) * 20.0), Color(0.32, 0.44, 0.64))
+
+	_add_history_card(content)
 
 	var tbl := _make_light_card(Color.WHITE, Color(0.80, 0.84, 0.89), 7, 14, 12)
 	content.add_child(tbl)
@@ -1586,15 +1686,105 @@ func _render_monitor_app() -> void:
 			var r_rent := str(r.get("rental_type", "none"))
 			var rent_txt := "Standby"
 			if r_rent != "none" and HardwareCatalog.RENTAL_PROFILES.has(r_rent):
-				rent_txt = "%s (%d User)" % [str(HardwareCatalog.RENTAL_PROFILES[r_rent]["short"]), int(r.get("active_users", 0))]
+				rent_txt = tr("%s (%d User)") % [tr(str(HardwareCatalog.RENTAL_PROFILES[r_rent]["short"])), int(r.get("active_users", 0))]
 			var row_l := Label.new()
-			row_l.text = "• %s:  %d/%d W  •  %d GB RAM  •  %.1f TB  •  %.0f°C  •  %s  •  Strom:%s LAN:%s" % [
+			row_l.text = tr("• %s:  %d/%d W  •  %d GB RAM  •  %.1f TB  •  %.0f°C  •  %s  •  Strom:%s LAN:%s") % [
 				str(rid).to_upper(), int(hw["watts"]), max_pdu, int(hw["ram_gb"]), float(hw["storage_tb"]),
-				float(r["temp"]), rent_txt, "an" if bool(r["powered"]) else "aus", "ok" if bool(r["networked"]) else "fehlt"
+				float(r["temp"]), rent_txt, tr("an") if bool(r["powered"]) else tr("aus"), tr("ok") if bool(r["networked"]) else tr("fehlt")
 			]
 			row_l.add_theme_font_size_override("font_size", 12)
 			row_l.modulate = Color(0.14, 0.16, 0.20)
 			tv.add_child(row_l)
+
+
+func _add_research_card(content: VBoxContainer) -> void:
+	var card := _make_light_card(Color.WHITE, Color(0.80, 0.84, 0.89), 7, 14, 12)
+	content.add_child(card)
+	var v := VBoxContainer.new()
+	v.add_theme_constant_override("separation", 10)
+	card.add_child(v)
+
+	var head := Label.new()
+	head.text = "FORSCHUNG (gilt für alle Server)"
+	head.add_theme_font_size_override("font_size", 11)
+	head.modulate = Color(0.34, 0.40, 0.48)
+	v.add_child(head)
+
+	for branch in GameState.RESEARCH_ORDER:
+		var node: Dictionary = GameState.RESEARCH_TREE[branch]
+		var levels: Array = node["levels"]
+		var lvl := GameState.get_research_level(branch)
+
+		var row := HBoxContainer.new()
+		row.add_theme_constant_override("separation", 12)
+		v.add_child(row)
+		var info := VBoxContainer.new()
+		info.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		row.add_child(info)
+
+		var title_lbl := Label.new()
+		title_lbl.text = tr("%s (Stufe %d/%d)") % [tr(str(node["label"])), lvl, levels.size()]
+		title_lbl.add_theme_font_size_override("font_size", 14)
+		title_lbl.modulate = Color(0.10, 0.12, 0.16)
+		info.add_child(title_lbl)
+
+		var desc_lbl := Label.new()
+		var cur_pct := (1.0 - GameState.get_research_mult(branch)) * 100.0
+		var desc := tr("%s  •  Aktuell: -%.0f%% %s") % [tr(str(node["desc"])), cur_pct, tr(str(node["stat"]))]
+		if lvl < levels.size():
+			desc += "  •  " + tr("Nächste Stufe: -%.0f%%") % ((1.0 - float(levels[lvl]["mult"])) * 100.0)
+		desc_lbl.text = desc
+		desc_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		desc_lbl.add_theme_font_size_override("font_size", 12)
+		desc_lbl.modulate = Color(0.36, 0.40, 0.46)
+		info.add_child(desc_lbl)
+
+		var btn := Button.new()
+		btn.custom_minimum_size = Vector2(210, 38)
+		var reason := GameState.get_research_block_reason(branch)
+		if reason.is_empty():
+			var cost := GameState.get_research_cost(branch)
+			btn.text = tr("Erforschen ($%d)") % cost
+			btn.disabled = GameState.money < float(cost)
+			_style_win_btn(btn, Color(0.42, 0.26, 0.74) if not btn.disabled else Color(0.84, 0.86, 0.89), Color(0.32, 0.18, 0.60), Color.WHITE if not btn.disabled else Color(0.45, 0.48, 0.52))
+			btn.pressed.connect(func(): GameState.request_research(branch))
+		else:
+			btn.text = reason
+			btn.disabled = true
+			_style_win_btn(btn, Color(0.88, 0.90, 0.93), Color(0.76, 0.79, 0.82), Color(0.32, 0.36, 0.42))
+		row.add_child(btn)
+
+
+func _add_history_card(content: VBoxContainer) -> void:
+	var card := _make_light_card(Color.WHITE, Color(0.80, 0.84, 0.89), 7, 14, 12)
+	content.add_child(card)
+	var v := VBoxContainer.new()
+	v.add_theme_constant_override("separation", 12)
+	card.add_child(v)
+
+	var head := Label.new()
+	head.text = tr("VERLAUF (letzte %d Minuten, ein Messpunkt alle %d s)") % [
+		int(StatsHistory.SAMPLE_INTERVAL * float(StatsHistory.MAX_SAMPLES) / 60.0), int(StatsHistory.SAMPLE_INTERVAL)
+	]
+	head.add_theme_font_size_override("font_size", 11)
+	head.modulate = Color(0.34, 0.40, 0.48)
+	v.add_child(head)
+
+	_add_history_chart(v, "money", "Kontostand", "$%.0f", Color(0.14, 0.58, 0.34), NAN, "")
+	_add_history_chart(v, "watts", "Stromverbrauch", "%.0f W", Color(0.12, 0.50, 0.84), float(GameState.max_watts), "Limit")
+	_add_history_chart(v, "temp", "Raumtemperatur", "%.1f °C", Color(0.84, 0.24, 0.14), 74.0, "Kritisch")
+
+
+func _add_history_chart(parent: VBoxContainer, series: String, title: String, unit_format: String, col: Color, ref_value: float, ref_label: String) -> void:
+	var chart := HISTORY_CHART.new()
+	chart.series = series
+	chart.title = tr(title)
+	chart.unit_format = unit_format
+	chart.line_color = col
+	chart.ref_value = ref_value
+	chart.ref_label = tr(ref_label)
+	chart.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	parent.add_child(chart)
 
 
 func _add_monitor_card(grid: GridContainer, title: String, value_txt: String, sub_txt: String, pct: float, bar_col: Color) -> void:
@@ -1605,7 +1795,7 @@ func _add_monitor_card(grid: GridContainer, title: String, value_txt: String, su
 	v.add_theme_constant_override("separation", 5)
 	card.add_child(v)
 	var t := Label.new()
-	t.text = title
+	t.text = tr(title)
 	t.add_theme_font_size_override("font_size", 11.5)
 	t.modulate = Color(0.36, 0.42, 0.48)
 	v.add_child(t)
@@ -1630,7 +1820,7 @@ func _add_monitor_card(grid: GridContainer, title: String, value_txt: String, su
 	pb.add_theme_stylebox_override("fill", fill_sb)
 	v.add_child(pb)
 	var sub := Label.new()
-	sub.text = sub_txt
+	sub.text = tr(sub_txt)
 	sub.add_theme_font_size_override("font_size", 11)
 	sub.modulate = Color(0.42, 0.46, 0.52)
 	v.add_child(sub)
@@ -1703,7 +1893,7 @@ func _build_ui() -> void:
 	for aid in APP_ORDER:
 		var meta: Dictionary = APP_META[aid]
 		var ibtn := Button.new()
-		ibtn.text = str(meta["name"])
+		ibtn.text = tr(str(meta["name"]))
 		_add_btn_icon(ibtn, str(meta["icon"]), 26, "top")
 		ibtn.custom_minimum_size = Vector2(90, 66)
 		ibtn.add_theme_font_size_override("font_size", 12)
@@ -1831,7 +2021,7 @@ func _build_ui() -> void:
 	_start_menu.grow_vertical = Control.GROW_DIRECTION_BEGIN
 	_start_menu.offset_left = -170.0
 	_start_menu.offset_right = 170.0
-	_start_menu.offset_top = -372.0
+	_start_menu.offset_top = -412.0
 	_start_menu.offset_bottom = -12.0
 	var sm_sb := StyleBoxFlat.new()
 	sm_sb.bg_color = Color(0.95, 0.96, 0.98, 0.98)
@@ -1861,7 +2051,7 @@ func _build_ui() -> void:
 	for aid in APP_ORDER:
 		var meta: Dictionary = APP_META[aid]
 		var sbtn := Button.new()
-		sbtn.text = str(meta["name"])
+		sbtn.text = tr(str(meta["name"]))
 		_add_btn_icon(sbtn, str(meta["icon"]), 16)
 		sbtn.alignment = HORIZONTAL_ALIGNMENT_LEFT
 		sbtn.custom_minimum_size = Vector2(0, 34)
@@ -1874,6 +2064,14 @@ func _build_ui() -> void:
 	sm_sp.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	sm_v.add_child(sm_sp)
 	sm_v.add_child(HSeparator.new())
+
+	_dark_toggle_btn = Button.new()
+	_dark_toggle_btn.alignment = HORIZONTAL_ALIGNMENT_LEFT
+	_dark_toggle_btn.custom_minimum_size = Vector2(0, 34)
+	_style_win_btn(_dark_toggle_btn, Color(0.92, 0.94, 0.97), Color(0.80, 0.84, 0.89), Color(0.12, 0.14, 0.18))
+	_dark_toggle_btn.pressed.connect(_toggle_dark_mode)
+	sm_v.add_child(_dark_toggle_btn)
+	_update_dark_toggle_text()
 
 	var shutdown_btn := Button.new()
 	shutdown_btn.text = "Herunterfahren"
@@ -1925,6 +2123,7 @@ func _build_ui() -> void:
 	tb_bar_sb.content_margin_bottom = 4
 	taskbar.add_theme_stylebox_override("panel", tb_bar_sb)
 	screen_v.add_child(taskbar)
+	_taskbar_panel = taskbar
 
 	var t_row := HBoxContainer.new()
 	t_row.add_theme_constant_override("separation", 4)
@@ -1953,7 +2152,7 @@ func _build_ui() -> void:
 	for aid in APP_ORDER:
 		var meta: Dictionary = APP_META[aid]
 		var pbtn := Button.new()
-		pbtn.tooltip_text = str(meta["name"])
+		pbtn.tooltip_text = tr(str(meta["name"]))
 		_add_btn_icon(pbtn, str(meta["icon"]), 20)
 		pbtn.custom_minimum_size = Vector2(40, 40)
 		pbtn.add_theme_font_size_override("font_size", 12)
@@ -2014,6 +2213,76 @@ func _build_ui() -> void:
 	t_row.add_child(leave_btn)
 
 
+func _load_dark_mode() -> void:
+	var cfg := ConfigFile.new()
+	if cfg.load(PC_DESKTOP_CFG) == OK:
+		_dark_mode = bool(cfg.get_value("desktop", "dark_mode", false))
+
+
+func _save_dark_mode() -> void:
+	var cfg := ConfigFile.new()
+	# Fehlt die Datei noch, wird sie beim Speichern neu angelegt.
+	cfg.load(PC_DESKTOP_CFG)
+	cfg.set_value("desktop", "dark_mode", _dark_mode)
+	var err := cfg.save(PC_DESKTOP_CFG)
+	if err != OK:
+		push_warning("PC-Dark-Mode konnte nicht gespeichert werden (Fehler %d)." % err)
+
+
+func _build_dark_filter() -> void:
+	var shader := Shader.new()
+	shader.code = DARK_FILTER_SHADER
+	for target in [_app_window, _start_menu, _call_popup, _taskbar_panel]:
+		var ctrl := target as Control
+		if ctrl == null:
+			continue
+		var mat := ShaderMaterial.new()
+		mat.shader = shader
+		var rect := ColorRect.new()
+		rect.material = mat
+		rect.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		rect.visible = false
+		# Als letzte Kinder gezeichnet, damit sie über dem fertigen Desktop liegen.
+		add_child(rect)
+		_dark_targets.append(ctrl)
+		_dark_filters.append(rect)
+
+
+func _update_dark_filter() -> void:
+	var booting := _boot_screen != null and _boot_screen.is_running()
+	for i in range(_dark_filters.size()):
+		var rect := _dark_filters[i]
+		var target := _dark_targets[i]
+		var active := _dark_mode and not booting and is_instance_valid(target) and target.is_visible_in_tree()
+		rect.visible = active
+		if not active:
+			continue
+		var g := target.get_global_rect()
+		rect.global_position = g.position
+		rect.size = g.size
+		var radius := 0.0
+		var sb := target.get_theme_stylebox("panel") as StyleBoxFlat
+		if sb != null:
+			radius = float(sb.corner_radius_top_left)
+		var mat := rect.material as ShaderMaterial
+		mat.set_shader_parameter("rect_size", g.size)
+		mat.set_shader_parameter("corner_radius", radius)
+
+
+func _toggle_dark_mode() -> void:
+	_dark_mode = not _dark_mode
+	_save_dark_mode()
+	_update_dark_toggle_text()
+	_update_dark_filter()
+	SfxManager.play("click", -10.0, 1.05)
+
+
+func _update_dark_toggle_text() -> void:
+	if _dark_toggle_btn == null:
+		return
+	_dark_toggle_btn.text = "Dunkler Modus: An" if _dark_mode else "Dunkler Modus: Aus"
+
+
 ## Gezeichnetes Symbol aus UIStyle.draw_icon. Es wird weiß gezeichnet, die Farbe kommt über modulate.
 func _win_icon(kind: String, px: int) -> Control:
 	var ic := Control.new()
@@ -2070,6 +2339,120 @@ func _add_btn_icon(btn: Button, kind: String, px: int, layout: String = "left") 
 	btn.add_child(ic)
 	btn.set_meta("icon_ctrl", ic)
 	return ic
+
+
+func _close_price_overlay() -> void:
+	if _price_overlay != null and is_instance_valid(_price_overlay):
+		_price_overlay.queue_free()
+	_price_overlay = null
+
+
+## Preis-Overlay für die Stromstufe: Vergleich "Aktuell" gegen "Neu", unten der Kaufen-Button.
+func _open_power_overlay() -> void:
+	_close_price_overlay()
+	if GameState.power_fuse_stock > 0:
+		return
+	if GameState.power_tier + 1 >= GameState.POWER_TIERS.size():
+		return
+	var cur: Dictionary = GameState.POWER_TIERS[GameState.power_tier]
+	var nxt: Dictionary = GameState.POWER_TIERS[GameState.power_tier + 1]
+	var cost := int(nxt["cost"])
+	var can_afford := GameState.money >= float(cost)
+
+	_price_overlay = Control.new()
+	_price_overlay.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_price_overlay.mouse_filter = Control.MOUSE_FILTER_STOP
+	add_child(_price_overlay)
+
+	var dim := ColorRect.new()
+	dim.color = Color(0.0, 0.0, 0.0, 0.55)
+	dim.set_anchors_preset(Control.PRESET_FULL_RECT)
+	dim.mouse_filter = Control.MOUSE_FILTER_STOP
+	_price_overlay.add_child(dim)
+
+	var center := CenterContainer.new()
+	center.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_price_overlay.add_child(center)
+
+	var card := _make_light_card(Color.WHITE, Color(0.80, 0.84, 0.89), 10, 22, 18)
+	card.custom_minimum_size = Vector2(560, 0)
+	center.add_child(card)
+
+	var col := VBoxContainer.new()
+	col.add_theme_constant_override("separation", 12)
+	card.add_child(col)
+
+	var title := Label.new()
+	title.text = tr("Stromversorgung upgraden")
+	title.add_theme_font_size_override("font_size", 18)
+	title.modulate = Color(0.10, 0.12, 0.16)
+	col.add_child(title)
+
+	var grid := GridContainer.new()
+	grid.columns = 3
+	grid.add_theme_constant_override("h_separation", 18)
+	grid.add_theme_constant_override("v_separation", 8)
+	col.add_child(grid)
+
+	var cur_watts := int(cur["watts"])
+	var nxt_watts := int(nxt["watts"])
+	var rows: Array = [
+		["", tr("Aktuell"), tr("Neu")],
+		[tr("Stufe"),
+			"%d / %d" % [GameState.power_tier + 1, GameState.POWER_TIERS.size()],
+			"%d / %d" % [GameState.power_tier + 2, GameState.POWER_TIERS.size()]],
+		[tr("Anschluss"), tr(str(cur["label"])), tr(str(nxt["label"]))],
+		[tr("Watt-Limit"),
+			"%.1f kW" % (float(cur_watts) / 1000.0),
+			"%.1f kW (+%.1f kW)" % [float(nxt_watts) / 1000.0, float(nxt_watts - cur_watts) / 1000.0]],
+		[tr("Preis"), "–", "$%d" % cost],
+	]
+	for r in range(rows.size()):
+		var row: Array = rows[r]
+		for c in range(3):
+			var lbl := Label.new()
+			lbl.text = str(row[c])
+			lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+			lbl.custom_minimum_size = Vector2(150 if c > 0 else 90, 0)
+			lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+			lbl.add_theme_font_size_override("font_size", 13)
+			if r == 0 or c == 0:
+				lbl.modulate = Color(0.36, 0.40, 0.46)
+			elif c == 1:
+				lbl.modulate = Color(0.45, 0.48, 0.52)
+			else:
+				lbl.modulate = Color(0.08, 0.44, 0.24)
+			grid.add_child(lbl)
+
+	var note := Label.new()
+	note.text = tr("Du kaufst eine Drehsicherung. Sie kommt ins Lager. Setze sie am Sicherungskasten mit [E] in Steckplatz F2 ein: Erst dann steigt die Stromstufe, und die alte Sicherung bekommst du in die Hand.")
+	note.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	note.add_theme_font_size_override("font_size", 12)
+	note.modulate = Color(0.36, 0.40, 0.46)
+	col.add_child(note)
+
+	var btn_row := HBoxContainer.new()
+	btn_row.add_theme_constant_override("separation", 10)
+	btn_row.alignment = BoxContainer.ALIGNMENT_END
+	col.add_child(btn_row)
+
+	var cancel_btn := Button.new()
+	cancel_btn.text = tr("Abbrechen")
+	cancel_btn.custom_minimum_size = Vector2(120, 38)
+	_style_win_btn(cancel_btn, Color(0.92, 0.93, 0.95), Color(0.76, 0.79, 0.82), Color(0.20, 0.24, 0.30))
+	cancel_btn.pressed.connect(_close_price_overlay)
+	btn_row.add_child(cancel_btn)
+
+	var buy_btn := Button.new()
+	buy_btn.text = tr("Kaufen ($%d)") % cost
+	buy_btn.custom_minimum_size = Vector2(170, 38)
+	buy_btn.disabled = not can_afford
+	_style_win_btn(buy_btn, Color(0.12, 0.56, 0.32) if can_afford else Color(0.84, 0.86, 0.89), Color(0.08, 0.44, 0.24), Color.WHITE if can_afford else Color(0.45, 0.48, 0.52))
+	buy_btn.pressed.connect(func():
+		GameState.request_upgrade_power()
+		_close_price_overlay()
+	)
+	btn_row.add_child(buy_btn)
 
 
 func _make_light_card(bg: Color, border: Color, radius: int, pad_x: int, pad_y: int) -> PanelContainer:

@@ -521,6 +521,8 @@ func _build_body() -> void:
 	var skin_mat := _mat(Color(0.86, 0.69, 0.56), 0.62, 0.0)
 	var hair_mat := _mat(Color(0.22, 0.15, 0.10), 0.90, 0.0)
 	var eye_mat := _mat(Color(0.10, 0.09, 0.08), 0.30, 0.0)
+	var eye_white_mat := _mat(Color(0.92, 0.91, 0.88), 0.35, 0.0)
+	var lip_mat := _mat(Color(0.62, 0.38, 0.33), 0.55, 0.0)
 	var reflect_mat := _mat(Color(0.82, 0.84, 0.86), 0.30, 0.35)
 	var amber_mat := _mat(Color(0.88, 0.58, 0.12), 0.50, 0.0)
 	var belt_mat := _mat(Color(0.10, 0.10, 0.11), 0.55, 0.20)
@@ -537,7 +539,7 @@ func _build_body() -> void:
 	pelvis.rotation_degrees.z = 90.0
 	pelvis.scale = Vector3(1.0, 1.0, 0.9)
 	var belt := _add_cyl(_body, Vector3(0.0, 1.0, 0.0), 0.172, 0.045, belt_mat)
-	belt.scale = Vector3(1.0, 1.0, 0.62)
+	belt.scale = Vector3(0.92, 1.0, 0.62)
 	_add_box(_body, Vector3(0.0, 1.0, -0.108), Vector3(0.05, 0.035, 0.01), buckle_mat)
 
 	# Beine mit Kniegelenk
@@ -552,28 +554,39 @@ func _build_body() -> void:
 	_torso = Node3D.new()
 	_torso.position = Vector3(0.0, 0.92, 0.0)
 	_body.add_child(_torso)
-	var chest := _add_capsule(_torso, Vector3(0.0, 0.30, 0.0), 0.20, 0.62, uniform_mat)
-	chest.scale = Vector3(1.0, 1.0, 0.6)
+	# Schmalerer Brustkorb, damit die herabhängenden Arme nicht im Körper stecken
+	# Kürzer als vorher: die Brust endet unter dem Kragen, damit der Hals sichtbar bleibt
+	var chest := _add_capsule(_torso, Vector3(0.0, 0.28, 0.0), 0.20, 0.54, uniform_mat)
+	chest.scale = Vector3(0.82, 1.0, 0.6)
+	# Schulterpartie verbindet Brust und Oberarme (Gesamtbreite mit Armen ca. 0,48 m)
+	var yoke := _add_capsule(_torso, Vector3(0.0, 0.47, 0.0), 0.058, 0.30, uniform_mat)
+	yoke.rotation_degrees.z = 90.0
+	yoke.scale = Vector3(1.0, 1.0, 0.72)
 	var stripe := _add_cyl(_torso, Vector3(0.0, 0.22, 0.0), 0.203, 0.035, reflect_mat)
-	stripe.scale = Vector3(1.0, 1.0, 0.6)
+	stripe.scale = Vector3(0.82, 1.0, 0.6)
 	_add_box(_torso, Vector3(0.0, 0.33, -0.122), Vector3(0.012, 0.42, 0.005), collar_mat) # Reißverschluss
 	_add_box(_torso, Vector3(-0.09, 0.42, -0.112), Vector3(0.09, 0.032, 0.008), amber_mat) # Namensschild
-	var collar := _add_cyl(_torso, Vector3(0.0, 0.56, 0.0), 0.075, 0.05, collar_mat)
+	var collar := _add_cyl(_torso, Vector3(0.0, 0.545, 0.0), 0.075, 0.05, collar_mat)
 	collar.scale = Vector3(1.0, 1.0, 0.85)
-	_add_cyl(_torso, Vector3(0.0, 0.59, 0.0), 0.05, 0.10, skin_mat) # Hals
+	_add_cyl(_torso, Vector3(0.0, 0.60, 0.0), 0.045, 0.12, skin_mat) # Hals
 
 	# Kopf mit Gesicht, Haaren und Schirmmütze
 	_head = Node3D.new()
-	_head.position = Vector3(0.0, 0.60, 0.0)
+	_head.position = Vector3(0.0, 0.615, 0.0)
 	_torso.add_child(_head)
 	var skull := _add_sphere(_head, Vector3(0.0, 0.13, 0.0), 0.11, 0.25, skin_mat)
 	skull.scale = Vector3(0.92, 1.0, 1.0)
-	_add_sphere(_head, Vector3(0.0, 0.17, 0.012), 0.114, 0.20, hair_mat)
-	_add_sphere(_head, Vector3(0.0, 0.11, -0.104), 0.022, 0.05, skin_mat) # Nase
+	# Haare nach hinten versetzt: vorne bleiben sie hinter der Stirn, Augen und Brauen liegen frei
+	var hair := _add_sphere(_head, Vector3(0.0, 0.175, 0.03), 0.113, 0.19, hair_mat)
+	hair.scale = Vector3(0.95, 1.0, 1.0)
+	var nose := _add_sphere(_head, Vector3(0.0, 0.115, -0.108), 0.016, 0.04, skin_mat)
+	nose.scale = Vector3(0.75, 1.0, 1.0)
+	_add_box(_head, Vector3(0.0, 0.085, -0.099), Vector3(0.035, 0.006, 0.008), lip_mat) # Mund
 	for ex in [-0.04, 0.04]:
 		var x := float(ex)
-		_add_sphere(_head, Vector3(x, 0.145, -0.097), 0.014, 0.028, eye_mat)
-		_add_box(_head, Vector3(x, 0.168, -0.099), Vector3(0.04, 0.008, 0.01), hair_mat) # Augenbraue
+		_add_sphere(_head, Vector3(x, 0.145, -0.096), 0.016, 0.032, eye_white_mat)
+		_add_sphere(_head, Vector3(x, 0.145, -0.108), 0.008, 0.016, eye_mat) # Pupille
+		_add_box(_head, Vector3(x, 0.168, -0.104), Vector3(0.035, 0.008, 0.01), hair_mat) # Augenbraue
 		var ear := _add_sphere(_head, Vector3(x * 2.7, 0.125, 0.005), 0.025, 0.05, skin_mat)
 		ear.scale = Vector3(0.5, 1.0, 0.8)
 	var cap := _add_sphere(_head, Vector3(0.0, 0.20, 0.005), 0.12, 0.12, collar_mat)
@@ -584,10 +597,10 @@ func _build_body() -> void:
 	_add_box(_head, Vector3(0.0, 0.25, -0.110), Vector3(0.06, 0.03, 0.005), amber_mat) # Mützenlogo
 
 	# Arme mit Ellbogengelenk
-	var arm_l := _build_arm(-0.25, uniform_mat, collar_mat, skin_mat)
+	var arm_l := _build_arm(-0.17, uniform_mat, collar_mat, skin_mat)
 	_shoulder_l = arm_l[0]
 	_elbow_l = arm_l[1]
-	var arm_r := _build_arm(0.25, uniform_mat, collar_mat, skin_mat)
+	var arm_r := _build_arm(0.17, uniform_mat, collar_mat, skin_mat)
 	_shoulder_r = arm_r[0]
 	_elbow_r = arm_r[1]
 
@@ -619,20 +632,27 @@ func _build_leg(side_x: float, trouser_mat: Material, shoe_mat: Material, sole_m
 
 func _build_arm(side_x: float, sleeve_mat: Material, cuff_mat: Material, skin_mat: Material) -> Array[Node3D]:
 	var shoulder := Node3D.new()
-	shoulder.position = Vector3(side_x, 0.50, 0.0)
+	shoulder.position = Vector3(side_x, 0.475, 0.0)
 	_torso.add_child(shoulder)
-	_add_sphere(shoulder, Vector3.ZERO, 0.068, 0.136, sleeve_mat)
-	_add_capsule(shoulder, Vector3(0.0, -0.14, 0.0), 0.062, 0.32, sleeve_mat)
+	_add_sphere(shoulder, Vector3.ZERO, 0.044, 0.088, sleeve_mat)
+	_add_capsule(shoulder, Vector3(0.0, -0.14, 0.0), 0.044, 0.32, sleeve_mat)
 	var elbow := Node3D.new()
 	elbow.position = Vector3(0.0, -0.29, 0.0)
 	shoulder.add_child(elbow)
-	_add_capsule(elbow, Vector3(0.0, -0.12, 0.0), 0.054, 0.28, sleeve_mat)
-	_add_cyl(elbow, Vector3(0.0, -0.245, 0.0), 0.056, 0.03, cuff_mat) # Bündchen
-	# Hand: flache Handfläche (zum Körper gedreht) und Daumen nach vorn
-	var palm := _add_capsule(elbow, Vector3(0.0, -0.305, 0.0), 0.04, 0.11, skin_mat)
-	palm.scale = Vector3(0.6, 1.0, 1.0)
-	var thumb := _add_capsule(elbow, Vector3(0.0, -0.29, -0.036), 0.014, 0.06, skin_mat)
-	thumb.rotation_degrees.x = 25.0
+	_add_capsule(elbow, Vector3(0.0, -0.12, 0.0), 0.045, 0.28, sleeve_mat)
+	_add_cyl(elbow, Vector3(0.0, -0.245, 0.0), 0.048, 0.03, cuff_mat) # Bündchen
+	# Hand (ca. 19 cm lang): flache Handfläche, vier einzelne Finger, Daumen nach vorn.
+	# Die Handfläche zeigt zum Körper (inward = +1 links, -1 rechts), die Finger krümmen sich dorthin.
+	var inward := -signf(side_x)
+	_add_box(elbow, Vector3(0.0, -0.33, 0.0), Vector3(0.034, 0.11, 0.080), skin_mat)
+	var finger_z: Array[float] = [-0.027, -0.009, 0.009, 0.027]
+	var finger_len: Array[float] = [0.080, 0.088, 0.082, 0.066]
+	for fi in range(finger_z.size()):
+		var flen := finger_len[fi]
+		var finger := _add_capsule(elbow, Vector3(inward * 0.005, -0.365 - flen * 0.5, finger_z[fi]), 0.0105, flen, skin_mat)
+		finger.rotation_degrees.z = 14.0 * inward
+	var thumb := _add_capsule(elbow, Vector3(inward * 0.012, -0.31, -0.042), 0.0125, 0.068, skin_mat)
+	thumb.rotation_degrees = Vector3(22.0, 0.0, 10.0 * inward)
 	var parts: Array[Node3D] = [shoulder, elbow]
 	return parts
 

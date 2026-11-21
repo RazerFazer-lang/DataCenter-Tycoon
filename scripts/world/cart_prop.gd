@@ -108,7 +108,7 @@ func _refresh_cargo_visuals() -> void:
 			var cat: Dictionary = GameState.ITEM_CATALOG.get(item_type, {"name": item_type, "color": Color.WHITE})
 			box_root.visible = true
 			(vis["stripe_mat"] as StandardMaterial3D).albedo_color = cat["color"]
-			(vis["lbl"] as Label3D).text = str(cat["name"]).left(14)
+			(vis["lbl"] as Label3D).text = tr(str(cat["name"])).left(14)
 		else:
 			box_root.visible = false
 
@@ -116,7 +116,7 @@ func _refresh_cargo_visuals() -> void:
 		var status := ""
 		if pushed_by != 0:
 			status = " • %s" % NetworkManager.get_player_name(pushed_by)
-		_label.text = "ROLLWAGEN (%d/%d)%s" % [_items.size(), GameState.CART_MAX_ITEMS, status]
+		_label.text = tr("ROLLWAGEN (%d/%d)%s") % [_items.size(), GameState.CART_MAX_ITEMS, status]
 		_label.modulate = Color(0.55, 0.94, 1.0) if _items.size() < GameState.CART_MAX_ITEMS else Color(1.0, 0.80, 0.30)
 
 

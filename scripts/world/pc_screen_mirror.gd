@@ -192,7 +192,7 @@ func _update_window() -> void:
 		_body_key = ""
 		return
 	var info: Dictionary = APP_INFO.get(app, {"icon": "windows", "name": app, "short": app})
-	_win_title.text = str(info["name"])
+	_win_title.text = tr(str(info["name"]))
 	_win_icon_kind = str(info["icon"])
 	_win_icon.queue_redraw()
 	_win_typing.visible = PcScreenState.typing
@@ -345,7 +345,7 @@ func _draw_lock() -> void:
 	var s := _lock.size
 	var day: int = GameState.day_number if GameState.is_active else 1
 	_lock.draw_string(_font, Vector2(70, s.y - 200), PcBootScreen.format_real_clock(), HORIZONTAL_ALIGNMENT_LEFT, -1, 120, Color.WHITE)
-	_lock.draw_string(_font, Vector2(76, s.y - 140), "%s  •  Spieltag %d" % [PcBootScreen.format_real_date(), day], HORIZONTAL_ALIGNMENT_LEFT, -1, 34, Color(1, 1, 1, 0.9))
+	_lock.draw_string(_font, Vector2(76, s.y - 140), tr("%s  •  Spieltag %d") % [PcBootScreen.format_real_date(), day], HORIZONTAL_ALIGNMENT_LEFT, -1, 34, Color(1, 1, 1, 0.9))
 	UIStyle.draw_icon(_lock, "net", Rect2(s.x - 110, s.y - 70, 30, 30), Color(1, 1, 1, 0.85))
 	UIStyle.draw_icon(_lock, "power", Rect2(s.x - 64, s.y - 70, 30, 30), Color(1, 1, 1, 0.85))
 
@@ -358,7 +358,7 @@ func _draw_desk() -> void:
 		var info: Dictionary = APP_INFO[aid]
 		var y := 24.0 + float(i) * 88.0
 		UIStyle.draw_icon(_desk, str(info["icon"]), Rect2(53, y, 44, 44), Color(1, 1, 1, 0.95))
-		_desk.draw_string(_font, Vector2(10, y + 66), str(info["short"]), HORIZONTAL_ALIGNMENT_CENTER, 130, 14, Color.WHITE)
+		_desk.draw_string(_font, Vector2(10, y + 66), tr(str(info["short"])), HORIZONTAL_ALIGNMENT_CENTER, 130, 14, Color.WHITE)
 
 	var tb := Rect2(0, s.y - TASKBAR_H, s.x, TASKBAR_H)
 	_desk.draw_rect(tb, Color(0.11, 0.12, 0.15, 0.94))
@@ -375,10 +375,10 @@ func _draw_desk() -> void:
 		UIStyle.draw_icon(_desk, str(info["icon"]), Rect2(bx + 11, tb.position.y + 11, 26, 26), Color(1, 1, 1, 0.9))
 
 	var user := PcScreenState.user_name if not PcScreenState.user_name.is_empty() else "Admin"
-	_desk.draw_string(_font, Vector2(16, tb.position.y + 30), "%s ist angemeldet" % user, HORIZONTAL_ALIGNMENT_LEFT, -1, 15, Color(1, 1, 1, 0.85))
+	_desk.draw_string(_font, Vector2(16, tb.position.y + 30), tr("%s ist angemeldet") % user, HORIZONTAL_ALIGNMENT_LEFT, -1, 15, Color(1, 1, 1, 0.85))
 	var day: int = GameState.day_number if GameState.is_active else 1
 	_desk.draw_string(_font, Vector2(s.x - 216, tb.position.y + 21), PcBootScreen.format_real_clock(), HORIZONTAL_ALIGNMENT_RIGHT, 200, 15, Color.WHITE)
-	_desk.draw_string(_font, Vector2(s.x - 216, tb.position.y + 40), "Tag %d" % day, HORIZONTAL_ALIGNMENT_RIGHT, 200, 13, Color(1, 1, 1, 0.75))
+	_desk.draw_string(_font, Vector2(s.x - 216, tb.position.y + 40), tr("Tag %d") % day, HORIZONTAL_ALIGNMENT_RIGHT, 200, 13, Color(1, 1, 1, 0.75))
 
 
 # ---------------------------------------------------------------- Inhalte der App-Fenster
@@ -406,8 +406,8 @@ func _rebuild_body(app: String, detail: String) -> void:
 
 func _render_shop(tab: String) -> void:
 	var body := FinanceApps._scroll_body(_win_body)
-	FinanceApps._header(body, "cart", "Hardware-Shop", "Kategorie: %s  •  Kontostand %s" % [
-		str(SHOP_TABS.get(tab, "Alle Produkte")), FinanceApps._money(GameState.money)
+	FinanceApps._header(body, "cart", "Hardware-Shop", tr("Kategorie: %s  •  Kontostand %s") % [
+		tr(str(SHOP_TABS.get(tab, "Alle Produkte"))), FinanceApps._money(GameState.money)
 	])
 	var grid := GridContainer.new()
 	grid.columns = 4
@@ -455,7 +455,7 @@ func _render_support(tab: String) -> void:
 		var t: Dictionary = t_v
 		var done := bool(t.get("reassured", false))
 		var card := FinanceApps._card(body, FinanceApps.COL_GOOD if done else FinanceApps.COL_WARN)
-		var subject := str(t.get("subject", t.get("title", "Kundenanfrage")))
+		var subject := GameState.format_message(str(t.get("subject", t.get("title", "Kundenanfrage"))), t.get("title_args", []))
 		card.add_child(FinanceApps._label("Ticket %s  •  %s" % [str(tid), subject], 14, FinanceApps.COL_TEXT))
 		card.add_child(FinanceApps._label("beantwortet" if done else "wartet auf Antwort", 12, FinanceApps.COL_GOOD if done else FinanceApps.COL_WARN))
 		shown += 1
@@ -476,12 +476,12 @@ func _render_upgrades() -> void:
 		var tier := int(row[1])
 		var count := maxi(1, int(row[2]))
 		var card := FinanceApps._card(body, FinanceApps.COL_ACCENT)
-		card.add_child(FinanceApps._label("%s  •  Stufe %d von %d" % [str(row[0]), tier + 1, count], 15, FinanceApps.COL_TEXT))
+		card.add_child(FinanceApps._label(tr("%s  •  Stufe %d von %d") % [tr(str(row[0])), tier + 1, count], 15, FinanceApps.COL_TEXT))
 		card.add_child(FinanceApps._bar(float(tier + 1) / float(count), FinanceApps.COL_ACCENT))
 	var room_card := FinanceApps._card(body)
-	room_card.add_child(FinanceApps._label("Raumausbau  •  Stufe %d" % int(GameState.room_level), 15, FinanceApps.COL_TEXT))
+	room_card.add_child(FinanceApps._label(tr("Raumausbau  •  Stufe %d") % int(GameState.room_level), 15, FinanceApps.COL_TEXT))
 	var ai_card := FinanceApps._card(body)
-	ai_card.add_child(FinanceApps._label("KI-Plattform  •  Stufe %d" % int(GameState.ai_platform_level), 15, FinanceApps.COL_TEXT))
+	ai_card.add_child(FinanceApps._label(tr("KI-Plattform  •  Stufe %d") % int(GameState.ai_platform_level), 15, FinanceApps.COL_TEXT))
 
 
 func _render_monitor() -> void:
@@ -498,7 +498,7 @@ func _render_monitor() -> void:
 		["Rechenleistung", "%d / %d CU" % [int(used), int(total)], FinanceApps.COL_TEXT],
 	])
 	var chart_card := FinanceApps._card(body)
-	chart_card.add_child(FinanceApps._label("Stromlast, letzte %d Sekunden" % HISTORY_LEN, 13, FinanceApps.COL_MUTED))
+	chart_card.add_child(FinanceApps._label(tr("Stromlast, letzte %d Sekunden") % HISTORY_LEN, 13, FinanceApps.COL_MUTED))
 	var chart := Control.new()
 	chart.custom_minimum_size = Vector2(0, 170)
 	chart.size_flags_horizontal = Control.SIZE_EXPAND_FILL

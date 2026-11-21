@@ -124,6 +124,12 @@ func _input(event: InputEvent) -> void:
 				_open_pause()
 			return
 
+		# Im Rack-Menü wird [E] abgefangen (Bedienung dort per Maus), damit das Rack nicht erneut öffnet.
+		if rack_inspector.visible and event.is_action_pressed("interact"):
+			get_viewport().set_input_as_handled()
+			rack_inspector.press_interact()
+			return
+
 		# Pressing F again closes the Rack Inspector smoothly
 		if rack_inspector.visible and event.is_action_pressed("inspect_rack"):
 			get_viewport().set_input_as_handled()
@@ -157,7 +163,7 @@ func _on_pc_seat_lost() -> void:
 		_cancel_pc_enter()
 	elif terminal_ui.visible:
 		_close_terminal()
-	hud.show_toast("PC besetzt: %s sitzt gerade davor" % PcScreenState.user_name, true)
+	hud.show_toast(tr("PC besetzt: %s sitzt gerade davor") % PcScreenState.user_name, true)
 
 
 func _on_session_left(_reason: String) -> void:
@@ -169,7 +175,7 @@ func _leave_to_menu() -> void:
 		GameState.save_current_world("", true)
 	NetworkManager.leave_session()
 	_return_to_menu_ui()
-	main_menu.show_status("Sitzung beendet.")
+	main_menu.show_status(tr("Sitzung beendet."))
 
 
 func _return_to_menu_ui() -> void:

@@ -36,7 +36,7 @@ func apply_data(data: Dictionary) -> void:
 		_led_mat.emission_energy_multiplier = 0.85 if _powered else 0.05
 	if _status_label != null:
 		var title := "AC-PRO" if cooler_type == "chiller" else cooler_id.to_upper()
-		_status_label.text = "%s\n%s (-%d°C)" % [title, "KÜHLT" if _powered else "KEIN STROM", cooling_val]
+		_status_label.text = "%s\n%s (-%d°C)" % [title, tr("KÜHLT") if _powered else tr("KEIN STROM"), cooling_val]
 		_status_label.modulate = Color(0.90, 0.92, 0.94) if _powered else Color(0.92, 0.76, 0.40)
 
 

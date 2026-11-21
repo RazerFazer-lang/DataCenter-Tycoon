@@ -1,10 +1,22 @@
 extends SceneTree
-## Findet heraus, welcher Grafikeffekt pro Frame am meisten Zeit kostet.
-## Jeder Effekt wird einzeln abgeschaltet, die Frame-Zeit (Median) gemessen und der Effekt wieder eingeschaltet.
-## Aufruf: godot --path . --resolution 1600x900 --script res://tests/render_cost_probe.gd -- q=3
+## Misst, was einzelne Render-Einstellungen pro Frame kosten (Frame-Zeit und reine GPU-Zeit).
+## Jede Einstellung wird einzeln abgeschaltet, gemessen und danach wiederhergestellt.
+## "aufloesung_50" ist nur ein Test, ob die Pixelmenge der Engpass ist.
+## Alle Änderungen gelten nur für diesen Testlauf, settings.cfg bleibt unberührt.
+## Aufruf: godot --path . --resolution 1280x720 --script res://tests/render_cost_probe.gd -- q=3
+## Ausgabe: Zeilen mit "RENDER", Zeiten in ms.
 
-const WARMUP_SEC := 5.0
-const FRAMES_PER_SAMPLE := 10
+const WARMUP_SEC := 6.0
+const SETTLE_SEC := 1.0
+const RESTORE_SEC := 0.5
+const SAMPLE_FRAMES := 180
+const EFFECTS: Array[String] = [
+	"sdfgi_enabled",
+	"volumetric_fog_enabled",
+	"ssr_enabled",
+	"ssil_enabled",
+	"ssao_enabled",
+]
 
 
 func _initialize() -> void:
@@ -19,95 +31,85 @@ func _initialize() -> void:
 	var settings := root.get_node_or_null("SettingsManager")
 	if settings != null:
 		settings.set("graphics_quality", quality)
+
 	var main_scene := (load("res://scenes/main.tscn") as PackedScene).instantiate()
 	root.add_child(main_scene)
+	RenderingServer.viewport_set_measure_render_time(root.get_viewport_rid(), true)
 	await create_timer(WARMUP_SEC).timeout
 
-	print("RENDER gpu=%s vendor=%s typ=%d viewport=%s" % [
-		RenderingServer.get_video_adapter_name(), RenderingServer.get_video_adapter_vendor(),
-		int(RenderingServer.get_video_adapter_type()), str(root.get_visible_rect().size),
+	print("RENDER fenster=%s msaa_3d=%d scaling_mode=%d scale=%.2f" % [
+		str(DisplayServer.window_get_size()), int(root.msaa_3d), int(root.scaling_3d_mode), root.scaling_3d_scale,
 	])
+	await _measure("basis")
 
-	var nodes := {"env": [], "lights": [], "probes": [], "viewports": []}
-	_collect(root, nodes)
-	var env: Environment = null
-	if not (nodes["env"] as Array).is_empty():
-		env = (nodes["env"][0] as WorldEnvironment).environment
-
-	var toggles := {}
+	var env := _find_environment()
 	if env != null:
-		if env.sky != null:
-			print("RENDER sky process_mode=%d radiance_size=%d material=%s" % [
-				int(env.sky.process_mode), int(env.sky.radiance_size), env.sky.sky_material.get_class() if env.sky.sky_material != null else "null",
-			])
-			toggles["himmel_shader"] = [[env.sky, "sky_material", ProceduralSkyMaterial.new()]]
-			toggles["himmel_radiance_32"] = [[env.sky, "radiance_size", Sky.RADIANCE_SIZE_32]]
-		toggles["sdfgi"] = [[env, "sdfgi_enabled", false]]
-		toggles["vol_fog"] = [[env, "volumetric_fog_enabled", false]]
-		toggles["ssr"] = [[env, "ssr_enabled", false]]
-		toggles["ssil"] = [[env, "ssil_enabled", false]]
-		toggles["ssao"] = [[env, "ssao_enabled", false]]
-		toggles["glow"] = [[env, "glow_enabled", false]]
-	toggles["msaa"] = [[root, "msaa_3d", Viewport.MSAA_DISABLED]]
-	var shadow_list: Array = []
-	for l in nodes["lights"]:
-		shadow_list.append([l, "shadow_enabled", false])
-	toggles["schatten"] = shadow_list
-	var probe_list: Array = []
-	for p in nodes["probes"]:
-		probe_list.append([p, "visible", false])
-	toggles["reflection_probes"] = probe_list
-	var vp_list: Array = []
-	for v in nodes["viewports"]:
-		vp_list.append([v, "render_target_update_mode", SubViewport.UPDATE_DISABLED])
-	toggles["subviewports"] = vp_list
-	var all_list: Array = []
-	for key in toggles.keys():
-		all_list.append_array(toggles[key])
-	toggles["ALLES"] = all_list
+		for prop in EFFECTS:
+			if not (prop in env) or not bool(env.get(prop)):
+				print("RENDER %-24s nicht aktiv" % prop)
+				continue
+			await _toggle(prop + "_aus",
+				func() -> void: env.set(prop, false),
+				func() -> void: env.set(prop, true))
 
-	print("RENDER lichter_mit_schatten=%d probes=%d subviewports=%d" % [shadow_list.size(), probe_list.size(), vp_list.size()])
+	var old_msaa := root.msaa_3d
+	await _toggle("msaa_aus",
+		func() -> void: root.msaa_3d = Viewport.MSAA_DISABLED,
+		func() -> void: root.msaa_3d = old_msaa)
 
-	var baseline := await _measure()
-	print("RENDER q=%d baseline=%.2fms" % [quality, baseline])
-	for key in toggles.keys():
-		var entries: Array = toggles[key]
-		if entries.is_empty():
-			continue
-		var originals: Array = []
-		for e in entries:
-			originals.append(e[0].get(e[1]))
-			e[0].set(e[1], e[2])
-		var t := await _measure()
-		for i in range(entries.size()):
-			entries[i][0].set(entries[i][1], originals[i])
-		print("RENDER %-20s aus: %7.2fms  gespart: %7.2fms" % [key, t, baseline - t])
+	var old_mode := root.scaling_3d_mode
+	await _toggle("fsr2_zu_bilinear",
+		func() -> void: root.scaling_3d_mode = Viewport.SCALING_3D_MODE_BILINEAR,
+		func() -> void: root.scaling_3d_mode = old_mode)
+
+	var old_scale := root.scaling_3d_scale
+	await _toggle("aufloesung_50",
+		func() -> void: root.scaling_3d_scale = 0.5,
+		func() -> void: root.scaling_3d_scale = old_scale)
 	quit(0)
 
 
-func _collect(node: Node, nodes: Dictionary) -> void:
-	if node is WorldEnvironment:
-		nodes["env"].append(node)
-	elif node is Light3D and (node as Light3D).shadow_enabled:
-		nodes["lights"].append(node)
-	elif node is ReflectionProbe and (node as ReflectionProbe).visible:
-		nodes["probes"].append(node)
-	elif node is SubViewport:
-		nodes["viewports"].append(node)
-	for child in node.get_children():
-		_collect(child, nodes)
+func _toggle(label: String, apply: Callable, restore: Callable) -> void:
+	apply.call()
+	await _measure(label)
+	restore.call()
+	await create_timer(RESTORE_SEC).timeout
 
 
-## Median der Frame-Zeit in ms
-func _measure() -> float:
-	await process_frame
-	await process_frame
-	var frame := PackedFloat32Array()
+func _measure(label: String) -> void:
+	await create_timer(SETTLE_SEC).timeout
+	var vp_rid := root.get_viewport_rid()
+	var times: Array[float] = []
+	var gpu_sum := 0.0
+	var draw_sum := 0
 	var last := Time.get_ticks_usec()
-	for i in range(FRAMES_PER_SAMPLE):
+	for i in range(SAMPLE_FRAMES):
 		await process_frame
 		var now := Time.get_ticks_usec()
-		frame.append(float(now - last) / 1000.0)
+		times.append(float(now - last) / 1000.0)
 		last = now
-	frame.sort()
-	return frame[frame.size() / 2]
+		gpu_sum += RenderingServer.viewport_get_measured_render_time_gpu(vp_rid)
+		draw_sum += int(Performance.get_monitor(Performance.RENDER_TOTAL_DRAW_CALLS_IN_FRAME))
+	times.sort()
+	var total := 0.0
+	for t in times:
+		total += t
+	print("RENDER %-24s avg=%.2f ms median=%.2f p99=%.2f gpu=%.2f draws=%d" % [
+		label,
+		total / float(times.size()),
+		times[times.size() / 2],
+		times[mini(times.size() - 1, int(times.size() * 0.99))],
+		gpu_sum / float(SAMPLE_FRAMES),
+		draw_sum / SAMPLE_FRAMES,
+	])
+
+
+func _find_environment() -> Environment:
+	for n in root.find_children("*", "WorldEnvironment", true, false):
+		var we := n as WorldEnvironment
+		if we != null and we.environment != null:
+			return we.environment
+	var world := root.get_world_3d()
+	if world != null and world.environment != null:
+		return world.environment
+	return null

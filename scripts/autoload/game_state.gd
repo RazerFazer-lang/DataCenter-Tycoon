@@ -6,6 +6,8 @@ extends Node
 
 signal world_snapshot_loaded
 signal state_updated
+## Ein Checklisten-Flag hat sich geändert (lokal oder vom Server für alle Spieler).
+signal checklist_changed
 signal racks_changed
 signal coolers_changed
 signal ups_changed
@@ -18,16 +20,56 @@ signal van_updated
 signal tickets_changed
 signal call_changed
 signal inventory_changed
+## Sicherungen im Wand-Sicherungskasten oder der Sicherungsvorrat haben sich geändert.
+signal fuses_changed
+## Türen, Seitenwände und Antenne (Racks, Sicherungskasten, Router) wurden geöffnet/geschlossen.
+signal panel_states_changed
+
+const MAX_SHARED_PANELS := 512
+## Vom Server geführter Zustand aller öffenbaren Abdeckungen: "<entity_id>|<panel_id>" -> true (nur offene).
+var shared_open_panels: Dictionary = {}
 signal event_logged(message: String, severity: String)
 signal world_saved(display_name: String, is_autosave: bool)
 signal daily_bill_charged(day_num: int, bill_amount: int, kwh_used: float)
 
 const SIM_TICK_INTERVAL := 0.5
+## Forschungsbaum: "mult" ist der Faktor auf den Wert "stat" bei der jeweiligen Stufe.
+## "requires" nennt Zweige, die vorher mindestens diese Stufe brauchen.
+const RESEARCH_TREE := {
+	"cooling": {
+		"label": "Kühltechnik", "desc": "Effizientere Kühlkörper und Luftführung.", "stat": "Abwärme",
+		"requires": {},
+		"levels": [{"cost": 2000, "mult": 0.90}, {"cost": 6000, "mult": 0.80}, {"cost": 15000, "mult": 0.70}],
+	},
+	"efficiency": {
+		"label": "Energieeffizienz", "desc": "Bessere Netzteile und Spannungswandler.", "stat": "Stromverbrauch",
+		"requires": {},
+		"levels": [{"cost": 2000, "mult": 0.92}, {"cost": 6000, "mult": 0.85}, {"cost": 15000, "mult": 0.78}],
+	},
+	"reliability": {
+		"label": "Zuverlässigkeit", "desc": "Monitoring und vorbeugende Wartung.", "stat": "Fehlerrate",
+		"requires": {"cooling": 1},
+		"levels": [{"cost": 2000, "mult": 0.85}, {"cost": 6000, "mult": 0.70}, {"cost": 15000, "mult": 0.55}],
+	},
+}
+const RESEARCH_ORDER: Array[String] = ["cooling", "efficiency", "reliability"]
+## Wasserschaden: Abstand zwischen zwei Lecks in Sekunden, betroffene Slots und Kosten.
+const WATER_LEAK_MIN_S := 240.0
+const WATER_LEAK_MAX_S := 420.0
+const WATER_LEAK_MAX_SLOTS := 2
+const WATER_LEAK_COST := 150.0
 const PAYOUT_CYCLE_SECONDS := 5.0
 const AUTOSAVE_INTERVAL := 180.0
 # Echtzeit: ein Spieltag dauert einen echten Tag.
 const DAY_LENGTH_SECONDS := 86400.0
+# Grundpreis pro kWh. Der Tagespreis (electricity_rate) schwankt um diesen Wert.
 const ELECTRICITY_RATE_PER_KWH := 1.45
+const ELECTRICITY_RATE_MIN := 1.00
+const ELECTRICITY_RATE_MAX := 2.05
+# Maximale zufällige Änderung pro Tag in $/kWh.
+const ELECTRICITY_RATE_DAILY_SWING := 0.18
+# Anteil, um den sich der Preis pro Tag zum Grundpreis zurückbewegt (0..1).
+const ELECTRICITY_RATE_REVERSION := 0.3
 const SELL_REFUND_RATIO := 0.70
 const CART_MAX_ITEMS := 4
 const VAN_ARRIVE_DURATION := 4.4
@@ -84,6 +126,17 @@ const ITEM_CATALOG := {
 		"color": Color(0.18, 0.44, 0.62),
 		"desc": "6 Einschub-Slots | Max. 6.000W PDU | Aktiv-Kühlung (-4°C)",
 	},
+	"old_fuse": {
+		"name": "Alte Schraubsicherung",
+		"category": "junk",
+		"price": 0,
+		"watts": 0,
+		"compute": 0,
+		"heat": 0.0,
+		"revenue_bonus": 0.0,
+		"color": Color(0.55, 0.50, 0.42),
+		"desc": "Ausgebaute Sicherung aus F2 • Mit [Q] ablegen",
+	},
 	"web_server": {
 		"name": "1U Standard-Chassis",
 		"category": "module",
@@ -116,6 +169,119 @@ const ITEM_CATALOG := {
 		"revenue_bonus": 0.04,
 		"color": Color(0.84, 0.58, 0.18),
 		"desc": "Großes High-Airflow PCIe-Gehäuse • Optimiert für fette Grafikkarten, Streaming & KI-Hosting",
+	},
+	# --- Mainboards: werden im Rack-Menü in einen freien Einschub gekauft und eingebaut ---
+	"mb_h110m_srv": {
+		"name": "Gigabyte GA-H110M Mini-Server",
+		"category": "module", "mainboard": true, "mb_cat": "entry", "chassis": "web_server", "form": "1U",
+		"price": 120, "watts": 35, "compute": 3, "base_compute": 3, "heat": 1.2, "revenue_bonus": 0.0,
+		"color": Color(0.36, 0.62, 0.86),
+		"desc": "Günstiges Single-Sockel-Board • 2 RAM-Bänke • Ideal für den ersten Webserver",
+	},
+	"mb_b450m_pro4": {
+		"name": "ASRock B450M Pro4 Server",
+		"category": "module", "mainboard": true, "mb_cat": "entry", "chassis": "web_server", "form": "1U",
+		"price": 160, "watts": 40, "compute": 4, "base_compute": 4, "heat": 1.4, "revenue_bonus": 0.0,
+		"color": Color(0.36, 0.62, 0.86),
+		"desc": "AM4-Board • 4 RAM-Bänke • M.2-Steckplatz für schnelle NVMe-SSDs",
+	},
+	"mb_x570d4u": {
+		"name": "ASRock Rack X570D4U",
+		"category": "module", "mainboard": true, "mb_cat": "entry", "chassis": "web_server", "form": "1U",
+		"price": 230, "watts": 45, "compute": 5, "base_compute": 5, "heat": 1.6, "revenue_bonus": 0.02,
+		"color": Color(0.36, 0.62, 0.86),
+		"desc": "Server-AM4 mit Fernwartung (IPMI) • ECC-RAM • +2% Einnahmen",
+	},
+	"mb_x11scl_f": {
+		"name": "Supermicro X11SCL-F",
+		"category": "module", "mainboard": true, "mb_cat": "entry", "chassis": "web_server", "form": "1U",
+		"price": 260, "watts": 40, "compute": 5, "base_compute": 5, "heat": 1.5, "revenue_bonus": 0.03,
+		"color": Color(0.36, 0.62, 0.86),
+		"desc": "Xeon-E-Board mit IPMI • Sehr stabil • +3% Einnahmen",
+	},
+	"mb_x11dpi_n": {
+		"name": "Supermicro X11DPi-N (Dual-Sockel)",
+		"category": "module", "mainboard": true, "mb_cat": "server", "chassis": "web_server", "form": "1U",
+		"price": 380, "watts": 60, "compute": 7, "base_compute": 7, "heat": 2.2, "revenue_bonus": 0.04,
+		"color": Color(0.52, 0.48, 0.90),
+		"desc": "2 Xeon-Sockel • 16 RAM-Bänke • Für Webhosting mit vielen Nutzern",
+	},
+	"mb_romed8_2t": {
+		"name": "ASRock Rack ROMED8-2T",
+		"category": "module", "mainboard": true, "mb_cat": "server", "chassis": "web_server", "form": "1U",
+		"price": 520, "watts": 70, "compute": 9, "base_compute": 9, "heat": 2.6, "revenue_bonus": 0.05,
+		"color": Color(0.52, 0.48, 0.90),
+		"desc": "EPYC-Board • 8 RAM-Kanäle • 2× 10-GbE • +5% Einnahmen",
+	},
+	"mb_mz73_lm0": {
+		"name": "Gigabyte MZ73-LM0 (Dual EPYC)",
+		"category": "module", "mainboard": true, "mb_cat": "server", "chassis": "web_server", "form": "1U",
+		"price": 780, "watts": 85, "compute": 11, "base_compute": 11, "heat": 3.0, "revenue_bonus": 0.06,
+		"color": Color(0.52, 0.48, 0.90),
+		"desc": "2 EPYC-Sockel • 24 RAM-Bänke • Für Datenbanken & große Kunden",
+	},
+	"mb_x13dei_t": {
+		"name": "Supermicro X13DEI-T (Dual Xeon)",
+		"category": "module", "mainboard": true, "mb_cat": "server", "chassis": "web_server", "form": "1U",
+		"price": 950, "watts": 90, "compute": 12, "base_compute": 12, "heat": 3.2, "revenue_bonus": 0.07,
+		"color": Color(0.52, 0.48, 0.90),
+		"desc": "Aktuelle Dual-Xeon-Plattform • DDR5 • +7% Einnahmen",
+	},
+	"mb_x10sdv_4c": {
+		"name": "Supermicro X10SDV-4C NAS",
+		"category": "module", "mainboard": true, "mb_cat": "storage", "chassis": "storage_server", "form": "2U",
+		"price": 240, "watts": 35, "compute": 5, "base_compute": 5, "heat": 1.3, "revenue_bonus": 0.08,
+		"color": Color(0.24, 0.68, 0.48),
+		"desc": "Sparsames NAS-Board • 6 SATA-Ports • +8% Einnahmen bei Speicher",
+	},
+	"mb_x11ssh_ctf": {
+		"name": "Supermicro X11SSH-CTF (SAS)",
+		"category": "module", "mainboard": true, "mb_cat": "storage", "chassis": "storage_server", "form": "2U",
+		"price": 340, "watts": 50, "compute": 6, "base_compute": 6, "heat": 1.8, "revenue_bonus": 0.09,
+		"color": Color(0.24, 0.68, 0.48),
+		"desc": "SAS-Controller onboard • 8 Hot-Swap-Laufwerke • +9% Einnahmen",
+	},
+	"mb_h12ssl_nt": {
+		"name": "Supermicro H12SSL-NT Storage",
+		"category": "module", "mainboard": true, "mb_cat": "storage", "chassis": "storage_server", "form": "2U",
+		"price": 520, "watts": 65, "compute": 8, "base_compute": 8, "heat": 2.3, "revenue_bonus": 0.11,
+		"color": Color(0.24, 0.68, 0.48),
+		"desc": "EPYC-Storage-Board • viele NVMe-Lanes • +11% Einnahmen",
+	},
+	"mb_genoad8x_2t": {
+		"name": "ASRock Rack GENOAD8X-2T",
+		"category": "module", "mainboard": true, "mb_cat": "storage", "chassis": "storage_server", "form": "2U",
+		"price": 860, "watts": 80, "compute": 10, "base_compute": 10, "heat": 2.8, "revenue_bonus": 0.14,
+		"color": Color(0.24, 0.68, 0.48),
+		"desc": "All-Flash-Plattform • DDR5 • +14% Einnahmen bei Cloud-Speicher",
+	},
+	"mb_ws_x299_sage": {
+		"name": "ASUS WS X299 SAGE (4× PCIe)",
+		"category": "module", "mainboard": true, "mb_cat": "gpu", "chassis": "gpu_server", "form": "4U",
+		"price": 420, "watts": 70, "compute": 10, "base_compute": 10, "heat": 2.6, "revenue_bonus": 0.03,
+		"color": Color(0.84, 0.58, 0.18),
+		"desc": "4 PCIe-x16-Plätze • Für Streaming & Render-Server",
+	},
+	"mb_trx50_sage": {
+		"name": "ASUS Pro WS TRX50-SAGE",
+		"category": "module", "mainboard": true, "mb_cat": "gpu", "chassis": "gpu_server", "form": "4U",
+		"price": 680, "watts": 85, "compute": 12, "base_compute": 12, "heat": 3.0, "revenue_bonus": 0.05,
+		"color": Color(0.84, 0.58, 0.18),
+		"desc": "Threadripper-Board • 3 GPU-Plätze • +5% Einnahmen",
+	},
+	"mb_wrx90e_sage": {
+		"name": "ASUS Pro WS WRX90E-SAGE",
+		"category": "module", "mainboard": true, "mb_cat": "gpu", "chassis": "gpu_server", "form": "4U",
+		"price": 980, "watts": 100, "compute": 14, "base_compute": 14, "heat": 3.6, "revenue_bonus": 0.07,
+		"color": Color(0.84, 0.58, 0.18),
+		"desc": "Threadripper PRO • 7 PCIe-5.0-Plätze • Für KI-Hosting",
+	},
+	"mb_hgx_8gpu": {
+		"name": "NVIDIA HGX 8-GPU Baseboard",
+		"category": "module", "mainboard": true, "mb_cat": "gpu", "chassis": "gpu_server", "form": "4U",
+		"price": 1450, "watts": 130, "compute": 18, "base_compute": 18, "heat": 4.4, "revenue_bonus": 0.10,
+		"color": Color(0.84, 0.58, 0.18),
+		"desc": "Rechenzentrums-Board für KI-Beschleuniger • +10% Einnahmen",
 	},
 	"net_switch": {
 		"name": "Rack-Switch 1U (24-Port)",
@@ -269,16 +435,73 @@ const CONTRACTS_TEMPLATE := [
 	{"id": "c_llm", "title": "Global LLM Inference", "client": "Synthetix Corp", "required_compute": 260, "req_ram_gb": 512, "req_mbps": 4000.0, "payout_per_cycle": 1180, "penalty_per_cycle": 420},
 ]
 
+## Zufällige, befristete Vertragsangebote. Sie werden nur auf dem Host erzeugt und über contracts synchronisiert.
+const RANDOM_CONTRACT_MAX_OFFERS := 3
+const RANDOM_CONTRACT_DURATION_MIN := 2
+const RANDOM_CONTRACT_DURATION_MAX := 5
+## Tage, die ein Angebot angenommen werden kann, bevor es verfällt.
+const RANDOM_CONTRACT_OFFER_DAYS := 2
+const RANDOM_CONTRACT_SCALE_MIN := 0.6
+const RANDOM_CONTRACT_SCALE_MAX := 1.3
+## Aufschlag auf die Einnahmen, weil der Vertrag befristet ist.
+const RANDOM_CONTRACT_PREMIUM_MIN := 1.10
+const RANDOM_CONTRACT_PREMIUM_MAX := 1.40
+const RANDOM_CONTRACT_PENALTY_MULT := 1.25
+## Basisvorlagen dürfen höchstens so viel RAM verlangen (Vielfaches des vorhandenen RAMs).
+const RANDOM_CONTRACT_RAM_REACH := 2
+const RANDOM_CONTRACT_TITLES := [
+	"Black-Friday Shop-Spitze",
+	"Hochschul-Rendering",
+	"Wahlabend Live-Ticker",
+	"E-Sport-Turnier Server",
+	"Backup-Migration",
+	"Wetterdaten-Simulation",
+]
+const RANDOM_CONTRACT_CLIENTS := [
+	"Kaufhaus Lindner",
+	"TU Nordheim",
+	"Regio-Nachrichten",
+	"Arena Cup Events",
+	"Steuerbüro Kranz",
+	"Meteo Süd",
+]
+
+## Endziel nach Halle C: Meilensteine für den Firmenwert. Der letzte Eintrag ist das Endziel.
+const COMPANY_VALUE_MILESTONES := [
+	{"value": 15000, "title": "Regionaler Hoster"},
+	{"value": 40000, "title": "Mittelstands-Rechenzentrum"},
+	{"value": 100000, "title": "Landesweiter Cloud-Anbieter"},
+	{"value": 250000, "title": "Hyperscaler"},
+]
+## Anteil des Kaufpreises, mit dem verbaute Hardware in den Firmenwert eingeht.
+const COMPANY_HARDWARE_VALUE_FACTOR := 0.6
+
 # Authoritative world state
 var is_active: bool = false
 var money: float = 1200.0
 var breaker_on: bool = true
+## Anzahl der Sicherungs-Steckplätze im Wand-Sicherungskasten und Preis einer Ersatzsicherung.
+const FUSE_SLOT_COUNT := 4
+const FUSE_PRICE := 35
+## Steckplätze im Sicherungskasten: "ok" (eingesetzt), "blown" (durchgebrannt) oder "empty" (leer).
+var breaker_fuses: Array = []
+## Gekaufte Sicherungen, die noch nicht eingesetzt sind.
+var fuse_stock: int = 0
+## Drehsicherung (Stromstufen-Upgrade): Der Kauf legt sie ins Lager (0 oder 1).
+## Erst das Einsetzen in Steckplatz F2 erhöht die Stromstufe und gibt die alte Sicherung in die Hand.
+const POWER_FUSE_SLOT := 1
+const OLD_FUSE_ITEM := "old_fuse"
+var power_fuse_stock: int = 0
 var ups_backup_active: bool = false
 var avg_ups_charge: float = 0.0
 var overload_timer: float = 0.0
 var power_tier: int = 0
 var router_tier: int = 0
+## Erforschte Stufe pro Zweig aus RESEARCH_TREE (fehlender Eintrag = 0).
+var research_levels: Dictionary = {}
 var room_level: int = 0 # 0 = Garage, 1 = +Halle B, 2 = +Halle C Enterprise
+## Zahl der erreichten Firmenwert-Meilensteine. -1 = alter Spielstand, wird beim nächsten Check still übernommen.
+var company_milestones_reached: int = 0
 var ai_platform_level: int = 0
 var ddos_active: bool = false
 var ddos_cooldown: float = 55.0
@@ -288,8 +511,14 @@ var day_number: int = 1
 var time_of_day: float = 0.36 # 0..1 (0.36 ≈ 08:38)
 var daily_kwh: float = 0.0
 var last_daily_bill: int = 0
+## Strompreis des laufenden Tags in $/kWh.
+var electricity_rate: float = ELECTRICITY_RATE_PER_KWH
+## Strompreis, mit dem die letzte Tagesrechnung berechnet wurde.
+var last_bill_rate: float = ELECTRICITY_RATE_PER_KWH
 
 var room_temp: float = 22.0
+## Countdown bis zum nächsten Wasserschaden (nur auf dem Host, wird nicht gespeichert).
+var water_leak_cooldown: float = randf_range(WATER_LEAK_MIN_S, WATER_LEAK_MAX_S)
 var total_watts: int = 0
 var max_watts: int = 2400
 var total_compute: int = 0
@@ -421,7 +650,7 @@ func _update_delivery_van(delta: float) -> void:
 				van_trip_done = 0
 				_rpc_play_sfx.rpc("van_horn")
 				_rpc_play_sfx.rpc("van_door")
-				post_event("🚚 Cloud Express ist angekommen (%d Pakete werden abgeladen)!" % van_trip_total, "good")
+				post_event_f("🚚 Cloud Express ist angekommen (%d Pakete werden abgeladen)!", [van_trip_total], "good")
 				_begin_van_trip_step("exit", VAN_DRIVER_EXIT_TIME)
 		"unloading":
 			van_phase_time += delta
@@ -586,7 +815,7 @@ func _deliver_parts_parcel() -> void:
 	_van_parcel_parts.clear()
 	_broadcast_inventory()
 	_rpc_play_sfx.rpc("pickup")
-	post_event("📦 %d Hardware-Bauteil(e) ins Teile-Lager geliefert! Jetzt am Rack einbauen [E]." % n, "good")
+	post_event_f("📦 %d Hardware-Bauteil(e) ins Teile-Lager geliefert! Jetzt am Rack einbauen [E].", [n], "good")
 
 
 func _cart_drop_pos(cart_count: int) -> Vector3:
@@ -665,12 +894,19 @@ func initialize_new_world(save_id: String = "mein_datacenter", save_name: String
 	if current_save_name.is_empty():
 		current_save_name = "Mein DataCenter"
 	money = 1800.0
+	# Neuer Spielstand: F1 und F2 mit intakten Sicherungen bestückt, F3/F4 leer, Hauptschalter an.
+	breaker_fuses = _make_fuse_slots("empty")
+	breaker_fuses[0] = "ok"
+	breaker_fuses[1] = "ok"
+	fuse_stock = 0
+	power_fuse_stock = 0
 	breaker_on = true
 	ups_backup_active = false
 	avg_ups_charge = 0.0
 	overload_timer = 0.0
 	power_tier = 0
 	router_tier = 0
+	research_levels = {}
 	room_level = 0
 	ai_platform_level = 0
 	ddos_active = false
@@ -679,6 +915,9 @@ func initialize_new_world(save_id: String = "mein_datacenter", save_name: String
 	time_of_day = 0.36
 	daily_kwh = 0.0
 	last_daily_bill = 0
+	electricity_rate = ELECTRICITY_RATE_PER_KWH
+	last_bill_rate = ELECTRICITY_RATE_PER_KWH
+	company_milestones_reached = 0
 	room_temp = 22.0
 	max_watts = int(POWER_TIERS[0]["watts"])
 	max_bandwidth_cu = int(ROUTER_TIERS[0]["max_cu"])
@@ -693,6 +932,7 @@ func initialize_new_world(save_id: String = "mein_datacenter", save_name: String
 	_phone_ring_accum = 0.0
 	_call_cooldown = 20.0
 
+	contracts.clear()
 	for tmpl in CONTRACTS_TEMPLATE:
 		var tmpl_dict: Dictionary = tmpl
 		var cid := str(tmpl_dict["id"])
@@ -700,6 +940,7 @@ func initialize_new_world(save_id: String = "mein_datacenter", save_name: String
 		entry["active"] = false
 		entry["status"] = "idle"
 		contracts[cid] = entry
+	_fill_random_contract_offers()
 
 	# v1.0 Clean Empty Garage Start: no racks, no servers, no crates!
 	# Player buys their very first Rack & Hardware from the Windows PC!
@@ -722,6 +963,10 @@ func export_save_data() -> Dictionary:
 		all_pending.append(str(item))
 	data["pending_delivery_items"] = all_pending
 	data["finance"] = FinanceManager.export_data()
+	data["checklist_dismissed"] = checklist_dismissed
+	var history := get_node_or_null("/root/StatsHistory")
+	if history != null and history.has_method("export_data"):
+		data["stats_history"] = history.call("export_data")
 	return data
 
 
@@ -758,11 +1003,18 @@ func load_from_save_data(data: Dictionary, save_id: String, display_name: String
 			entry["active"] = false
 			entry["status"] = "idle"
 			contracts[cid] = entry
+	# Ältere Spielstände ohne befristete Angebote bekommen sofort welche.
+	_fill_random_contract_offers()
 
+	checklist_dismissed = bool(data.get("checklist_dismissed", false))
 	_recalculate_networks_and_metrics()
 	world_snapshot_loaded.emit()
+	# StatsHistory leert sich bei world_snapshot_loaded, deshalb erst danach den gespeicherten Verlauf einspielen.
+	var history := get_node_or_null("/root/StatsHistory")
+	if history != null and history.has_method("import_data"):
+		history.call("import_data", data.get("stats_history", {}))
 	state_updated.emit()
-	post_event("Spielstand '%s' geladen! (Tag %d • $%.0f • %d Racks • %d CU)" % [
+	post_event_f("Spielstand '%s' geladen! (Tag %d • $%.0f • %d Racks • %d CU)", [
 		current_save_name, day_number, money, racks.size(), total_compute
 	], "good")
 
@@ -779,13 +1031,13 @@ func save_current_world(custom_display_name: String = "", is_autosave: bool = fa
 		current_save_id = "mein_datacenter"
 		current_save_name = "Mein DataCenter"
 
-	var result := SaveManager.save_world(current_save_id, current_save_name, export_save_data())
+	var result := SaveManager.save_world(current_save_id, current_save_name, export_save_data(), is_autosave)
 	if bool(result.get("ok", false)):
 		_autosave_accum = 0.0
 		_rpc_notify_saved.rpc(current_save_name, is_autosave)
 		if not is_autosave:
 			_rpc_play_sfx.rpc("save")
-			post_event("Spielstand '%s' wurde gespeichert." % current_save_name, "good")
+			post_event_f("Spielstand '%s' wurde gespeichert.", [current_save_name], "good")
 	return result
 
 
@@ -805,6 +1057,10 @@ func clear_local_state() -> void:
 	cables.clear()
 	contracts.clear()
 	parts_inventory.clear()
+	breaker_fuses = _make_fuse_slots("ok")
+	fuse_stock = 0
+	power_fuse_stock = 0
+	shared_open_panels.clear()
 	support_tickets.clear()
 	active_call.clear()
 	total_rental_income_per_cycle = 0.0
@@ -930,18 +1186,25 @@ func build_snapshot() -> Dictionary:
 		"current_save_name": current_save_name,
 		"money": money,
 		"breaker_on": breaker_on,
+		"breaker_fuses": breaker_fuses.duplicate(),
+		"fuse_stock": fuse_stock,
+		"power_fuse_stock": power_fuse_stock,
 		"ups_backup_active": ups_backup_active,
 		"avg_ups_charge": avg_ups_charge,
 		"overload_timer": overload_timer,
 		"power_tier": power_tier,
 		"router_tier": router_tier,
+		"research_levels": research_levels.duplicate(),
 		"room_level": room_level,
+		"company_milestones_reached": company_milestones_reached,
 		"ai_platform_level": ai_platform_level,
 		"ddos_active": ddos_active,
 		"day_number": day_number,
 		"time_of_day": time_of_day,
 		"daily_kwh": daily_kwh,
 		"last_daily_bill": last_daily_bill,
+		"electricity_rate": electricity_rate,
+		"last_bill_rate": last_bill_rate,
 		"room_temp": room_temp,
 		"total_watts": total_watts,
 		"max_watts": max_watts,
@@ -974,6 +1237,9 @@ func build_snapshot() -> Dictionary:
 		"van_phase_time": van_phase_time,
 		"van_cargo_count": van_cargo.size(),
 		"pending_delivery_count": pending_delivery_items.size(),
+		"checklist_opened_pc": checklist_opened_pc,
+		"checklist_ordered_anything": checklist_ordered_anything,
+		"open_panels": shared_open_panels.duplicate(),
 	}
 
 
@@ -994,22 +1260,30 @@ func _apply_snapshot(snap: Dictionary) -> void:
 	current_save_name = str(snap.get("current_save_name", current_save_name))
 	money = float(snap.get("money", 1200.0))
 	breaker_on = bool(snap.get("breaker_on", true))
+	# Alte Spielstände ohne Sicherungsdaten starten mit vollständig bestücktem Kasten.
+	breaker_fuses = _sanitize_fuses(snap.get("breaker_fuses", null))
+	fuse_stock = maxi(0, int(snap.get("fuse_stock", 0)))
+	power_fuse_stock = clampi(int(snap.get("power_fuse_stock", 0)), 0, 1)
 	ups_backup_active = bool(snap.get("ups_backup_active", false))
 	avg_ups_charge = float(snap.get("avg_ups_charge", 0.0))
 	overload_timer = float(snap.get("overload_timer", 0.0))
 	power_tier = int(snap.get("power_tier", 0))
 	router_tier = clampi(int(snap.get("router_tier", 0)), 0, ROUTER_TIERS.size() - 1)
+	research_levels = _sanitize_research(snap.get("research_levels", {}))
 	# Backwards-compatible migration from old v0.2 room_expanded bool
 	if snap.has("room_level"):
 		room_level = clampi(int(snap.get("room_level", 0)), 0, 2)
 	else:
 		room_level = 1 if bool(snap.get("room_expanded", false)) else 0
 	ai_platform_level = int(snap.get("ai_platform_level", 0))
+	company_milestones_reached = clampi(int(snap.get("company_milestones_reached", -1)), -1, COMPANY_VALUE_MILESTONES.size())
 	ddos_active = bool(snap.get("ddos_active", false))
 	day_number = maxi(1, int(snap.get("day_number", 1)))
 	time_of_day = clampf(float(snap.get("time_of_day", 0.36)), 0.0, 0.999)
 	daily_kwh = float(snap.get("daily_kwh", 0.0))
 	last_daily_bill = int(snap.get("last_daily_bill", 0))
+	electricity_rate = clampf(float(snap.get("electricity_rate", ELECTRICITY_RATE_PER_KWH)), ELECTRICITY_RATE_MIN, ELECTRICITY_RATE_MAX)
+	last_bill_rate = clampf(float(snap.get("last_bill_rate", ELECTRICITY_RATE_PER_KWH)), ELECTRICITY_RATE_MIN, ELECTRICITY_RATE_MAX)
 	room_temp = float(snap.get("room_temp", 22.0))
 	total_watts = int(snap.get("total_watts", 0))
 	max_watts = int(snap.get("max_watts", 2400))
@@ -1038,10 +1312,15 @@ func _apply_snapshot(snap: Dictionary) -> void:
 	used_bandwidth_mbps = float(snap.get("used_bandwidth_mbps", 0.0))
 	max_bandwidth_mbps = float(snap.get("max_bandwidth_mbps", float(ROUTER_TIERS[router_tier]["max_mbps"])))
 	extinguisher_held_by = int(snap.get("extinguisher_held_by", 0))
+	shared_open_panels = _sanitize_open_panels(snap.get("open_panels", {}))
+	panel_states_changed.emit()
 	van_phase = str(snap.get("van_phase", "idle"))
 	van_phase_time = float(snap.get("van_phase_time", 0.0))
 	van_cargo_count = int(snap.get("van_cargo_count", 0))
 	pending_delivery_count = int(snap.get("pending_delivery_count", 0))
+	# Ältere Spielstände haben diese Felder nicht. Die übrigen Schritte leitet die Checkliste aus Racks/Kisten ab.
+	checklist_opened_pc = bool(snap.get("checklist_opened_pc", false))
+	checklist_ordered_anything = bool(snap.get("checklist_ordered_anything", false))
 	_ensure_loaded_compat()
 
 	racks_changed.emit()
@@ -1101,11 +1380,122 @@ func _real_time_of_day() -> float:
 
 
 func get_estimated_daily_bill() -> int:
-	return int(roundf(daily_kwh * ELECTRICITY_RATE_PER_KWH))
+	return int(roundf(daily_kwh * electricity_rate))
+
+
+## Neuer Tagespreis: zufällige Änderung, die zum Grundpreis zurückzieht. Nur auf dem Host.
+func _roll_electricity_rate(current: float) -> float:
+	var pull := (ELECTRICITY_RATE_PER_KWH - current) * ELECTRICITY_RATE_REVERSION
+	var swing := randf_range(-ELECTRICITY_RATE_DAILY_SWING, ELECTRICITY_RATE_DAILY_SWING)
+	return snappedf(clampf(current + pull + swing, ELECTRICITY_RATE_MIN, ELECTRICITY_RATE_MAX), 0.01)
+
+
+## Kategorien der Mainboard-Auswahl im Rack-Menü (Reihenfolge = Anzeige-Reihenfolge).
+const MAINBOARD_CATEGORIES := [
+	{"id": "entry", "label": "Einsteiger", "form": "1U", "color": Color(0.36, 0.62, 0.86),
+		"desc": "Günstige Single-Sockel-Boards für Webhosting und die ersten Kunden."},
+	{"id": "server", "label": "Server", "form": "1U", "color": Color(0.52, 0.48, 0.90),
+		"desc": "Dual-Sockel und viele RAM-Bänke für Datenbanken und viele Nutzer."},
+	{"id": "storage", "label": "Storage", "form": "2U", "color": Color(0.24, 0.68, 0.48),
+		"desc": "Viele Laufwerks-Anschlüsse und Bonus-Einnahmen bei Cloud-Speicher."},
+	{"id": "gpu", "label": "GPU & KI", "form": "4U", "color": Color(0.84, 0.58, 0.18),
+		"desc": "Mehrere PCIe-x16-Plätze für Grafikkarten, Streaming und KI-Hosting."},
+]
 
 
 func is_slot_upgradeable(item_type: String) -> bool:
-	return item_type == "web_server" or item_type == "storage_server" or item_type == "gpu_server"
+	# Die alten Chassis bleiben nur für bestehende Spielstände gültig.
+	if item_type == "web_server" or item_type == "storage_server" or item_type == "gpu_server":
+		return true
+	return is_mainboard(item_type)
+
+
+func is_mainboard(item_type: String) -> bool:
+	var entry: Dictionary = ITEM_CATALOG.get(item_type, {})
+	return bool(entry.get("mainboard", false))
+
+
+## Welches 3D-Gehäuse (1U/2U/4U) für einen Einschub gezeigt wird.
+func get_chassis_visual(item_type: String) -> String:
+	if is_mainboard(item_type):
+		return str(ITEM_CATALOG[item_type].get("chassis", "web_server"))
+	return item_type
+
+
+## Mainboard-IDs einer Kategorie ("" = alle), aufsteigend nach Preis sortiert.
+func get_mainboards(mb_cat: String = "") -> Array:
+	var out: Array = []
+	for key in ITEM_CATALOG:
+		var id := str(key)
+		if not is_mainboard(id):
+			continue
+		if mb_cat != "" and str(ITEM_CATALOG[id].get("mb_cat", "")) != mb_cat:
+			continue
+		out.append(id)
+	out.sort_custom(func(a, b) -> bool: return int(ITEM_CATALOG[a]["price"]) < int(ITEM_CATALOG[b]["price"]))
+	return out
+
+
+## Aktuelle Stufe eines Forschungszweigs (0 = nicht erforscht).
+func get_research_level(branch: String) -> int:
+	if not RESEARCH_TREE.has(branch):
+		return 0
+	var node: Dictionary = RESEARCH_TREE[branch]
+	var levels: Array = node["levels"]
+	return clampi(int(research_levels.get(branch, 0)), 0, levels.size())
+
+
+## Faktor, den die erforschte Stufe auf den Wert des Zweigs anwendet (1.0 = kein Bonus).
+func get_research_mult(branch: String) -> float:
+	var lvl := get_research_level(branch)
+	if lvl <= 0:
+		return 1.0
+	var node: Dictionary = RESEARCH_TREE[branch]
+	var levels: Array = node["levels"]
+	return float(levels[lvl - 1]["mult"])
+
+
+## Kosten der nächsten Stufe, -1 wenn der Zweig unbekannt oder voll erforscht ist.
+func get_research_cost(branch: String) -> int:
+	if not RESEARCH_TREE.has(branch):
+		return -1
+	var node: Dictionary = RESEARCH_TREE[branch]
+	var levels: Array = node["levels"]
+	var lvl := get_research_level(branch)
+	if lvl >= levels.size():
+		return -1
+	return int(levels[lvl]["cost"])
+
+
+## Grund, warum die nächste Stufe gesperrt ist. "" = freigeschaltet (Geld wird getrennt geprüft).
+func get_research_block_reason(branch: String) -> String:
+	if not RESEARCH_TREE.has(branch):
+		return tr("Unbekannte Forschung")
+	if get_research_cost(branch) < 0:
+		return tr("Voll erforscht")
+	var node: Dictionary = RESEARCH_TREE[branch]
+	var req: Dictionary = node.get("requires", {})
+	for other in req.keys():
+		var need := int(req[other])
+		if get_research_level(str(other)) < need:
+			var other_node: Dictionary = RESEARCH_TREE[str(other)]
+			return tr("Benötigt %s %d") % [tr(str(other_node["label"])), need]
+	return ""
+
+
+## Nur bekannte Zweige mit gültiger Stufe übernehmen (Spielstand und Netzwerk sind nicht vertrauenswürdig).
+func _sanitize_research(raw: Variant) -> Dictionary:
+	var out := {}
+	if typeof(raw) != TYPE_DICTIONARY:
+		return out
+	var d: Dictionary = raw
+	for branch in RESEARCH_ORDER:
+		var node: Dictionary = RESEARCH_TREE[branch]
+		var levels: Array = node["levels"]
+		var lvl := clampi(int(d.get(branch, 0)), 0, levels.size())
+		if lvl > 0:
+			out[branch] = lvl
+	return out
 
 
 func get_slot_stats(slot: Dictionary) -> Dictionary:
@@ -1137,10 +1527,10 @@ func get_slot_stats(slot: Dictionary) -> Dictionary:
 	if is_slot_upgradeable(item_type):
 		var raw_comps: Dictionary = slot.get("components", {})
 		var comps := HardwareCatalog.normalize_components(raw_comps, item_type)
-		# Chassis baseline (modest base + all real installed hardware parts!)
+		# Mainboard-/Chassis-Basis plus alle eingebauten Bauteile
 		watts = 65.0
 		heat = 2.0
-		compute = 4 if item_type == "web_server" else (6 if item_type == "storage_server" else 10)
+		compute = int(ITEM_CATALOG[item_type].get("base_compute", 4 if item_type == "web_server" else (6 if item_type == "storage_server" else 10)))
 		for cat in HardwareCatalog.CATEGORY_ORDER:
 			var part_id := str(comps.get(cat, HardwareCatalog.DEFAULT_PARTS[cat]))
 			var pd := HardwareCatalog.get_part(cat, part_id)
@@ -1170,6 +1560,11 @@ func get_slot_stats(slot: Dictionary) -> Dictionary:
 	if psu_overloaded:
 		fault_mult *= 2.4
 		heat += 4.5
+
+	# Forschung wirkt auf alle Server.
+	heat *= get_research_mult("cooling")
+	watt_mult *= get_research_mult("efficiency")
+	fault_mult *= get_research_mult("reliability")
 
 	var final_watts := maxi(40, int(roundf(watts * watt_mult)))
 	var final_heat := maxf(1.5, heat)
@@ -1254,13 +1649,58 @@ func get_starter_checklist() -> Array:
 		for sl in r["slots"]:
 			if str((sl as Dictionary).get("item_type", "")) != "":
 				has_server = true
+	# "hint" erklärt den aktuellen Schritt. {aktion} wird im HUD durch die belegte Taste ersetzt.
 	return [
-		{"text": "PC am Schreibtisch öffnen [E]", "done": checklist_opened_pc or has_ordered},
-		{"text": "Im Shop Rack + Server-Chassis bestellen", "done": has_ordered},
-		{"text": "Rack aufstellen & Server einschieben [E]", "done": has_rack and has_server},
-		{"text": "Strom (gelb) & LAN (blau) verkabeln [E]", "done": has_wired},
-		{"text": "Rack im Rack-Menü [E] vermieten", "done": has_rented},
+		{"text": "PC am Schreibtisch öffnen [E]", "done": checklist_opened_pc or has_ordered,
+			"hint": "Geh zum Schreibtisch, schau auf den Monitor und drück [E]."},
+		{"text": "Im Shop Rack + Server-Chassis bestellen", "done": has_ordered,
+			"hint": "Kauf im Shop am PC ein Rack und mindestens ein Server-Chassis. Die Bestellung wird geliefert."},
+		{"text": "Rack aufstellen & Server einschieben [E]", "done": has_rack and has_server,
+			"hint": "Stell das Rack auf, [R] dreht es. Schieb dann den Server mit [E] in einen freien Slot."},
+		{"text": "Strom (gelb) & LAN (blau) verkabeln [E]", "done": has_wired,
+			"hint": "Nimm das Stromkabel [{tool_power_cable}] und das LAN-Kabel [{tool_net_cable}] und schließ das Rack mit [E] an. Erst mit beidem läuft es."},
+		{"text": "Rack im Rack-Menü [E] vermieten", "done": has_rented,
+			"hint": "Öffne am Rack das Rack-Menü und wähl einen Mietvertrag. Ab dann zahlen Kunden Miete."},
 	]
+
+
+## Lässt bis zu WATER_LEAK_MAX_SLOTS laufende Server eines zufälligen Racks mit Strom abstürzen.
+func _trigger_water_leak() -> void:
+	var candidates: Array[String] = []
+	for rid in racks.keys():
+		var rack: Dictionary = racks[rid]
+		if not bool(rack.get("powered", false)):
+			continue
+		for slot in rack["slots"]:
+			if str(slot["item_type"]) != "" and str(slot["state"]) == "ok":
+				candidates.append(str(rid))
+				break
+	if candidates.is_empty():
+		return
+
+	var target := candidates[randi() % candidates.size()]
+	var slots: Array = racks[target]["slots"]
+	var ok_idx: Array[int] = []
+	for i in range(slots.size()):
+		var s: Dictionary = slots[i]
+		if str(s["item_type"]) != "" and str(s["state"]) == "ok":
+			ok_idx.append(i)
+	ok_idx.shuffle()
+
+	var hit := PackedStringArray()
+	for j in range(mini(WATER_LEAK_MAX_SLOTS, ok_idx.size())):
+		var slot: Dictionary = slots[ok_idx[j]]
+		slot["state"] = "crashed"
+		slot["repair_progress"] = 0.0
+		hit.append(str(ok_idx[j] + 1))
+
+	money = maxf(0.0, money - WATER_LEAK_COST)
+	post_event_f("WASSERSCHADEN über %s! Slot %s ausgefallen, Trocknung kostet $%d. Mit [E] reparieren.", [
+		target.to_upper(), ", ".join(hit), int(WATER_LEAK_COST)
+	], "alert")
+	_rpc_play_sfx.rpc("alarm")
+	_recalculate_networks_and_metrics()
+	_broadcast_racks()
 
 
 func is_ticket_issue_fixed(ticket: Dictionary) -> bool:
@@ -1384,7 +1824,9 @@ func count_cables_on(cable_type: String, endpoint_id: String) -> int:
 
 func get_max_ports(cable_type: String, endpoint_id: String) -> int:
 	if cable_type == "power":
-		if endpoint_id == WALL_BREAKER_ID or endpoint_id == HALL_C_BREAKER_ID:
+		if endpoint_id == WALL_BREAKER_ID:
+			return 3 + power_tier * 2 # 3 Steckdosen am Kasten, jede Stufe +2 per Verlängerungskabel
+		if endpoint_id == HALL_C_BREAKER_ID:
 			return 6 + power_tier * 2
 		if racks.has(endpoint_id):
 			return 2
@@ -1453,6 +1895,189 @@ func get_active_contract_count() -> int:
 	return n
 
 
+## Reihenfolge für die Anzeige: feste Vorlagen zuerst, danach befristete Angebote.
+func get_contract_display_order() -> Array[String]:
+	var order: Array[String] = []
+	for tmpl in CONTRACTS_TEMPLATE:
+		var tmpl_dict: Dictionary = tmpl
+		var cid := str(tmpl_dict["id"])
+		if contracts.has(cid):
+			order.append(cid)
+	var extra: Array[String] = []
+	for key in contracts.keys():
+		var cid := str(key)
+		if not order.has(cid):
+			extra.append(cid)
+	extra.sort()
+	order.append_array(extra)
+	return order
+
+
+## Erzeugt ein befristetes Angebot, abgeleitet von einer Vorlage, die zum aktuellen Ausbau passt.
+func _make_random_contract() -> Dictionary:
+	var ram_cap := maxi(int(total_ram_gb), 4) * RANDOM_CONTRACT_RAM_REACH
+	var bases: Array[Dictionary] = []
+	for tmpl in CONTRACTS_TEMPLATE:
+		var tmpl_dict: Dictionary = tmpl
+		if int(tmpl_dict["req_ram_gb"]) <= ram_cap:
+			bases.append(tmpl_dict)
+	if bases.is_empty():
+		var first: Dictionary = CONTRACTS_TEMPLATE[0]
+		bases.append(first)
+	var base: Dictionary = bases[randi() % bases.size()]
+	var scale := randf_range(RANDOM_CONTRACT_SCALE_MIN, RANDOM_CONTRACT_SCALE_MAX)
+	var premium := randf_range(RANDOM_CONTRACT_PREMIUM_MIN, RANDOM_CONTRACT_PREMIUM_MAX)
+	var cid := ""
+	while cid == "" or contracts.has(cid):
+		cid = "r_%d_%d" % [day_number, randi() % 100000]
+	return {
+		"id": cid,
+		"title": str(RANDOM_CONTRACT_TITLES[randi() % RANDOM_CONTRACT_TITLES.size()]),
+		"client": str(RANDOM_CONTRACT_CLIENTS[randi() % RANDOM_CONTRACT_CLIENTS.size()]),
+		"required_compute": maxi(1, int(roundf(float(base["required_compute"]) * scale))),
+		"req_ram_gb": maxi(2, int(roundf(float(base["req_ram_gb"]) * scale))),
+		"req_mbps": snappedf(maxf(5.0, float(base["req_mbps"]) * scale), 0.5),
+		"payout_per_cycle": maxi(1, int(roundf(float(base["payout_per_cycle"]) * scale * premium))),
+		"penalty_per_cycle": maxi(1, int(roundf(float(base["penalty_per_cycle"]) * scale * RANDOM_CONTRACT_PENALTY_MULT))),
+		"random": true,
+		"duration_days": randi_range(RANDOM_CONTRACT_DURATION_MIN, RANDOM_CONTRACT_DURATION_MAX),
+		"days_left": 0,
+		"offer_days_left": RANDOM_CONTRACT_OFFER_DAYS,
+		"active": false,
+		"status": "idle",
+	}
+
+
+## Füllt die offenen befristeten Angebote auf. Gibt die Zahl neuer Angebote zurück.
+func _fill_random_contract_offers() -> int:
+	var offers := 0
+	for key in contracts.keys():
+		var c: Dictionary = contracts[key]
+		if bool(c.get("random", false)) and not bool(c.get("active", false)):
+			offers += 1
+	var added := 0
+	while offers < RANDOM_CONTRACT_MAX_OFFERS:
+		var entry := _make_random_contract()
+		contracts[str(entry["id"])] = entry
+		offers += 1
+		added += 1
+	return added
+
+
+## Tageswechsel: Laufzeiten und Annahmefristen herunterzählen, abgelaufene entfernen, neue Angebote erzeugen.
+func _advance_random_contracts() -> void:
+	for key in contracts.keys():
+		var c: Dictionary = contracts[key]
+		if not bool(c.get("random", false)):
+			continue
+		if bool(c.get("active", false)):
+			c["days_left"] = int(c.get("days_left", 0)) - 1
+			if int(c["days_left"]) <= 0:
+				contracts.erase(key)
+				post_event_f("✅ Befristeter Vertrag '%s' (%s) ist erfüllt und ausgelaufen.", [str(c["title"]), str(c["client"])], "good")
+		else:
+			c["offer_days_left"] = int(c.get("offer_days_left", 1)) - 1
+			if int(c["offer_days_left"]) <= 0:
+				contracts.erase(key)
+	if _fill_random_contract_offers() > 0:
+		post_event("📄 Neue befristete Vertragsangebote im Support-Hub.", "info")
+
+
+func _catalog_price(item_id: String) -> float:
+	var item: Dictionary = ITEM_CATALOG.get(item_id, {})
+	return float(item.get("price", 0))
+
+
+## Firmenwert: Bargeld + Restwert der Hardware + bezahlte Ausbauten.
+func get_company_value() -> int:
+	var hardware := 0.0
+	for rid in racks.keys():
+		var r: Dictionary = racks[rid]
+		hardware += _catalog_price(str(r.get("rack_type", "rack")))
+		var slots: Array = r.get("slots", [])
+		for slot_v in slots:
+			if not (slot_v is Dictionary):
+				continue
+			var slot: Dictionary = slot_v
+			var item_type := str(slot.get("item_type", ""))
+			if item_type == "":
+				continue
+			hardware += _catalog_price(item_type)
+			var comps_v: Variant = slot.get("components", {})
+			if not (comps_v is Dictionary):
+				continue
+			var comps: Dictionary = comps_v
+			for cat in comps.keys():
+				var pid := str(comps[cat])
+				# Serienteile sind im Gerätepreis enthalten, nur Nachrüstungen zählen extra.
+				if HardwareCatalog.is_stock_default_part(pid):
+					continue
+				var pd := HardwareCatalog.get_part(str(cat), pid)
+				hardware += float(pd.get("cost", 0))
+	for cid in coolers.keys():
+		var cooler: Dictionary = coolers[cid]
+		hardware += _catalog_price(str(cooler.get("cooler_type", "cooler")))
+	hardware += _catalog_price("ups") * float(ups_units.size())
+
+	var upgrades := 0.0
+	for i in range(1, clampi(power_tier, 0, POWER_TIERS.size() - 1) + 1):
+		upgrades += float(POWER_TIERS[i]["cost"])
+	for i in range(1, clampi(router_tier, 0, ROUTER_TIERS.size() - 1) + 1):
+		upgrades += float(ROUTER_TIERS[i]["cost"])
+	for i in range(1, clampi(ai_platform_level, 0, AI_TIERS.size() - 1) + 1):
+		upgrades += float(AI_TIERS[i]["cost"])
+	for branch in research_levels.keys():
+		if not RESEARCH_TREE.has(branch):
+			continue
+		var levels: Array = RESEARCH_TREE[branch]["levels"]
+		for i in range(clampi(int(research_levels[branch]), 0, levels.size())):
+			upgrades += float(levels[i]["cost"])
+	if room_level >= 1:
+		upgrades += float(HALL_B_COST)
+	if room_level >= 2:
+		upgrades += float(HALL_C_COST)
+
+	return int(roundf(money + hardware * COMPANY_HARDWARE_VALUE_FACTOR + upgrades))
+
+
+func _count_company_milestones(value: int) -> int:
+	var n := 0
+	for m_v in COMPANY_VALUE_MILESTONES:
+		var m: Dictionary = m_v
+		if value >= int(m["value"]):
+			n += 1
+	return n
+
+
+## Nur auf dem Host: neu erreichte Meilensteine melden. Erreichte Meilensteine gehen nie verloren.
+func _check_company_milestones() -> void:
+	if not multiplayer.is_server():
+		return
+	var value := get_company_value()
+	var reached := _count_company_milestones(value)
+	if company_milestones_reached < 0:
+		company_milestones_reached = reached
+		return
+	while company_milestones_reached < reached:
+		var m: Dictionary = COMPANY_VALUE_MILESTONES[company_milestones_reached]
+		company_milestones_reached += 1
+		if company_milestones_reached >= COMPANY_VALUE_MILESTONES.size():
+			post_event_f("🏆 Endziel erreicht: %s! Firmenwert $%d.", [str(m["title"]), value], "good")
+			_rpc_play_sfx.rpc("upgrade")
+		else:
+			post_event_f("🏅 Meilenstein erreicht: %s (Firmenwert über $%d).", [str(m["title"]), int(m["value"])], "good")
+
+
+## Text für die Upgrades-App: aktueller Firmenwert und nächstes Ziel.
+func get_company_goal_text() -> String:
+	var value := get_company_value()
+	var idx := maxi(company_milestones_reached, 0)
+	if idx >= COMPANY_VALUE_MILESTONES.size():
+		return tr("Firmenwert: $%d  •  Endziel erreicht!") % value
+	var m: Dictionary = COMPANY_VALUE_MILESTONES[idx]
+	return tr("Firmenwert: $%d  •  Nächstes Ziel: $%d (%s)") % [value, int(m["value"]), tr(str(m["title"]))]
+
+
 # ==============================================================================
 # SIMULATION LOOP (HOST ONLY)
 # ==============================================================================
@@ -1472,14 +2097,19 @@ func _run_simulation_step(dt: float) -> void:
 		var billed_kwh := daily_kwh
 		daily_kwh = 0.0
 		last_daily_bill = bill
+		last_bill_rate = electricity_rate
+		electricity_rate = _roll_electricity_rate(electricity_rate)
+		post_event_f("⚡ Strompreis für Tag %d: $%.2f pro kWh.", [day_number, electricity_rate], "info")
+		_advance_random_contracts()
+		_check_company_milestones()
 		if bill > 0:
 			# Die Stromrechnung wird nicht mehr sofort abgebucht. FinanceManager stellt daraus
 			# eine Rechnung mit Fälligkeit aus, die in der Rechnungen-App bezahlt wird.
 			_rpc_daily_bill.rpc(day_number, bill, billed_kwh)
 			_rpc_play_sfx.rpc("bill")
-			post_event("⚡ Tag %d Stromrechnung erhalten: $%d (%.1f kWh verbraucht)." % [day_number - 1, bill, billed_kwh], "warn")
+			post_event_f("⚡ Tag %d Stromrechnung erhalten: $%d (%.1f kWh verbraucht).", [day_number - 1, bill, billed_kwh], "warn")
 		else:
-			post_event("☀ Tag %d beginnt – keine Stromkosten angefallen." % day_number, "info")
+			post_event_f("☀ Tag %d beginnt – keine Stromkosten angefallen.", [day_number], "info")
 
 	# 1. UPS Charging & Emergency Backup Discharging
 	var ups_dirty := false
@@ -1537,13 +2167,18 @@ func _run_simulation_step(dt: float) -> void:
 		if overload_timer >= 3.0:
 			breaker_on = false
 			overload_timer = 0.0
+			_blow_random_fuse()
 			_recalculate_networks_and_metrics()
 			_rpc_play_sfx.rpc("breaker_trip")
+			if has_working_fuse():
+				post_event("Überlast! Eine Sicherung ist durchgebrannt und der Hauptschalter hat ausgelöst. Hauptschalter wieder einschalten und Ersatz am PC kaufen.", "warn")
+			else:
+				post_event("Überlast! Die letzte intakte Sicherung ist durchgebrannt. Neue Sicherung am PC kaufen und im Sicherungskasten einsetzen.", "warn")
 			if ups_backup_active:
 				post_event("ÜBERLAST! Sicherung rausgeflogen – 🔋 USV-NOTSTROM hat übernommen!", "warn")
 				_rpc_play_sfx.rpc("ups_beep")
 			else:
-				post_event("BLACKOUT! Sicherung bei %dW / %dW rausgeflogen! Am Sicherungskasten einschalten." % [total_watts, max_watts], "alert")
+				post_event_f("BLACKOUT! Sicherung bei %dW / %dW rausgeflogen! Am Sicherungskasten einschalten.", [total_watts, max_watts], "alert")
 				_rpc_play_sfx.rpc("power_down")
 	else:
 		overload_timer = maxf(0.0, overload_timer - dt * 1.5)
@@ -1607,19 +2242,19 @@ func _run_simulation_step(dt: float) -> void:
 					slot["state"] = "burning"
 					slot["fire_level"] = 1.0
 					racks_dirty = true
-					post_event("BRAND in %s (Slot %d)! Feuerlöscher von der Wand holen!" % [rid.to_upper(), i + 1], "alert")
+					post_event_f("BRAND in %s (Slot %d)! Feuerlöscher von der Wand holen!", [rid.to_upper(), i + 1], "alert")
 					_rpc_play_sfx.rpc("alarm")
 				elif rtemp >= 68.0 and randf() < 0.014 * fmult:
 					slot["state"] = "crashed"
 					slot["repair_progress"] = 0.0
 					racks_dirty = true
-					post_event("Überhitzung: %s Slot %d abgestürzt! Mit [E] reparieren." % [rid.to_upper(), i + 1], "warn")
+					post_event_f("Überhitzung: %s Slot %d abgestürzt! Mit [E] reparieren.", [rid.to_upper(), i + 1], "warn")
 					_rpc_play_sfx.rpc("alarm")
 				elif bool(rack["networked"]) and randf() < 0.0012 * fmult:
 					slot["state"] = "crashed"
 					slot["repair_progress"] = 0.0
 					racks_dirty = true
-					post_event("Hardware-Fehler in %s Slot %d – Wartung [E] nötig." % [rid.to_upper(), i + 1], "warn")
+					post_event_f("Hardware-Fehler in %s Slot %d – Wartung [E] nötig.", [rid.to_upper(), i + 1], "warn")
 					_rpc_play_sfx.rpc("error")
 
 	if racks_dirty:
@@ -1637,6 +2272,13 @@ func _run_simulation_step(dt: float) -> void:
 				ddos_cooldown = randf_range(65.0, 105.0) * dmult
 				post_event("DDOS-ANGRIFF ERKANNT! Am Wand-Router [E] oder im Windows-PC abwehren!", "alert")
 				_rpc_play_sfx.rpc("alarm")
+
+	# 5a. Wasserschaden: Ein Leck legt einzelne Server eines Racks lahm.
+	if has_power and get_active_contract_count() >= 1:
+		water_leak_cooldown -= dt
+		if water_leak_cooldown <= 0.0:
+			water_leak_cooldown = randf_range(WATER_LEAK_MIN_S, WATER_LEAK_MAX_S)
+			_trigger_water_leak()
 
 	# 5b. Rack Rentals, Active Users, Resource Load & Support Tickets/Calls
 	_update_rack_rentals_and_support(dt)
@@ -1725,7 +2367,7 @@ func _update_rack_rentals_and_support(dt: float) -> void:
 				var crid := str(active_call.get("rack_id", ""))
 				if racks.has(crid):
 					racks[crid]["satisfaction"] = maxf(5.0, float(racks[crid].get("satisfaction", 60.0)) - 12.0)
-				post_event("📞 Verpasster Kundenanruf von %s! Zufriedenheit gesunken." % str(active_call.get("customer", "Kunde")), "warn")
+				post_event_f("📞 Verpasster Kundenanruf von %s! Zufriedenheit gesunken.", [str(active_call.get("customer", "Kunde"))], "warn")
 				active_call.clear()
 				_call_cooldown = 30.0
 				call_dirty = true
@@ -1864,7 +2506,7 @@ func _update_rack_rentals_and_support(dt: float) -> void:
 			r["rental_income"] = 0.0
 			_clear_tickets_for_rack(rid)
 			tickets_dirty = true
-			post_event("❌ %s hat %s gekündigt (dauerhafte Überlastung)! Hardware aufrüsten & neu vermieten." % [cname, rid.to_upper()], "alert")
+			post_event_f("❌ %s hat %s gekündigt (dauerhafte Überlastung)! Hardware aufrüsten & neu vermieten.", [cname, rid.to_upper()], "alert")
 			_rpc_play_sfx.rpc("alarm")
 
 	total_rental_income_per_cycle = total_rent
@@ -1874,20 +2516,22 @@ func _update_rack_rentals_and_support(dt: float) -> void:
 		var cr: Dictionary = racks[worst_call_rack]
 		var cname := str(cr.get("rental_customer", "Kunde"))
 		var rtype := str(cr.get("rental_type", "web"))
+		var call_msg := _describe_issue_call(worst_call_rack, cr, worst_call_issue)
 		active_call = {
 			"id": "call_%d" % _next_ticket_num,
 			"rack_id": worst_call_rack,
 			"customer": cname,
 			"rental_type": rtype,
 			"issue_key": worst_call_issue,
-			"message": _describe_issue_call(worst_call_rack, cr, worst_call_issue),
+			"message": str(call_msg["text"]),
+			"message_args": call_msg["args"],
 			"state": "ringing",
 			"timer": 0.0,
 		}
 		_next_ticket_num += 1
 		_phone_ring_accum = 0.0
 		_rpc_play_sfx.rpc("phone_ring")
-		post_event("📞 EINGEHENDER ANRUF AM PC: %s beschwert sich über %s! Zum PC [E] gehen!" % [cname, worst_call_rack.to_upper()], "alert")
+		post_event_f("📞 EINGEHENDER ANRUF AM PC: %s beschwert sich über %s! Zum PC [E] gehen!", [cname, worst_call_rack.to_upper()], "alert")
 		call_dirty = true
 
 	# Age existing tickets
@@ -1923,41 +2567,52 @@ func _create_support_ticket(rack_id: String, rack: Dictionary, issue_key: String
 	var rtype := str(rack.get("rental_type", "web"))
 	var users := int(rack.get("active_users", 0))
 	var m: Dictionary = rack.get("metrics", {})
-	var title := "Problem auf %s" % rack_id.to_upper()
+	var rid_up := rack_id.to_upper()
+	# Titel und Text bleiben Vorlagen mit Werten. Übersetzt wird erst beim
+	# Empfänger, damit jeder Spieler sie in seiner eigenen Sprache sieht.
+	var title := ""
+	var title_args: Array = []
 	var msg := ""
+	var msg_args: Array = []
 	var prio := "HOCH"
 	match issue_key:
 		"ram":
 			title = "Arbeitsspeicher (RAM) voll!"
-			msg = "Hallo Support, bei unseren %d aktiven Nutzern läuft der RAM auf %s über (%.1f / %.0f GB)! Dienste stürzen ab — bitte mehr/schnelleren RAM (DDR3/DDR4/DDR5) einbauen!" % [
-				users, rack_id.to_upper(), float(m.get("ram_used_gb", 0.0)), float(m.get("ram_total_gb", 0.0))
-			]
+			msg = "Hallo Support, bei unseren %d aktiven Nutzern läuft der RAM auf %s über (%.1f / %.0f GB)! Dienste stürzen ab — bitte mehr/schnelleren RAM (DDR3/DDR4/DDR5) einbauen!"
+			msg_args = [users, rid_up, float(m.get("ram_used_gb", 0.0)), float(m.get("ram_total_gb", 0.0))]
 		"cpu":
-			title = "CPU-Auslastung bei %.0f%%!" % float(m.get("cpu_pct", 100.0))
-			msg = "Unsere %d aktiven User klagen über extreme Lags auf %s! Der Prozessor ist komplett am Limit — wir brauchen dringend stärkere CPUs oder einen weiteren Server!" % [users, rack_id.to_upper()]
+			title = "CPU-Auslastung bei %.0f%%!"
+			title_args = [float(m.get("cpu_pct", 100.0))]
+			msg = "Unsere %d aktiven User klagen über extreme Lags auf %s! Der Prozessor ist komplett am Limit — wir brauchen dringend stärkere CPUs oder einen weiteren Server!"
+			msg_args = [users, rid_up]
 		"gpu":
 			title = "GPU-Leistung reicht nicht aus!"
-			msg = "Bei %d aktiven Nutzern hängen unsere GPU-Jobs auf %s (%.0f%% Last). Bitte bessere Grafikkarten verbauen!" % [users, rack_id.to_upper(), float(m.get("gpu_pct", 100.0))]
+			msg = "Bei %d aktiven Nutzern hängen unsere GPU-Jobs auf %s (%.0f%% Last). Bitte bessere Grafikkarten verbauen!"
+			msg_args = [users, rid_up, float(m.get("gpu_pct", 100.0))]
 		"storage":
 			title = "Festplatten-Speicher fast voll!"
-			msg = "Warnung: Unsere %d Nutzer belegen bereits %.1f / %.1f TB auf %s! Uploads schlagen fehl — bitte größere HDD/SSD/NVMe einbauen!" % [
-				users, float(m.get("storage_used_tb", 0.0)), float(m.get("storage_total_tb", 0.0)), rack_id.to_upper()
-			]
+			msg = "Warnung: Unsere %d Nutzer belegen bereits %.1f / %.1f TB auf %s! Uploads schlagen fehl — bitte größere HDD/SSD/NVMe einbauen!"
+			msg_args = [users, float(m.get("storage_used_tb", 0.0)), float(m.get("storage_total_tb", 0.0)), rid_up]
 		"network":
 			title = "Internet-Leitung zu langsam!"
-			msg = "Hoher Ping & Paketverlust bei %d aktiven Usern! Dein Router drosselt %s — bitte Internet-Router upgraden!" % [users, rack_id.to_upper()]
+			msg = "Hoher Ping & Paketverlust bei %d aktiven Usern! Dein Router drosselt %s — bitte Internet-Router upgraden!"
+			msg_args = [users, rid_up]
 		"overheat":
 			prio = "KRITISCH"
-			title = "Kritische Rack-Temperatur (%.0f°C)!" % float(rack.get("temp", 75.0))
-			msg = "Thermal Throttling auf %s! Bitte sofort Server-Kühlung verbessern oder Klimaanlage anschließen!" % rack_id.to_upper()
+			title = "Kritische Rack-Temperatur (%.0f°C)!"
+			title_args = [float(rack.get("temp", 75.0))]
+			msg = "Thermal Throttling auf %s! Bitte sofort Server-Kühlung verbessern oder Klimaanlage anschließen!"
+			msg_args = [rid_up]
 		"psu":
 			prio = "KRITISCH"
 			title = "Netzteil-Überlastung erkannt!"
-			msg = "Spannungsabfälle auf %s — ein verbautes Netzteil ist zu schwach für die Komponenten! Bitte stärkeres Netzteil (PSU) einbauen." % rack_id.to_upper()
+			msg = "Spannungsabfälle auf %s — ein verbautes Netzteil ist zu schwach für die Komponenten! Bitte stärkeres Netzteil (PSU) einbauen."
+			msg_args = [rid_up]
 		_:
 			prio = "KRITISCH"
 			title = "Komplettausfall — Server offline!"
-			msg = "NOTFALL: Unser gemietetes %s ist komplett unerreichbar! Bitte sofort Stromkabel, Netzwerkkabel & Server-Zustand prüfen!" % rack_id.to_upper()
+			msg = "NOTFALL: Unser gemietetes %s ist komplett unerreichbar! Bitte sofort Stromkabel, Netzwerkkabel & Server-Zustand prüfen!"
+			msg_args = [rid_up]
 
 	support_tickets[tid] = {
 		"id": tid,
@@ -1966,7 +2621,9 @@ func _create_support_ticket(rack_id: String, rack: Dictionary, issue_key: String
 		"rental_type": rtype,
 		"issue_key": issue_key,
 		"title": title,
+		"title_args": title_args,
 		"message": msg,
+		"message_args": msg_args,
 		"priority": prio,
 		"created_day": day_number,
 		"age": 0.0,
@@ -1974,45 +2631,40 @@ func _create_support_ticket(rack_id: String, rack: Dictionary, issue_key: String
 		"compensated": false,
 	}
 	_rpc_play_sfx.rpc("ticket_notify")
-	post_event("🎧 Neues Support-Ticket %s von %s: %s" % [tid, cname, title], "warn")
+	post_event_f("🎧 Neues Support-Ticket %s von %s: %s", [tid, cname, {"text": title, "args": title_args}], "warn")
 
 
-func _describe_issue_call(rack_id: String, rack: Dictionary, issue_key: String) -> String:
+## Liefert den Anruftext als Vorlage plus Werte ({text, args}).
+func _describe_issue_call(rack_id: String, rack: Dictionary, issue_key: String) -> Dictionary:
 	var users := int(rack.get("active_users", 0))
 	var m: Dictionary = rack.get("metrics", {})
+	var who := str(rack.get("rental_customer", ""))
+	var rid_up := rack_id.to_upper()
 	match issue_key:
 		"ram":
-			return "„Hallo?! Hier ist %s! Bei %d aktiven Usern ist der RAM auf %s zu %.0f%% voll — unsere Kunden fliegen ständig raus! Wann baut ihr mehr RAM ein?“" % [
-				str(rack.get("rental_customer", "")), users, rack_id.to_upper(), float(m.get("ram_pct", 100.0))
-			]
+			return {"text": "„Hallo?! Hier ist %s! Bei %d aktiven Usern ist der RAM auf %s zu %.0f%% voll — unsere Kunden fliegen ständig raus! Wann baut ihr mehr RAM ein?“",
+				"args": [who, users, rid_up, float(m.get("ram_pct", 100.0))]}
 		"cpu":
-			return "„Dringend! Hier %s — die CPU auf %s hängt bei %.0f%% Last mit %d Usern, alles laggt unerträglich! Macht bitte sofort ein CPU-Upgrade!“" % [
-				str(rack.get("rental_customer", "")), rack_id.to_upper(), float(m.get("cpu_pct", 100.0)), users
-			]
+			return {"text": "„Dringend! Hier %s — die CPU auf %s hängt bei %.0f%% Last mit %d Usern, alles laggt unerträglich! Macht bitte sofort ein CPU-Upgrade!“",
+				"args": [who, rid_up, float(m.get("cpu_pct", 100.0)), users]}
 		"gpu":
-			return "„Hier %s! Unsere KI/Video-Aufträge auf %s stehen still, die GPU ist restlos überlastet (%.0f%%)! Wir brauchen dringend dickere Grafikkarten!“" % [
-				str(rack.get("rental_customer", "")), rack_id.to_upper(), float(m.get("gpu_pct", 100.0))
-			]
+			return {"text": "„Hier %s! Unsere KI/Video-Aufträge auf %s stehen still, die GPU ist restlos überlastet (%.0f%%)! Wir brauchen dringend dickere Grafikkarten!“",
+				"args": [who, rid_up, float(m.get("gpu_pct", 100.0))]}
 		"storage":
-			return "„Hallo Support, %s hier! Der Speicher auf %s ist komplett voll (%.1f / %.1f TB) — unsere Kunden können nichts mehr hochladen!“" % [
-				str(rack.get("rental_customer", "")), rack_id.to_upper(), float(m.get("storage_used_tb", 0.0)), float(m.get("storage_total_tb", 0.0))
-			]
+			return {"text": "„Hallo Support, %s hier! Der Speicher auf %s ist komplett voll (%.1f / %.1f TB) — unsere Kunden können nichts mehr hochladen!“",
+				"args": [who, rid_up, float(m.get("storage_used_tb", 0.0)), float(m.get("storage_total_tb", 0.0))]}
 		"network":
-			return "„%s am Apparat! Euer alter Router bremst unser ganzes %s aus — Ping über 400 ms bei %d Usern! Wann gibt's schnelleres Internet?“" % [
-				str(rack.get("rental_customer", "")), rack_id.to_upper(), users
-			]
+			return {"text": "„%s am Apparat! Euer alter Router bremst unser ganzes %s aus — Ping über 400 ms bei %d Usern! Wann gibt's schnelleres Internet?“",
+				"args": [who, rid_up, users]}
 		"overheat":
-			return "„ALARM! Hier %s — euer Monitoring meldet %.0f°C auf %s! Wenn die Server gleich abbrennen, kündigen wir sofort!“" % [
-				str(rack.get("rental_customer", "")), float(rack.get("temp", 80.0)), rack_id.to_upper()
-			]
+			return {"text": "„ALARM! Hier %s — euer Monitoring meldet %.0f°C auf %s! Wenn die Server gleich abbrennen, kündigen wir sofort!“",
+				"args": [who, float(rack.get("temp", 80.0)), rid_up]}
 		"psu":
-			return "„%s hier! Auf %s brechen ständig die Netzteile ein — bitte baut stärkere PSUs ein, bevor uns Daten verloren gehen!“" % [
-				str(rack.get("rental_customer", "")), rack_id.to_upper()
-			]
+			return {"text": "„%s hier! Auf %s brechen ständig die Netzteile ein — bitte baut stärkere PSUs ein, bevor uns Daten verloren gehen!“",
+				"args": [who, rid_up]}
 		_:
-			return "„NOTFALL! Hier ist %s — unser gemietetes %s ist KOMPLETT OFFLINE! Prüft sofort Strom, LAN-Kabel und Server!“" % [
-				str(rack.get("rental_customer", "")), rack_id.to_upper()
-			]
+			return {"text": "„NOTFALL! Hier ist %s — unser gemietetes %s ist KOMPLETT OFFLINE! Prüft sofort Strom, LAN-Kabel und Server!“",
+				"args": [who, rid_up]}
 
 
 func _recalculate_networks_and_metrics() -> void:
@@ -2209,12 +2861,54 @@ func _get_sender_id() -> int:
 	return sid
 
 
+## Checkliste in der Lobby: Der Server führt die Flags. Erledigt ein Spieler einen Schritt,
+## wird er bei allen Spielern sofort abgehakt, damit niemand dieselbe Aufgabe doppelt macht.
+func request_mark_checklist_opened_pc() -> void:
+	if checklist_opened_pc:
+		return
+	# Sofort lokal abhaken, der Server bestätigt es danach für alle.
+	checklist_opened_pc = true
+	checklist_changed.emit()
+	_rpc_req_checklist_opened_pc.rpc_id(1)
+
+
+@rpc("any_peer", "call_local", "reliable")
+func _rpc_req_checklist_opened_pc() -> void:
+	if not multiplayer.is_server():
+		return
+	checklist_opened_pc = true
+	_broadcast_checklist()
+
+
+func _broadcast_checklist() -> void:
+	if not multiplayer.is_server():
+		return
+	_rpc_sync_checklist.rpc(checklist_opened_pc, checklist_ordered_anything)
+
+
+@rpc("authority", "call_local", "reliable")
+func _rpc_sync_checklist(opened_pc: bool, ordered: bool) -> void:
+	checklist_opened_pc = opened_pc
+	checklist_ordered_anything = ordered
+	checklist_changed.emit()
+
+
 func request_buy_item(item_type: String) -> void:
 	_rpc_req_buy_item.rpc_id(1, item_type)
 
 
 func request_checkout_cart(entries: Array) -> void:
 	_rpc_req_checkout_cart.rpc_id(1, entries)
+
+
+## Kauft ein Bauteil direkt am Rack und baut es sofort ein (kein Lieferwagen).
+func request_buy_install_component(rack_id: String, slot_idx: int, category: String, part_id: String) -> void:
+	_rpc_req_buy_install_component.rpc_id(1, rack_id, slot_idx, category, part_id)
+
+
+## Kauft ein Mainboard/Chassis direkt am Rack und setzt es sofort in einen leeren Slot.
+func request_buy_install_module(rack_id: String, slot_idx: int, item_type: String) -> void:
+	_rpc_req_buy_install_module.rpc_id(1, rack_id, slot_idx, item_type)
 
 
 func request_sell_inventory_part(part_id: String) -> void:
@@ -2297,12 +2991,77 @@ func request_toggle_breaker() -> void:
 	_rpc_req_toggle_breaker.rpc_id(1)
 
 
+func request_buy_fuse() -> void:
+	_rpc_req_buy_fuse.rpc_id(1)
+
+
+func request_insert_fuse(slot_idx: int) -> void:
+	_rpc_req_insert_fuse.rpc_id(1, slot_idx)
+
+
 func request_pickup_extinguisher() -> void:
 	_rpc_req_pickup_extinguisher.rpc_id(1)
 
 
 func request_return_extinguisher() -> void:
 	_rpc_req_return_extinguisher.rpc_id(1)
+
+
+func is_shared_panel_open(entity_id: String, panel_id: String) -> bool:
+	return shared_open_panels.has(_panel_key(entity_id, panel_id))
+
+
+## Tür/Seitenwand/Antenne umschalten: Der Server entscheidet und schickt den neuen Zustand an alle.
+func request_toggle_panel(entity_id: String, panel_id: String) -> void:
+	if entity_id.is_empty() or panel_id.is_empty():
+		return
+	_rpc_req_toggle_panel.rpc_id(1, entity_id, panel_id)
+
+
+func _panel_key(entity_id: String, panel_id: String) -> String:
+	return entity_id + "|" + panel_id
+
+
+func _sanitize_open_panels(data: Variant) -> Dictionary:
+	var out: Dictionary = {}
+	if not (data is Dictionary):
+		return out
+	var src := data as Dictionary
+	for k in src.keys():
+		if out.size() >= MAX_SHARED_PANELS:
+			break
+		var ks := str(k)
+		var v: Variant = src[k]
+		if ks.length() <= 160 and ks.contains("|") and typeof(v) == TYPE_BOOL and bool(v):
+			out[ks] = true
+	return out
+
+
+@rpc("any_peer", "call_local", "reliable")
+func _rpc_req_toggle_panel(entity_id: String, panel_id: String) -> void:
+	if not multiplayer.is_server():
+		return
+	if entity_id.length() > 64 or panel_id.length() > 95:
+		return
+	var key := _panel_key(entity_id, panel_id)
+	var opened := not shared_open_panels.has(key)
+	if opened:
+		if shared_open_panels.size() >= MAX_SHARED_PANELS:
+			return
+		shared_open_panels[key] = true
+	else:
+		shared_open_panels.erase(key)
+	_rpc_sync_panel.rpc(key, opened)
+
+
+@rpc("authority", "call_local", "reliable")
+func _rpc_sync_panel(key: String, opened: bool) -> void:
+	if not multiplayer.is_server():
+		if opened:
+			shared_open_panels[key] = true
+		else:
+			shared_open_panels.erase(key)
+	panel_states_changed.emit()
 
 
 func request_extinguish_slot(rack_id: String, slot_idx: int, amount: float) -> void:
@@ -2323,6 +3082,10 @@ func request_upgrade_power() -> void:
 
 func request_upgrade_router() -> void:
 	_rpc_req_upgrade_router.rpc_id(1)
+
+
+func request_research(branch: String) -> void:
+	_rpc_req_research.rpc_id(1, branch)
 
 
 func request_expand_room() -> void:
@@ -2405,7 +3168,7 @@ func _rpc_req_buy_item(item_type: String) -> void:
 	_broadcast_van_state()
 	_broadcast_sim_tick()
 	_rpc_play_sfx.rpc("cash")
-	post_event("%s bestellte %s — 🚚 Cloud Express liefert gleich!" % [
+	post_event_f("%s bestellte %s — 🚚 Cloud Express liefert gleich!", [
 		NetworkManager.get_player_name(peer_id), ITEM_CATALOG[item_type]["name"]
 	], "good")
 
@@ -2465,7 +3228,7 @@ func _rpc_req_place_held_structure(pos: Vector3, rot_y: float) -> void:
 		racks[rid] = _make_rack_data(rid, item_type, snapped, rot_y)
 		_recalculate_networks_and_metrics()
 		_broadcast_racks()
-		post_event("%s hat %s (%s) aufgestellt." % [NetworkManager.get_player_name(peer_id), rid.to_upper(), ITEM_CATALOG[item_type]["name"]], "info")
+		post_event_f("%s hat %s (%s) aufgestellt.", [NetworkManager.get_player_name(peer_id), rid.to_upper(), ITEM_CATALOG[item_type]["name"]], "info")
 	elif item_type == "cooler" or item_type == "chiller":
 		var cid := _alloc_id("cooler")
 		coolers[cid] = {
@@ -2477,7 +3240,7 @@ func _rpc_req_place_held_structure(pos: Vector3, rot_y: float) -> void:
 		}
 		_recalculate_networks_and_metrics()
 		_broadcast_coolers()
-		post_event("%s hat %s aufgestellt (Stromkabel anschließen!)." % [NetworkManager.get_player_name(peer_id), ITEM_CATALOG[item_type]["name"]], "info")
+		post_event_f("%s hat %s aufgestellt (Stromkabel anschließen!).", [NetworkManager.get_player_name(peer_id), ITEM_CATALOG[item_type]["name"]], "info")
 	elif item_type == "ups":
 		var uid := _alloc_id("ups")
 		ups_units[uid] = {
@@ -2490,7 +3253,7 @@ func _rpc_req_place_held_structure(pos: Vector3, rot_y: float) -> void:
 		}
 		_recalculate_networks_and_metrics()
 		_broadcast_ups()
-		post_event("%s hat USV-Notstrom %s aufgestellt (mit Stromkabel [2] verbinden!)." % [NetworkManager.get_player_name(peer_id), uid.to_upper()], "good")
+		post_event_f("%s hat USV-Notstrom %s aufgestellt (mit Stromkabel [2] verbinden!).", [NetworkManager.get_player_name(peer_id), uid.to_upper()], "good")
 
 	_broadcast_crates()
 	_broadcast_sim_tick()
@@ -2519,7 +3282,7 @@ func _rpc_req_relocate_rack(rack_id: String, pos: Vector3, rot_y: float) -> void
 	_broadcast_ups()
 	_broadcast_sim_tick()
 	_rpc_play_sfx.rpc("place")
-	post_event("%s hat %s umgesetzt (Kabel neu anschließen!)." % [NetworkManager.get_player_name(peer_id), rack_id.to_upper()], "info")
+	post_event_f("%s hat %s umgesetzt (Kabel neu anschließen!).", [NetworkManager.get_player_name(peer_id), rack_id.to_upper()], "info")
 
 
 @rpc("any_peer", "call_local", "reliable")
@@ -2545,7 +3308,7 @@ func _rpc_req_sell_rack(rack_id: String) -> void:
 	_broadcast_ups()
 	_broadcast_sim_tick()
 	_rpc_play_sfx.rpc("sell")
-	post_event("%s verkaufte %s für +$%d." % [NetworkManager.get_player_name(peer_id), rack_id.to_upper(), refund], "good")
+	post_event_f("%s verkaufte %s für +$%d.", [NetworkManager.get_player_name(peer_id), rack_id.to_upper(), refund], "good")
 
 
 @rpc("any_peer", "call_local", "reliable")
@@ -2606,7 +3369,7 @@ func _rpc_req_sell_device(kind: String, entity_id: String) -> void:
 	_broadcast_cables()
 	_broadcast_sim_tick()
 	_rpc_play_sfx.rpc("sell")
-	post_event("%s verkaufte %s für +$%d." % [NetworkManager.get_player_name(peer_id), entity_id.to_upper(), refund], "good")
+	post_event_f("%s verkaufte %s für +$%d.", [NetworkManager.get_player_name(peer_id), entity_id.to_upper(), refund], "good")
 
 
 @rpc("any_peer", "call_local", "reliable")
@@ -2642,7 +3405,7 @@ func _rpc_req_install_module(rack_id: String, slot_idx: int) -> void:
 	_broadcast_racks()
 	_broadcast_sim_tick()
 	_rpc_play_sfx.rpc("snap")
-	post_event("%s baute %s in %s (Slot %d) ein." % [
+	post_event_f("%s baute %s in %s (Slot %d) ein.", [
 		NetworkManager.get_player_name(peer_id),
 		ITEM_CATALOG[item_type]["name"],
 		rack_id.to_upper(),
@@ -2699,7 +3462,7 @@ func _rpc_req_sell_slot_module(rack_id: String, slot_idx: int) -> void:
 	_broadcast_racks()
 	_broadcast_sim_tick()
 	_rpc_play_sfx.rpc("sell")
-	post_event("%s verkaufte Modul aus %s Slot %d für +$%d." % [
+	post_event_f("%s verkaufte Modul aus %s Slot %d für +$%d.", [
 		NetworkManager.get_player_name(peer_id), rack_id.to_upper(), slot_idx + 1, refund
 	], "good")
 
@@ -2751,7 +3514,7 @@ func _rpc_req_install_component(rack_id: String, slot_idx: int, category: String
 		var stock := int(parts_inventory.get(part_id, 0))
 		if stock <= 0:
 			_rpc_play_sfx.rpc_id(peer_id, "error")
-			post_event("%s nicht im Teile-Lager! Erst im Windows-PC-Shop bestellen." % str(new_part["name"]), "warn")
+			post_event_f("%s nicht im Teile-Lager! Erst im Windows-PC-Shop bestellen.", [str(new_part["name"])], "warn")
 			return
 		parts_inventory[part_id] = stock - 1
 		if int(parts_inventory[part_id]) <= 0:
@@ -2768,8 +3531,82 @@ func _rpc_req_install_component(rack_id: String, slot_idx: int, category: String
 	_broadcast_racks()
 	_broadcast_sim_tick()
 	_rpc_play_sfx.rpc("upgrade")
-	post_event("%s baute %s aus dem Lager in %s Slot %d ein!" % [
+	post_event_f("%s baute %s aus dem Lager in %s Slot %d ein!", [
 		NetworkManager.get_player_name(peer_id), str(new_part["name"]), rack_id.to_upper(), slot_idx + 1
+	], "good")
+
+
+@rpc("any_peer", "call_local", "reliable")
+func _rpc_req_buy_install_component(rack_id: String, slot_idx: int, category: String, part_id: String) -> void:
+	if not multiplayer.is_server():
+		return
+	var peer_id := _get_sender_id()
+	if not racks.has(rack_id) or not HardwareCatalog.PARTS.has(category):
+		return
+	var slots: Array = racks[rack_id]["slots"]
+	if slot_idx < 0 or slot_idx >= slots.size():
+		return
+	var slot: Dictionary = slots[slot_idx]
+	var item_type := str(slot["item_type"])
+	if not is_slot_upgradeable(item_type) or str(slot["state"]) == "burning":
+		_rpc_play_sfx.rpc_id(peer_id, "error")
+		return
+	var new_part := HardwareCatalog.get_part(category, part_id)
+	if new_part.is_empty():
+		return
+	var cost := float(new_part.get("cost", 0))
+	if cost <= 0.0 or money < cost:
+		_rpc_play_sfx.rpc_id(peer_id, "error")
+		return
+	var comps := HardwareCatalog.normalize_components(slot.get("components", {}), item_type)
+	if str(comps.get(category, "")) == part_id:
+		return
+
+	# Teil direkt ins Lager buchen und sofort über den normalen Einbau-Weg verbauen.
+	money -= cost
+	parts_inventory[part_id] = int(parts_inventory.get(part_id, 0)) + 1
+	_rpc_req_install_component(rack_id, slot_idx, category, part_id)
+	_rpc_play_sfx.rpc("cash")
+
+
+@rpc("any_peer", "call_local", "reliable")
+func _rpc_req_buy_install_module(rack_id: String, slot_idx: int, item_type: String) -> void:
+	if not multiplayer.is_server():
+		return
+	var peer_id := _get_sender_id()
+	if not racks.has(rack_id) or not ITEM_CATALOG.has(item_type):
+		return
+	if str(ITEM_CATALOG[item_type]["category"]) != "module":
+		return
+	var slots: Array = racks[rack_id]["slots"]
+	if slot_idx < 0 or slot_idx >= slots.size():
+		return
+	if str(slots[slot_idx]["item_type"]) != "":
+		_rpc_play_sfx.rpc_id(peer_id, "error")
+		return
+	var cost := float(ITEM_CATALOG[item_type]["price"])
+	if money < cost:
+		_rpc_play_sfx.rpc_id(peer_id, "error")
+		return
+
+	money -= cost
+	slots[slot_idx] = {
+		"item_type": item_type,
+		"state": "ok",
+		"repair_progress": 0.0,
+		"fire_level": 0.0,
+		"components": _default_components(item_type),
+	}
+	_recalculate_networks_and_metrics()
+	_broadcast_racks()
+	_broadcast_sim_tick()
+	_rpc_play_sfx.rpc("cash")
+	_rpc_play_sfx.rpc("snap")
+	post_event_f("%s kaufte %s und baute es in %s (Slot %d) ein.", [
+		NetworkManager.get_player_name(peer_id),
+		ITEM_CATALOG[item_type]["name"],
+		rack_id.to_upper(),
+		slot_idx + 1,
 	], "good")
 
 
@@ -2807,7 +3644,9 @@ func _rpc_req_checkout_cart(entries: Array) -> void:
 		return
 
 	money -= total_cost
-	checklist_ordered_anything = true
+	if not checklist_ordered_anything:
+		checklist_ordered_anything = true
+		_broadcast_checklist()
 	for qi in queue_items:
 		if van_phase == "arriving":
 			van_cargo.append(qi)
@@ -2817,7 +3656,7 @@ func _rpc_req_checkout_cart(entries: Array) -> void:
 	_broadcast_van_state()
 	_broadcast_sim_tick()
 	_rpc_play_sfx.rpc("cash")
-	post_event("🛒 %s bestellte %d Artikel ($%.0f) — Cloud Express Sprinter ist unterwegs!" % [
+	post_event_f("🛒 %s bestellte %d Artikel ($%.0f) — Cloud Express Sprinter ist unterwegs!", [
 		NetworkManager.get_player_name(peer_id), queue_items.size(), total_cost
 	], "good")
 
@@ -2841,7 +3680,7 @@ func _rpc_req_sell_inventory_part(part_id: String) -> void:
 	_broadcast_inventory()
 	_broadcast_sim_tick()
 	_rpc_play_sfx.rpc("sell")
-	post_event("💰 %s verkaufte %s aus dem Lager (+$%d)." % [
+	post_event_f("💰 %s verkaufte %s aus dem Lager (+$%d).", [
 		NetworkManager.get_player_name(peer_id), str(pd.get("name", part_id)), refund
 	], "good")
 
@@ -2870,7 +3709,7 @@ func _rpc_req_set_rack_rental(rack_id: String, rental_type: String) -> void:
 		r["satisfaction"] = 100.0
 		r["rental_income"] = 0.0
 		r["grace_timer"] = 0.0
-		post_event("%s beendete Vermietung von %s." % [NetworkManager.get_player_name(peer_id), rack_id.to_upper()], "info")
+		post_event_f("%s beendete Vermietung von %s.", [NetworkManager.get_player_name(peer_id), rack_id.to_upper()], "info")
 	else:
 		var prof: Dictionary = HardwareCatalog.RENTAL_PROFILES[rental_type]
 		var cname := HardwareCatalog.pick_customer_name(rental_type, _next_entity_num + racks.size() + day_number)
@@ -2878,7 +3717,7 @@ func _rpc_req_set_rack_rental(rack_id: String, rental_type: String) -> void:
 		r["active_users"] = int(prof["base_users"])
 		r["satisfaction"] = 95.0
 		r["grace_timer"] = 18.0
-		post_event("🤝 %s vermietet %s als %s an %s (%d Start-User)!" % [
+		post_event_f("🤝 %s vermietet %s als %s an %s (%d Start-User)!", [
 			NetworkManager.get_player_name(peer_id), rack_id.to_upper(), str(prof["short"]), cname, int(prof["base_users"])
 		], "good")
 	_rpc_play_sfx.rpc("cash")
@@ -2906,7 +3745,7 @@ func _rpc_req_reply_ticket(ticket_id: String, action: String) -> void:
 				racks[rid]["satisfaction"] = minf(100.0, float(racks[rid].get("satisfaction", 70.0)) + 12.0)
 				racks[rid]["grace_timer"] = maxf(float(racks[rid].get("grace_timer", 0.0)), 45.0)
 			_rpc_play_sfx.rpc("ticket_notify")
-			post_event("⌨ %s antwortete auf Ticket %s — Kunde beruhigt (+45s Zeit zum Aufrüsten)." % [NetworkManager.get_player_name(peer_id), ticket_id], "info")
+			post_event_f("⌨ %s antwortete auf Ticket %s — Kunde beruhigt (+45s Zeit zum Aufrüsten).", [NetworkManager.get_player_name(peer_id), ticket_id], "info")
 		"compensate":
 			if bool(t.get("compensated", false)) or money < 60.0:
 				_rpc_play_sfx.rpc_id(peer_id, "error")
@@ -2917,11 +3756,11 @@ func _rpc_req_reply_ticket(ticket_id: String, action: String) -> void:
 				racks[rid]["satisfaction"] = minf(100.0, float(racks[rid].get("satisfaction", 60.0)) + 24.0)
 				racks[rid]["grace_timer"] = maxf(float(racks[rid].get("grace_timer", 0.0)), 75.0)
 			_rpc_play_sfx.rpc("cash")
-			post_event("💰 %s gewährte $60 Rabatt für Ticket %s (+24%% Zufriedenheit)." % [NetworkManager.get_player_name(peer_id), ticket_id], "good")
+			post_event_f("💰 %s gewährte $60 Rabatt für Ticket %s (+24%% Zufriedenheit).", [NetworkManager.get_player_name(peer_id), ticket_id], "good")
 		"resolve":
 			if not is_ticket_issue_fixed(t):
 				_rpc_play_sfx.rpc_id(peer_id, "error")
-				post_event("Problem bei %s besteht noch! Erst Hardware/Kabel/Router beheben." % rid.to_upper(), "warn")
+				post_event_f("Problem bei %s besteht noch! Erst Hardware/Kabel/Router beheben.", [rid.to_upper()], "warn")
 				return
 			var cname := str(t.get("customer", "Kunde"))
 			support_tickets.erase(ticket_id)
@@ -2929,7 +3768,7 @@ func _rpc_req_reply_ticket(ticket_id: String, action: String) -> void:
 				racks[rid]["satisfaction"] = minf(100.0, float(racks[rid].get("satisfaction", 80.0)) + 16.0)
 			money += 35.0
 			_rpc_play_sfx.rpc("cash")
-			post_event("✅ Ticket %s von %s gelöst! (+$35 Support-Bonus & +16%% Zufriedenheit)" % [ticket_id, cname], "good")
+			post_event_f("✅ Ticket %s von %s gelöst! (+$35 Support-Bonus & +16%% Zufriedenheit)", [ticket_id, cname], "good")
 
 	_broadcast_tickets()
 	_broadcast_racks()
@@ -2960,21 +3799,21 @@ func _rpc_req_resolve_call(choice: String) -> void:
 			if racks.has(rid):
 				racks[rid]["satisfaction"] = minf(100.0, float(racks[rid].get("satisfaction", 60.0)) + 14.0)
 				racks[rid]["grace_timer"] = maxf(float(racks[rid].get("grace_timer", 0.0)), 60.0)
-			post_event("📞 %s versprach %s sofortiges Upgrade (+60s Schonfrist)." % [NetworkManager.get_player_name(peer_id), cname], "good")
+			post_event_f("📞 %s versprach %s sofortiges Upgrade (+60s Schonfrist).", [NetworkManager.get_player_name(peer_id), cname], "good")
 		"restart_compensate":
 			if money >= 60.0:
 				money -= 60.0
 				if racks.has(rid):
 					racks[rid]["satisfaction"] = minf(100.0, float(racks[rid].get("satisfaction", 60.0)) + 26.0)
 					racks[rid]["grace_timer"] = maxf(float(racks[rid].get("grace_timer", 0.0)), 80.0)
-				post_event("📞 %s gab %s $60 Gutschrift am Telefon (+26%% Zufriedenheit)." % [NetworkManager.get_player_name(peer_id), cname], "good")
+				post_event_f("📞 %s gab %s $60 Gutschrift am Telefon (+26%% Zufriedenheit).", [NetworkManager.get_player_name(peer_id), cname], "good")
 			else:
 				_rpc_play_sfx.rpc_id(peer_id, "error")
 				return
 		_:
 			if racks.has(rid):
 				racks[rid]["grace_timer"] = maxf(float(racks[rid].get("grace_timer", 0.0)), 20.0)
-			post_event("📞 Anruf von %s beendet." % cname, "info")
+			post_event_f("📞 Anruf von %s beendet.", [cname], "info")
 
 	active_call.clear()
 	_call_cooldown = 38.0
@@ -3007,14 +3846,14 @@ func _rpc_req_connect_cable(cable_type: String, from_id: String, to_id: String) 
 				return
 
 	if count_cables_on(cable_type, from_id) >= get_max_ports(cable_type, from_id):
-		post_event("Kein freier %s-Port an %s (Rack-Switch oder Upgrade nötig)." % [
+		post_event_f("Kein freier %s-Port an %s (Rack-Switch oder Upgrade nötig).", [
 			"Strom" if cable_type == "power" else "Netzwerk", from_id.to_upper()
 		], "warn")
 		_rpc_play_sfx.rpc_id(peer_id, "error")
 		return
 
 	if count_cables_on(cable_type, to_id) >= get_max_ports(cable_type, to_id):
-		post_event("Kein freier %s-Port an %s." % [
+		post_event_f("Kein freier %s-Port an %s.", [
 			"Strom" if cable_type == "power" else "Netzwerk", to_id.to_upper()
 		], "warn")
 		_rpc_play_sfx.rpc_id(peer_id, "error")
@@ -3030,7 +3869,7 @@ func _rpc_req_connect_cable(cable_type: String, from_id: String, to_id: String) 
 	_broadcast_sim_tick()
 	_rpc_play_sfx.rpc("cable")
 	var label := "Stromkabel" if cable_type == "power" else "Netzwerkkabel"
-	post_event("%s verband %s: %s ↔ %s" % [NetworkManager.get_player_name(peer_id), label, from_id.to_upper(), to_id.to_upper()], "info")
+	post_event_f("%s verband %s: %s ↔ %s", [NetworkManager.get_player_name(peer_id), label, from_id.to_upper(), to_id.to_upper()], "info")
 
 
 func _is_valid_cable_endpoint(cable_type: String, endpoint_id: String) -> bool:
@@ -3075,6 +3914,10 @@ func _rpc_req_toggle_breaker() -> void:
 	if not multiplayer.is_server():
 		return
 	var peer_id := _get_sender_id()
+	if not breaker_on and not has_working_fuse():
+		_rpc_play_sfx.rpc_id(peer_id, "error")
+		post_event("Hauptschalter lässt sich nicht einschalten: Im Sicherungskasten steckt keine intakte Sicherung.", "warn")
+		return
 	breaker_on = not breaker_on
 	overload_timer = 0.0
 	_recalculate_networks_and_metrics()
@@ -3083,9 +3926,8 @@ func _rpc_req_toggle_breaker() -> void:
 	_broadcast_ups()
 	_broadcast_sim_tick()
 	_rpc_play_sfx.rpc("breaker_on" if breaker_on else "breaker_trip")
-	post_event("%s hat die Hauptsicherung %s." % [
+	post_event_f("%s hat die Hauptsicherung EINGESCHALTET." if breaker_on else "%s hat die Hauptsicherung ABGESCHALTET.", [
 		NetworkManager.get_player_name(peer_id),
-		"EINGESCHALTET" if breaker_on else "ABGESCHALTET",
 	], "good" if breaker_on else "warn")
 
 
@@ -3132,7 +3974,7 @@ func _rpc_req_extinguish_slot(rack_id: String, slot_idx: int, amount: float) -> 
 		slot["state"] = "crashed"
 		slot["repair_progress"] = 0.0
 		racks[rack_id]["temp"] = minf(float(racks[rack_id]["temp"]), 55.0)
-		post_event("%s hat den Brand in %s Slot %d gelöscht! Jetzt reparieren [E]." % [
+		post_event_f("%s hat den Brand in %s Slot %d gelöscht! Jetzt reparieren [E].", [
 			NetworkManager.get_player_name(peer_id), rack_id.to_upper(), slot_idx + 1
 		], "good")
 		_rpc_play_sfx.rpc("repair")
@@ -3158,7 +4000,7 @@ func _rpc_req_repair_slot(rack_id: String, slot_idx: int, amount: float) -> void
 		slot["repair_progress"] = 0.0
 		_recalculate_networks_and_metrics()
 		_broadcast_sim_tick()
-		post_event("%s hat %s Slot %d repariert & neugestartet!" % [
+		post_event_f("%s hat %s Slot %d repariert & neugestartet!", [
 			NetworkManager.get_player_name(peer_id), rack_id.to_upper(), slot_idx + 1
 		], "good")
 		_rpc_play_sfx.rpc("repair")
@@ -3179,11 +4021,17 @@ func _rpc_req_toggle_contract(contract_id: String) -> void:
 		return
 	c["active"] = now_active
 	c["status"] = "ok" if now_active else "idle"
+	if bool(c.get("random", false)):
+		if now_active:
+			c["days_left"] = int(c.get("duration_days", RANDOM_CONTRACT_DURATION_MIN))
+		else:
+			# Ein gekündigter befristeter Vertrag ist weg und kann nicht neu angenommen werden.
+			contracts.erase(contract_id)
 	_recalculate_networks_and_metrics()
 	_broadcast_sim_tick()
 	_rpc_play_sfx.rpc("click")
-	post_event("%s hat Vertrag '%s' %s." % [
-		NetworkManager.get_player_name(peer_id), str(c["title"]), "angenommen" if now_active else "gekündigt",
+	post_event_f("%s hat Vertrag '%s' angenommen." if now_active else "%s hat Vertrag '%s' gekündigt.", [
+		NetworkManager.get_player_name(peer_id), str(c["title"]),
 	], "good" if now_active else "info")
 
 
@@ -3192,6 +4040,10 @@ func _rpc_req_upgrade_power() -> void:
 	if not multiplayer.is_server():
 		return
 	var peer_id := _get_sender_id()
+	if power_fuse_stock > 0:
+		_rpc_play_sfx.rpc_id(peer_id, "error")
+		post_event("Die Drehsicherung liegt schon im Lager. Setze sie am Sicherungskasten in F2 ein.", "warn")
+		return
 	if power_tier + 1 >= POWER_TIERS.size():
 		return
 	var next_tier: Dictionary = POWER_TIERS[power_tier + 1]
@@ -3200,12 +4052,37 @@ func _rpc_req_upgrade_power() -> void:
 		_rpc_play_sfx.rpc_id(peer_id, "error")
 		return
 	money -= cost
-	power_tier += 1
+	power_fuse_stock = 1
+	_broadcast_fuses()
+	_broadcast_sim_tick()
+	_rpc_play_sfx.rpc("cash")
+	post_event_f("%s hat eine Drehsicherung für %s gekauft. Einsetzen: Sicherungskasten, Steckplatz F2.", [
+		NetworkManager.get_player_name(peer_id), str(next_tier["label"])
+	], "good")
+
+
+@rpc("any_peer", "call_local", "reliable")
+func _rpc_req_research(branch: String) -> void:
+	if not multiplayer.is_server():
+		return
+	var peer_id := _get_sender_id()
+	if not get_research_block_reason(branch).is_empty():
+		_rpc_play_sfx.rpc_id(peer_id, "error")
+		return
+	var cost := float(get_research_cost(branch))
+	if money < cost:
+		_rpc_play_sfx.rpc_id(peer_id, "error")
+		return
+	money -= cost
+	var new_level := get_research_level(branch) + 1
+	research_levels[branch] = new_level
 	_recalculate_networks_and_metrics()
+	_broadcast_racks()
 	_broadcast_sim_tick()
 	_rpc_play_sfx.rpc("upgrade")
-	post_event("%s upgradete Stromversorgung auf %s!" % [
-		NetworkManager.get_player_name(peer_id), str(next_tier["label"])
+	var node: Dictionary = RESEARCH_TREE[branch]
+	post_event_f("%s erforschte %s Stufe %d!", [
+		NetworkManager.get_player_name(peer_id), str(node["label"]), new_level
 	], "good")
 
 
@@ -3226,7 +4103,7 @@ func _rpc_req_upgrade_router() -> void:
 	_recalculate_networks_and_metrics()
 	_broadcast_sim_tick()
 	_rpc_play_sfx.rpc("upgrade")
-	post_event("%s installierte neuen Router: %s!" % [
+	post_event_f("%s installierte neuen Router: %s!", [
 		NetworkManager.get_player_name(peer_id), str(next_r["label"])
 	], "good")
 
@@ -3248,9 +4125,10 @@ func _rpc_req_expand_room() -> void:
 	_broadcast_sim_tick()
 	_rpc_play_sfx.rpc("upgrade")
 	if room_level == 1:
-		post_event("%s schaltete HALLE B (Garagen-Anbau) frei! +63 m² Stellfläche!" % NetworkManager.get_player_name(peer_id), "good")
+		post_event_f("%s schaltete HALLE B (Garagen-Anbau) frei! +63 m² Stellfläche!", [NetworkManager.get_player_name(peer_id)], "good")
 	else:
-		post_event("%s schaltete HALLE C (Enterprise-Flügel) inkl. eigenem Strom- & Glasfaser-Verteiler frei!" % NetworkManager.get_player_name(peer_id), "good")
+		post_event_f("%s schaltete HALLE C (Enterprise-Flügel) inkl. eigenem Strom- & Glasfaser-Verteiler frei!", [NetworkManager.get_player_name(peer_id)], "good")
+	_check_company_milestones()
 
 
 @rpc("any_peer", "call_local", "reliable")
@@ -3268,7 +4146,7 @@ func _rpc_req_upgrade_ai_platform() -> void:
 	ai_platform_level += 1
 	_broadcast_sim_tick()
 	_rpc_play_sfx.rpc("upgrade")
-	post_event("%s startete %s — freie Server-Kapazität verdient jetzt live Geld!" % [
+	post_event_f("%s startete %s — freie Server-Kapazität verdient jetzt live Geld!", [
 		NetworkManager.get_player_name(peer_id), str(next_ai["label"])
 	], "good")
 
@@ -3283,7 +4161,7 @@ func _rpc_req_mitigate_ddos() -> void:
 	ddos_active = false
 	_broadcast_sim_tick()
 	_rpc_play_sfx.rpc("repair")
-	post_event("%s hat den DDoS-Angriff erfolgreich abgewehrt!" % NetworkManager.get_player_name(peer_id), "good")
+	post_event_f("%s hat den DDoS-Angriff erfolgreich abgewehrt!", [NetworkManager.get_player_name(peer_id)], "good")
 
 
 @rpc("any_peer", "call_local", "reliable")
@@ -3330,7 +4208,7 @@ func _rpc_req_load_held_crate_to_cart(cart_id: String) -> void:
 		return
 	var items: Array = carts[cart_id]["items"]
 	if items.size() >= CART_MAX_ITEMS:
-		post_event("Rollwagen ist voll (%d/%d Kartons)!" % [CART_MAX_ITEMS, CART_MAX_ITEMS], "warn")
+		post_event_f("Rollwagen ist voll (%d/%d Kartons)!", [CART_MAX_ITEMS, CART_MAX_ITEMS], "warn")
 		_rpc_play_sfx.rpc_id(peer_id, "error")
 		return
 	var item_type := str(held["item_type"])
@@ -3356,7 +4234,7 @@ func _rpc_req_load_ground_crate_to_pushed_cart(crate_id: String) -> void:
 	var cid := str(cart["id"])
 	var items: Array = carts[cid]["items"]
 	if items.size() >= CART_MAX_ITEMS:
-		post_event("Rollwagen ist voll (%d/%d Kartons)!" % [CART_MAX_ITEMS, CART_MAX_ITEMS], "warn")
+		post_event_f("Rollwagen ist voll (%d/%d Kartons)!", [CART_MAX_ITEMS, CART_MAX_ITEMS], "warn")
 		_rpc_play_sfx.rpc_id(peer_id, "error")
 		return
 	var item_type := str(crates[crate_id]["item_type"])
@@ -3391,16 +4269,46 @@ func _rpc_req_unload_cart_to_hands(cart_id: String) -> void:
 # HOST -> ALL CLIENTS BROADCASTS
 # ==============================================================================
 
-func post_event(message: String, severity: String = "info") -> void:
+## message ist eine deutsche Vorlage (Übersetzungsschlüssel), args die Werte für ihre Platzhalter.
+## Übersetzt wird beim Empfänger, damit jeder Spieler Meldungen in seiner eigenen Sprache sieht.
+func post_event(message: String, severity: String = "info", args: Array = []) -> void:
 	if multiplayer.is_server():
-		_rpc_event_log.rpc(message, severity)
+		_rpc_event_log.rpc(message, severity, args)
 	else:
-		event_logged.emit(message, severity)
+		event_logged.emit(_format_event(message, args), severity)
 
 
 @rpc("authority", "call_local", "reliable")
-func _rpc_event_log(message: String, severity: String) -> void:
-	event_logged.emit(message, severity)
+func _rpc_event_log(message: String, severity: String, args: Array = []) -> void:
+	event_logged.emit(_format_event(message, args), severity)
+
+
+## Wie post_event, aber mit args vor severity. So wird aus post_event("…" % [a, b], "warn")
+## einfach post_event_f("…", [a, b], "warn"), ohne die Klammern umzustellen.
+func post_event_f(message: String, args: Array, severity: String = "info") -> void:
+	post_event(message, severity, args)
+
+
+## Übersetzt eine gespeicherte Vorlage mit ihren Werten in der Sprache dieses
+## Spielers. Alte Spielstände ohne args liefern ihren Text unverändert.
+func format_message(message: String, args: Array = []) -> String:
+	return _format_event(message, args)
+
+
+func _format_event(message: String, args: Array) -> String:
+	var template := tr(message)
+	if args.is_empty():
+		return template
+	var tr_args: Array = []
+	for v in args:
+		if v is String:
+			tr_args.append(tr(v))
+		elif v is Dictionary and (v as Dictionary).has("text"):
+			# Eingebettete Vorlage, z. B. ein Ticket-Titel mit eigenen Werten.
+			tr_args.append(_format_event(str(v["text"]), v.get("args", [])))
+		else:
+			tr_args.append(v)
+	return template % tr_args
 
 
 @rpc("authority", "call_local", "reliable")
@@ -3502,6 +4410,133 @@ func _rpc_sync_inventory(data: Dictionary) -> void:
 	inventory_changed.emit()
 
 
+# ==============================================================================
+# SICHERUNGSKASTEN: Sicherungen kaufen, einsetzen, bei Überlast durchbrennen lassen
+# ==============================================================================
+func _make_fuse_slots(state: String) -> Array:
+	var arr: Array = []
+	for _i in range(FUSE_SLOT_COUNT):
+		arr.append(state)
+	return arr
+
+
+func _sanitize_fuses(data: Variant) -> Array:
+	if not (data is Array):
+		return _make_fuse_slots("ok")
+	var src: Array = data
+	var arr: Array = []
+	for i in range(FUSE_SLOT_COUNT):
+		var s := str(src[i]) if i < src.size() else "empty"
+		arr.append(s if s == "ok" or s == "blown" else "empty")
+	return arr
+
+
+func count_working_fuses() -> int:
+	var n := 0
+	for f in breaker_fuses:
+		if str(f) == "ok":
+			n += 1
+	return n
+
+
+## Der Hauptschalter lässt sich nur einschalten, solange mindestens eine intakte Sicherung steckt.
+func has_working_fuse() -> bool:
+	return count_working_fuses() > 0
+
+
+## Die Kastentür muss offen sein, bevor Sicherungen und der Hauptschalter bedient werden können.
+func is_breaker_door_open() -> bool:
+	return shared_open_panels.has(_panel_key(WALL_BREAKER_ID, "breaker:door"))
+
+
+func _blow_random_fuse() -> void:
+	var ok_idx: Array[int] = []
+	for i in range(breaker_fuses.size()):
+		if str(breaker_fuses[i]) == "ok":
+			ok_idx.append(i)
+	if ok_idx.is_empty():
+		return
+	breaker_fuses[ok_idx[randi() % ok_idx.size()]] = "blown"
+	_broadcast_fuses()
+
+
+func _broadcast_fuses() -> void:
+	_rpc_sync_fuses.rpc(breaker_fuses, fuse_stock, power_fuse_stock)
+
+
+@rpc("authority", "call_local", "reliable")
+func _rpc_sync_fuses(fuses: Array, stock: int, power_stock: int) -> void:
+	if not multiplayer.is_server():
+		breaker_fuses = _sanitize_fuses(fuses)
+		fuse_stock = maxi(0, stock)
+		power_fuse_stock = clampi(power_stock, 0, 1)
+	fuses_changed.emit()
+
+
+@rpc("any_peer", "call_local", "reliable")
+func _rpc_req_buy_fuse() -> void:
+	if not multiplayer.is_server():
+		return
+	var peer_id := _get_sender_id()
+	if money < float(FUSE_PRICE):
+		_rpc_play_sfx.rpc_id(peer_id, "error")
+		return
+	money -= float(FUSE_PRICE)
+	fuse_stock += 1
+	_broadcast_fuses()
+	_broadcast_sim_tick()
+	_rpc_play_sfx.rpc("cash")
+
+
+@rpc("any_peer", "call_local", "reliable")
+func _rpc_req_insert_fuse(slot_idx: int) -> void:
+	if not multiplayer.is_server():
+		return
+	var peer_id := _get_sender_id()
+	if slot_idx < 0 or slot_idx >= breaker_fuses.size():
+		return
+	if slot_idx == POWER_FUSE_SLOT and power_fuse_stock > 0:
+		_install_power_fuse(peer_id)
+		return
+	if str(breaker_fuses[slot_idx]) == "ok":
+		return
+	if fuse_stock <= 0:
+		_rpc_play_sfx.rpc_id(peer_id, "error")
+		post_event("Keine Sicherung im Lager. Kaufe Sicherungen am PC im Shop unter \"Klima & USV\".", "warn")
+		return
+	fuse_stock -= 1
+	breaker_fuses[slot_idx] = "ok"
+	_broadcast_fuses()
+	_rpc_play_sfx.rpc("pickup")
+	post_event_f("%s hat eine Sicherung in Steckplatz %d eingesetzt.", [
+		NetworkManager.get_player_name(peer_id), slot_idx + 1,
+	], "good")
+
+
+## Setzt die gekaufte Drehsicherung in F2 ein: Stromstufe +1, die alte Sicherung landet in der Hand.
+func _install_power_fuse(peer_id: int) -> void:
+	if power_tier + 1 >= POWER_TIERS.size():
+		power_fuse_stock = 0
+		_broadcast_fuses()
+		return
+	if is_player_holding_anything(peer_id):
+		_rpc_play_sfx.rpc_id(peer_id, "error")
+		post_event("Hände frei machen: Die alte Sicherung wird dir beim Einsetzen in die Hand gegeben.", "warn")
+		return
+	power_fuse_stock = 0
+	power_tier += 1
+	var cid := _alloc_id("crate")
+	crates[cid] = {"id": cid, "item_type": OLD_FUSE_ITEM, "pos": Vector3.ZERO, "held_by": peer_id}
+	_recalculate_networks_and_metrics()
+	_broadcast_fuses()
+	_broadcast_crates()
+	_broadcast_sim_tick()
+	_rpc_play_sfx.rpc("upgrade")
+	post_event_f("%s hat die Drehsicherung in F2 eingesetzt: Stromversorgung jetzt %s!", [
+		NetworkManager.get_player_name(peer_id), str(POWER_TIERS[power_tier]["label"])
+	], "good")
+
+
 func _broadcast_tickets() -> void:
 	_rpc_sync_tickets.rpc(support_tickets)
 
@@ -3558,12 +4593,16 @@ func _broadcast_sim_tick() -> void:
 		"overload_timer": overload_timer,
 		"power_tier": power_tier,
 		"router_tier": router_tier,
+		"research_levels": research_levels.duplicate(),
+		"company_milestones_reached": company_milestones_reached,
 		"ai_platform_level": ai_platform_level,
 		"ddos_active": ddos_active,
 		"day_number": day_number,
 		"time_of_day": time_of_day,
 		"daily_kwh": daily_kwh,
 		"last_daily_bill": last_daily_bill,
+		"electricity_rate": electricity_rate,
+		"last_bill_rate": last_bill_rate,
 		"room_temp": room_temp,
 		"total_watts": total_watts,
 		"max_watts": max_watts,
@@ -3599,7 +4638,9 @@ func _rpc_sync_sim_tick(packet: Dictionary) -> void:
 		overload_timer = float(packet["overload_timer"])
 		power_tier = int(packet["power_tier"])
 		router_tier = clampi(int(packet.get("router_tier", 0)), 0, ROUTER_TIERS.size() - 1)
+		research_levels = _sanitize_research(packet.get("research_levels", {}))
 		ai_platform_level = int(packet["ai_platform_level"])
+		company_milestones_reached = int(packet.get("company_milestones_reached", company_milestones_reached))
 		ddos_active = bool(packet["ddos_active"])
 		day_number = int(packet["day_number"])
 		var host_time := float(packet["time_of_day"])
@@ -3610,6 +4651,8 @@ func _rpc_sync_sim_tick(packet: Dictionary) -> void:
 		else:
 			_time_correction = time_diff
 		daily_kwh = float(packet["daily_kwh"])
+		electricity_rate = float(packet.get("electricity_rate", ELECTRICITY_RATE_PER_KWH))
+		last_bill_rate = float(packet.get("last_bill_rate", ELECTRICITY_RATE_PER_KWH))
 		last_daily_bill = int(packet["last_daily_bill"])
 		room_temp = float(packet["room_temp"])
 		total_watts = int(packet["total_watts"])

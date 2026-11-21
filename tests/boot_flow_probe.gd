@@ -144,6 +144,7 @@ func _finish(main_scene: Node, net: Node) -> void:
 	if net.has_method("leave_session"):
 		net.call("leave_session")
 	main_scene.queue_free()
-	await _frames(5)
+	# Genug Frames abwarten, damit Viewport-Texturen freigegeben sind (sonst "RIDs leaked" beim Beenden).
+	await _frames(30)
 	print("BOOT ERGEBNIS " + ("FEHLGESCHLAGEN" if _failed else "ALLES OK"))
 	quit(1 if _failed else 0)

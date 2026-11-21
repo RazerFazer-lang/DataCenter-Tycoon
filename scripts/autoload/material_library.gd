@@ -9,11 +9,56 @@ var _materials: Dictionary = {}
 var _sky_shader_mat: ShaderMaterial = null
 var _os_screen_mat: ShaderMaterial = null
 var _telemetry_screen_mat: ShaderMaterial = null
+# Texturen, die schon mit Mipmaps aus _cached_textures kommen. _finalize_textures überspringt sie,
+# statt ihr Bild erneut von der Grafikkarte zurückzulesen.
+var _mipmapped: Dictionary = {}
+
+# Fertig erzeugte Wandtexturen werden hier zwischengespeichert, damit nur der erste Start rechnen muss.
+# WALL_TEX_VERSION erhöhen, wenn sich Farben oder Aufbau der Wandtextur ändern.
+const WALL_TEX_CACHE_DIR := "user://tex_cache"
+const WALL_TEX_VERSION := 1
+# Gleiches Prinzip für Böden, Ziegel und Wellblech. Erhöhen, wenn sich deren Aufbau oder Farben ändern.
+const SURFACE_TEX_VERSION := 1
+# Gleiches Prinzip für Platinen, Kühlkörper, gebürstetes Metall, Lochblech und Warnstreifen.
+const GEN_TEX_VERSION := 1
 
 
 func _ready() -> void:
 	_build_all_materials()
+	_finalize_textures()
 	_build_custom_shaders()
+
+
+## Gibt allen Bildtexturen Mipmaps und schaltet anisotrope Filterung ein.
+## Ohne Mipmaps flimmern Böden und Wände in der Ferne, und die Anisotropie-Einstellung im Menü wirkt gar nicht.
+func _finalize_textures() -> void:
+	var done: Dictionary = {}
+	for key in _materials:
+		var m := _materials[key] as BaseMaterial3D
+		if m == null:
+			continue
+		m.texture_filter = BaseMaterial3D.TEXTURE_FILTER_LINEAR_WITH_MIPMAPS_ANISOTROPIC
+		m.albedo_texture = _with_mipmaps(m.albedo_texture, false, done)
+		if m.normal_enabled:
+			m.normal_texture = _with_mipmaps(m.normal_texture, true, done)
+	_mipmapped.clear()
+
+
+func _with_mipmaps(tex: Texture2D, is_normal: bool, done: Dictionary) -> Texture2D:
+	if not (tex is ImageTexture):
+		return tex
+	if _mipmapped.has(tex):
+		return tex
+	if done.has(tex):
+		return done[tex] as Texture2D
+	var img := tex.get_image()
+	if img == null or img.is_empty() or img.is_compressed() or img.has_mipmaps():
+		done[tex] = tex
+		return tex
+	img.generate_mipmaps(is_normal)
+	var out := ImageTexture.create_from_image(img)
+	done[tex] = out
+	return out
 
 
 func get_mat(mat_id: String) -> StandardMaterial3D:
@@ -47,7 +92,7 @@ func _build_all_materials() -> void:
 	_materials["default"] = _simple(Color(0.55, 0.55, 0.54), 0.7, 0.1)
 
 	# 1. Natural Warm-Grey Poured Garage Concrete Floor (real expansion joints, matte-satin)
-	var conc_pair := _gen_tiled_concrete(256)
+	var conc_pair := _cached_tex_pair("concrete_floor", 1024, _render_concrete)
 	var conc_mat := StandardMaterial3D.new()
 	conc_mat.albedo_texture = conc_pair[0]
 	conc_mat.normal_enabled = true
@@ -60,7 +105,7 @@ func _build_all_materials() -> void:
 	_materials["concrete_floor"] = conc_mat
 
 	# 2. Industrial Anti-Static Light-Grey Raised Floor (Hall B — realistic server room tiles)
-	var epoxy_pair := _gen_raised_floor_tiles(256, Color(0.45, 0.47, 0.49), Color(0.52, 0.54, 0.56), Color(0.24, 0.26, 0.28))
+	var epoxy_pair := _cached_tex_pair("raised_floor_b", 1024, _render_raised_floor.bind(Color(0.45, 0.47, 0.49), Color(0.52, 0.54, 0.56), Color(0.24, 0.26, 0.28)))
 	var epoxy_mat := StandardMaterial3D.new()
 	epoxy_mat.albedo_texture = epoxy_pair[0]
 	epoxy_mat.normal_enabled = true
@@ -76,7 +121,7 @@ func _build_all_materials() -> void:
 	_materials["epoxy_floor"] = epoxy_mat
 
 	# 3. Clean Bright Enterprise Raised Datacenter Floor (Hall C — like Hetzner/AWS/Google DC)
-	var ent_pair := _gen_raised_floor_tiles(256, Color(0.68, 0.70, 0.72), Color(0.75, 0.77, 0.79), Color(0.36, 0.38, 0.41))
+	var ent_pair := _cached_tex_pair("raised_floor_c", 1024, _render_raised_floor.bind(Color(0.68, 0.70, 0.72), Color(0.75, 0.77, 0.79), Color(0.36, 0.38, 0.41)))
 	var ent_mat := StandardMaterial3D.new()
 	ent_mat.albedo_texture = ent_pair[0]
 	ent_mat.normal_enabled = true
@@ -92,28 +137,32 @@ func _build_all_materials() -> void:
 	_materials["enterprise_floor"] = ent_mat
 
 	# 4. Realistic Painted Off-White / Warm Light-Grey Drywall & Concrete Block Interior Wall
-	var wall_noise := _make_noise(FastNoiseLite.TYPE_SIMPLEX_SMOOTH, 0.08, 3, 404)
-	var wall_tex := _make_noise_tex(wall_noise, 256, Color(0.74, 0.73, 0.70), Color(0.83, 0.82, 0.79))
-	var wall_norm := _make_normal_tex(wall_noise, 256, 1.1)
+	# Gestrichene Betonsteinwand im Läuferverband: 1024 px pro 1,6 m Kachel (~640 px/m statt ~115 px/m vorher).
+	var wall_set := _gen_block_wall_set(1024,
+		Color(0.76, 0.75, 0.72), Color(0.83, 0.82, 0.79),
+		Color(0.39, 0.41, 0.43), Color(0.45, 0.47, 0.50))
 	var wall_mat := StandardMaterial3D.new()
-	wall_mat.albedo_texture = wall_tex
+	wall_mat.albedo_texture = wall_set[0]
 	wall_mat.normal_enabled = true
-	wall_mat.normal_texture = wall_norm
-	wall_mat.normal_scale = 0.32
-	wall_mat.roughness = 0.86
+	wall_mat.normal_texture = wall_set[2]
+	wall_mat.normal_scale = 0.85
+	wall_mat.roughness = 0.84
 	wall_mat.uv1_triplanar = true
-	wall_mat.uv1_scale = Vector3(0.45, 0.45, 0.45)
+	# Weltkoordinaten: Steinreihen laufen über alle Wandstücke durch und beginnen am Boden.
+	wall_mat.uv1_world_triplanar = true
+	wall_mat.uv1_triplanar_sharpness = 4.0
+	wall_mat.uv1_scale = Vector3(0.625, 0.625, 0.625)
 	_materials["garage_wall"] = wall_mat
 
 	# 5. Realistic Industrial Medium-Grey Lower Wall Paint (Wainscoting)
 	var wain_mat := wall_mat.duplicate() as StandardMaterial3D
-	wain_mat.albedo_texture = _make_noise_tex(wall_noise, 256, Color(0.38, 0.40, 0.42), Color(0.45, 0.47, 0.50))
+	wain_mat.albedo_texture = wall_set[1]
 	wain_mat.roughness = 0.72
 	wain_mat.metallic = 0.04
 	_materials["wainscot_wall"] = wain_mat
 
 	# 6. Brushed Anodized Server Steel & Galvanized Chassis Metal
-	var steel_pair := _gen_brushed_metal_tex(128)
+	var steel_pair := _cached_textures("brushed_metal_g%d_128" % GEN_TEX_VERSION, _gen_brushed_metal_tex.bind(128), [false, true])
 	var steel_mat := StandardMaterial3D.new()
 	steel_mat.albedo_color = Color(0.18, 0.19, 0.21)
 	steel_mat.normal_enabled = true
@@ -125,7 +174,7 @@ func _build_all_materials() -> void:
 	_materials["brushed_steel"] = steel_mat
 
 	# 7. Perforated Server Rack Hex/Grid Steel Mesh
-	var perf_pair := _gen_perforated_mesh_tex(128)
+	var perf_pair := _cached_textures("perforated_mesh_g%d_128" % GEN_TEX_VERSION, _gen_perforated_mesh_tex.bind(128), [false, true])
 	var perf_mat := StandardMaterial3D.new()
 	perf_mat.albedo_texture = perf_pair[0]
 	perf_mat.normal_enabled = true
@@ -137,7 +186,7 @@ func _build_all_materials() -> void:
 	_materials["perforated_mesh"] = perf_mat
 
 	# 8. Diagonal Industrial Safety Hazard Stripes (Muted realistic safety yellow & matte charcoal)
-	var haz_tex := _gen_hazard_stripes_tex(128)
+	var haz_tex: Texture2D = _cached_textures("hazard_stripes_g%d_512" % GEN_TEX_VERSION, func() -> Array: return [_gen_hazard_stripes_tex(512)], [false])[0]
 	var haz_mat := StandardMaterial3D.new()
 	haz_mat.albedo_texture = haz_tex
 	haz_mat.roughness = 0.62
@@ -147,7 +196,7 @@ func _build_all_materials() -> void:
 	_materials["hazard_stripes"] = haz_mat
 
 	# 9. Corrugated Galvanized Steel (Garage Door & Expansion Partitions)
-	var corr_pair := _gen_corrugated_tex(128)
+	var corr_pair := _cached_tex_pair("corrugated", 512, _render_corrugated)
 	var corr_mat := StandardMaterial3D.new()
 	corr_mat.albedo_texture = corr_pair[0]
 	corr_mat.normal_enabled = true
@@ -160,7 +209,7 @@ func _build_all_materials() -> void:
 	_materials["corrugated_metal"] = corr_mat
 
 	# 10. Realistic Warm Red-Brown Architectural Brick Exterior Facade
-	var brick_pair := _gen_brick_tex(256)
+	var brick_pair := _cached_tex_pair("exterior_brick", 1024, _render_brick)
 	var brick_mat := StandardMaterial3D.new()
 	brick_mat.albedo_texture = brick_pair[0]
 	brick_mat.normal_enabled = true
@@ -172,9 +221,11 @@ func _build_all_materials() -> void:
 	_materials["exterior_brick"] = brick_mat
 
 	# 11. Natural Warm Oak Workbench / Desk Wood
-	var wood_noise := _make_noise(FastNoiseLite.TYPE_SIMPLEX, 0.05, 4, 606)
-	var wood_tex := _make_noise_tex(wood_noise, 256, Color(0.42, 0.29, 0.17), Color(0.60, 0.44, 0.28))
-	var wood_norm := _make_normal_tex(wood_noise, 256, 0.9)
+	# Rauschtexturen: 4-fache Auflösung, Frequenz durch 4 (gleiche Grobstruktur) und 2 Oktaven mehr für feine Details.
+	# Bump × 3, weil die Höhenunterschiede pro Pixel bei höherer Auflösung kleiner werden.
+	var wood_noise := _make_noise(FastNoiseLite.TYPE_SIMPLEX, 0.0125, 6, 606)
+	var wood_tex := _make_noise_tex(wood_noise, 1024, Color(0.42, 0.29, 0.17), Color(0.60, 0.44, 0.28))
+	var wood_norm := _make_normal_tex(wood_noise, 1024, 2.7)
 	var wood_mat := StandardMaterial3D.new()
 	wood_mat.albedo_texture = wood_tex
 	wood_mat.normal_enabled = true
@@ -186,9 +237,9 @@ func _build_all_materials() -> void:
 	_materials["wood_desk"] = wood_mat
 
 	# 12. Natural Kraft Corrugated Cardboard Box
-	var card_noise := _make_noise(FastNoiseLite.TYPE_SIMPLEX, 0.16, 3, 707)
-	var card_tex := _make_noise_tex(card_noise, 128, Color(0.60, 0.47, 0.32), Color(0.72, 0.58, 0.41))
-	var card_norm := _make_normal_tex(card_noise, 128, 1.0)
+	var card_noise := _make_noise(FastNoiseLite.TYPE_SIMPLEX, 0.04, 5, 707)
+	var card_tex := _make_noise_tex(card_noise, 512, Color(0.60, 0.47, 0.32), Color(0.72, 0.58, 0.41))
+	var card_norm := _make_normal_tex(card_noise, 512, 3.0)
 	var card_mat := StandardMaterial3D.new()
 	card_mat.albedo_texture = card_tex
 	card_mat.normal_enabled = true
@@ -198,9 +249,9 @@ func _build_all_materials() -> void:
 	_materials["cardboard"] = card_mat
 
 	# 13. Exterior Asphalt Driveway / Road
-	var asp_noise := _make_noise(FastNoiseLite.TYPE_SIMPLEX, 0.25, 4, 808)
-	var asp_tex := _make_noise_tex(asp_noise, 256, Color(0.24, 0.24, 0.25), Color(0.35, 0.35, 0.36))
-	var asp_norm := _make_normal_tex(asp_noise, 256, 2.2)
+	var asp_noise := _make_noise(FastNoiseLite.TYPE_SIMPLEX, 0.0625, 6, 808)
+	var asp_tex := _make_noise_tex(asp_noise, 1024, Color(0.24, 0.24, 0.25), Color(0.35, 0.35, 0.36))
+	var asp_norm := _make_normal_tex(asp_noise, 1024, 6.6)
 	var asp_mat := StandardMaterial3D.new()
 	asp_mat.albedo_texture = asp_tex
 	asp_mat.normal_enabled = true
@@ -212,9 +263,9 @@ func _build_all_materials() -> void:
 	_materials["asphalt"] = asp_mat
 
 	# 14. Natural Exterior Grass Lawn
-	var grass_noise := _make_noise(FastNoiseLite.TYPE_SIMPLEX_SMOOTH, 0.12, 4, 909)
-	var grass_tex := _make_noise_tex(grass_noise, 256, Color(0.22, 0.36, 0.16), Color(0.34, 0.48, 0.22))
-	var grass_norm := _make_normal_tex(grass_noise, 256, 1.5)
+	var grass_noise := _make_noise(FastNoiseLite.TYPE_SIMPLEX_SMOOTH, 0.03, 6, 909)
+	var grass_tex := _make_noise_tex(grass_noise, 1024, Color(0.22, 0.36, 0.16), Color(0.34, 0.48, 0.22))
+	var grass_norm := _make_normal_tex(grass_noise, 1024, 4.5)
 	var grass_mat := StandardMaterial3D.new()
 	grass_mat.albedo_texture = grass_tex
 	grass_mat.normal_enabled = true
@@ -241,7 +292,7 @@ func _build_all_materials() -> void:
 	# ==========================================================================
 
 	# 16. Enterprise Green Server Motherboard PCB (with copper circuit traces & gold vias!)
-	var pcb_g_pair := _gen_pcb_tex(256, Color(0.06, 0.26, 0.14), Color(0.11, 0.36, 0.20), Color(0.76, 0.64, 0.26))
+	var pcb_g_pair := _cached_textures("pcb_green_g%d_256" % GEN_TEX_VERSION, _gen_pcb_tex.bind(256, Color(0.06, 0.26, 0.14), Color(0.11, 0.36, 0.20), Color(0.76, 0.64, 0.26)), [false, true])
 	var pcb_g := StandardMaterial3D.new()
 	pcb_g.albedo_texture = pcb_g_pair[0]
 	pcb_g.normal_enabled = true
@@ -252,7 +303,7 @@ func _build_all_materials() -> void:
 	_materials["pcb_green"] = pcb_g
 
 	# 17. Matte-Black Workstation/GPU PCB (with metallic dark-gold circuit paths!)
-	var pcb_b_pair := _gen_pcb_tex(256, Color(0.08, 0.09, 0.10), Color(0.14, 0.15, 0.17), Color(0.62, 0.52, 0.28))
+	var pcb_b_pair := _cached_textures("pcb_black_g%d_256" % GEN_TEX_VERSION, _gen_pcb_tex.bind(256, Color(0.08, 0.09, 0.10), Color(0.14, 0.15, 0.17), Color(0.62, 0.52, 0.28)), [false, true])
 	var pcb_b := StandardMaterial3D.new()
 	pcb_b.albedo_texture = pcb_b_pair[0]
 	pcb_b.normal_enabled = true
@@ -263,7 +314,7 @@ func _build_all_materials() -> void:
 	_materials["pcb_black"] = pcb_b
 
 	# 18. Finned Aluminum Heatsink (ribbed cooling fins + normal map)
-	var fin_pair := _gen_heatsink_fins_tex(128, Color(0.72, 0.74, 0.77))
+	var fin_pair := _cached_textures("heatsink_aluminum_g%d_128" % GEN_TEX_VERSION, _gen_heatsink_fins_tex.bind(128, Color(0.72, 0.74, 0.77)), [false, true])
 	var fin_al := StandardMaterial3D.new()
 	fin_al.albedo_texture = fin_pair[0]
 	fin_al.normal_enabled = true
@@ -274,7 +325,7 @@ func _build_all_materials() -> void:
 	_materials["heatsink_aluminum"] = fin_al
 
 	# 19. Finned Copper Server Heatsink
-	var fin_cu_pair := _gen_heatsink_fins_tex(128, Color(0.84, 0.48, 0.28))
+	var fin_cu_pair := _cached_textures("heatsink_copper_g%d_128" % GEN_TEX_VERSION, _gen_heatsink_fins_tex.bind(128, Color(0.84, 0.48, 0.28)), [false, true])
 	var fin_cu := StandardMaterial3D.new()
 	fin_cu.albedo_texture = fin_cu_pair[0]
 	fin_cu.normal_enabled = true
@@ -346,19 +397,34 @@ void sky() {
 	vec3 hor_sunset = vec3(0.92, 0.56, 0.34);
 	vec3 hor_night = vec3(0.05, 0.07, 0.12);
 
+	// Dreistufiger Verlauf: kräftiges Blau oben, helleres Blau in der Mitte, Dunst am Horizont
+	top_day = vec3(0.13, 0.33, 0.68);
+	vec3 mid_day = vec3(0.34, 0.56, 0.84);
+	hor_day = vec3(0.76, 0.85, 0.93);
 	vec3 top_col = mix(mix(top_night, top_day, day_factor), top_sunset, sunset_factor * 0.70);
+	vec3 mid_col = mix(mix(top_night * 1.3, mid_day, day_factor), mix(top_sunset, hor_sunset, 0.45), sunset_factor * 0.75);
 	vec3 hor_col = mix(mix(hor_night, hor_day, day_factor), hor_sunset, sunset_factor * 0.82);
-	vec3 col = mix(hor_col, top_col, pow(h, 0.55));
-
-	if (dir.y < 0.0) {
-		col = mix(hor_col * 0.60, vec3(0.12, 0.13, 0.14), clamp(-dir.y * 3.0, 0.0, 1.0));
-	}
+	vec3 col = mix(hor_col, mid_col, smoothstep(0.0, 0.28, h));
+	col = mix(col, top_col, smoothstep(0.22, 0.95, h));
 
 	vec3 sdir = normalize(sun_dir);
-	float sun_dot = max(dot(dir, sdir), 0.0);
+	float sun_raw = dot(dir, sdir);
+	float sun_dot = max(sun_raw, 0.0);
+	vec3 sun_tint = mix(vec3(1.0, 0.97, 0.90), vec3(1.0, 0.62, 0.36), sunset_factor);
+
+	// Unter dem Horizont: gedämpfter Grünton statt Betongrau (wirkt auch aufs Umgebungslicht)
+	if (dir.y < 0.0) {
+		vec3 ground_col = mix(vec3(0.02, 0.025, 0.03), vec3(0.24, 0.28, 0.22), day_factor);
+		col = mix(hor_col * 0.85, ground_col, clamp(-dir.y * 4.0, 0.0, 1.0));
+	}
+
+	// Helleres Leuchten am Horizont auf der Sonnenseite
+	float mie = pow(sun_dot, 5.0) * (1.0 - h) * 0.28 * (day_factor + sunset_factor);
+	col += sun_tint * mie;
+
 	float sun_disc = smoothstep(0.9988, 0.9996, sun_dot) * day_factor;
 	float sun_halo = pow(sun_dot, 22.0) * 0.38 * (day_factor + sunset_factor * 0.6);
-	vec3 sun_tint = mix(vec3(1.0, 0.97, 0.90), vec3(1.0, 0.62, 0.36), sunset_factor);
+	sun_halo += pow(sun_dot, 180.0) * 0.6 * day_factor;
 	col += sun_tint * (sun_disc * 2.2 + sun_halo);
 
 	vec3 mdir = normalize(vec3(-sdir.x, max(abs(sdir.y), 0.32), -sdir.z));
@@ -381,15 +447,28 @@ void sky() {
 		}
 	}
 
+	// Haufenwolken: zwei Rauschebenen für die Form, eine zur Sonne versetzte Probe für die Schattenseite
 	if (dir.y > 0.02) {
-		vec2 cuv = dir.xz / (dir.y + 0.22) * 1.45 + vec2(TIME * 0.012, TIME * 0.004);
+		vec2 cuv = dir.xz / (dir.y + 0.18) * 1.25 + vec2(TIME * 0.012, TIME * 0.004);
 		float n = fbm(cuv);
-		float cloud_mask = smoothstep(0.50, 0.78, n) * smoothstep(0.02, 0.24, dir.y);
-		vec3 cloud_day = mix(vec3(0.95, 0.96, 0.97), vec3(0.96, 0.76, 0.58), sunset_factor * 0.80);
+		float n2 = fbm(cuv * 2.3 + vec2(7.1, 3.7));
+		float dens = n * 0.75 + n2 * 0.25;
+		float cloud_mask = smoothstep(0.47, 0.72, dens) * smoothstep(0.02, 0.20, dir.y);
+		float ns = fbm(cuv + sdir.xz * 0.15) * 0.75 + n2 * 0.25;
+		float shade = clamp((dens - ns) * 3.5 + 0.65, 0.30, 1.0);
+		vec3 cloud_lit = mix(vec3(1.0, 0.99, 0.97), vec3(1.0, 0.78, 0.58), sunset_factor * 0.80);
+		vec3 cloud_shadow = mix(vec3(0.60, 0.66, 0.75), vec3(0.52, 0.40, 0.45), sunset_factor * 0.70);
+		vec3 cloud_day = mix(cloud_shadow, cloud_lit, shade);
+		// Heller Rand an dünnen Stellen nahe der Sonne
+		cloud_day += sun_tint * pow(sun_dot, 10.0) * 0.35 * (1.0 - smoothstep(0.55, 0.8, dens));
 		vec3 cloud_night = vec3(0.09, 0.11, 0.16);
 		vec3 cloud_col = mix(cloud_night, cloud_day, day_factor);
-		col = mix(col, cloud_col, cloud_mask * 0.70);
+		col = mix(col, cloud_col, cloud_mask * 0.88);
 	}
+
+	// Dunstschleier direkt über dem Horizont, blendet in die Baumreihe über
+	float haze = exp(-max(dir.y, 0.0) * 16.0) * step(0.0, dir.y);
+	col = mix(col, hor_col, haze * 0.40);
 
 	COLOR = col;
 }
@@ -501,43 +580,192 @@ void fragment() {
 # CRISP REALISTIC PROCEDURAL PBR TEXTURE GENERATORS
 # ==============================================================================
 
-func _gen_tiled_concrete(size: int) -> Array:
-	var n := _make_noise(FastNoiseLite.TYPE_SIMPLEX_SMOOTH, 0.06, 4, 101)
-	var alb := Image.create(size, size, false, Image.FORMAT_RGB8)
-	var hgt := Image.create(size, size, false, Image.FORMAT_L8)
+## Lädt [Albedo, Normal-Map] für `key` aus user://tex_cache oder rechnet sie einmal mit `render(size)` und speichert sie.
+## `render` muss [Albedo-Image RGB8, Normal-Image] liefern. Rückgabe: zwei ImageTextures mit Mipmaps.
+func _cached_tex_pair(key: String, size: int, render: Callable) -> Array:
+	var cache_key := "%s_v%d_%d" % [key, SURFACE_TEX_VERSION, size]
+	return _cached_textures(cache_key, func() -> Array: return render.call(size), [false, true])
+
+
+## Lädt Texturen für `key` als fertige Images mit Mipmaps aus user://tex_cache (.res) oder rechnet sie
+## einmal mit `render` und speichert sie. `render` liefert ein Array aus Image oder ImageTexture,
+## `normal_flags[i]` gibt an, ob Eintrag i eine Normal-Map ist. Rückgabe: ImageTextures mit Mipmaps.
+## Grund: PNG entpacken und Mipmaps rechnen kostete bei jedem Start ~314 ms (gemessen).
+func _cached_textures(key: String, render: Callable, normal_flags: Array) -> Array:
+	var count := normal_flags.size()
+	var paths: PackedStringArray = []
+	for i in range(count):
+		paths.append("%s/%s_%d.res" % [WALL_TEX_CACHE_DIR, key, i])
+
+	var imgs: Array = []
+	for p in paths:
+		if not ResourceLoader.exists(p):
+			imgs.clear()
+			break
+		var res := ResourceLoader.load(p, "Image", ResourceLoader.CACHE_MODE_IGNORE)
+		if not (res is Image) or (res as Image).is_empty() or not (res as Image).has_mipmaps():
+			imgs.clear()
+			break
+		imgs.append(res)
+
+	if imgs.size() != count:
+		imgs = _images_with_mipmaps(render.call(), normal_flags)
+		DirAccess.make_dir_recursive_absolute(WALL_TEX_CACHE_DIR)
+		for i in range(count):
+			if imgs[i] == null:
+				continue
+			var err := ResourceSaver.save(imgs[i] as Image, paths[i])
+			if err != OK:
+				push_warning("Textur konnte nicht gecacht werden: %s (Fehler %d)" % [paths[i], err])
+
+	var out: Array = []
+	for img in imgs:
+		if img == null:
+			out.append(null)
+			continue
+		var tex := ImageTexture.create_from_image(img as Image)
+		_mipmapped[tex] = true
+		out.append(tex)
+	return out
+
+
+func _images_with_mipmaps(raw: Variant, normal_flags: Array) -> Array:
+	var items: Array = raw if raw is Array else []
+	var imgs: Array = []
+	for i in range(normal_flags.size()):
+		var item: Variant = items[i] if i < items.size() else null
+		var img: Image = null
+		if item is Image:
+			img = item as Image
+		elif item is Texture2D:
+			img = (item as Texture2D).get_image()
+		if img == null or img.is_empty():
+			push_warning("Texturgenerator lieferte für Eintrag %d kein Bild" % i)
+			imgs.append(null)
+			continue
+		if not img.is_compressed() and not img.has_mipmaps():
+			img.generate_mipmaps(bool(normal_flags[i]))
+		imgs.append(img)
+	return imgs
+
+
+## Kachelbares Rauschen als Graustufen-Bytes (0..255), nativ erzeugt statt per get_noise_2d pro Pixel.
+func _noise_l8(noise_type: int, freq: float, octaves: int, seed_val: int, size: int) -> PackedByteArray:
+	var img := _make_noise(noise_type, freq, octaves, seed_val).get_seamless_image(size, size)
+	img.convert(Image.FORMAT_L8)
+	return img.get_data()
+
+
+func _finish_pair(size: int, alb: PackedByteArray, hg: PackedByteArray, bump: float) -> Array:
+	var alb_img := Image.create_from_data(size, size, false, Image.FORMAT_RGB8, alb)
+	var nrm_img := Image.create_from_data(size, size, false, Image.FORMAT_L8, hg)
+	nrm_img.bump_map_to_normal_map(bump)
+	return [alb_img, nrm_img]
+
+
+## Gegossener Garagenboden: 2 × 2 Platten pro Kachel mit Fugenschnitt und gefaster Kante,
+## Kellenflecken, Zuschlagkörnung, Luftporen und leicht unterschiedlichem Farbton pro Platte.
+func _render_concrete(size: int) -> Array:
 	var tile := size / 2
+	var joint := maxi(2, size / 256)
+	var bevel := maxi(2, size / 256)
+	var cd := _noise_l8(FastNoiseLite.TYPE_SIMPLEX_SMOOTH, 0.004, 4, 101, size)
+	var md := _noise_l8(FastNoiseLite.TYPE_SIMPLEX, 0.03, 3, 102, size)
+	var fd := _noise_l8(FastNoiseLite.TYPE_SIMPLEX, 0.45, 1, 103, size)
+	var alb := PackedByteArray()
+	alb.resize(size * size * 3)
+	var hg := PackedByteArray()
+	hg.resize(size * size)
 	for y in range(size):
+		var slab_row := y / tile
+		var gy := y % tile
+		var dy := mini(gy, tile - 1 - gy)
+		var slab_var_l := float(((0 * 73856093) ^ ((slab_row + 1) * 19349663)) & 1023) / 1023.0
+		var slab_var_r := float(((1 * 73856093) ^ ((slab_row + 1) * 19349663)) & 1023) / 1023.0
 		for x in range(size):
-			var v := (n.get_noise_2d(float(x), float(y)) + 1.0) * 0.5
 			var gx := x % tile
-			var gy := y % tile
-			var is_seam := (gx <= 2 or gy <= 2)
-			var base := lerpf(0.46, 0.58, v)
-			if is_seam:
-				base *= 0.62
-			# Warm natural garage concrete (zero blue cast)
-			alb.set_pixel(x, y, Color(base * 1.01, base * 1.0, base * 0.97))
-			var hv := 0.24 if is_seam else lerpf(0.52, 0.78, v)
-			hgt.set_pixel(x, y, Color(hv, hv, hv))
-	return [ImageTexture.create_from_image(alb), _height_to_normal(hgt, 2.0)]
+			var d := mini(dy, mini(gx, tile - 1 - gx))
+			var i := y * size + x
+			var c := float(cd[i]) / 255.0
+			var m := float(md[i]) / 255.0
+			var f := float(fd[i]) / 255.0
+			var slab_var := slab_var_l if x < tile else slab_var_r
+			var v := c * 0.55 + m * 0.30 + slab_var * 0.15
+			var base := lerpf(0.46, 0.60, v) * (0.95 + f * 0.09)
+			var h := lerpf(0.55, 0.75, v) + (f - 0.5) * 0.08
+			if f < 0.05:
+				# Luftporen
+				base *= 0.78
+				h -= 0.14
+			elif f > 0.96:
+				# helle Zuschlagkörner
+				base *= 1.07
+			if d < joint:
+				base *= 0.55
+				h = 0.16
+			elif d < joint + bevel:
+				var e := float(d - joint + 1) / float(bevel + 1)
+				base *= lerpf(0.80, 1.0, e)
+				h = lerpf(0.30, h, e)
+			var j := i * 3
+			# Warmer Beton ohne Blaustich
+			alb[j] = clampi(int(base * 1.01 * 255.0), 0, 255)
+			alb[j + 1] = clampi(int(base * 255.0), 0, 255)
+			alb[j + 2] = clampi(int(base * 0.97 * 255.0), 0, 255)
+			hg[i] = clampi(int(h * 255.0), 0, 255)
+	return _finish_pair(size, alb, hg, 5.0)
 
 
-func _gen_raised_floor_tiles(size: int, col_a: Color, col_b: Color, grout_col: Color) -> Array:
-	var n := _make_noise(FastNoiseLite.TYPE_SIMPLEX, 0.14, 3, 202)
-	var alb := Image.create(size, size, false, Image.FORMAT_RGB8)
-	var hgt := Image.create(size, size, false, Image.FORMAT_L8)
+## Doppelboden: 4 × 4 Platten pro Kachel, schmale Fuge, gefaste Plattenkante,
+## Farbton pro Platte und feine helle/dunkle Chips wie bei antistatischem Vinylbelag.
+func _render_raised_floor(size: int, col_a: Color, col_b: Color, grout_col: Color) -> Array:
 	var tile := size / 4
+	var joint := maxi(2, size / 400)
+	var bevel := maxi(3, size / 128)
+	var cd := _noise_l8(FastNoiseLite.TYPE_SIMPLEX_SMOOTH, 0.006, 3, 202, size)
+	var fd := _noise_l8(FastNoiseLite.TYPE_SIMPLEX, 0.35, 1, 203, size)
+	var alb := PackedByteArray()
+	alb.resize(size * size * 3)
+	var hg := PackedByteArray()
+	hg.resize(size * size)
 	for y in range(size):
+		var ty := y / tile
+		var gy := y % tile
+		var dy := mini(gy, tile - 1 - gy)
 		for x in range(size):
-			var v := (n.get_noise_2d(float(x), float(y)) + 1.0) * 0.5
+			var tx := x / tile
 			var gx := x % tile
-			var gy := y % tile
-			var is_grout := (gx <= 1 or gy <= 1)
-			var c := grout_col if is_grout else col_a.lerp(col_b, v)
-			alb.set_pixel(x, y, c)
-			var hv := 0.20 if is_grout else lerpf(0.68, 0.80, v)
-			hgt.set_pixel(x, y, Color(hv, hv, hv))
-	return [ImageTexture.create_from_image(alb), _height_to_normal(hgt, 1.8)]
+			var d := mini(dy, mini(gx, tile - 1 - gx))
+			var i := y * size + x
+			var c := float(cd[i]) / 255.0
+			var f := float(fd[i]) / 255.0
+			var tile_var := float((((tx + 1) * 73856093) ^ ((ty + 1) * 19349663)) & 1023) / 1023.0
+			var t := clampf(c * 0.6 + tile_var * 0.4, 0.0, 1.0)
+			var r := lerpf(col_a.r, col_b.r, t)
+			var g := lerpf(col_a.g, col_b.g, t)
+			var b := lerpf(col_a.b, col_b.b, t)
+			var shade := 0.97 + c * 0.04
+			var h := 0.80 + (c - 0.5) * 0.04
+			if f > 0.93:
+				shade *= 1.10
+			elif f < 0.07:
+				shade *= 0.88
+			if d < joint:
+				r = grout_col.r
+				g = grout_col.g
+				b = grout_col.b
+				shade = 1.0
+				h = 0.14
+			elif d < joint + bevel:
+				var e := float(d - joint + 1) / float(bevel + 1)
+				shade *= lerpf(0.86, 1.0, e)
+				h = lerpf(0.42, h, e)
+			var j := i * 3
+			alb[j] = clampi(int(r * shade * 255.0), 0, 255)
+			alb[j + 1] = clampi(int(g * shade * 255.0), 0, 255)
+			alb[j + 2] = clampi(int(b * shade * 255.0), 0, 255)
+			hg[i] = clampi(int(h * 255.0), 0, 255)
+	return _finish_pair(size, alb, hg, 6.0)
 
 
 func _gen_pcb_tex(size: int, base_col: Color, trace_col: Color, pad_col: Color) -> Array:
@@ -617,52 +845,110 @@ func _gen_perforated_mesh_tex(size: int) -> Array:
 	return [ImageTexture.create_from_image(alb), _height_to_normal(hgt, 3.0)]
 
 
+## Warnstreifen mit leichter Abnutzung. Streifenbreite size/4, damit sich das diagonale Muster
+## an den Kachelrändern nahtlos fortsetzt (die alte Breite 24 von 128 erzeugte eine Naht).
 func _gen_hazard_stripes_tex(size: int) -> ImageTexture:
-	var img := Image.create(size, size, false, Image.FORMAT_RGB8)
+	var band_w := maxi(1, size / 4)
+	var wear := _noise_l8(FastNoiseLite.TYPE_SIMPLEX, 0.05, 4, 660, size)
 	var yellow := Color(0.82, 0.64, 0.14)
 	var dark := Color(0.14, 0.14, 0.15)
+	var px := PackedByteArray()
+	px.resize(size * size * 3)
 	for y in range(size):
 		for x in range(size):
-			var band := ((x + y) / 24) % 2
-			img.set_pixel(x, y, yellow if band == 0 else dark)
-	return ImageTexture.create_from_image(img)
+			var i := y * size + x
+			var c := yellow if ((x + y) / band_w) % 2 == 0 else dark
+			var w := 0.92 + float(wear[i]) / 255.0 * 0.10
+			var j := i * 3
+			px[j] = clampi(int(c.r * w * 255.0), 0, 255)
+			px[j + 1] = clampi(int(c.g * w * 255.0), 0, 255)
+			px[j + 2] = clampi(int(c.b * w * 255.0), 0, 255)
+	return ImageTexture.create_from_image(Image.create_from_data(size, size, false, Image.FORMAT_RGB8, px))
 
 
-func _gen_corrugated_tex(size: int) -> Array:
-	var alb := Image.create(size, size, false, Image.FORMAT_RGB8)
-	var hgt := Image.create(size, size, false, Image.FORMAT_L8)
+## Wellblech: 8 Wellen pro Kachel wie bisher, dazu Verzinkungsflecken und feine Körnung.
+func _render_corrugated(size: int) -> Array:
+	var sd := _noise_l8(FastNoiseLite.TYPE_SIMPLEX_SMOOTH, 0.008, 3, 671, size)
+	var fd := _noise_l8(FastNoiseLite.TYPE_SIMPLEX, 0.30, 1, 672, size)
+	var alb := PackedByteArray()
+	alb.resize(size * size * 3)
+	var hg := PackedByteArray()
+	hg.resize(size * size)
 	for y in range(size):
 		var wave := 0.5 + 0.5 * sin(float(y) / float(size) * TAU * 8.0)
-		var shade := lerpf(0.46, 0.62, wave)
+		var base := lerpf(0.46, 0.62, wave)
 		for x in range(size):
-			alb.set_pixel(x, y, Color(shade, shade, shade))
-			hgt.set_pixel(x, y, Color(wave, wave, wave))
-	return [ImageTexture.create_from_image(alb), _height_to_normal(hgt, 2.6)]
+			var i := y * size + x
+			var s := float(sd[i]) / 255.0
+			var f := float(fd[i]) / 255.0
+			var v := clampi(int(base * (0.92 + s * 0.12) * (0.97 + f * 0.06) * 255.0), 0, 255)
+			var j := i * 3
+			alb[j] = v
+			alb[j + 1] = v
+			alb[j + 2] = v
+			hg[i] = clampi(int((wave * 0.92 + f * 0.03) * 255.0), 0, 255)
+	return _finish_pair(size, alb, hg, 10.0)
 
 
-func _gen_brick_tex(size: int) -> Array:
-	var n := _make_noise(FastNoiseLite.TYPE_SIMPLEX, 0.12, 3, 777)
-	var alb := Image.create(size, size, false, Image.FORMAT_RGB8)
-	var hgt := Image.create(size, size, false, Image.FORMAT_L8)
-	var bh := 32
-	var bw := 64
+## Ziegelfassade: gleiche Steinaufteilung wie bisher (4 × 8 pro Kachel), dazu Farbton pro Stein,
+## gefaste Kanten, vertiefte Mörtelfugen mit Körnung und kleine Poren im Stein.
+func _render_brick(size: int) -> Array:
+	var bw := size / 4
+	var bh := size / 8
+	var joint := maxi(2, size / 200)
+	var bevel := maxi(3, size / 170)
+	var cd := _noise_l8(FastNoiseLite.TYPE_SIMPLEX_SMOOTH, 0.006, 4, 777, size)
+	var md := _noise_l8(FastNoiseLite.TYPE_SIMPLEX, 0.05, 3, 778, size)
+	var fd := _noise_l8(FastNoiseLite.TYPE_SIMPLEX, 0.40, 1, 779, size)
+	var alb := PackedByteArray()
+	alb.resize(size * size * 3)
+	var hg := PackedByteArray()
+	hg.resize(size * size)
 	for y in range(size):
 		var row := y / bh
 		var ly := y % bh
+		var dy := mini(ly, bh - 1 - ly)
+		var shift := bw / 2 if row % 2 == 1 else 0
 		for x in range(size):
-			var sx := (x + (row % 2) * (bw / 2)) % size
+			var sx := (x + shift) % size
+			var col := sx / bw
 			var lx := sx % bw
-			var is_mortar := (lx < 3 or ly < 3)
-			var nv := (n.get_noise_2d(float(x), float(y)) + 1.0) * 0.5
-			if is_mortar:
-				alb.set_pixel(x, y, Color(0.58, 0.56, 0.52))
-				hgt.set_pixel(x, y, Color(0.20, 0.20, 0.20))
+			var d := mini(dy, mini(lx, bw - 1 - lx))
+			var i := y * size + x
+			var c := float(cd[i]) / 255.0
+			var m := float(md[i]) / 255.0
+			var f := float(fd[i]) / 255.0
+			var r: float
+			var g: float
+			var b: float
+			var h: float
+			if d < joint:
+				var mv := 0.90 + f * 0.14
+				r = 0.58 * mv
+				g = 0.56 * mv
+				b = 0.52 * mv
+				h = 0.16 + f * 0.08
 			else:
-				var br := lerpf(0.44, 0.58, nv)
-				alb.set_pixel(x, y, Color(br * 1.12, br * 0.64, br * 0.48))
-				var hv := lerpf(0.72, 0.88, nv)
-				hgt.set_pixel(x, y, Color(hv, hv, hv))
-	return [ImageTexture.create_from_image(alb), _height_to_normal(hgt, 2.6)]
+				var hsh := (((col + 1) * 73856093) ^ ((row + 1) * 19349663)) & 1023
+				var brick_var := float(hsh) / 1023.0
+				var hue := float((hsh >> 3) & 127) / 127.0
+				var e := clampf(float(d - joint + 1) / float(bevel), 0.0, 1.0)
+				e = e * (2.0 - e)
+				var br := lerpf(0.40, 0.60, clampf(brick_var * 0.45 + c * 0.35 + m * 0.20, 0.0, 1.0))
+				br *= (0.93 + f * 0.12) * lerpf(0.88, 1.0, e)
+				h = lerpf(0.40, 0.80, e) + (m - 0.5) * 0.10 + (f - 0.5) * 0.08
+				if f < 0.06:
+					br *= 0.85
+					h -= 0.15
+				r = br * lerpf(1.06, 1.18, hue)
+				g = br * 0.64
+				b = br * 0.48
+			var j := i * 3
+			alb[j] = clampi(int(r * 255.0), 0, 255)
+			alb[j + 1] = clampi(int(g * 255.0), 0, 255)
+			alb[j + 2] = clampi(int(b * 255.0), 0, 255)
+			hg[i] = clampi(int(h * 255.0), 0, 255)
+	return _finish_pair(size, alb, hg, 5.0)
 
 
 func _height_to_normal(hgt: Image, strength: float) -> ImageTexture:
@@ -682,6 +968,88 @@ func _height_to_normal(hgt: Image, strength: float) -> ImageTexture:
 			var v := Vector3((hl - hr) * strength, (hu - hd) * strength, 1.0).normalized()
 			norm.set_pixel(x, y, Color(v.x * 0.5 + 0.5, v.y * 0.5 + 0.5, v.z * 0.5 + 0.5))
 	return ImageTexture.create_from_image(norm)
+
+
+## Liefert [Albedo oben, Albedo Sockel, Normal-Map] als ImageTextures mit Mipmaps.
+## Lädt aus dem Cache in user://, sonst wird einmal gerechnet und gespeichert.
+func _gen_block_wall_set(size: int, upper_a: Color, upper_b: Color, lower_a: Color, lower_b: Color) -> Array:
+	var cache_key := "block_wall_v%d_%d" % [WALL_TEX_VERSION, size]
+	return _cached_textures(cache_key, func() -> Array:
+		return _render_block_wall(size, upper_a, upper_b, lower_a, lower_b), [false, false, true])
+
+
+## Rechnet die Wand: 4 × 8 Steine (40 × 20 cm) pro Kachel, ~1 cm Fuge, gefaste Kanten,
+## feine Porenstruktur unter der Farbe, leichte Farbunterschiede pro Stein und großflächig.
+## Arbeitet auf PackedByteArrays statt set_pixel, damit 1024² Pixel schnell genug gehen.
+func _render_block_wall(size: int, upper_a: Color, upper_b: Color, lower_a: Color, lower_b: Color) -> Array:
+	var cols := 4
+	var rows := 8
+	var bw := size / cols
+	var bh := size / rows
+	var joint := maxi(2, size / 170)
+	var bevel := maxi(3, size / 100)
+
+	var fine_img := _make_noise(FastNoiseLite.TYPE_SIMPLEX, 0.30, 2, 4041).get_seamless_image(size, size)
+	var coarse_img := _make_noise(FastNoiseLite.TYPE_SIMPLEX_SMOOTH, 0.0045, 3, 4042).get_seamless_image(size, size)
+	fine_img.convert(Image.FORMAT_L8)
+	coarse_img.convert(Image.FORMAT_L8)
+	var fd := fine_img.get_data()
+	var cd := coarse_img.get_data()
+
+	var up := PackedByteArray()
+	up.resize(size * size * 3)
+	var lo := PackedByteArray()
+	lo.resize(size * size * 3)
+	var hg := PackedByteArray()
+	hg.resize(size * size)
+
+	for y in range(size):
+		var row := y / bh
+		var ly := y % bh
+		var dy := mini(ly, bh - 1 - ly)
+		var shift := bw / 2 if row % 2 == 1 else 0
+		for x in range(size):
+			var sx := (x + shift) % size
+			var col := sx / bw
+			var lx := sx % bw
+			var d := mini(dy, mini(lx, bw - 1 - lx))
+			var i := y * size + x
+			var f := float(fd[i]) / 255.0
+			var c := float(cd[i]) / 255.0
+			var h: float
+			var t: float
+			var shade: float
+			if d < joint:
+				# Fuge: vertieft, etwas dunkler, gleiche Farbe (überstrichen).
+				h = 0.16 + f * 0.08
+				t = c
+				shade = 0.80 + f * 0.06
+			else:
+				var edge := clampf(float(d - joint + 1) / float(bevel), 0.0, 1.0)
+				edge = edge * (2.0 - edge)
+				var block_var := float(((col * 73856093) ^ (row * 19349663)) & 1023) / 1023.0
+				t = clampf(c * 0.7 + block_var * 0.3, 0.0, 1.0)
+				h = lerpf(0.40, 0.74, edge) + (f - 0.5) * 0.14
+				shade = lerpf(0.91, 1.0, edge) * (0.95 + f * 0.09)
+				if f < 0.14:
+					# Kleine Poren im Stein.
+					h -= 0.16
+					shade *= 0.86
+			hg[i] = clampi(int(h * 255.0), 0, 255)
+			var j := i * 3
+			up[j] = clampi(int(lerpf(upper_a.r, upper_b.r, t) * shade * 255.0), 0, 255)
+			up[j + 1] = clampi(int(lerpf(upper_a.g, upper_b.g, t) * shade * 255.0), 0, 255)
+			up[j + 2] = clampi(int(lerpf(upper_a.b, upper_b.b, t) * shade * 255.0), 0, 255)
+			lo[j] = clampi(int(lerpf(lower_a.r, lower_b.r, t) * shade * 255.0), 0, 255)
+			lo[j + 1] = clampi(int(lerpf(lower_a.g, lower_b.g, t) * shade * 255.0), 0, 255)
+			lo[j + 2] = clampi(int(lerpf(lower_a.b, lower_b.b, t) * shade * 255.0), 0, 255)
+
+	var up_img := Image.create_from_data(size, size, false, Image.FORMAT_RGB8, up)
+	var lo_img := Image.create_from_data(size, size, false, Image.FORMAT_RGB8, lo)
+	var nrm_img := Image.create_from_data(size, size, false, Image.FORMAT_L8, hg)
+	# Gleiche Umrechnung, die NoiseTexture2D für as_normal_map nutzt (native, schnell).
+	nrm_img.bump_map_to_normal_map(5.0)
+	return [up_img, lo_img, nrm_img]
 
 
 func _make_noise(noise_type: int, freq: float, octaves: int, seed_val: int) -> FastNoiseLite:

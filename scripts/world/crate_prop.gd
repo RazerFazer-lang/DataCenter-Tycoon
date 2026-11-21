@@ -46,7 +46,7 @@ func _build_geometry() -> void:
 	var custom := ModelLoader.instantiate_custom_model("crate")
 	if custom != null:
 		add_child(custom)
-	elif item_type == "web_server" or item_type == "storage_server" or item_type == "gpu_server" or item_type == "net_switch":
+	elif GameState.is_slot_upgradeable(item_type) or item_type == "net_switch":
 		# Open-top cardboard + protective ESD foam tray revealing the REAL 3D Server Hardware inside!
 		var box_mat := MatLib.get_mat("cardboard")
 		var foam_mat := MatLib.get_mat("packing_foam")
@@ -65,7 +65,14 @@ func _build_geometry() -> void:
 	else:
 		# Realistic strapped industrial freight carton for large equipment (Racks, Coolers, UPS, Cart)
 		var pkg := HardwareMeshFactory.build_item_visual(item_type)
-		pkg.scale = Vector3(1.12, 1.18, 1.12)
+		# Das echte Sicherungsmodell bekommt keinen Zusatzfaktor, wie in der Garagen-Ablage.
+		# Fällt es auf den Karton zurück, bleibt der bisherige Faktor erhalten.
+		var uses_fuse_model := item_type == "old_fuse" and ModelLoader.has_custom_model("fuse_d02_blown")
+		if not uses_fuse_model:
+			pkg.scale = Vector3(1.12, 1.18, 1.12)
+		else:
+			# Das Modell ist im Ursprung zentriert (Unterkante bei y = -0.024 m). Um die Höhe anheben, damit es auf dem Boden liegt.
+			pkg.position = Vector3(0.0, 0.024, 0.0)
 		add_child(pkg)
 
 	_label = Label3D.new()

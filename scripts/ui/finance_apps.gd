@@ -53,18 +53,18 @@ static func render_staff(host: Control, feedback: String, feedback_ok: bool) -> 
 		info.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		row.add_child(info)
 		info.add_child(_label(str(e["name"]), 15, COL_TEXT))
-		info.add_child(_label("%s  •  Erfahrung %d/5  •  seit Tag %d" % [FinanceManager.get_role_title(role), skill, int(e["hired_day"])], 12, COL_MUTED))
+		info.add_child(_label(_t("%s  •  Erfahrung %d/5  •  seit Tag %d") % [_t(FinanceManager.get_role_title(role)), skill, int(e["hired_day"])], 12, COL_MUTED))
 		info.add_child(_bar(float(skill) / 5.0, COL_ACCENT))
 		info.add_child(_label(_work_text(role, skill, int(e["work_done"])), 12, COL_MUTED, true))
 
 		var right := VBoxContainer.new()
 		right.alignment = BoxContainer.ALIGNMENT_CENTER
 		row.add_child(right)
-		var wage_lbl := _label("%s / Tag" % _money(float(wage)), 14, COL_TEXT)
+		var wage_lbl := _label(_t("%s / Tag") % _money(float(wage)), 14, COL_TEXT)
 		wage_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
 		right.add_child(wage_lbl)
 		var severance := float(wage * FinanceScript.SEVERANCE_DAYS)
-		right.add_child(_button("Entlassen (Abfindung %s)" % _money(severance), COL_BAD, func(): FinanceManager.request_fire(eid)))
+		right.add_child(_button(_t("Entlassen (Abfindung %s)") % _money(severance), COL_BAD, func(): FinanceManager.request_fire(eid)))
 
 	_section(body, "Bewerbungen")
 	var cands: Array = FinanceManager.get_candidates()
@@ -87,17 +87,17 @@ static func render_staff(host: Control, feedback: String, feedback_ok: bool) -> 
 		var info := VBoxContainer.new()
 		info.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		row.add_child(info)
-		info.add_child(_label("%s  —  %s" % [str(c["name"]), FinanceManager.get_role_title(role)], 15, COL_TEXT))
-		info.add_child(_label("Erfahrung %d/5  •  Lohn %s pro Tag" % [skill, _money(float(wage))], 12, COL_MUTED))
+		info.add_child(_label("%s  —  %s" % [str(c["name"]), _t(FinanceManager.get_role_title(role))], 15, COL_TEXT))
+		info.add_child(_label(_t("Erfahrung %d/5  •  Lohn %s pro Tag") % [skill, _money(float(wage))], 12, COL_MUTED))
 		info.add_child(_bar(float(skill) / 5.0, COL_MUTED))
-		info.add_child(_label(str(r.get("desc", "")), 12, COL_MUTED, true))
+		info.add_child(_label(_t(str(r.get("desc", ""))), 12, COL_MUTED, true))
 
 		var can_pay := GameState.money >= float(wage)
-		var hire_btn := _button("Einstellen (Startprämie %s)" % _money(float(wage)), COL_GOOD, func(): FinanceManager.request_hire(idx), not full and can_pay)
+		var hire_btn := _button(_t("Einstellen (Startprämie %s)") % _money(float(wage)), COL_GOOD, func(): FinanceManager.request_hire(idx), not full and can_pay)
 		if full:
-			hire_btn.tooltip_text = "Das Team ist voll."
+			hire_btn.tooltip_text = _t("Das Team ist voll.")
 		elif not can_pay:
-			hire_btn.tooltip_text = "Zu wenig Geld für die Startprämie."
+			hire_btn.tooltip_text = _t("Zu wenig Geld für die Startprämie.")
 		row.add_child(hire_btn)
 
 
@@ -109,10 +109,10 @@ static func _role_icon(role: String) -> String:
 static func _work_text(role: String, skill: int, done: int) -> String:
 	if role == "support":
 		var interval := maxf(FinanceScript.SUPPORT_MIN_INTERVAL, FinanceScript.SUPPORT_BASE_INTERVAL - FinanceScript.SUPPORT_SKILL_STEP * float(skill))
-		return "Beantwortet etwa alle %d s ein offenes Ticket  •  %d Tickets beantwortet" % [int(interval), done]
+		return _t("Beantwortet etwa alle %d s ein offenes Ticket  •  %d Tickets beantwortet") % [int(interval), done]
 	if role == "accounting":
-		var when := "einen Tag vor Fälligkeit" if skill >= 3 else "am Fälligkeitstag"
-		return "Bezahlt Rechnungen %s  •  %d Rechnungen bezahlt" % [when, done]
+		var when := _t("einen Tag vor Fälligkeit") if skill >= 3 else _t("am Fälligkeitstag")
+		return _t("Bezahlt Rechnungen %s  •  %d Rechnungen bezahlt") % [when, done]
 	return ""
 
 
@@ -136,9 +136,9 @@ static func render_bank(host: Control, feedback: String, feedback_ok: bool) -> v
 	var score_ratio := float(score - FinanceScript.SCORE_MIN) / float(FinanceScript.SCORE_MAX - FinanceScript.SCORE_MIN)
 	var score_col := COL_GOOD if score >= 680 else (COL_WARN if score >= 560 else COL_BAD)
 	var score_card := _card(body, score_col)
-	score_card.add_child(_label("Bonität: %d  (%s)" % [score, FinanceManager.get_score_label()], 15, COL_TEXT))
+	score_card.add_child(_label(_t("Bonität: %d  (%s)") % [score, _t(FinanceManager.get_score_label())], 15, COL_TEXT))
 	score_card.add_child(_bar(score_ratio, score_col))
-	score_card.add_child(_label("Kreditrahmen %s  •  davon frei %s" % [
+	score_card.add_child(_label(_t("Kreditrahmen %s  •  davon frei %s") % [
 		_money(float(FinanceManager.get_credit_limit())), _money(FinanceManager.get_free_credit())
 	], 13, COL_TEXT))
 	score_card.add_child(_label("Pünktlich bezahlte Rechnungen und Raten verbessern die Bonität. Mahnungen, Inkasso und geplatzte Raten senken sie.", 12, COL_MUTED, true))
@@ -158,20 +158,20 @@ static func render_bank(host: Control, feedback: String, feedback_ok: bool) -> v
 		var card := _card(body, COL_BAD if missed > 0 else COL_ACCENT)
 		var top := HBoxContainer.new()
 		card.add_child(top)
-		var title := _label("%s  •  %s" % [str(ln["title"]), lid], 15, COL_TEXT)
+		var title := _label("%s  •  %s" % [_t(str(ln["title"])), lid], 15, COL_TEXT)
 		title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		top.add_child(title)
-		top.add_child(_label("Restschuld %s von %s" % [_money(remaining), _money(total)], 13, COL_TEXT))
+		top.add_child(_label(_t("Restschuld %s von %s") % [_money(remaining), _money(total)], 13, COL_TEXT))
 		card.add_child(_bar(1.0 - remaining / total, COL_GOOD))
-		card.add_child(_label("Rate %s pro Tag  •  noch %d Tage  •  Zins %d %%  •  aufgenommen an Tag %d" % [
+		card.add_child(_label(_t("Rate %s pro Tag  •  noch %d Tage  •  Zins %d %%  •  aufgenommen an Tag %d") % [
 			_money(float(ln["daily_payment"])), int(ln["days_left"]), int(roundf(float(ln["rate"]) * 100.0)), int(ln["taken_day"])
 		], 12, COL_MUTED, true))
 		if missed > 0:
-			card.add_child(_label("%d Rate(n) geplatzt. Jede geplatzte Rate kostet %d %% Verzugszins." % [
+			card.add_child(_label(_t("%d Rate(n) geplatzt. Jede geplatzte Rate kostet %d %% Verzugszins.") % [
 				missed, int(FinanceScript.LOAN_LATE_PENALTY_PCT * 100.0)
 			], 12, COL_BAD, true))
 		var cost: int = FinanceManager.get_loan_repay_cost(ln)
-		var repay := _button("Sondertilgung %s (%d %% Rabatt)" % [_money(float(cost)), int(FinanceScript.EARLY_REPAY_DISCOUNT * 100.0)],
+		var repay := _button(_t("Sondertilgung %s (%d %% Rabatt)") % [_money(float(cost)), int(FinanceScript.EARLY_REPAY_DISCOUNT * 100.0)],
 			COL_ACCENT, func(): FinanceManager.request_repay_loan(lid), GameState.money >= float(cost))
 		repay.size_flags_horizontal = Control.SIZE_SHRINK_END
 		card.add_child(repay)
@@ -189,13 +189,13 @@ static func render_bank(host: Control, feedback: String, feedback_ok: bool) -> v
 		var info := VBoxContainer.new()
 		info.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		row.add_child(info)
-		info.add_child(_label("%s über %s" % [str(offer["title"]), _money(float(offer["amount"]))], 15, COL_TEXT))
-		info.add_child(_label("Zins %d %%  •  Laufzeit %d Tage  •  Rückzahlung %s  •  Rate %s pro Tag" % [
+		info.add_child(_label(_t("%s über %s") % [_t(str(offer["title"])), _money(float(offer["amount"]))], 15, COL_TEXT))
+		info.add_child(_label(_t("Zins %d %%  •  Laufzeit %d Tage  •  Rückzahlung %s  •  Rate %s pro Tag") % [
 			int(roundf(float(offer["rate"]) * 100.0)), int(offer["days"]),
 			_money(float(FinanceManager.get_offer_total(offer))), _money(float(FinanceManager.get_offer_daily(offer)))
 		], 12, COL_MUTED, true))
 		if int(offer["min_score"]) > 0:
-			info.add_child(_label("Ab Bonität %d" % int(offer["min_score"]), 12, COL_MUTED))
+			info.add_child(_label(_t("Ab Bonität %d") % int(offer["min_score"]), 12, COL_MUTED))
 		if not reason.is_empty():
 			info.add_child(_label(reason, 12, COL_BAD, true))
 		row.add_child(_button("Kredit beantragen", COL_GOOD, func(): FinanceManager.request_take_loan(oid), reason.is_empty()))
@@ -218,7 +218,7 @@ static func render_bank(host: Control, feedback: String, feedback_ok: bool) -> v
 		var en: Dictionary = entries[i]
 		var amount := float(en["amount"])
 		grid.add_child(_label(str(int(en["day"])), 12, COL_TEXT))
-		var txt := _label(str(en["text"]), 12, COL_TEXT)
+		var txt := _label(FinanceManager.format_text(str(en["text"]), en.get("args", [])), 12, COL_TEXT)
 		txt.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		txt.clip_text = true
 		grid.add_child(txt)
@@ -246,7 +246,7 @@ static func render_bills(host: Control, feedback: String, feedback_ok: bool) -> 
 		["Offene Rechnungen", str(open_bills.size()), COL_TEXT],
 		["Summe offen", _money(open_total), COL_BAD if open_total > 0.0 else COL_TEXT],
 		["Mahnungen", str(dunning), COL_BAD if dunning > 0 else COL_TEXT],
-		["Nächste Wochenrechnungen", ("Tag %d" % next_week) if next_week >= 0 else "–", COL_TEXT],
+		["Nächste Wochenrechnungen", (_t("Tag %d") % next_week) if next_week >= 0 else "–", COL_TEXT],
 	])
 
 	var acc: Dictionary = FinanceManager.get_accountant()
@@ -259,10 +259,10 @@ static func render_bills(host: Control, feedback: String, feedback_ok: bool) -> 
 	if acc.is_empty():
 		acc_text = "Kein Buchhalter angestellt. In der Personal-App kannst du einen einstellen, der fällige Rechnungen automatisch bezahlt."
 	else:
-		acc_text = "%s bezahlt fällige Rechnungen automatisch, solange genug Geld auf dem Konto ist." % str(acc["name"])
+		acc_text = _t("%s bezahlt fällige Rechnungen automatisch, solange genug Geld auf dem Konto ist.") % str(acc["name"])
 	acc_row.add_child(_label(acc_text, 13, COL_TEXT, true))
 	if not open_bills.is_empty():
-		var pay_all := _button("Alle bezahlen (%s)" % _money(open_total), COL_ACCENT, func(): FinanceManager.request_pay_all(), GameState.money > 0.0)
+		var pay_all := _button(_t("Alle bezahlen (%s)") % _money(open_total), COL_ACCENT, func(): FinanceManager.request_pay_all(), GameState.money > 0.0)
 		acc_row.add_child(pay_all)
 
 	_section(body, "Offen")
@@ -292,26 +292,27 @@ static func render_bills(host: Control, feedback: String, feedback_ok: bool) -> 
 		who.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		top.add_child(who)
 		who.add_child(_label(str(b["vendor"]), 15, COL_TEXT))
-		who.add_child(_label("%s  •  Rechnungsnummer %s" % [str(b["title"]), bid], 12, COL_MUTED))
+		who.add_child(_label(_t("%s  •  Rechnungsnummer %s") % [_t(str(b["title"])), bid], 12, COL_MUTED))
 		var amt_box := VBoxContainer.new()
 		top.add_child(amt_box)
 		var amt_lbl := _label(_money(amount), 18, COL_TEXT)
 		amt_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
 		amt_box.add_child(amt_lbl)
 		if lvl > 0:
-			var badge := _label("%d. Mahnung" % lvl, 12, COL_BAD)
+			var badge := _label(_t("%d. Mahnung") % lvl, 12, COL_BAD)
 			badge.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
 			amt_box.add_child(badge)
 
 		card.add_child(HSeparator.new())
-		card.add_child(_label("Rechnungsdatum: Tag %d   •   Fällig: Tag %d   •   %s" % [int(b["issued_day"]), due, _due_text(days_left)], 12, accent if accent != COL_ACCENT else COL_TEXT, true))
+		card.add_child(_label(_t("Rechnungsdatum: Tag %d   •   Fällig: Tag %d   •   %s") % [int(b["issued_day"]), due, _due_text(days_left)], 12, accent if accent != COL_ACCENT else COL_TEXT, true))
 		var details: Array = b.get("details", [])
 		for d in details:
-			card.add_child(_label("•  " + str(d), 12, COL_MUTED, true))
+			var d_txt: String = FinanceManager.format_text(str(d["text"]), d.get("args", [])) if d is Dictionary else FinanceManager.format_text(str(d))
+			card.add_child(_label("•  " + d_txt, 12, COL_MUTED, true))
 
 		var pay := _button("Jetzt bezahlen", COL_GOOD, func(): FinanceManager.request_pay_bill(bid), GameState.money >= amount)
 		if GameState.money < amount:
-			pay.tooltip_text = "Es fehlen %s." % _money(amount - GameState.money)
+			pay.tooltip_text = _t("Es fehlen %s.") % _money(amount - GameState.money)
 		pay.size_flags_horizontal = Control.SIZE_SHRINK_END
 		card.add_child(pay)
 
@@ -332,30 +333,36 @@ static func render_bills(host: Control, feedback: String, feedback_ok: bool) -> 
 		var p: Dictionary = paid[i]
 		grid.add_child(_label(str(int(p.get("paid_day", 0))), 12, COL_TEXT))
 		grid.add_child(_label(str(p["id"]), 12, COL_TEXT))
-		var vendor := _label("%s (%s)" % [str(p["vendor"]), str(p["title"])], 12, COL_TEXT)
+		var vendor := _label("%s (%s)" % [str(p["vendor"]), _t(str(p["title"]))], 12, COL_TEXT)
 		vendor.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		vendor.clip_text = true
 		grid.add_child(vendor)
 		var amt := _label(_money(float(p["amount"])), 12, COL_TEXT)
 		amt.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
 		grid.add_child(amt)
-		grid.add_child(_label(str(p.get("paid_by", "")), 12, COL_MUTED))
+		grid.add_child(_label(FinanceManager.format_text(str(p.get("paid_by", "")), p.get("paid_by_args", [])), 12, COL_MUTED))
 
 
 static func _due_text(days_left: int) -> String:
 	if days_left < 0:
-		return "überfällig seit %d Tag(en)" % -days_left
+		return _t("überfällig seit %d Tag(en)") % -days_left
 	if days_left == 0:
-		return "heute fällig"
+		return _t("heute fällig")
 	if days_left == 1:
-		return "morgen fällig"
-	return "fällig in %d Tagen" % days_left
+		return _t("morgen fällig")
+	return _t("fällig in %d Tagen") % days_left
 
 
 # ---------------------------------------------------------------- Bausteine
 
 static func _money(v: float) -> String:
 	return FinanceScript.format_money(v)
+
+
+## Übersetzt eine Vorlage, bevor Werte eingesetzt werden. Labels und Buttons
+## übersetzen nur ihren fertigen Text, eine Formatvorlage fänden sie nicht.
+static func _t(text: String) -> String:
+	return String(TranslationServer.translate(text))
 
 
 static func _scroll_body(host: Control) -> VBoxContainer:
@@ -378,7 +385,7 @@ static func _scroll_body(host: Control) -> VBoxContainer:
 
 static func _label(text: String, font_size: int, col: Color, wrap: bool = false) -> Label:
 	var l := Label.new()
-	l.text = text
+	l.text = TranslationServer.translate(text)
 	l.add_theme_font_size_override("font_size", font_size)
 	l.add_theme_color_override("font_color", col)
 	if wrap:

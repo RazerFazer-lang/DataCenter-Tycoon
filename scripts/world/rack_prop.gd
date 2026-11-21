@@ -20,6 +20,8 @@ var _header_label: Label3D
 var _fan_audio: AudioStreamPlayer3D
 var _fire_light: OmniLight3D
 var _roof_fans: Array[Node3D] = []
+## Bewegliche Teile aus dem Blender-Modell: panel_id -> {node, kind, closed, open, is_open, tween}
+var _panels: Dictionary = {}
 
 var _slot_visuals: Array = []
 var _anim_time: float = 0.0
@@ -33,6 +35,11 @@ func setup(id: String, p_rack_type: String = "rack", p_showcase: bool = false) -
 	slot_count = 6 if rack_type == "rack_pro" else 4
 	is_showcase_only = p_showcase
 	_build_rack_geometry()
+	if not is_showcase_only:
+		# Türzustand kommt vom Server, damit alle Spieler dieselben offenen Türen sehen
+		_apply_synced_panel_states(false)
+		if not GameState.panel_states_changed.is_connected(_on_panel_states_changed):
+			GameState.panel_states_changed.connect(_on_panel_states_changed)
 	_setup_fan_audio()
 	SettingsManager.settings_changed.connect(_apply_graphics_setting)
 	_apply_graphics_setting()
@@ -105,7 +112,8 @@ func _process(delta: float) -> void:
 			active_servers += 1
 			var comps: Dictionary = slot.get("components", {})
 			var gpu_lvl := HardwareMeshFactory.get_visual_tier(comps, "gpu")
-			gpu_weight += (1.5 if item_type == "gpu_server" else (0.45 if item_type == "net_switch" else 0.85)) + float(gpu_lvl) * 0.35
+			var chassis := GameState.get_chassis_visual(item_type)
+			gpu_weight += (1.5 if chassis == "gpu_server" else (0.45 if item_type == "net_switch" else 0.85)) + float(gpu_lvl) * 0.35
 
 			var speed := 11.0 + clampf((temp - 25.0) * 0.35, 0.0, 22.0)
 			var hw_fans: Array = vis["hw_fans"]
@@ -229,7 +237,7 @@ func _refresh_visuals() -> void:
 				_clear_children(hw_holder)
 				(vis["hw_fans"] as Array).clear()
 				vis["hw_sig"] = ""
-			slot_lbl.text = "SLOT %d [LEER]" % (i + 1)
+			slot_lbl.text = tr("SLOT %d [LEER]") % (i + 1)
 			slot_lbl.modulate = Color(0.68, 0.70, 0.72)
 		else:
 			used_slots += 1
@@ -261,15 +269,15 @@ func _refresh_visuals() -> void:
 			var cat: Dictionary = GameState.ITEM_CATALOG[item_type]
 			var st := str(slot["state"])
 			if st == "burning":
-				slot_lbl.text = "BRAND! (%.0f%%)" % (float(slot["fire_level"]) * 100.0)
+				slot_lbl.text = tr("BRAND! (%.0f%%)") % (float(slot["fire_level"]) * 100.0)
 				slot_lbl.modulate = Color(0.98, 0.34, 0.16)
 			elif st == "crashed":
 				var rp := float(slot["repair_progress"]) * 100.0
-				slot_lbl.text = "DEFEKT [E] %.0f%%" % rp
+				slot_lbl.text = tr("DEFEKT [E] %.0f%%") % rp
 				slot_lbl.modulate = Color(0.96, 0.34, 0.30)
 			else:
 				var up_tag := _get_upgrade_badge(slot)
-				slot_lbl.text = "%s%s" % [str(cat["name"]), up_tag]
+				slot_lbl.text = "%s%s" % [tr(str(cat["name"])), up_tag]
 				slot_lbl.modulate = Color(0.92, 0.93, 0.94)
 
 	if _header_label != null:
@@ -284,7 +292,7 @@ func _refresh_visuals() -> void:
 			var m: Dictionary = _rack_data.get("metrics", {})
 			var bneck := str(m.get("bottleneck", "ok"))
 			var warn_tag := (" ⚠" + bneck.to_upper()) if bneck != "ok" else ""
-			rent_line = "%s %s • %d User%s • %.0f°C" % [str(prof["icon"]), str(prof["short"]), users, warn_tag, temp]
+			rent_line = tr("%s %s • %d User%s • %.0f°C") % [str(prof["icon"]), tr(str(prof["short"])), users, warn_tag, temp]
 		_header_label.text = "%s%s | %d/%d (%d GB RAM)\n%s" % [
 			rack_id.to_upper(), pro_tag, used_slots, slot_count, rack_ram_gb, rent_line
 		]
@@ -332,50 +340,124 @@ func _build_rack_geometry() -> void:
 		body.add_child(col)
 		add_child(body)
 
-	# 4 Industrial Rubber Leveling Feet + Caster Brackets
-	for fx in [-0.38, 0.38]:
-		for fz in [-0.38, 0.38]:
-			_add_box(self, Vector3(float(fx), 0.025, float(fz)), Vector3(0.085, 0.05, 0.085), dark_mat)
-
-	# Optional custom external .glb visual shell override (assets/models/rack.glb or rack_pro.glb)
+	var plastic_mat := MatLib.get_mat("plastic_black")
+	# Blender-Modell (assets/models/rack.glb bzw. rack_pro.glb) ersetzt das prozedurale Rack.
 	var custom_shell := ModelLoader.instantiate_custom_model(rack_type)
+	var use_procedural_shell := custom_shell == null
 	if custom_shell != null:
 		add_child(custom_shell)
-
-	# Base Plinth, Roof Cap & Twin Spinning Roof Exhaust Fans under Perforated Grilles
-	_add_box(self, Vector3(0.0, 0.10, 0.0), Vector3(0.92, 0.14, 0.92), frame_mat)
-	_add_box(self, Vector3(0.0, top_y, 0.0), Vector3(0.92, 0.16, 0.92), frame_mat)
-	for rx in [-0.20, 0.20]:
-		_add_box(self, Vector3(float(rx), top_y + 0.085, -0.05), Vector3(0.32, 0.02, 0.48), perf_mat)
-		var rf := Node3D.new()
-		rf.position = Vector3(float(rx), top_y + 0.098, -0.05)
-		add_child(rf)
-		_add_box(rf, Vector3.ZERO, Vector3(0.24, 0.015, 0.042), steel_mat)
-		_add_box(rf, Vector3.ZERO, Vector3(0.042, 0.015, 0.24), steel_mat)
-		_roof_fans.append(rf)
-
-	# 4 Vertical Heavy-Gauge Corner Posts + Real 19-Inch Silver Slotted Mounting Rails
+		_setup_custom_shell(custom_shell, total_h)
 	var post_h := total_h - 0.24
 	var mid_y := 0.16 + post_h * 0.5
-	for px in [-0.42, 0.42]:
-		for pz in [-0.42, 0.42]:
-			_add_box(self, Vector3(float(px), mid_y, float(pz)), Vector3(0.068, post_h, 0.068), frame_mat)
-		# Silver 19-inch front & rear mounting rails (zero neon!)
-		_add_box(self, Vector3(float(px) * 0.91, mid_y, 0.37), Vector3(0.030, post_h - 0.06, 0.024), steel_mat)
-		_add_box(self, Vector3(float(px) * 0.91, mid_y, -0.37), Vector3(0.028, post_h - 0.06, 0.022), steel_mat)
 
-	# Pro Cabinet Brushed Aluminum Edge Trim (no neon!)
-	if is_pro:
-		_add_box(self, Vector3(-0.448, mid_y, 0.425), Vector3(0.020, post_h - 0.08, 0.022), steel_mat)
-		_add_box(self, Vector3(0.448, mid_y, 0.425), Vector3(0.020, post_h - 0.08, 0.022), steel_mat)
+	if use_procedural_shell:
+		# 4 Lenkrollen mit Gabel und daneben je ein Stellfuß mit Gummiteller
+		for fx in [-0.38, 0.38]:
+			for fz in [-0.38, 0.38]:
+				var cx := float(fx)
+				var cz := float(fz)
+				_limit_detail_range(_add_box(self, Vector3(cx, 0.048, cz), Vector3(0.070, 0.008, 0.070), steel_mat))
+				_limit_detail_range(_add_box(self, Vector3(cx - 0.018, 0.030, cz), Vector3(0.006, 0.030, 0.036), steel_mat))
+				_limit_detail_range(_add_box(self, Vector3(cx + 0.018, 0.030, cz), Vector3(0.006, 0.030, 0.036), steel_mat))
+				var wheel := _add_cyl(self, Vector3(cx, 0.022, cz), 0.022, 0.026, plastic_mat)
+				_limit_detail_range(wheel)
+				wheel.rotation_degrees.z = 90.0
+				_limit_detail_range(_add_cyl(self, Vector3(cx * 0.80, 0.020, cz * 0.80), 0.006, 0.030, steel_mat))
+				_limit_detail_range(_add_cyl(self, Vector3(cx * 0.80, 0.004, cz * 0.80), 0.018, 0.008, dark_mat))
 
-	# Clear Glass Side Inspection Windows framed in charcoal steel so you see the REAL 3D Server Hardware inside!
-	_add_box(self, Vector3(-0.43, mid_y, 0.0), Vector3(0.016, post_h - 0.22, 0.68), glass)
-	_add_box(self, Vector3(0.43, mid_y, 0.0), Vector3(0.016, post_h - 0.22, 0.68), glass)
-	# Rear perforated airflow door + Rear Vertical PDU Power Strip
-	_add_box(self, Vector3(0.0, mid_y, -0.43), Vector3(0.78, post_h - 0.08, 0.026), perf_mat)
-	_add_box(self, Vector3(0.32, mid_y, -0.452), Vector3(0.082, post_h - 0.22, 0.042), side_mat)
-	_add_box(self, Vector3(0.32, mid_y + 0.55, -0.476), Vector3(0.038, 0.052, 0.016), _mat(Color(0.78, 0.18, 0.14), 0.42, 0.15))
+		# Base Plinth, Roof Cap & Twin Spinning Roof Exhaust Fans under Perforated Grilles
+		_add_box(self, Vector3(0.0, 0.10, 0.0), Vector3(0.92, 0.14, 0.92), frame_mat)
+		_add_box(self, Vector3(0.0, top_y, 0.0), Vector3(0.92, 0.16, 0.92), frame_mat)
+		# Lüftungsschlitze vorne im Sockel
+		var vent_parts: Array = []
+		for v in range(12):
+			vent_parts.append([Vector3(-0.33 + float(v) * 0.06, 0.0, 0.0), Vector3(0.036, 0.060, 0.006)])
+		var plinth_vents := HardwareMeshFactory.merged_boxes(self, "rack_plinth_vents", vent_parts, dark_mat)
+		plinth_vents.position = Vector3(0.0, 0.10, 0.461)
+		# Kabeleinführung mit Bürstenleiste vorne im Dach
+		_add_box(self, Vector3(0.0, top_y + 0.084, 0.31), Vector3(0.46, 0.014, 0.07), dark_mat)
+		_add_box(self, Vector3(0.0, top_y + 0.092, 0.31), Vector3(0.44, 0.004, 0.012), plastic_mat)
+		# Zwei Abluftlüfter im Dach: Lochblech, dunkle Lüfterkammer, drehendes Lüfterrad, Schutzgitter
+		var fan_blade_mat := MatLib.make_brushed_metal(Color(0.17, 0.18, 0.20), 0.60, 0.15)
+		var fan_shade := MatLib.make_brushed_metal(Color(0.05, 0.05, 0.06), 0.85, 0.0)
+		var roof_guard_parts: Array = [
+			[Vector3(0.0, 0.0, -0.13), Vector3(0.27, 0.006, 0.008)],
+			[Vector3(0.0, 0.0, 0.13), Vector3(0.27, 0.006, 0.008)],
+			[Vector3(-0.13, 0.0, 0.0), Vector3(0.008, 0.006, 0.27)],
+			[Vector3(0.13, 0.0, 0.0), Vector3(0.008, 0.006, 0.27)],
+			[Vector3(0.0, 0.0, -0.065), Vector3(0.26, 0.004, 0.004)],
+			[Vector3(0.0, 0.0, 0.0), Vector3(0.26, 0.004, 0.004)],
+			[Vector3(0.0, 0.0, 0.065), Vector3(0.26, 0.004, 0.004)],
+			[Vector3(-0.065, 0.0, 0.0), Vector3(0.004, 0.004, 0.26)],
+			[Vector3(0.0, 0.0, 0.0), Vector3(0.004, 0.004, 0.26)],
+			[Vector3(0.065, 0.0, 0.0), Vector3(0.004, 0.004, 0.26)],
+		]
+		for rx in [-0.20, 0.20]:
+			var fx := float(rx)
+			_add_box(self, Vector3(fx, top_y + 0.085, -0.05), Vector3(0.32, 0.02, 0.48), perf_mat)
+			_add_cyl(self, Vector3(fx, top_y + 0.097, -0.05), 0.125, 0.004, fan_shade)
+			_add_cyl(self, Vector3(fx, top_y + 0.101, -0.05), 0.040, 0.012, plastic_mat)
+			var rf := Node3D.new()
+			rf.position = Vector3(fx, top_y + 0.112, -0.05)
+			add_child(rf)
+			# Die Blätter liegen waagerecht, gedreht wird in _process um die Y-Achse.
+			var blade_holder := Node3D.new()
+			blade_holder.rotation_degrees.x = -90.0
+			rf.add_child(blade_holder)
+			HardwareMeshFactory.fan_blades(blade_holder, 0.115, 7, fan_blade_mat, steel_mat)
+			_roof_fans.append(rf)
+			var roof_guard := HardwareMeshFactory.merged_boxes(self, "rack_roof_guard", roof_guard_parts, steel_mat)
+			roof_guard.position = Vector3(fx, top_y + 0.128, -0.05)
+
+		# 4 Vertical Heavy-Gauge Corner Posts + Real 19-Inch Silver Slotted Mounting Rails
+		for px in [-0.42, 0.42]:
+			for pz in [-0.42, 0.42]:
+				_add_box(self, Vector3(float(px), mid_y, float(pz)), Vector3(0.068, post_h, 0.068), frame_mat)
+			# Silver 19-inch front & rear mounting rails (zero neon!)
+			_add_box(self, Vector3(float(px) * 0.91, mid_y, 0.37), Vector3(0.030, post_h - 0.06, 0.024), steel_mat)
+			_add_box(self, Vector3(float(px) * 0.91, mid_y, -0.37), Vector3(0.028, post_h - 0.06, 0.022), steel_mat)
+			# Vierkantlöcher im 1-HE-Raster (44,45 mm) auf der vorderen Schiene
+			var rail_len := post_h - 0.10
+			var hole_count := int(rail_len / 0.04445)
+			var hole_parts: Array = []
+			for h in range(hole_count):
+				hole_parts.append([Vector3(0.0, -rail_len * 0.5 + (float(h) + 0.5) * 0.04445, 0.0), Vector3(0.010, 0.010, 0.004)])
+			var holes := HardwareMeshFactory.merged_boxes(self, "rack_rail_holes_%d" % hole_count, hole_parts, dark_mat)
+			holes.position = Vector3(float(px) * 0.91, mid_y, 0.3825)
+
+		# Pro Cabinet Brushed Aluminum Edge Trim (no neon!)
+		if is_pro:
+			_add_box(self, Vector3(-0.448, mid_y, 0.425), Vector3(0.020, post_h - 0.08, 0.022), steel_mat)
+			_add_box(self, Vector3(0.448, mid_y, 0.425), Vector3(0.020, post_h - 0.08, 0.022), steel_mat)
+
+		# Clear Glass Side Inspection Windows framed in charcoal steel so you see the REAL 3D Server Hardware inside!
+		_add_box(self, Vector3(-0.43, mid_y, 0.0), Vector3(0.016, post_h - 0.22, 0.68), glass)
+		_add_box(self, Vector3(0.43, mid_y, 0.0), Vector3(0.016, post_h - 0.22, 0.68), glass)
+		# Stahlrahmen um die Seitenfenster und Schloss mit Griffmulde
+		var glass_h := post_h - 0.22
+		var window_frame_parts: Array = [
+			[Vector3(0.0, glass_h * 0.5, 0.0), Vector3(0.006, 0.030, 0.70)],
+			[Vector3(0.0, -glass_h * 0.5, 0.0), Vector3(0.006, 0.030, 0.70)],
+			[Vector3(0.0, 0.0, 0.34), Vector3(0.006, glass_h, 0.030)],
+			[Vector3(0.0, 0.0, -0.34), Vector3(0.006, glass_h, 0.030)],
+		]
+		for side in [-1.0, 1.0]:
+			var sx := float(side)
+			var wf := HardwareMeshFactory.merged_boxes(self, "rack_window_frame_%.3f" % glass_h, window_frame_parts, side_mat)
+			wf.position = Vector3(sx * 0.440, mid_y, 0.0)
+			_limit_detail_range(_add_box(self, Vector3(sx * 0.444, mid_y, 0.30), Vector3(0.006, 0.090, 0.022), dark_mat))
+			var lock := _add_cyl(self, Vector3(sx * 0.448, mid_y + 0.065, 0.30), 0.007, 0.006, steel_mat)
+			_limit_detail_range(lock)
+			lock.rotation_degrees.z = 90.0
+		# Rear perforated airflow door + Rear Vertical PDU Power Strip
+		_add_box(self, Vector3(0.0, mid_y, -0.43), Vector3(0.78, post_h - 0.08, 0.026), perf_mat)
+		# Schwenkgriff und Scharniere an der hinteren Tür
+		_limit_detail_range(_add_box(self, Vector3(-0.33, mid_y, -0.448), Vector3(0.026, 0.16, 0.010), dark_mat))
+		_limit_detail_range(_add_box(self, Vector3(-0.33, mid_y + 0.03, -0.456), Vector3(0.012, 0.07, 0.008), steel_mat))
+		for hy in [0.30, 0.70]:
+			_limit_detail_range(_add_cyl(self, Vector3(0.392, 0.16 + post_h * float(hy), -0.446), 0.008, 0.06, steel_mat))
+		_add_box(self, Vector3(0.32, mid_y, -0.452), Vector3(0.082, post_h - 0.22, 0.042), side_mat)
+		_limit_detail_range(_add_box(self, Vector3(0.32, mid_y + 0.55, -0.476), Vector3(0.038, 0.052, 0.016), _mat(Color(0.78, 0.18, 0.14), 0.42, 0.15)))
 
 	# Fire-only dynamic light
 	_fire_light = OmniLight3D.new()
@@ -393,7 +475,7 @@ func _build_rack_geometry() -> void:
 	_power_led_mat.emission_enabled = true
 	_power_led_mat.emission = Color(0.24, 0.78, 0.38)
 	_power_led_mat.emission_energy_multiplier = 0.04
-	_add_box(self, Vector3(-0.18, top_y, 0.474), Vector3(0.024, 0.024, 0.016), _power_led_mat)
+	_limit_detail_range(_add_box(self, Vector3(-0.18, top_y, 0.474), Vector3(0.024, 0.024, 0.016), _power_led_mat))
 
 	_power_port_marker = Node3D.new()
 	_power_port_marker.position = Vector3(-0.27, top_y, 0.50)
@@ -415,7 +497,7 @@ func _build_rack_geometry() -> void:
 	_net_led_mat.emission_enabled = true
 	_net_led_mat.emission = Color(0.24, 0.78, 0.38)
 	_net_led_mat.emission_energy_multiplier = 0.04
-	_add_box(self, Vector3(0.36, top_y, 0.474), Vector3(0.024, 0.024, 0.016), _net_led_mat)
+	_limit_detail_range(_add_box(self, Vector3(0.36, top_y, 0.474), Vector3(0.024, 0.024, 0.016), _net_led_mat))
 
 	_net_port_marker = Node3D.new()
 	_net_port_marker.position = Vector3(0.27, top_y, 0.50)
@@ -472,8 +554,8 @@ func _build_rack_geometry() -> void:
 		var led_pod := Node3D.new()
 		led_pod.visible = false
 		slot_root.add_child(led_pod)
-		_add_box(led_pod, Vector3(0.345, -0.005, 0.415), Vector3(0.018, 0.018, 0.012), led_mat)
-		_add_box(led_pod, Vector3(0.345, -0.036, 0.415), Vector3(0.018, 0.014, 0.012), act_mat)
+		_limit_detail_range(_add_box(led_pod, Vector3(0.345, -0.005, 0.415), Vector3(0.018, 0.018, 0.012), led_mat))
+		_limit_detail_range(_add_box(led_pod, Vector3(0.345, -0.036, 0.415), Vector3(0.018, 0.014, 0.012), act_mat))
 
 		var fire_root := Node3D.new()
 		fire_root.position = Vector3(0.0, 0.04, 0.45)
@@ -506,6 +588,7 @@ func _build_rack_geometry() -> void:
 		slot_lbl.font_size = 15
 		slot_lbl.pixel_size = 0.0028
 		slot_lbl.position = Vector3(-0.08, 0.095, 0.445)
+		_limit_detail_range(slot_lbl)
 		slot_root.add_child(slot_lbl)
 
 		if not is_showcase_only:
@@ -550,11 +633,38 @@ func _make_area(size: Vector3, meta: Dictionary) -> Area3D:
 	return area
 
 
+## Kleine Details (LEDs von 1,2 bis 2,4 cm, Slot-Beschriftung) sind ab ~14 m in 1440p kaum ein Pixel groß.
+## Ab dort werden sie nicht mehr gezeichnet. Die 1 m Spielraum verhindert Flackern an der Grenze.
+const DETAIL_RANGE_END := 14.0
+const DETAIL_RANGE_MARGIN := 1.0
+
+
+func _limit_detail_range(node: GeometryInstance3D) -> void:
+	if node == null:
+		return
+	node.visibility_range_end = DETAIL_RANGE_END
+	node.visibility_range_end_margin = DETAIL_RANGE_MARGIN
+
+
 func _add_box(parent: Node3D, pos: Vector3, size: Vector3, mat: Material) -> MeshInstance3D:
 	var mi := MeshInstance3D.new()
 	var bm := BoxMesh.new()
 	bm.size = size
 	mi.mesh = bm
+	mi.material_override = mat
+	mi.position = pos
+	parent.add_child(mi)
+	return mi
+
+
+func _add_cyl(parent: Node3D, pos: Vector3, rad: float, height: float, mat: Material) -> MeshInstance3D:
+	var mi := MeshInstance3D.new()
+	var cm := CylinderMesh.new()
+	cm.top_radius = rad
+	cm.bottom_radius = rad
+	cm.height = height
+	cm.radial_segments = 16
+	mi.mesh = cm
 	mi.material_override = mat
 	mi.position = pos
 	parent.add_child(mi)
@@ -567,3 +677,126 @@ func _mat(col: Color, rough: float, metal: float) -> StandardMaterial3D:
 	m.roughness = rough
 	m.metallic = metal
 	return m
+
+
+## Türen und Seitenwände aus dem Blender-Modell beweglich machen und Dachlüfter registrieren.
+func _setup_custom_shell(shell: Node3D, total_h: float) -> void:
+	for n in _collect_nodes(shell):
+		if not (n is Node3D):
+			continue
+		var n3 := n as Node3D
+		var nm := String(n3.name)
+		if nm.contains("Fan_Roof"):
+			_roof_fans.append(n3)
+		elif nm.contains("Hinge_"):
+			var side := signf(n3.position.x)
+			var fallback_deg := -105.0 if nm.ends_with("RearDoor_R") else 105.0
+			var open_deg := _extra_float(n3, "dct_open_deg", fallback_deg)
+			_panels[nm] = {
+				"node": n3,
+				"kind": "hinge",
+				"closed": n3.rotation.y,
+				"open": n3.rotation.y + deg_to_rad(open_deg),
+				"is_open": false,
+				"tween": null,
+			}
+			if not is_showcase_only:
+				# Griffbereich auf der Seite gegenüber dem Scharnier, schwenkt mit der Tür mit
+				var reach := 0.40 if nm.contains("RearDoor") else 0.84
+				var front := signf(n3.position.z)
+				var d_area := _make_area(Vector3(0.10, 0.50, 0.08), {
+					"interact_type": "rack_panel",
+					"entity_id": rack_id,
+					"panel_id": nm,
+					"rack_prop": self,
+				})
+				d_area.position = Vector3(-side * reach, total_h * 0.5, front * (0.10 if front > 0.0 else 0.04))
+				n3.add_child(d_area)
+		# Panel_Side_*: Seitenwände bleiben geschlossen und sind nicht interaktiv (nur Vorder- und Hecktür öffnen).
+		elif nm.contains("Panel_Side_"):
+			continue
+
+
+## Fragt beim Server an. Die Tür bewegt sich erst, wenn der Server den neuen Zustand an alle schickt.
+func toggle_panel(panel_id: String) -> void:
+	if not _panels.has(panel_id):
+		return
+	GameState.request_toggle_panel(rack_id, panel_id)
+
+
+func _on_panel_states_changed() -> void:
+	_apply_synced_panel_states(true)
+
+
+func _apply_synced_panel_states(animate: bool) -> void:
+	for pid in _panels.keys():
+		_set_panel_open(str(pid), GameState.is_shared_panel_open(rack_id, str(pid)), animate)
+
+
+func _set_panel_open(panel_id: String, opening: bool, animate: bool) -> void:
+	if not _panels.has(panel_id):
+		return
+	var p: Dictionary = _panels[panel_id]
+	var node_v: Variant = p["node"]
+	if not is_instance_valid(node_v):
+		return
+	if bool(p["is_open"]) == opening:
+		return
+	p["is_open"] = opening
+	var old_tw: Variant = p.get("tween")
+	if old_tw is Tween and (old_tw as Tween).is_valid():
+		(old_tw as Tween).kill()
+	var is_hinge := str(p["kind"]) == "hinge"
+	var prop := "rotation:y" if is_hinge else "position:x"
+	var target := float(p["open"] if opening else p["closed"])
+	var node := node_v as Node3D
+	if not animate or not node.is_inside_tree():
+		node.set_indexed(NodePath(prop), target)
+		p["tween"] = null
+		return
+	var tw := create_tween()
+	tw.tween_property(node, prop, target, 0.55 if is_hinge else 0.40) \
+		.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
+	p["tween"] = tw
+	SfxManager.play("click", -10.0, 0.85 if opening else 0.7)
+
+
+func is_panel_open(panel_id: String) -> bool:
+	if not _panels.has(panel_id):
+		return false
+	return bool((_panels[panel_id] as Dictionary).get("is_open", false))
+
+
+func get_panel_label(panel_id: String) -> String:
+	if panel_id.contains("FrontDoor"):
+		return tr("Fronttür")
+	if panel_id.contains("RearDoor_L"):
+		return tr("Hintertür links")
+	if panel_id.contains("RearDoor_R"):
+		return tr("Hintertür rechts")
+	if panel_id.contains("Side_L"):
+		return tr("Seitenwand links")
+	if panel_id.contains("Side_R"):
+		return tr("Seitenwand rechts")
+	return tr("Abdeckung")
+
+
+func _collect_nodes(root: Node) -> Array[Node]:
+	var out: Array[Node] = [root]
+	var i := 0
+	while i < out.size():
+		for c in out[i].get_children():
+			out.append(c)
+		i += 1
+	return out
+
+
+## glTF-Extras kommen je nach Importweg als Meta "extras" (Dictionary) oder als einzelne Meta-Keys an.
+func _extra_float(n: Node, key: String, fallback: float) -> float:
+	if n.has_meta("extras"):
+		var ex: Variant = n.get_meta("extras")
+		if ex is Dictionary and (ex as Dictionary).has(key):
+			return float((ex as Dictionary)[key])
+	if n.has_meta(key):
+		return float(n.get_meta(key))
+	return fallback
