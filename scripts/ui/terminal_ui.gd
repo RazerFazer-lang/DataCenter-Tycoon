@@ -129,6 +129,7 @@ func _ready() -> void:
 	GameState.racks_changed.connect(_refresh_all)
 	GameState.inventory_changed.connect(_refresh_all)
 	GameState.fuses_changed.connect(_refresh_all)
+	GameState.accessories_changed.connect(_refresh_all)
 	GameState.tickets_changed.connect(_refresh_all)
 	GameState.call_changed.connect(_refresh_call_popup)
 	FinanceManager.finance_changed.connect(_on_finance_changed)
@@ -737,6 +738,64 @@ func _add_fuse_shop_card(list: VBoxContainer) -> void:
 	fz_row.add_child(fz_buy)
 
 
+## Steckleisten (Stromkasten) und Netzwerk-Verteiler (Router): werden sofort montiert, ohne Lieferung.
+func _add_accessory_shop_cards(list: VBoxContainer) -> void:
+	var breaker_cap := GameState.BREAKER_BASE_SOCKETS + GameState.power_strips * GameState.POWER_STRIP_EXTRA
+	var router_cap := GameState.ROUTER_BASE_PORTS + GameState.net_hubs * GameState.NET_HUB_EXTRA
+	_add_accessory_card(list,
+		tr("Steckleiste 4-fach (Stromkasten)"),
+		tr("Wird sofort am Stromkasten montiert. Belegt eine Steckdose und bringt +%d Steckplätze.") % GameState.POWER_STRIP_EXTRA
+			+ "\n" + (tr("Steckplätze am Kasten: %d  •  Montiert: %d / %d") % [breaker_cap, GameState.power_strips, GameState.POWER_STRIP_MAX]),
+		GameState.POWER_STRIP_PRICE,
+		GameState.power_strips >= GameState.POWER_STRIP_MAX,
+		func(): GameState.request_buy_power_strip())
+	_add_accessory_card(list,
+		tr("Netzwerk-Verteiler 4-Port (Router)"),
+		tr("Wird sofort am Router montiert. Belegt einen Port und bringt +%d Netzwerkdosen.") % GameState.NET_HUB_EXTRA
+			+ "\n" + (tr("Ports am Router: %d  •  Montiert: %d / %d") % [router_cap, GameState.net_hubs, GameState.NET_HUB_MAX]),
+		GameState.NET_HUB_PRICE,
+		GameState.net_hubs >= GameState.NET_HUB_MAX,
+		func(): GameState.request_buy_net_hub())
+
+
+func _add_accessory_card(list: VBoxContainer, title: String, desc: String, price: int, at_max: bool, on_buy: Callable) -> void:
+	var card := _make_light_card(Color(0.94, 0.97, 0.99), Color(0.46, 0.64, 0.86), 6, 12, 8)
+	list.add_child(card)
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 10)
+	card.add_child(row)
+
+	var info := VBoxContainer.new()
+	info.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	info.add_theme_constant_override("separation", 3)
+	row.add_child(info)
+
+	var t := Label.new()
+	t.text = title
+	t.add_theme_font_size_override("font_size", 13)
+	t.modulate = Color(0.12, 0.16, 0.24)
+	info.add_child(t)
+
+	var d := Label.new()
+	d.text = desc
+	d.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	d.add_theme_font_size_override("font_size", 11)
+	d.modulate = Color(0.32, 0.36, 0.44)
+	info.add_child(d)
+
+	var buy := Button.new()
+	buy.text = tr("Maximum") if at_max else (tr("Kaufen  $%d") % price)
+	buy.custom_minimum_size = Vector2(110, 32)
+	buy.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	buy.disabled = at_max or GameState.money < float(price)
+	_style_win_btn(buy, Color(0.10, 0.46, 0.82), Color(0.08, 0.36, 0.68), Color.WHITE)
+	buy.pressed.connect(func():
+		SfxManager.play("click", -12.0, 1.1)
+		on_buy.call()
+	)
+	row.add_child(buy)
+
+
 func _render_shop_app() -> void:
 	# Clean Browser Navigation + Category Ribbon
 	var nav_bar := _make_light_card(Color(0.95, 0.96, 0.98), Color(0.80, 0.83, 0.87), 6, 10, 6)
@@ -837,6 +896,7 @@ func _render_shop_app() -> void:
 	elif _shop_tab == "infra":
 		_populate_physical_shop_list(left_list, ["cooler", "chiller", "ups", "cart"])
 		_add_fuse_shop_card(left_list)
+		_add_accessory_shop_cards(left_list)
 	elif _shop_tab == "warehouse":
 		_populate_warehouse_list(left_list)
 	elif HardwareCatalog.PARTS.has(_shop_tab):

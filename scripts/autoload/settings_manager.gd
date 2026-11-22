@@ -517,11 +517,19 @@ func get_action_key_label(action: String) -> String:
 		return "–"
 	var names: Array[String] = []
 	for code in keys:
-		var key_name := OS.get_keycode_string(DisplayServer.keyboard_get_keycode_from_physical(code))
-		if key_name.is_empty():
-			key_name = OS.get_keycode_string(code)
-		names.append(key_name)
+		names.append(_physical_key_name(int(code)))
 	return " / ".join(names)
+
+
+## Tastenname im aktuellen Layout. Ohne Bildschirm (dedizierter Server mit --headless)
+## gibt es kein Tastaturlayout, dann gilt der physische Name.
+func _physical_key_name(code: int) -> String:
+	if DisplayServer.get_name() == "headless":
+		return OS.get_keycode_string(code)
+	var key_name := OS.get_keycode_string(DisplayServer.keyboard_get_keycode_from_physical(code))
+	if key_name.is_empty():
+		key_name = OS.get_keycode_string(code)
+	return key_name
 
 
 ## Belegt eine Aktion mit genau einer Taste. Hat eine andere Aktion diese Taste, bekommt sie
@@ -608,11 +616,7 @@ func _primary_key_name(action: String) -> String:
 	var keys := _get_action_keys(action)
 	if keys.is_empty():
 		return "–"
-	var code := int(keys[0])
-	var key_name := OS.get_keycode_string(DisplayServer.keyboard_get_keycode_from_physical(code))
-	if key_name.is_empty():
-		key_name = OS.get_keycode_string(code)
-	return key_name
+	return _physical_key_name(int(keys[0]))
 
 
 func reset_key_bindings() -> void:

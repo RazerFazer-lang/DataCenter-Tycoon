@@ -627,8 +627,9 @@ func _rpc_submit_pose(pos: Vector3, yaw: float, pitch: float, tool: int, sprayin
 	if not multiplayer.is_server():
 		return
 	var sid := multiplayer.get_remote_sender_id()
-	if _player_nodes.has(sid):
-		(_player_nodes[sid] as PlayerController).apply_remote_pose(pos, yaw, pitch, tool, spraying)
+	var node := _ensure_remote_player(sid)
+	if node != null:
+		node.apply_remote_pose(pos, yaw, pitch, tool, spraying)
 	_rpc_relay_pose.rpc(sid, pos, yaw, pitch, tool, spraying)
 
 
@@ -636,5 +637,18 @@ func _rpc_submit_pose(pos: Vector3, yaw: float, pitch: float, tool: int, sprayin
 func _rpc_relay_pose(peer_id: int, pos: Vector3, yaw: float, pitch: float, tool: int, spraying: bool) -> void:
 	if peer_id == multiplayer.get_unique_id():
 		return
-	if _player_nodes.has(peer_id):
-		(_player_nodes[peer_id] as PlayerController).apply_remote_pose(pos, yaw, pitch, tool, spraying)
+	var node := _ensure_remote_player(peer_id)
+	if node != null:
+		node.apply_remote_pose(pos, yaw, pitch, tool, spraying)
+
+
+## Liefert die Figur eines fremden Spielers und legt sie bei Bedarf an.
+## Fängt ab, dass player_joined zu früh kam oder die Figur inzwischen entfernt wurde.
+func _ensure_remote_player(peer_id: int) -> PlayerController:
+	if _player_nodes.has(peer_id) and not is_instance_valid(_player_nodes[peer_id]):
+		_player_nodes.erase(peer_id)
+	if not _player_nodes.has(peer_id):
+		if not NetworkManager.is_in_session or not NetworkManager.players.has(peer_id):
+			return null
+		_spawn_player_if_missing(peer_id, NetworkManager.players[peer_id])
+	return _player_nodes.get(peer_id) as PlayerController

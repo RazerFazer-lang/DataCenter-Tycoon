@@ -701,16 +701,16 @@ func _setup_custom_shell(shell: Node3D, total_h: float) -> void:
 				"tween": null,
 			}
 			if not is_showcase_only:
-				# Griffbereich auf der Seite gegenüber dem Scharnier, schwenkt mit der Tür mit
+				# Klickbereich über die ganze Türfläche (vom Scharnier bis zum Griff), schwenkt mit der Tür mit
 				var reach := 0.40 if nm.contains("RearDoor") else 0.84
 				var front := signf(n3.position.z)
-				var d_area := _make_area(Vector3(0.10, 0.50, 0.08), {
+				var d_area := _make_area(Vector3(reach + 0.06, total_h * 0.92, 0.18), {
 					"interact_type": "rack_panel",
 					"entity_id": rack_id,
 					"panel_id": nm,
 					"rack_prop": self,
 				})
-				d_area.position = Vector3(-side * reach, total_h * 0.5, front * (0.10 if front > 0.0 else 0.04))
+				d_area.position = Vector3(-side * reach * 0.5, total_h * 0.5, front * (0.14 if front > 0.0 else 0.08))
 				n3.add_child(d_area)
 		# Panel_Side_*: Seitenwände bleiben geschlossen und sind nicht interaktiv (nur Vorder- und Hecktür öffnen).
 		elif nm.contains("Panel_Side_"):

@@ -492,6 +492,19 @@ var fuse_stock: int = 0
 const POWER_FUSE_SLOT := 1
 const OLD_FUSE_ITEM := "old_fuse"
 var power_fuse_stock: int = 0
+## Steckleisten am Stromkasten und Netzwerk-Verteiler am Router (im Shop unter "Klima & USV").
+## Ohne Zubehör: 1 Steckdose am Stromkasten, 2 Netzwerkdosen am Router.
+const BREAKER_BASE_SOCKETS := 1
+const ROUTER_BASE_PORTS := 2
+const POWER_STRIP_PRICE := 60
+const POWER_STRIP_EXTRA := 3 # 4er-Leiste belegt selbst eine Dose: +3
+const POWER_STRIP_MAX := 8
+const NET_HUB_PRICE := 90
+const NET_HUB_EXTRA := 3 # 4-Port-Verteiler belegt selbst einen Port: +3
+const NET_HUB_MAX := 8
+var power_strips: int = 0
+var net_hubs: int = 0
+signal accessories_changed
 var ups_backup_active: bool = false
 var avg_ups_charge: float = 0.0
 var overload_timer: float = 0.0
@@ -608,6 +621,11 @@ func _process(delta: float) -> void:
 			van_phase_time += delta
 		return
 
+	# Dedizierter Server ohne verbundene Spieler: Welt pausiert (kein Geld, keine Ereignisse, kein Lieferwagen).
+	if is_world_paused_for_empty_server():
+		_last_real_time = -1.0
+		return
+
 	_update_delivery_van(delta)
 
 	# Die Spieluhr läuft in Echtzeit: der Host übernimmt die Uhrzeit seines Rechners.
@@ -629,6 +647,11 @@ func _process(delta: float) -> void:
 		if _autosave_accum >= AUTOSAVE_INTERVAL:
 			_autosave_accum = 0.0
 			save_current_world("", true)
+
+
+## true, wenn ein dedizierter Server läuft und niemand verbunden ist.
+func is_world_paused_for_empty_server() -> bool:
+	return NetworkManager.is_dedicated and NetworkManager.players.is_empty()
 
 
 func _update_delivery_van(delta: float) -> void:
@@ -900,6 +923,8 @@ func initialize_new_world(save_id: String = "mein_datacenter", save_name: String
 	breaker_fuses[1] = "ok"
 	fuse_stock = 0
 	power_fuse_stock = 0
+	power_strips = 0
+	net_hubs = 0
 	breaker_on = true
 	ups_backup_active = false
 	avg_ups_charge = 0.0
@@ -1060,6 +1085,8 @@ func clear_local_state() -> void:
 	breaker_fuses = _make_fuse_slots("ok")
 	fuse_stock = 0
 	power_fuse_stock = 0
+	power_strips = 0
+	net_hubs = 0
 	shared_open_panels.clear()
 	support_tickets.clear()
 	active_call.clear()
@@ -1189,6 +1216,8 @@ func build_snapshot() -> Dictionary:
 		"breaker_fuses": breaker_fuses.duplicate(),
 		"fuse_stock": fuse_stock,
 		"power_fuse_stock": power_fuse_stock,
+		"power_strips": power_strips,
+		"net_hubs": net_hubs,
 		"ups_backup_active": ups_backup_active,
 		"avg_ups_charge": avg_ups_charge,
 		"overload_timer": overload_timer,
@@ -1264,6 +1293,8 @@ func _apply_snapshot(snap: Dictionary) -> void:
 	breaker_fuses = _sanitize_fuses(snap.get("breaker_fuses", null))
 	fuse_stock = maxi(0, int(snap.get("fuse_stock", 0)))
 	power_fuse_stock = clampi(int(snap.get("power_fuse_stock", 0)), 0, 1)
+	power_strips = clampi(int(snap.get("power_strips", 0)), 0, POWER_STRIP_MAX)
+	net_hubs = clampi(int(snap.get("net_hubs", 0)), 0, NET_HUB_MAX)
 	ups_backup_active = bool(snap.get("ups_backup_active", false))
 	avg_ups_charge = float(snap.get("avg_ups_charge", 0.0))
 	overload_timer = float(snap.get("overload_timer", 0.0))
@@ -1825,7 +1856,7 @@ func count_cables_on(cable_type: String, endpoint_id: String) -> int:
 func get_max_ports(cable_type: String, endpoint_id: String) -> int:
 	if cable_type == "power":
 		if endpoint_id == WALL_BREAKER_ID:
-			return 3 + power_tier * 2 # 3 Steckdosen am Kasten, jede Stufe +2 per Verlängerungskabel
+			return BREAKER_BASE_SOCKETS + power_strips * POWER_STRIP_EXTRA
 		if endpoint_id == HALL_C_BREAKER_ID:
 			return 6 + power_tier * 2
 		if racks.has(endpoint_id):
@@ -1837,7 +1868,7 @@ func get_max_ports(cable_type: String, endpoint_id: String) -> int:
 		return 0
 	else:
 		if endpoint_id == WALL_ROUTER_ID:
-			return int(ROUTER_TIERS[clampi(router_tier, 0, ROUTER_TIERS.size() - 1)]["ports"])
+			return ROUTER_BASE_PORTS + net_hubs * NET_HUB_EXTRA
 		if endpoint_id == HALL_C_ROUTER_ID:
 			return 4
 		if racks.has(endpoint_id):
@@ -2993,6 +3024,14 @@ func request_toggle_breaker() -> void:
 
 func request_buy_fuse() -> void:
 	_rpc_req_buy_fuse.rpc_id(1)
+
+
+func request_buy_power_strip() -> void:
+	_rpc_req_buy_accessory.rpc_id(1, "power_strip")
+
+
+func request_buy_net_hub() -> void:
+	_rpc_req_buy_accessory.rpc_id(1, "net_hub")
 
 
 func request_insert_fuse(slot_idx: int) -> void:
@@ -4486,6 +4525,50 @@ func _rpc_req_buy_fuse() -> void:
 	_broadcast_fuses()
 	_broadcast_sim_tick()
 	_rpc_play_sfx.rpc("cash")
+
+
+## Steckleiste (Stromkasten) oder Netzwerk-Verteiler (Router) kaufen. Wird sofort montiert.
+@rpc("any_peer", "call_local", "reliable")
+func _rpc_req_buy_accessory(kind: String) -> void:
+	if not multiplayer.is_server():
+		return
+	var peer_id := _get_sender_id()
+	var price := 0
+	var at_max := false
+	match kind:
+		"power_strip":
+			price = POWER_STRIP_PRICE
+			at_max = power_strips >= POWER_STRIP_MAX
+		"net_hub":
+			price = NET_HUB_PRICE
+			at_max = net_hubs >= NET_HUB_MAX
+		_:
+			return
+	if at_max or money < float(price):
+		_rpc_play_sfx.rpc_id(peer_id, "error")
+		return
+	money -= float(price)
+	if kind == "power_strip":
+		power_strips += 1
+		post_event_f("%s hat eine Steckleiste am Stromkasten montiert (+%d Steckplätze).", [
+			NetworkManager.get_player_name(peer_id), POWER_STRIP_EXTRA,
+		], "good")
+	else:
+		net_hubs += 1
+		post_event_f("%s hat einen Netzwerk-Verteiler am Router montiert (+%d Ports).", [
+			NetworkManager.get_player_name(peer_id), NET_HUB_EXTRA,
+		], "good")
+	_rpc_sync_accessories.rpc(power_strips, net_hubs)
+	_recalculate_networks_and_metrics()
+	_broadcast_sim_tick()
+	_rpc_play_sfx.rpc("cash")
+
+
+@rpc("authority", "call_local", "reliable")
+func _rpc_sync_accessories(strips: int, hubs: int) -> void:
+	power_strips = clampi(strips, 0, POWER_STRIP_MAX)
+	net_hubs = clampi(hubs, 0, NET_HUB_MAX)
+	accessories_changed.emit()
 
 
 @rpc("any_peer", "call_local", "reliable")

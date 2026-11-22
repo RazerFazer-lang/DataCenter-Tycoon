@@ -43,6 +43,8 @@ const PLAYER_COLORS := [
 ]
 
 var local_player_name: String = "Admin"
+## true, solange ein dedizierter Server ohne eigene Spielerfigur läuft.
+var is_dedicated: bool = false
 ## peer_id (int) -> { "name": String, "color": Color }
 var players: Dictionary = {}
 var is_in_session: bool = false
@@ -76,7 +78,9 @@ var hosted_world_name: String = ""
 ## "ip:port" -> {ip, port, world, host, players, max, password, version, sig, seen}
 var lan_games: Dictionary = {}
 var _lan_listener: PacketPeerUDP = null
-var _lan_broadcast: PacketPeerUDP = null
+## Ein Sender ohne feste Adresse plus einer pro lokaler IPv4. Windows schickt einen
+## Broadcast an 255.255.255.255 sonst nur über einen Adapter (oft VPN/Hyper-V).
+var _lan_broadcasts: Array[PacketPeerUDP] = []
 var _lan_broadcast_port: int = 0
 var _lan_broadcast_timer: Timer = null
 
@@ -126,6 +130,7 @@ func _setup_input_actions() -> void:
 	_add_key_action("toggle_help", [KEY_H])
 	_add_key_action("open_chat", [KEY_T])
 	_add_key_action("toggle_perf", [KEY_F3])
+	_add_key_action("punch", [KEY_V])
 	_add_mouse_action("primary_action", MOUSE_BUTTON_LEFT)
 	_add_mouse_action("secondary_action", MOUSE_BUTTON_RIGHT)
 
@@ -168,32 +173,59 @@ func host_from_save(save_id: String, player_name: String, port: int = DEFAULT_PO
 	)
 
 
-func _start_host_internal(player_name: String, port: int, loaded_state: Dictionary, save_id: String, display_name: String, password: String = "") -> Error:
+## Dedizierter Server: kein Host-Spieler, alle MAX_PLAYERS Plätze gehen an Clients.
+## world_name ist Anzeigename oder Spielstand-ID. Gibt es dazu keinen Spielstand, entsteht eine neue Welt.
+func host_dedicated(server_name: String, port: int, world_name: String, password: String = "", use_upnp: bool = true) -> Error:
+	var save_id := SaveManager.sanitize_save_id(world_name)
+	if save_id.is_empty() or not FileAccess.file_exists(SaveManager.get_save_path(save_id)):
+		return _start_host_internal(server_name, port, {}, "", world_name, password, true, use_upnp)
+	var loaded := SaveManager.load_world_file(save_id)
+	if not bool(loaded.get("ok", false)):
+		connection_failed.emit(tr(str(loaded.get("error", "Spielstand konnte nicht geladen werden."))))
+		return ERR_FILE_CANT_READ
+	return _start_host_internal(
+		server_name,
+		port,
+		loaded["state"] as Dictionary,
+		str(loaded["save_id"]),
+		str(loaded["display_name"]),
+		password,
+		true,
+		use_upnp
+	)
+
+
+func _start_host_internal(player_name: String, port: int, loaded_state: Dictionary, save_id: String, display_name: String, password: String = "", dedicated: bool = false, use_upnp: bool = true) -> Error:
 	leave_session()
 	host_password = password.strip_edges().left(PASSWORD_MAX_LEN)
 	local_player_name = player_name.strip_edges().left(18)
 	if local_player_name.is_empty():
 		local_player_name = "Host"
-	SettingsManager.player_name = local_player_name
-	SettingsManager.save_settings()
+	# Der Servername ist kein Spielername und soll die settings.cfg nicht überschreiben.
+	if not dedicated:
+		SettingsManager.player_name = local_player_name
+		SettingsManager.save_settings()
 
 	var peer := ENetMultiplayerPeer.new()
-	var err := peer.create_server(port, MAX_PLAYERS - 1)
+	var err := peer.create_server(port, MAX_PLAYERS if dedicated else MAX_PLAYERS - 1)
 	if err != OK:
 		connection_failed.emit(tr("Port %d konnte nicht geöffnet werden (Fehler %d).") % [port, err])
 		return err
 
 	multiplayer.multiplayer_peer = peer
 	is_in_session = true
+	is_dedicated = dedicated
 	players.clear()
 
 	var host_info := {
 		"name": local_player_name,
 		"color": PLAYER_COLORS[0],
 	}
-	players[1] = host_info
-	DisplayServer.window_set_title("DataCenter Tycoon Co-op [HOST - %s]" % local_player_name)
-	_start_port_forward(port)
+	if not dedicated:
+		players[1] = host_info
+	DisplayServer.window_set_title("DataCenter Tycoon Co-op [%s - %s]" % ["SERVER" if dedicated else "HOST", local_player_name])
+	if use_upnp:
+		_start_port_forward(port)
 
 	if loaded_state.is_empty():
 		var clean_name := display_name.strip_edges()
@@ -207,7 +239,8 @@ func _start_host_internal(player_name: String, port: int, loaded_state: Dictiona
 	_start_lan_broadcast(port)
 
 	players_changed.emit()
-	player_joined.emit(1, host_info)
+	if not dedicated:
+		player_joined.emit(1, host_info)
 	connection_succeeded.emit()
 	return OK
 
@@ -253,6 +286,7 @@ func leave_session() -> void:
 	stop_lan_discovery()
 	hosted_world_name = ""
 	is_in_session = false
+	is_dedicated = false
 	GameState.clear_local_state()
 	DisplayServer.window_set_title("DataCenter Tycoon Co-op")
 
@@ -555,29 +589,59 @@ func _rpc_kicked(reason: String) -> void:
 
 func _start_lan_broadcast(port: int) -> void:
 	_stop_lan_broadcast()
-	var udp := PacketPeerUDP.new()
-	udp.set_broadcast_enabled(true)
-	var err := udp.set_dest_address("255.255.255.255", DISCOVERY_PORT)
-	if err != OK:
-		push_warning("LAN-Ankündigung nicht möglich (Fehler %d)." % err)
+	var fallback := _make_lan_sender("")
+	if fallback != null:
+		_lan_broadcasts.append(fallback)
+	for addr in _local_lan_ipv4s():
+		var udp := _make_lan_sender(addr)
+		if udp != null:
+			_lan_broadcasts.append(udp)
+	if _lan_broadcasts.is_empty():
+		push_warning("LAN-Ankündigung nicht möglich: kein Netzwerkadapter nutzbar.")
 		return
-	_lan_broadcast = udp
 	_lan_broadcast_port = port
 	_lan_broadcast_timer.start()
 	_on_lan_broadcast_tick()
 
 
+## bind_address leer = Windows wählt den Adapter selbst.
+func _make_lan_sender(bind_address: String) -> PacketPeerUDP:
+	var udp := PacketPeerUDP.new()
+	udp.set_broadcast_enabled(true)
+	if not bind_address.is_empty():
+		if udp.bind(0, bind_address) != OK:
+			return null
+	if udp.set_dest_address("255.255.255.255", DISCOVERY_PORT) != OK:
+		udp.close()
+		return null
+	return udp
+
+
+## Lokale IPv4-Adressen ohne Loopback (127.x) und ohne APIPA (169.254.x).
+func _local_lan_ipv4s() -> Array[String]:
+	var result: Array[String] = []
+	for iface in IP.get_local_interfaces():
+		var d: Dictionary = iface
+		for a in d.get("addresses", []):
+			var s := str(a)
+			if s.contains(":") or s.begins_with("127.") or s.begins_with("169.254."):
+				continue
+			if not result.has(s):
+				result.append(s)
+	return result
+
+
 func _stop_lan_broadcast() -> void:
 	if _lan_broadcast_timer != null:
 		_lan_broadcast_timer.stop()
-	if _lan_broadcast != null:
-		_lan_broadcast.close()
-		_lan_broadcast = null
+	for udp in _lan_broadcasts:
+		udp.close()
+	_lan_broadcasts.clear()
 	_lan_broadcast_port = 0
 
 
 func _on_lan_broadcast_tick() -> void:
-	if _lan_broadcast == null or not is_in_session or multiplayer.multiplayer_peer == null or not multiplayer.is_server():
+	if _lan_broadcasts.is_empty() or not is_in_session or multiplayer.multiplayer_peer == null or not multiplayer.is_server():
 		return
 	var info := {
 		"magic": DISCOVERY_MAGIC,
@@ -589,7 +653,10 @@ func _on_lan_broadcast_tick() -> void:
 		"max": MAX_PLAYERS,
 		"password": not host_password.is_empty(),
 	}
-	_lan_broadcast.put_packet(JSON.stringify(info).to_utf8_buffer())
+	var packet := JSON.stringify(info).to_utf8_buffer()
+	for udp in _lan_broadcasts:
+		# Fehler einzelner Adapter (z. B. getrennt) ignorieren, die anderen senden weiter.
+		udp.put_packet(packet)
 
 
 func is_lan_discovery_active() -> bool:
@@ -735,6 +802,10 @@ func _rpc_register_player(player_name: String) -> void:
 		"color": PLAYER_COLORS[color_idx],
 	}
 	players[peer_id] = info
+	# Der Spieler steht jetzt schon in players. _rpc_add_player hält ihn deshalb
+	# auf dem Server für bekannt und meldet ihn nicht mehr, also hier melden.
+	players_changed.emit()
+	player_joined.emit(peer_id, info)
 
 	_rpc_sync_player_roster.rpc_id(peer_id, players)
 	GameState.send_full_snapshot_to_peer(peer_id)

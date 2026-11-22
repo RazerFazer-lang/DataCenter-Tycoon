@@ -1,8 +1,17 @@
 {
-  "version": "1.0.2",
-  "codename": "v1.0.2 Modell-Fix",
+  "version": "1.0.3",
+  "codename": "v1.0.3 Co-op-Fix",
   "release_date": "2026-11-22",
   "changelog": [
+    {
+      "version": "v1.0.3",
+      "title": "Mitspieler sind für den Host wieder sichtbar",
+      "items": [
+        "Wer ein Rechenzentrum startet, sieht jetzt alle Mitspieler. Vorher sahen nur die beigetretenen Spieler den Host, der Host aber niemanden.",
+        "Positionen von Mitspielern gehen beim Host nicht mehr verloren, auch wenn die Figur noch nicht angelegt war.",
+        "Enthält alle Neuerungen aus v1.0.2."
+      ]
+    },
     {
       "version": "v1.0.2",
       "title": "Blender-Modelle auch in der Spielversion",

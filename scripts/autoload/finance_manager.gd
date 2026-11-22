@@ -107,6 +107,9 @@ func _process(delta: float) -> void:
 	_was_active = true
 	if not multiplayer.is_server():
 		return
+	# Leerer dedizierter Server: keine Gehälter, keine Rechnungen.
+	if GameState.is_world_paused_for_empty_server():
+		return
 	var today: int = GameState.day_number
 	if _last_day < 0:
 		_last_day = today

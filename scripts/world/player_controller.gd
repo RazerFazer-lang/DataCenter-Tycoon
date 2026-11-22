@@ -468,19 +468,41 @@ func _animate_remote_avatar(delta: float, horiz_speed: float) -> void:
 func _get_aimed_interactable() -> Object:
 	if _ray == null:
 		return null
-	_ray.force_raycast_update()
-	if not _ray.is_colliding():
-		return null
-	var hit := _ray.get_collider()
-	if hit != null and hit.has_meta("interact_type"):
+	var skipped: Array[CollisionObject3D] = []
+	var result: Object = null
+	var door_hit: Object = null
+	for _i in range(4):
+		_ray.force_raycast_update()
+		if not _ray.is_colliding():
+			break
+		var hit := _ray.get_collider()
+		if hit == null or not hit.has_meta("interact_type"):
+			break
 		var hit_type := str(hit.get_meta("interact_type"))
-		var hit_eid := str(hit.get_meta("entity_id")) if hit.has_meta("entity_id") else ""
-		var behind_breaker_door := hit_type == "fuse_slot" or hit_type == "wall_breaker" \
-			or (hit_type == "power_port" and hit_eid == GameState.WALL_BREAKER_ID)
+		# Sicherungen und Hauptschalter liegen hinter der Kastentür: bei geschlossener Tür hindurchschauen,
+		# damit der Blick die Tür trifft und man nicht genau zielen muss.
+		var behind_breaker_door := hit_type == "fuse_slot" or hit_type == "wall_breaker"
 		if behind_breaker_door and not GameState.is_breaker_door_open():
-			return null
-		return hit
-	return null
+			if not (hit is CollisionObject3D):
+				break
+			skipped.append(hit as CollisionObject3D)
+			_ray.add_exception(hit as CollisionObject3D)
+			continue
+		# Die Steckdose unten am Kasten bleibt auch durch den Klickbereich der Tür hindurch erreichbar.
+		if door_hit == null and hit_type == "rack_panel" and str(hit.get_meta("panel_id", "")) == "breaker:door" and hit is CollisionObject3D:
+			door_hit = hit
+			skipped.append(hit as CollisionObject3D)
+			_ray.add_exception(hit as CollisionObject3D)
+			continue
+		if door_hit != null and hit_type != "power_port":
+			break
+		result = hit
+		break
+	for obj in skipped:
+		_ray.remove_exception(obj)
+	if result == null:
+		result = door_hit
+	return result
 
 
 func _handle_drop() -> void:
@@ -576,9 +598,8 @@ func _handle_primary_interact() -> void:
 				cable_start_id = eid
 				SfxManager.play("cable", -8.0, 1.15)
 		"power_port":
-			if eid == GameState.WALL_BREAKER_ID and not GameState.is_breaker_door_open():
-				SfxManager.play("error")
-			elif hands_empty:
+			# Die Einspeisung unten am Stromkasten ist auch bei geschlossener Tür erreichbar.
+			if hands_empty:
 				cable_active_type = "power"
 				cable_start_id = eid
 				SfxManager.play("cable", -8.0, 1.05)
@@ -654,10 +675,7 @@ func _handle_secondary_action() -> void:
 		elif itype == "cart":
 			GameState.request_unload_cart_to_hands(eid)
 		elif itype == "power_port":
-			if eid == GameState.WALL_BREAKER_ID and not GameState.is_breaker_door_open():
-				SfxManager.play("error")
-			else:
-				GameState.request_disconnect_cables_on("power", eid)
+			GameState.request_disconnect_cables_on("power", eid)
 		elif itype == "net_port" or itype == "wall_router":
 			GameState.request_disconnect_cables_on("network", eid)
 
@@ -703,7 +721,7 @@ func _resolve_aimed_cable_endpoint(cable_type: String) -> String:
 	var itype := str(target.get_meta("interact_type"))
 	var eid := str(target.get_meta("entity_id"))
 	if cable_type == "power":
-		if (itype == "wall_breaker" or itype == "power_port") and eid == GameState.WALL_BREAKER_ID and not GameState.is_breaker_door_open():
+		if itype == "wall_breaker" and eid == GameState.WALL_BREAKER_ID and not GameState.is_breaker_door_open():
 			return ""
 		if itype == "wall_breaker":
 			return eid

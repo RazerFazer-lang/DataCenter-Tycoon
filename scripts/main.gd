@@ -9,6 +9,8 @@ extends Node
 @onready var terminal_ui: TerminalUI = $UI/TerminalUI
 @onready var rack_inspector: RackInspectorUI = $UI/RackInspectorUI
 
+const DedicatedServerScript := preload("res://scripts/server/dedicated_server.gd")
+
 var loading_screen: LoadingScreen
 var _is_paused: bool = false
 var _menu_orbit_angle: float = 0.0
@@ -48,6 +50,15 @@ func _ready() -> void:
 	rack_inspector.relocate_rack_requested.connect(_on_relocate_rack_requested)
 	hud.resume_requested.connect(_resume_from_pause)
 	hud.leave_requested.connect(_leave_to_menu)
+
+	# Dedizierter Server: kein Ladebildschirm, kein Menü, die Welt startet sofort.
+	if DedicatedServerScript.is_requested():
+		_startup_done = true
+		loading_screen.visible = false
+		var server := DedicatedServerScript.new()
+		server.name = "DedicatedServer"
+		add_child(server)
+		return
 
 	# Ablauf: Ladebildschirm, dann Hauptmenü, dann per Klick die Welt.
 	loading_screen.start_loading("STARTE RECHENZENTRUM…", 2.4)

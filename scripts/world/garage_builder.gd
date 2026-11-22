@@ -1218,12 +1218,13 @@ func _setup_breaker_model(model: Node3D, root: Node3D) -> void:
 		slot_area.position = Vector3(fx, -0.14, 0.12)
 		root.add_child(slot_area)
 
-	# Glastür: Griffbereich an der freien Kante, ragt vor die Hauptschalter-Zone
+	# Glastür: Klickbereich über fast die ganze Türfläche, damit man nicht genau auf den Griff zielen muss.
+	# Er hängt an der Tür und schwenkt beim Öffnen mit weg, Sicherungen und Hauptschalter bleiben dann frei.
 	var door_h := _glb_find(model, "_Hinge_Door")
 	if door_h != null:
 		_register_panel(door_h, "breaker:door", tr("Kastentür"), "rotation:y",
 			deg_to_rad(_glb_extra(door_h, "dct_open_deg", -110.0)), GameState.WALL_BREAKER_ID,
-			Vector3(0.68, -0.12, 0.10), Vector3(0.10, 0.34, 0.26))
+			Vector3(0.38, -0.08, 0.16), Vector3(0.80, 0.76, 0.46))
 
 	_socket_lids.clear()
 	_socket_lid_closed.clear()
