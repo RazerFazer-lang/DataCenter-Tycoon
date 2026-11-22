@@ -34,6 +34,12 @@ var _day_lbl: Label
 var _clock_icon: Control
 var _is_night: bool = false
 
+# Hand-Inventar: Slot-Leiste unten in der Mitte (Slots 1-4)
+var _slot_bar: HBoxContainer
+var _slot_styles: Array[StyleBoxFlat] = []
+var _slot_item_lbls: Array[Label] = []
+var _slot_sig: String = ""
+
 # Bedingte Panels (nur sichtbar, wenn etwas anliegt)
 var _alert_panel: PanelContainer
 var _alert_lbl: Label
@@ -91,6 +97,21 @@ var _pause_sharp_slider: HSlider
 var _pause_aniso_option: OptionButton
 var _pause_fps_option: OptionButton
 var _pause_vsync_check: CheckButton
+var _pause_sfx_slider: HSlider
+var _pause_fov_slider: HSlider
+var _pause_window_mode_option: OptionButton
+var _pause_screen_option: OptionButton
+var _pause_window_size_option: OptionButton
+var _pause_ui_scale_option: OptionButton
+var _pause_language_option: OptionButton
+var _pause_autosave_check: CheckButton
+var _pause_window_size_values: Array[Vector2i] = []
+## true = die Auflösungsliste gehört zu einem Vollbildmodus und schreibt fullscreen_resolution.
+var _pause_window_size_list_fullscreen := false
+var _pause_keybind_buttons: Dictionary = {}
+## Aktion, für die gerade eine neue Taste abgefragt wird ("" = keine Abfrage aktiv).
+var _pause_rebind_action := ""
+var _pause_keybind_hint: Label
 
 var _display_money: float = 1800.0
 var _toast_timer: float = 0.0
@@ -149,6 +170,7 @@ func set_pause_visible(show_pause: bool) -> void:
 		_update_slider_label(_pause_master_slider)
 		_update_slider_label(_pause_fan_slider)
 		_update_slider_label(_pause_sens_slider)
+		_sync_pause_general()
 		_pause_gfx_option.selected = SettingsManager.graphics_quality
 		_sync_pause_graphics()
 		UIStyle.animate_popup_open(_pause_overlay, _pause_card)
@@ -207,6 +229,7 @@ func _process(delta: float) -> void:
 		_day_lbl.text = tr("TAG %d") % GameState.day_number
 
 	_refresh_player_hud(delta)
+	_refresh_slot_bar()
 	_refresh_alert_banner()
 	_refresh_van_badge()
 	if _toast_timer > 0.0:
@@ -413,7 +436,12 @@ func _refresh_alert_banner() -> void:
 	if _alert_panel == null:
 		return
 	var alerts: Array[String] = []
-	if not GameState.breaker_on:
+	if GameState.grid_outage_left > 0.0:
+		if GameState.ups_backup_active:
+			alerts.append(tr("NETZAUSFALL: USV-Notstrom (%.0f%%), noch ca. %d Min.") % [GameState.avg_ups_charge, GameState.get_grid_outage_minutes()])
+		else:
+			alerts.append(tr("NETZAUSFALL: kein Strom, noch ca. %d Min.") % GameState.get_grid_outage_minutes())
+	elif not GameState.breaker_on:
 		if GameState.ups_backup_active:
 			alerts.append(tr("USV-Notstrom (%.0f%%): Sicherung [E] einschalten") % GameState.avg_ups_charge)
 		else:
@@ -544,6 +572,7 @@ func _on_pause_quick_settings_changed(_val: float = 0.0) -> void:
 	SettingsManager.master_volume = _pause_master_slider.value / 100.0
 	SettingsManager.fan_volume = _pause_fan_slider.value / 100.0
 	SettingsManager.mouse_sensitivity = _pause_sens_slider.value / 1000.0
+	_apply_pause_general()
 	SettingsManager.graphics_quality = clampi(_pause_gfx_option.selected, 0, 3)
 	if _pause_aa_option != null:
 		SettingsManager.anti_aliasing = clampi(_pause_aa_option.selected, 0, SettingsManager.AA_COUNT - 1)
@@ -597,6 +626,7 @@ func _build_ui() -> void:
 	_build_van_widget()
 	_build_right_column()
 	_build_key_hints()
+	_build_slot_bar()
 	_build_crosshair_and_prompt()
 	# Alles außer dem Pause-Menü lässt Mausklicks durch
 	for child in get_children():
@@ -1084,6 +1114,93 @@ func _draw_crosshair() -> void:
 		_crosshair.draw_circle(c, 2.0, Color(1.0, 1.0, 1.0, 0.85))
 
 
+## Hand-Inventar: vier Slots unten in der Mitte. Der aktive Slot hat einen Amber-Rahmen.
+func _build_slot_bar() -> void:
+	_slot_bar = HBoxContainer.new()
+	_slot_bar.anchor_left = 0.5
+	_slot_bar.anchor_right = 0.5
+	_slot_bar.anchor_top = 1.0
+	_slot_bar.anchor_bottom = 1.0
+	_slot_bar.offset_top = -EDGE
+	_slot_bar.offset_bottom = -EDGE
+	_slot_bar.grow_horizontal = Control.GROW_DIRECTION_BOTH
+	_slot_bar.grow_vertical = Control.GROW_DIRECTION_BEGIN
+	_slot_bar.add_theme_constant_override("separation", 6)
+	add_child(_slot_bar)
+
+	for i in GameState.SLOT_COUNT:
+		var sb := UIStyle.make_panel(HUD_BG, HUD_BORDER, 4, 1, 10, 6)
+		var cell := PanelContainer.new()
+		cell.custom_minimum_size = Vector2(112, 0)
+		cell.add_theme_stylebox_override("panel", sb)
+		_slot_bar.add_child(cell)
+
+		var h := HBoxContainer.new()
+		h.add_theme_constant_override("separation", 8)
+		cell.add_child(h)
+
+		h.add_child(_make_keycap(str(i + 1)))
+
+		var name_lbl := Label.new()
+		name_lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		name_lbl.clip_text = true
+		name_lbl.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+		UIStyle.style_label(name_lbl, 11, UIStyle.COL_TEXT_SUB)
+		h.add_child(name_lbl)
+
+		_slot_styles.append(sb)
+		_slot_item_lbls.append(name_lbl)
+
+
+## Liest pro Frame, was in welchem Slot liegt, und baut die Leiste nur bei Änderungen neu auf.
+func _refresh_slot_bar() -> void:
+	if _slot_bar == null:
+		return
+	if _world == null or _world.local_player == null:
+		_slot_bar.visible = false
+		return
+	var lp := _world.local_player
+	_slot_bar.visible = not lp.ui_locked
+	if not _slot_bar.visible:
+		return
+
+	var pid: int = lp.peer_id
+	var active: int = GameState.get_active_slot(pid)
+	var names := PackedStringArray()
+	names.resize(GameState.SLOT_COUNT)
+	for cid in GameState.crates.keys():
+		var c: Dictionary = GameState.crates[cid]
+		if int(c.get("held_by", 0)) != pid:
+			continue
+		var s := clampi(int(c.get("held_slot", 1)), 1, GameState.SLOT_COUNT)
+		var item_type := str(c.get("item_type", ""))
+		var info: Dictionary = GameState.ITEM_CATALOG.get(item_type, {})
+		names[s - 1] = tr(str(info.get("name", item_type)))
+	if GameState.extinguisher_held_by == pid:
+		var es := clampi(GameState.extinguisher_held_slot, 1, GameState.SLOT_COUNT)
+		names[es - 1] = tr("Feuerlöscher")
+	for i in GameState.SLOT_COUNT:
+		if not names[i].is_empty():
+			continue
+		var cable_type: String = lp.get_slot_cable_type(i + 1)
+		if not cable_type.is_empty():
+			if cable_type == "cluster":
+				names[i] = tr("Cluster-Kabel")
+			else:
+				names[i] = tr("Stromkabel") if cable_type == "power" else tr("Netzwerkkabel")
+
+	var sig := "%d|%s" % [active, "|".join(names)]
+	if sig == _slot_sig:
+		return
+	_slot_sig = sig
+	for i in _slot_styles.size():
+		var is_active := i + 1 == active
+		_slot_styles[i].border_color = UIStyle.COL_ACCENT if is_active else HUD_BORDER
+		var lbl := _slot_item_lbls[i]
+		lbl.text = names[i] if not names[i].is_empty() else tr("Leer")
+		lbl.add_theme_color_override("font_color", UIStyle.COL_TEXT_MAIN if is_active else UIStyle.COL_TEXT_SUB)
+
+
 func _make_keycap(key: String, font_size: int = 11) -> PanelContainer:
 	var cap := PanelContainer.new()
 	var sb := StyleBoxFlat.new()
@@ -1206,8 +1323,10 @@ func _build_pause_overlay() -> void:
 
 	pvbox.add_child(_section_label(tr("SCHNELL-EINSTELLUNGEN")))
 	_pause_master_slider = _add_pause_slider(pvbox, "Gesamtlautstärke", 0, 100, 1, "%d%%")
+	_pause_sfx_slider = _add_pause_slider(pvbox, "Effekte & UI (SFX)", 0, 100, 1, "%d%%")
 	_pause_fan_slider = _add_pause_slider(pvbox, "Server-Lüfter & Raum", 0, 100, 1, "%d%%")
 	_pause_sens_slider = _add_pause_slider(pvbox, "Maus-Empfindlichkeit", 0.5, 8.0, 0.1, "%.1f")
+	_pause_fov_slider = _add_pause_slider(pvbox, "Sichtfeld (FOV)", 60, 105, 1, "%d°")
 
 	var grow := HBoxContainer.new()
 	grow.add_theme_constant_override("separation", 10)
@@ -1269,6 +1388,8 @@ func _build_pause_overlay() -> void:
 	_pause_vsync_check.toggled.connect(func(_on: bool): _on_pause_quick_settings_changed())
 	_pause_gfx_details.add_child(_pause_vsync_check)
 
+	_build_pause_general_section(pvbox)
+
 	_pause_players_box = VBoxContainer.new()
 	_pause_players_box.add_theme_constant_override("separation", 6)
 	_pause_players_box.visible = false
@@ -1293,6 +1414,257 @@ func _build_pause_overlay() -> void:
 	leave_btn.add_theme_font_override("font", _display_font)
 	leave_btn.pressed.connect(func(): leave_requested.emit())
 	pvbox.add_child(leave_btn)
+
+
+## Aufklappbarer Bereich mit Anzeige- und allgemeinen Einstellungen (wie im Hauptmenü).
+func _build_pause_general_section(parent: VBoxContainer) -> void:
+	var toggle := Button.new()
+	toggle.text = "Anzeige, Steuerung & Allgemein ▸"
+	toggle.toggle_mode = true
+	toggle.custom_minimum_size = Vector2(0, 32)
+	UIStyle.style_button(toggle)
+	parent.add_child(toggle)
+
+	# Eigener Scrollbereich wie bei der erweiterten Grafik, damit das Menü auf 720p passt.
+	var scroll := ScrollContainer.new()
+	scroll.custom_minimum_size = Vector2(0, 230)
+	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	scroll.visible = false
+	parent.add_child(scroll)
+
+	var box := VBoxContainer.new()
+	box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	box.add_theme_constant_override("separation", 8)
+	scroll.add_child(box)
+
+	toggle.toggled.connect(func(on: bool):
+		scroll.visible = on
+		toggle.text = "Anzeige, Steuerung & Allgemein ▾" if on else "Anzeige, Steuerung & Allgemein ▸"
+	)
+
+	_pause_window_mode_option = _add_pause_option(box, "Fenstermodus", SettingsManager.WINDOW_MODE_LABELS)
+	# Läuft nach _on_pause_quick_settings_changed (Reihenfolge der Verbindungen), damit die Liste zum neuen Modus passt.
+	_pause_window_mode_option.item_selected.connect(func(_i: int): _rebuild_pause_window_sizes())
+	_pause_screen_option = _add_pause_option(box, "Monitor", SettingsManager.get_screen_labels())
+	_pause_screen_option.item_selected.connect(func(_i: int): _rebuild_pause_window_sizes())
+	_pause_window_size_option = _add_pause_option(box, "Auflösung", [])
+	_pause_ui_scale_option = _add_pause_option(box, "UI-Skalierung", SettingsManager.UI_SCALE_LABELS)
+	_pause_ui_scale_option.tooltip_text = tr("Automatisch: 100 % bis 1080p, 125 % bei 1440p, 200 % bei 4K.")
+	_pause_language_option = _add_pause_option(box, "Sprache", SettingsManager.LANGUAGE_LABELS)
+
+	_pause_autosave_check = CheckButton.new()
+	_pause_autosave_check.text = "Auto-Save alle 3 Minuten (Host)"
+	_pause_autosave_check.add_theme_font_size_override("font_size", 13)
+	_pause_autosave_check.add_theme_color_override("font_color", Color(0.80, 0.81, 0.81))
+	_pause_autosave_check.toggled.connect(func(_on: bool): _on_pause_quick_settings_changed())
+	box.add_child(_pause_autosave_check)
+
+	# --- Tastenbelegung (gleiche Logik wie im Hauptmenü) ---
+	var kb_title := Label.new()
+	kb_title.text = "Tastenbelegung (anklicken, dann neue Taste drücken)"
+	kb_title.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	UIStyle.style_label(kb_title, 12, UIStyle.COL_TEXT_SUB)
+	box.add_child(kb_title)
+
+	_pause_keybind_buttons.clear()
+	for action in SettingsManager.REBINDABLE_ACTIONS:
+		var row := HBoxContainer.new()
+		row.add_theme_constant_override("separation", 10)
+		box.add_child(row)
+
+		var lbl := Label.new()
+		lbl.text = SettingsManager.get_action_label(action)
+		lbl.custom_minimum_size = Vector2(170, 0)
+		lbl.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+		UIStyle.style_label(lbl, 13, Color(0.80, 0.81, 0.81))
+		row.add_child(lbl)
+
+		var btn := Button.new()
+		btn.custom_minimum_size = Vector2(0, 32)
+		btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		btn.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+		UIStyle.style_button(btn)
+		var cap_action: String = action
+		btn.pressed.connect(func() -> void: _start_pause_rebind(cap_action))
+		row.add_child(btn)
+		_pause_keybind_buttons[action] = btn
+
+	_pause_keybind_hint = Label.new()
+	_pause_keybind_hint.text = "ESC oder Mausklick bricht die Abfrage ab. Belegte Tasten werden getauscht."
+	_pause_keybind_hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	UIStyle.style_label(_pause_keybind_hint, 12, UIStyle.COL_TEXT_SUB)
+	box.add_child(_pause_keybind_hint)
+
+	var reset_keys_btn := Button.new()
+	reset_keys_btn.text = "Standardtasten wiederherstellen"
+	reset_keys_btn.custom_minimum_size = Vector2(240, 32)
+	reset_keys_btn.size_flags_horizontal = Control.SIZE_SHRINK_END
+	UIStyle.style_button(reset_keys_btn)
+	reset_keys_btn.pressed.connect(func() -> void:
+		SfxManager.play("click", -10.0)
+		_pause_rebind_action = ""
+		SettingsManager.reset_key_bindings()
+		_refresh_pause_keybind_buttons()
+		_pause_keybind_hint.text = "Standardtasten wiederhergestellt."
+	)
+	box.add_child(reset_keys_btn)
+
+	# Änderungen aus dem Hauptmenü oder durch Tauschen sofort übernehmen.
+	SettingsManager.key_bindings_changed.connect(_refresh_pause_keybind_buttons)
+	_refresh_pause_keybind_buttons()
+
+
+## Überträgt SFX, Sichtfeld, Anzeige und Allgemeines aus dem Pausemenü in den SettingsManager.
+func _apply_pause_general() -> void:
+	if _pause_sfx_slider != null:
+		SettingsManager.sfx_volume = _pause_sfx_slider.value / 100.0
+	if _pause_fov_slider != null:
+		SettingsManager.fov = _pause_fov_slider.value
+	if _pause_window_mode_option != null:
+		SettingsManager.window_mode = clampi(_pause_window_mode_option.selected, 0, SettingsManager.WINDOW_MODE_COUNT - 1)
+	if _pause_screen_option != null:
+		SettingsManager.screen_index = maxi(_pause_screen_option.selected - 1, -1)
+	if _pause_window_size_option != null and _pause_window_size_option.selected >= 0 and _pause_window_size_option.selected < _pause_window_size_values.size():
+		var picked: Vector2i = _pause_window_size_values[_pause_window_size_option.selected]
+		if _pause_window_size_list_fullscreen:
+			SettingsManager.fullscreen_resolution = picked
+		else:
+			SettingsManager.window_size = picked
+	if _pause_ui_scale_option != null and _pause_ui_scale_option.selected >= 0 and _pause_ui_scale_option.selected < SettingsManager.UI_SCALE_VALUES.size():
+		SettingsManager.ui_scale = SettingsManager.UI_SCALE_VALUES[_pause_ui_scale_option.selected]
+	if _pause_language_option != null:
+		var lang_idx := clampi(_pause_language_option.selected, 0, SettingsManager.LANGUAGE_CODES.size() - 1)
+		SettingsManager.language = SettingsManager.LANGUAGE_CODES[lang_idx]
+	if _pause_autosave_check != null:
+		SettingsManager.autosave_enabled = _pause_autosave_check.button_pressed
+
+
+## Setzt die neuen Pausemenü-Felder auf die aktuellen Werte, ohne Signale auszulösen.
+func _sync_pause_general() -> void:
+	if _pause_sfx_slider != null:
+		_pause_sfx_slider.set_value_no_signal(SettingsManager.sfx_volume * 100.0)
+		_update_slider_label(_pause_sfx_slider)
+	if _pause_fov_slider != null:
+		_pause_fov_slider.set_value_no_signal(SettingsManager.fov)
+		_update_slider_label(_pause_fov_slider)
+	if _pause_window_mode_option != null:
+		_pause_window_mode_option.select(clampi(SettingsManager.window_mode, 0, _pause_window_mode_option.item_count - 1))
+	if _pause_screen_option != null:
+		# Monitore können seit dem Spielstart an- oder abgesteckt worden sein.
+		_pause_screen_option.clear()
+		var screen_labels := SettingsManager.get_screen_labels()
+		for i in screen_labels.size():
+			_pause_screen_option.add_item(tr(screen_labels[i]), i)
+		if _pause_screen_option.item_count > 0:
+			_pause_screen_option.select(clampi(SettingsManager.screen_index + 1, 0, _pause_screen_option.item_count - 1))
+	if _pause_ui_scale_option != null:
+		_pause_ui_scale_option.select(maxi(SettingsManager.UI_SCALE_VALUES.find(SettingsManager.ui_scale), 0))
+	if _pause_language_option != null:
+		_pause_language_option.select(maxi(SettingsManager.LANGUAGE_CODES.find(SettingsManager.language), 0))
+	if _pause_autosave_check != null:
+		_pause_autosave_check.set_pressed_no_signal(SettingsManager.autosave_enabled)
+	_rebuild_pause_window_sizes()
+	_pause_rebind_action = ""
+	_refresh_pause_keybind_buttons()
+
+
+## Baut die Auflösungsliste passend zu Fenstermodus und Monitor neu auf (gleiche Logik wie im Hauptmenü).
+func _rebuild_pause_window_sizes() -> void:
+	if _pause_window_size_option == null:
+		return
+	var screen := SettingsManager.screen_index
+	if _pause_screen_option != null:
+		screen = _pause_screen_option.selected - 1
+	var mode := SettingsManager.window_mode
+	if _pause_window_mode_option != null:
+		mode = _pause_window_mode_option.selected
+	_pause_window_size_list_fullscreen = mode != SettingsManager.WINDOW_WINDOWED
+
+	var native: Vector2i = SettingsManager.get_screen_size(screen)
+	var wanted: Vector2i = SettingsManager.window_size
+	var values: Array[Vector2i] = []
+	if _pause_window_size_list_fullscreen:
+		values.append(Vector2i.ZERO)
+		wanted = SettingsManager.fullscreen_resolution
+		if wanted == native:
+			wanted = Vector2i.ZERO
+	values.append_array(SettingsManager.get_window_sizes(screen, _pause_window_size_list_fullscreen))
+	# Eine gespeicherte Größe, die nicht in der Liste steht, bleibt wählbar. Sonst würde die nächste Änderung sie überschreiben.
+	if not values.has(wanted):
+		values.append(wanted)
+	_pause_window_size_values = values
+
+	_pause_window_size_option.clear()
+	var current := 0
+	for i in values.size():
+		var s: Vector2i = values[i]
+		if s == Vector2i.ZERO:
+			_pause_window_size_option.add_item(tr("Nativ (%d × %d)") % [native.x, native.y], i)
+		else:
+			_pause_window_size_option.add_item("%d × %d" % [s.x, s.y], i)
+		if s == wanted:
+			current = i
+	if _pause_window_size_option.item_count > 0:
+		_pause_window_size_option.select(current)
+	_pause_window_size_option.tooltip_text = tr("Im Vollbild wird das Bild in dieser Auflösung berechnet und auf den Monitor hochskaliert.") if _pause_window_size_list_fullscreen else ""
+
+
+func _refresh_pause_keybind_buttons() -> void:
+	for action in _pause_keybind_buttons.keys():
+		var btn := _pause_keybind_buttons[action] as Button
+		if btn == null or not is_instance_valid(btn):
+			continue
+		if action == _pause_rebind_action:
+			btn.text = "Taste drücken..."
+		else:
+			btn.text = SettingsManager.get_action_key_label(action)
+
+
+func _start_pause_rebind(action: String) -> void:
+	SfxManager.play("click", -10.0)
+	_pause_rebind_action = action
+	_refresh_pause_keybind_buttons()
+	if _pause_keybind_hint != null:
+		_pause_keybind_hint.text = tr("Neue Taste für „%s“ drücken (ESC bricht ab).") % SettingsManager.get_action_label(action)
+
+
+func _cancel_pause_rebind() -> void:
+	_pause_rebind_action = ""
+	_refresh_pause_keybind_buttons()
+	if _pause_keybind_hint != null:
+		_pause_keybind_hint.text = "Abgebrochen, Belegung unverändert."
+
+
+## Fängt während der Tastenabfrage alle Tasten ab. Das HUD liegt unter Main im Baum und bekommt
+## _input deshalb vor main.gd. So schließt ESC hier nur die Abfrage und nicht das Pausemenü.
+func _input(event: InputEvent) -> void:
+	if _pause_rebind_action.is_empty():
+		return
+	if not is_visible_in_tree() or _pause_overlay == null or not _pause_overlay.visible:
+		_cancel_pause_rebind()
+		return
+	if event is InputEventMouseButton and event.is_pressed():
+		_cancel_pause_rebind()
+		return
+	var key := event as InputEventKey
+	if key == null or not key.pressed or key.echo:
+		return
+	get_viewport().set_input_as_handled()
+	var code := int(key.physical_keycode)
+	if code == 0:
+		code = int(key.keycode)
+	if code == 0 or SettingsManager.RESERVED_KEYS.has(code):
+		_cancel_pause_rebind()
+		return
+	var action := _pause_rebind_action
+	_pause_rebind_action = ""
+	var swapped := SettingsManager.set_key_binding(action, code)
+	_refresh_pause_keybind_buttons()
+	if _pause_keybind_hint != null:
+		if swapped.is_empty():
+			_pause_keybind_hint.text = tr("„%s“ liegt jetzt auf %s.") % [SettingsManager.get_action_label(action), SettingsManager.get_action_key_label(action)]
+		else:
+			_pause_keybind_hint.text = tr("„%s“ liegt jetzt auf %s. „%s“ hat die alte Taste bekommen.") % [SettingsManager.get_action_label(action), SettingsManager.get_action_key_label(action), swapped]
 
 
 ## Öffnet den Ordner mit den Godot-Logs (user://logs) im Datei-Explorer.

@@ -19,6 +19,8 @@ const SCRIPTS: Array[String] = [
 	"res://scripts/ui/perf_overlay.gd",
 	"res://scripts/ui/history_chart.gd",
 	"res://scripts/autoload/stats_history.gd",
+	"res://scripts/ui/rack_inspector_ui.gd",
+	"res://scripts/world/rack_prop.gd",
 ]
 
 

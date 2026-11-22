@@ -46,6 +46,7 @@ var _cable_keys: Dictionary = {} # cable_id -> Geometrie-Schlüssel (unveränder
 
 var _power_mat: StandardMaterial3D
 var _net_mat: StandardMaterial3D
+var _cluster_mat: StandardMaterial3D
 var _plug_mat: StandardMaterial3D
 var _rj45_mat: StandardMaterial3D
 var _metal_mat: StandardMaterial3D
@@ -92,6 +93,7 @@ func _ready() -> void:
 	# PVC-Mantel mit seitlichem Aufdruck, wie echte Kaltgeräte- und Cat6A-Kabel
 	_power_mat = _make_jacket_mat(Color(0.80, 0.60, 0.12), 0.60, jacket_tex)
 	_net_mat = _make_jacket_mat(Color(0.15, 0.38, 0.66), 0.50, jacket_tex)
+	_cluster_mat = _make_jacket_mat(Color(0.52, 0.28, 0.74), 0.50, jacket_tex)
 
 	_plug_mat = _make_mat(Color(0.08, 0.08, 0.09), 0.62, 0.0)
 	_clip_mat = _make_mat(Color(0.20, 0.21, 0.23), 0.50, 0.0)
@@ -259,6 +261,8 @@ func _resolve_port(port_resolver: Callable, cable_port_resolver: Callable, cid: 
 
 
 func _cable_mat(cable_type: String) -> StandardMaterial3D:
+	if cable_type == "cluster":
+		return _cluster_mat
 	return _power_mat if cable_type == "power" else _net_mat
 
 
@@ -273,6 +277,9 @@ func _bend_for(cable_type: String) -> float:
 ## Stromkabel liegen immer auf der positiven, Datenkabel auf der negativen Seite der Trasse.
 func _lane_offset(cable_type: String, idx: int) -> float:
 	var off := TYPE_SEPARATION * 0.5 + float(posmod(idx, LANE_COUNT)) * LANE_SPACING
+	# Cluster-Kabel liegen außen neben den Datenkabeln, damit sich die Spuren nicht überlagern.
+	if cable_type == "cluster":
+		return -(off + TYPE_SEPARATION)
 	return off if cable_type == "power" else -off
 
 

@@ -88,8 +88,8 @@ const UI_BASE_HEIGHT := 720.0
 ## Tastenbelegung: Aktionen, die der Spieler ändern kann (Reihenfolge = Reihenfolge im Menü).
 const REBINDABLE_ACTIONS: Array[String] = [
 	"move_forward", "move_back", "move_left", "move_right",
-	"jump", "sprint", "interact", "inspect_rack", "drop_item", "rotate_item",
-	"tool_hands", "tool_power_cable", "tool_net_cable", "toggle_help", "open_chat", "toggle_perf",
+	"jump", "sprint", "crouch", "interact", "inspect_rack", "drop_item", "rotate_item",
+	"tool_hands", "tool_power_cable", "tool_net_cable", "tool_slot_4", "toggle_help", "open_chat", "toggle_perf",
 ]
 const ACTION_LABELS := {
 	"move_forward": "Vorwärts",
@@ -98,13 +98,15 @@ const ACTION_LABELS := {
 	"move_right": "Rechts",
 	"jump": "Springen",
 	"sprint": "Sprinten",
+	"crouch": "Ducken",
 	"interact": "Interagieren",
 	"inspect_rack": "Rack untersuchen",
 	"drop_item": "Gegenstand ablegen",
 	"rotate_item": "Gegenstand drehen",
-	"tool_hands": "Werkzeug: Hände",
-	"tool_power_cable": "Werkzeug: Stromkabel",
-	"tool_net_cable": "Werkzeug: Netzwerkkabel",
+	"tool_hands": "Slot 1 wählen",
+	"tool_power_cable": "Slot 2 wählen",
+	"tool_net_cable": "Slot 3 wählen",
+	"tool_slot_4": "Slot 4 wählen",
 	"toggle_help": "Hilfe ein/aus",
 	"toggle_perf": "Leistungsanzeige",
 	"open_chat": "Chat öffnen",
@@ -128,6 +130,38 @@ var vsync: bool = true
 var max_fps: int = 0
 
 var player_name: String = "Admin"
+## Skin-Editor: Indizes in die Farblisten unten. Jacke 0 = Teamfarbe der Sitzung.
+var skin_jacket: int = 0
+var skin_pants: int = 0
+var skin_tone: int = DEFAULT_SKIN_TONE
+
+const DEFAULT_SKIN_TONE := 1
+const SKIN_JACKET_LABELS := ["Teamfarbe (automatisch)", "Signalrot", "Warngelb", "Dunkelblau", "Waldgrün", "Graphit", "Weiß"]
+const SKIN_JACKET_COLORS := [
+	Color(0.0, 0.0, 0.0, 0.0),
+	Color(0.80, 0.16, 0.14),
+	Color(0.96, 0.76, 0.12),
+	Color(0.14, 0.24, 0.52),
+	Color(0.18, 0.42, 0.24),
+	Color(0.26, 0.28, 0.31),
+	Color(0.88, 0.89, 0.90),
+]
+const SKIN_PANTS_LABELS := ["Anthrazit", "Jeansblau", "Khaki", "Schwarz", "Olivgrün"]
+const SKIN_PANTS_COLORS := [
+	Color(0.15, 0.17, 0.21),
+	Color(0.20, 0.30, 0.46),
+	Color(0.55, 0.49, 0.36),
+	Color(0.07, 0.07, 0.08),
+	Color(0.30, 0.34, 0.20),
+]
+const SKIN_TONE_LABELS := ["Hell", "Mittelhell", "Mittel", "Dunkel", "Sehr dunkel"]
+const SKIN_TONE_COLORS := [
+	Color(0.96, 0.84, 0.74),
+	Color(0.88, 0.72, 0.60),
+	Color(0.74, 0.55, 0.40),
+	Color(0.52, 0.36, 0.25),
+	Color(0.33, 0.22, 0.15),
+]
 var master_volume: float = 0.85
 var sfx_volume: float = 0.85
 var fan_volume: float = 0.70
@@ -187,6 +221,39 @@ func apply_language() -> void:
 		TranslationServer.set_locale(language)
 
 
+## Aktueller Skin als Netzwerk-Dictionary (nur Indizes).
+func get_skin() -> Dictionary:
+	return {"jacket": skin_jacket, "pants": skin_pants, "tone": skin_tone}
+
+
+## Prüft einen Skin aus Datei oder Netzwerk. Ungültige Werte fallen auf den Standard zurück.
+func sanitize_skin(raw: Variant) -> Dictionary:
+	var d: Dictionary = raw if raw is Dictionary else {}
+	return {
+		"jacket": _skin_index(d.get("jacket", 0), SKIN_JACKET_COLORS.size(), 0),
+		"pants": _skin_index(d.get("pants", 0), SKIN_PANTS_COLORS.size(), 0),
+		"tone": _skin_index(d.get("tone", DEFAULT_SKIN_TONE), SKIN_TONE_COLORS.size(), DEFAULT_SKIN_TONE),
+	}
+
+
+## Löst einen Skin in Farben auf. Jacke 0 nimmt die Teamfarbe des Spielers.
+func skin_colors(skin: Variant, team_color: Color) -> Dictionary:
+	var s := sanitize_skin(skin)
+	var jacket_idx := int(s["jacket"])
+	var jacket: Color = team_color if jacket_idx == 0 else SKIN_JACKET_COLORS[jacket_idx]
+	return {
+		"jacket": jacket,
+		"pants": SKIN_PANTS_COLORS[int(s["pants"])],
+		"tone": SKIN_TONE_COLORS[int(s["tone"])],
+	}
+
+
+func _skin_index(value: Variant, count: int, fallback: int) -> int:
+	if typeof(value) != TYPE_INT and typeof(value) != TYPE_FLOAT:
+		return fallback
+	return clampi(int(value), 0, count - 1)
+
+
 func load_settings() -> void:
 	var cfg := ConfigFile.new()
 	var err := cfg.load(SETTINGS_PATH)
@@ -194,6 +261,14 @@ func load_settings() -> void:
 		return
 
 	player_name = str(cfg.get_value("player", "name", "Admin"))
+	var loaded_skin := sanitize_skin({
+		"jacket": cfg.get_value("player", "skin_jacket", 0),
+		"pants": cfg.get_value("player", "skin_pants", 0),
+		"tone": cfg.get_value("player", "skin_tone", DEFAULT_SKIN_TONE),
+	})
+	skin_jacket = int(loaded_skin["jacket"])
+	skin_pants = int(loaded_skin["pants"])
+	skin_tone = int(loaded_skin["tone"])
 	master_volume = clampf(float(cfg.get_value("audio", "master", 0.85)), 0.0, 1.0)
 	sfx_volume = clampf(float(cfg.get_value("audio", "sfx", 0.85)), 0.0, 1.0)
 	fan_volume = clampf(float(cfg.get_value("audio", "fans", 0.70)), 0.0, 1.0)
@@ -255,6 +330,9 @@ func load_settings() -> void:
 func save_settings() -> void:
 	var cfg := ConfigFile.new()
 	cfg.set_value("player", "name", player_name)
+	cfg.set_value("player", "skin_jacket", skin_jacket)
+	cfg.set_value("player", "skin_pants", skin_pants)
+	cfg.set_value("player", "skin_tone", skin_tone)
 	cfg.set_value("audio", "master", master_volume)
 	cfg.set_value("audio", "sfx", sfx_volume)
 	cfg.set_value("audio", "fans", fan_volume)

@@ -1,8 +1,16 @@
 {
-  "version": "1.0.4",
-  "codename": "v1.0.4 Kabel-Overhaul",
+  "version": "1.0.5",
+  "codename": "v1.0.5 Halle-C-Modell",
   "release_date": "2026-11-22",
   "changelog": [
+    {
+      "version": "v1.0.5",
+      "title": "Halle-C-Sicherungskasten als 3D-Modell",
+      "items": [
+        "Der Sicherungskasten in Halle C ist als eigenes 3D-Modell mit 14 Steckdosen und Abdeckungen gebaut. Gehäuse und Abdeckungen haben die Farben des Spiels.",
+        "Enthält alle Neuerungen aus v1.0.4."
+      ]
+    },
     {
       "version": "v1.0.4",
       "title": "Kabel-Overhaul, mehr Vermietungsdienste, Steckdosen in Halle C und aufgeräumtes Lager",

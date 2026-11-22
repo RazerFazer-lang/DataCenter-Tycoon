@@ -3,6 +3,10 @@ extends Node3D
 ## Detailed 3D UPS Emergency Backup Battery Unit (UPS-1) with 5-segment LED charge meter,
 ## heavy industrial battery casing, front-top Power Port, and 3D status readout.
 
+## Frontfläche der CEE-Steckdose am Blender-Modell (tools/blender/build_utilities.py, build_ups).
+const MODEL_PORT_POS := Vector3(0.0, 1.30, 0.29)
+const PROCEDURAL_PORT_POS := Vector3(0.0, 1.32, 0.28)
+
 var ups_id: String = ""
 var _ups_data: Dictionary = {}
 
@@ -90,11 +94,13 @@ func _refresh_visuals() -> void:
 
 func _build_geometry() -> void:
 	var custom_m := ModelLoader.instantiate_custom_model("ups")
+	var port_pos := PROCEDURAL_PORT_POS
 	if custom_m != null:
 		add_child(custom_m)
-	var chassis_mat := MatLib.make_brushed_metal(Color(0.16, 0.18, 0.22), 0.42, 0.58)
-	var amber_mat := _mat(Color(0.96, 0.68, 0.12), 0.40, 0.20)
-	var dark_mat := _mat(Color(0.09, 0.10, 0.13), 0.68, 0.22)
+		_bind_model_lights(custom_m)
+		port_pos = MODEL_PORT_POS
+	else:
+		_build_procedural_body()
 
 	var sb := StaticBody3D.new()
 	sb.collision_layer = 1
@@ -106,6 +112,83 @@ func _build_geometry() -> void:
 	col.position = Vector3(0.0, 0.64, 0.0)
 	sb.add_child(col)
 	add_child(sb)
+
+	_power_port_marker = Node3D.new()
+	_power_port_marker.position = port_pos
+	add_child(_power_port_marker)
+
+	# Dedicated Top Power Socket interact area (Contextual 1-Hand Cable Grab!)
+	var pp_area := Area3D.new()
+	pp_area.collision_layer = 4
+	pp_area.collision_mask = 0
+	var pp_col := CollisionShape3D.new()
+	var pp_sh := BoxShape3D.new()
+	pp_sh.size = Vector3(0.36, 0.22, 0.28)
+	pp_col.shape = pp_sh
+	pp_area.position = Vector3(0.0, 1.30, 0.22)
+	pp_area.add_child(pp_col)
+	pp_area.set_meta("interact_type", "power_port")
+	pp_area.set_meta("entity_id", ups_id)
+	add_child(pp_area)
+
+	var area := Area3D.new()
+	area.collision_layer = 4
+	area.collision_mask = 0
+	var acol := CollisionShape3D.new()
+	var ash := BoxShape3D.new()
+	ash.size = Vector3(0.74, 1.18, 0.70)
+	acol.shape = ash
+	area.position = Vector3(0.0, 0.59, 0.02)
+	area.add_child(acol)
+	area.set_meta("interact_type", "ups_unit")
+	area.set_meta("entity_id", ups_id)
+	add_child(area)
+
+	_label = Label3D.new()
+	_label.text = ups_id.to_upper()
+	_label.font_size = 24
+	_label.pixel_size = 0.0042
+	_label.position = Vector3(0.0, 1.54, 0.15)
+	add_child(_label)
+
+
+## ups.glb: Ladeanzeige und Status-LED an eigene Materialkopien binden, damit jede USV einzeln leuchtet.
+func _bind_model_lights(model: Node3D) -> void:
+	for i in range(5):
+		var bm := _bind_model_mat(model, "DCT_U_UpsBar%d" % (i + 1))
+		if bm != null:
+			_bar_mats.append(bm)
+	_status_led_mat = _bind_model_mat(model, "DCT_U_UpsStatus")
+	if _bar_mats.size() != 5 or _status_led_mat == null:
+		push_warning("ups.glb: Material für Ladeanzeige oder Status-LED fehlt")
+
+
+func _bind_model_mat(root: Node, mat_name: String) -> StandardMaterial3D:
+	var bound: StandardMaterial3D = null
+	var stack: Array[Node] = [root]
+	while not stack.is_empty():
+		var n: Node = stack.pop_back()
+		for c in n.get_children():
+			stack.append(c)
+		var mi := n as MeshInstance3D
+		if mi == null or mi.mesh == null:
+			continue
+		for s in range(mi.mesh.get_surface_count()):
+			var src := mi.mesh.surface_get_material(s)
+			if src == null or src.resource_name != mat_name:
+				continue
+			if bound == null:
+				bound = (src.duplicate() as StandardMaterial3D) if src is StandardMaterial3D else StandardMaterial3D.new()
+				bound.emission_enabled = true
+			mi.set_surface_override_material(s, bound)
+	return bound
+
+
+## Ersatzgehäuse aus Boxen, falls ups.glb fehlt.
+func _build_procedural_body() -> void:
+	var chassis_mat := MatLib.make_brushed_metal(Color(0.16, 0.18, 0.22), 0.42, 0.58)
+	var amber_mat := _mat(Color(0.96, 0.68, 0.12), 0.40, 0.20)
+	var dark_mat := _mat(Color(0.09, 0.10, 0.13), 0.68, 0.22)
 
 	# Heavy battery rack base + main steel housing
 	_add_box(self, Vector3(0.0, 0.05, 0.0), Vector3(0.72, 0.10, 0.64), dark_mat)
@@ -142,44 +225,6 @@ func _build_geometry() -> void:
 	_add_box(self, Vector3(0.0, 1.27, 0.20), Vector3(0.26, 0.075, 0.13), dark_mat)
 	var pmat := _mat(Color(0.84, 0.66, 0.14), 0.48, 0.08)
 	_add_box(self, Vector3(0.0, 1.29, 0.22), Vector3(0.18, 0.055, 0.09), pmat)
-
-	_power_port_marker = Node3D.new()
-	_power_port_marker.position = Vector3(0.0, 1.32, 0.28)
-	add_child(_power_port_marker)
-
-	# Dedicated Top Power Socket interact area (Contextual 1-Hand Cable Grab!)
-	var pp_area := Area3D.new()
-	pp_area.collision_layer = 4
-	pp_area.collision_mask = 0
-	var pp_col := CollisionShape3D.new()
-	var pp_sh := BoxShape3D.new()
-	pp_sh.size = Vector3(0.36, 0.22, 0.28)
-	pp_col.shape = pp_sh
-	pp_area.position = Vector3(0.0, 1.30, 0.22)
-	pp_area.add_child(pp_col)
-	pp_area.set_meta("interact_type", "power_port")
-	pp_area.set_meta("entity_id", ups_id)
-	add_child(pp_area)
-
-	var area := Area3D.new()
-	area.collision_layer = 4
-	area.collision_mask = 0
-	var acol := CollisionShape3D.new()
-	var ash := BoxShape3D.new()
-	ash.size = Vector3(0.74, 1.18, 0.70)
-	acol.shape = ash
-	area.position = Vector3(0.0, 0.59, 0.02)
-	area.add_child(acol)
-	area.set_meta("interact_type", "ups_unit")
-	area.set_meta("entity_id", ups_id)
-	add_child(area)
-
-	_label = Label3D.new()
-	_label.text = ups_id.to_upper()
-	_label.font_size = 24
-	_label.pixel_size = 0.0042
-	_label.position = Vector3(0.0, 1.54, 0.15)
-	add_child(_label)
 
 
 func _add_box(parent: Node3D, pos: Vector3, size: Vector3, mat: Material) -> MeshInstance3D:

@@ -80,6 +80,8 @@ func _ready() -> void:
 	GameState.carts_changed.connect(_sync_carts)
 	GameState.crates_changed.connect(_sync_crates)
 	GameState.cables_changed.connect(_sync_cables)
+	# Router-Upgrade verschiebt die LAN-Buchse: Kabel nach dem Neubau des Modells neu zeichnen.
+	_garage.router_visuals_rebuilt.connect(_on_router_visuals_rebuilt, CONNECT_DEFERRED)
 	GameState.extinguisher_changed.connect(_sync_extinguisher)
 	GameState.room_level_changed.connect(_sync_room_level)
 	GameState.state_updated.connect(_on_state_updated)
@@ -409,6 +411,8 @@ func get_port_world_pos(cable_type: String, endpoint_id: String) -> Variant:
 		return _garage.hall_c_router_port_pos
 	if _rack_nodes.has(endpoint_id):
 		var rp: RackProp = _rack_nodes[endpoint_id]
+		if cable_type == "cluster":
+			return rp.get_cluster_port_global_pos()
 		return rp.get_power_port_global_pos() if cable_type == "power" else rp.get_net_port_global_pos()
 	if _cooler_nodes.has(endpoint_id):
 		var cp: CoolerProp = _cooler_nodes[endpoint_id]
@@ -571,23 +575,48 @@ func _sync_cables() -> void:
 	_cable_renderer.rebuild_cables(GameState.cables, get_port_world_pos, get_port_world_dir, _make_cable_socket_resolver())
 
 
-## Verteilt die Stromkabel am Kasten in Halle C auf einzelne Buchsen (stabile Reihenfolge nach Kabel-ID).
+## Im Menü bleiben die Showcase-Kabel stehen; nur in einer laufenden Sitzung neu zeichnen.
+func _on_router_visuals_rebuilt() -> void:
+	if GameState.is_active:
+		_sync_cables()
+
+
+## Legt jedes Kabel an Anschlüssen mit mehreren Buchsen (Strombus Halle C, Wand-Router)
+## auf die beim Stecken gewählte Buchse. null = allgemeiner Port des Anschlusses.
 func _make_cable_socket_resolver() -> Callable:
-	var hall_c_ids: Array[String] = []
-	for cid in GameState.cables.keys():
-		var c: Dictionary = GameState.cables[cid]
-		if str(c.get("cable_type", "")) != "power":
-			continue
-		if str(c.get("from_id", "")) == GameState.HALL_C_BREAKER_ID or str(c.get("to_id", "")) == GameState.HALL_C_BREAKER_ID:
-			hall_c_ids.append(str(cid))
-	hall_c_ids.sort()
-	var slot_of := {}
-	for i in range(hall_c_ids.size()):
-		slot_of[hall_c_ids[i]] = i
-	return func(cid: String, _ctype: String, eid: String) -> Variant:
-		if eid == GameState.HALL_C_BREAKER_ID and slot_of.has(cid):
-			return _garage.get_hall_c_socket_pos(int(slot_of[cid]))
+	var slot_maps := {
+		"power": {GameState.HALL_C_BREAKER_ID: GameState.get_cable_slot_map("power", GameState.HALL_C_BREAKER_ID)},
+		"network": {GameState.WALL_ROUTER_ID: GameState.get_cable_slot_map("network", GameState.WALL_ROUTER_ID)},
+	}
+	return func(cid: String, ctype: String, eid: String) -> Variant:
+		var per_type: Dictionary = slot_maps.get(ctype, {})
+		if not per_type.has(eid):
+			return null
+		var slots: Dictionary = per_type[eid]
+		if not slots.has(cid):
+			return null
+		var socks := get_socket_positions(ctype, eid)
+		var idx := int(slots[cid])
+		if idx >= 0 and idx < socks.size():
+			return socks[idx]
 		return null
+
+
+## Weltpositionen der einzelnen Buchsen eines Anschlusses. Leer = Anschluss hat nur einen Steckpunkt.
+func get_socket_positions(cable_type: String, endpoint_id: String) -> Array[Vector3]:
+	if cable_type == "power" and endpoint_id == GameState.HALL_C_BREAKER_ID:
+		return _garage.get_hall_c_socket_positions()
+	if cable_type == "network" and endpoint_id == GameState.WALL_ROUTER_ID:
+		return _garage.get_router_jack_positions()
+	return []
+
+
+## Weltposition der Buchse idx, sonst der allgemeine Port des Anschlusses.
+func get_socket_world_pos(cable_type: String, endpoint_id: String, idx: int) -> Variant:
+	var socks := get_socket_positions(cable_type, endpoint_id)
+	if idx >= 0 and idx < socks.size():
+		return socks[idx]
+	return get_port_world_pos(cable_type, endpoint_id)
 
 
 ## Richtung, in die ein Port zeigt (Kabel verlässt die Buchse in diese Richtung). null = unbekannt.
@@ -643,6 +672,7 @@ func _spawn_player_if_missing(peer_id: int, info: Dictionary) -> void:
 		info.get("color", Color(0.22, 0.72, 0.98)),
 		self
 	)
+	p.apply_skin(info.get("skin", {}))
 	_players_container.add_child(p)
 	_player_nodes[peer_id] = p
 	if is_me:

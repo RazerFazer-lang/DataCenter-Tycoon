@@ -120,6 +120,7 @@ func _setup_input_actions() -> void:
 	_add_key_action("move_right", [KEY_D, KEY_RIGHT])
 	_add_key_action("jump", [KEY_SPACE])
 	_add_key_action("sprint", [KEY_SHIFT])
+	_add_key_action("crouch", [KEY_C, KEY_CTRL])
 	_add_key_action("interact", [KEY_E])
 	_add_key_action("inspect_rack", [KEY_F])
 	_add_key_action("drop_item", [KEY_Q])
@@ -127,6 +128,7 @@ func _setup_input_actions() -> void:
 	_add_key_action("tool_hands", [KEY_1])
 	_add_key_action("tool_power_cable", [KEY_2])
 	_add_key_action("tool_net_cable", [KEY_3])
+	_add_key_action("tool_slot_4", [KEY_4])
 	_add_key_action("toggle_help", [KEY_H])
 	_add_key_action("open_chat", [KEY_T])
 	_add_key_action("toggle_perf", [KEY_F3])
@@ -220,6 +222,7 @@ func _start_host_internal(player_name: String, port: int, loaded_state: Dictiona
 	var host_info := {
 		"name": local_player_name,
 		"color": PLAYER_COLORS[0],
+		"skin": SettingsManager.get_skin(),
 	}
 	if not dedicated:
 		players[1] = host_info
@@ -770,7 +773,7 @@ func _on_peer_disconnected(peer_id: int) -> void:
 func _on_connected_to_server() -> void:
 	_joining = false
 	is_in_session = true
-	_rpc_register_player.rpc_id(1, local_player_name)
+	_rpc_register_player.rpc_id(1, local_player_name, SettingsManager.get_skin())
 	connection_succeeded.emit()
 
 
@@ -789,7 +792,7 @@ func _on_server_disconnected() -> void:
 
 
 @rpc("any_peer", "call_remote", "reliable")
-func _rpc_register_player(player_name: String) -> void:
+func _rpc_register_player(player_name: String, skin: Dictionary) -> void:
 	if not multiplayer.is_server():
 		return
 	var peer_id := multiplayer.get_remote_sender_id()
@@ -800,6 +803,7 @@ func _rpc_register_player(player_name: String) -> void:
 	var info := {
 		"name": clean_name,
 		"color": PLAYER_COLORS[color_idx],
+		"skin": SettingsManager.sanitize_skin(skin),
 	}
 	players[peer_id] = info
 	# Der Spieler steht jetzt schon in players. _rpc_add_player hält ihn deshalb

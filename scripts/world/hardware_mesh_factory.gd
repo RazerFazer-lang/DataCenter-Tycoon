@@ -29,6 +29,73 @@ static func get_visual_tier(components: Dictionary, cat: String) -> int:
 	return clampi(int(val), 0, 3)
 
 
+## Werte der Blender-Materialien "DCX_*", die MatLib nicht als feste Materialien kennt:
+## [Farbe, Rauheit, Metall], dieselben Werte wie in den build_*-Funktionen.
+const PART_MODEL_DCX_MATS := {
+	"DCX_dark_steel": [Color(0.18, 0.19, 0.21), 0.38, 0.65],
+	"DCX_etch": [Color(0.50, 0.51, 0.53), 0.55, 0.55],
+	"DCX_dark_top": [Color(0.20, 0.21, 0.23), 0.40, 0.70],
+	"DCX_shroud": [Color(0.16, 0.17, 0.19), 0.34, 0.62],
+	"DCX_backplate": [Color(0.11, 0.12, 0.13), 0.40, 0.70],
+	"DCX_blade_gpu": [Color(0.22, 0.23, 0.25), 0.58, 0.20],
+	"DCX_label": [Color(0.80, 0.81, 0.83), 0.55, 0.25],
+	"DCX_dark_al": [Color(0.22, 0.24, 0.27), 0.32, 0.72],
+	"DCX_paper": [Color(0.86, 0.87, 0.89), 0.80, 0.0],
+	"DCX_blade_fan": [Color(0.17, 0.18, 0.20), 0.60, 0.15],
+	"DCX_shade": [Color(0.05, 0.05, 0.06), 0.85, 0.0],
+	"DCX_handle_green": [Color(0.24, 0.56, 0.34), 0.42, 0.30],
+}
+
+static var _part_mat_cache: Dictionary = {}
+
+
+## Lädt ein in Blender gebautes Bauteil (tools/blender/build_hardware_parts.py) aus assets/models.
+## Gibt null zurück, wenn die Datei fehlt; dann baut der Aufrufer das Teil wie bisher im Code.
+## Objekte "Rotor_Z_*" / "Rotor_X_*" kommen als drehende Lüfter in out_fans.
+static func _load_part_model(model_id: String, out_fans: Array = []) -> Node3D:
+	if not ModelLoader.has_custom_model(model_id):
+		return null
+	var inst := ModelLoader.instantiate_custom_model(model_id)
+	if inst == null:
+		return null
+	_prepare_part_model(inst, out_fans)
+	return inst
+
+
+static func _prepare_part_model(n: Node, out_fans: Array) -> void:
+	if n is MeshInstance3D:
+		var mi := n as MeshInstance3D
+		if mi.mesh != null:
+			for s in range(mi.mesh.get_surface_count()):
+				var src := mi.mesh.surface_get_material(s)
+				if src == null:
+					continue
+				var mat := _part_material(src.resource_name)
+				if mat != null:
+					mi.set_surface_override_material(s, mat)
+		var node_name := str(mi.name)
+		if node_name.begins_with("Rotor_"):
+			if node_name.begins_with("Rotor_X"):
+				mi.set_meta("spin_axis", "x")
+			out_fans.append(mi)
+	for c in n.get_children():
+		_prepare_part_model(c, out_fans)
+
+
+## "DCT_<id>" wird zu MatLib.get_mat(<id>), "DCX_*" zu gebürstetem Metall aus PART_MODEL_DCX_MATS.
+static func _part_material(mat_name: String) -> Material:
+	if _part_mat_cache.has(mat_name):
+		return _part_mat_cache[mat_name] as Material
+	var mat: Material = null
+	if mat_name.begins_with("DCT_"):
+		mat = MatLib.get_mat(mat_name.substr(4))
+	elif PART_MODEL_DCX_MATS.has(mat_name):
+		var p: Array = PART_MODEL_DCX_MATS[mat_name]
+		mat = MatLib.make_brushed_metal(p[0] as Color, float(p[1]), float(p[2]))
+	_part_mat_cache[mat_name] = mat
+	return mat
+
+
 static func build_open_server_chassis(item_type: String, components: Dictionary, out_fans: Array = []) -> Node3D:
 	# Mainboards nutzen das passende 1U/2U/4U-Gehäuse.
 	item_type = GameState.get_chassis_visual(item_type)
@@ -85,9 +152,72 @@ static func build_open_server_chassis(item_type: String, components: Dictionary,
 	# 2. Realistic Server Motherboard PCB (with standoffs, Rear I/O ports, CMOS battery, Capacitors, Chipset)
 	var mb := Node3D.new()
 	mb.position = Vector3(-0.04, 0.022, -0.07)
+	# Markierung für den Hover in der 3D-Vorschau. part_base: Bauteile auf der Platine haben Vorrang.
+	mb.set_meta("part_cat", "mainboard")
+	mb.set_meta("part_base", true)
 	root.add_child(mb)
-	_box(mb, Vector3.ZERO, Vector3(0.58, 0.012, 0.48), pcb)
+	var mb_model := _load_part_model("part_mainboard_ai" if item_type == "gpu_server" else "part_mainboard")
+	if mb_model != null:
+		mb.add_child(mb_model)
+	else:
+		_build_mainboard_fallback(mb, pcb, steel, alu_fin, dark_steel, plastic, gold)
 
+	# 3. REAL 3D CPU + LGA Socket + Upgraded Cooler (at center-left of motherboard)
+	# Leere Steckplätze bleiben leer: nur eingebaute Teile werden gezeigt.
+	if has_part(components, "cpu"):
+		var cpu_lvl := get_visual_tier(components, "cpu")
+		var cpu_node := build_cpu_assembly(cpu_lvl)
+		cpu_node.position = Vector3(-0.07, 0.008, -0.01)
+		cpu_node.set_meta("part_cat", "cpu")
+		mb.add_child(cpu_node)
+
+	# 4. REAL 3D RAM DIMM Bank (right beside CPU!)
+	if has_part(components, "ram"):
+		var ram_lvl := get_visual_tier(components, "ram")
+		var ram_node := build_ram_bank(ram_lvl)
+		ram_node.position = Vector3(0.09, 0.008, -0.03)
+		ram_node.set_meta("part_cat", "ram")
+		mb.add_child(ram_node)
+
+	# 5. REAL 3D GPU (Grafikkarte) in PCIe x16 Slot (left side of motherboard)
+	if has_part(components, "gpu") or item_type == "gpu_server":
+		var gpu_lvl := get_visual_tier(components, "gpu")
+		if item_type == "gpu_server" and gpu_lvl == 0:
+			gpu_lvl = 1 # GPU-AI server always has at least a visible GPU installed!
+		var gpu_node := build_gpu_card(gpu_lvl, out_fans)
+		gpu_node.position = Vector3(-0.21, 0.008, 0.05)
+		gpu_node.set_meta("part_cat", "gpu")
+		mb.add_child(gpu_node)
+
+	# 6. REAL 3D M.2 NVMe SSDs mounted directly on the Motherboard
+	if has_part(components, "storage"):
+		var nvme_node := build_storage_module(stor_lvl)
+		nvme_node.position = Vector3(0.04, 0.008, 0.14)
+		nvme_node.set_meta("part_cat", "storage")
+		mb.add_child(nvme_node)
+
+	# 7. REAL 3D Server Cooling Fan Wall (between drives & motherboard!)
+	if has_part(components, "cooling"):
+		var cool_lvl := get_visual_tier(components, "cooling")
+		var fan_wall := build_cooling_wall(cool_lvl, out_fans)
+		fan_wall.position = Vector3(-0.02, 0.018, 0.21)
+		fan_wall.set_meta("part_cat", "cooling")
+		root.add_child(fan_wall)
+
+	# 8. REAL 3D Server PSU Unit (rear-right bay inside chassis!)
+	if has_part(components, "psu"):
+		var psu_lvl := get_visual_tier(components, "psu")
+		var psu_node := build_psu_unit(psu_lvl)
+		psu_node.position = Vector3(0.285, 0.018, -0.17)
+		psu_node.set_meta("part_cat", "psu")
+		root.add_child(psu_node)
+
+	return root
+
+
+## Mainboard aus Codeteilen, falls part_mainboard.glb fehlt.
+static func _build_mainboard_fallback(mb: Node3D, pcb: StandardMaterial3D, steel: StandardMaterial3D, alu_fin: StandardMaterial3D, dark_steel: StandardMaterial3D, plastic: StandardMaterial3D, gold: StandardMaterial3D) -> void:
+	_box(mb, Vector3.ZERO, Vector3(0.58, 0.012, 0.48), pcb)
 	# Rear I/O metallic port blocks (2x Gigabit RJ45, 4x USB, VGA)
 	for io_i in range(4):
 		_box(mb, Vector3(-0.22 + float(io_i) * 0.065, 0.028, -0.22), Vector3(0.044, 0.042, 0.048), steel)
@@ -107,54 +237,11 @@ static func build_open_server_chassis(item_type: String, components: Dictionary,
 	for s_i in range(4):
 		_box(mb, Vector3(0.24, 0.016, 0.12 + float(s_i) * 0.024), Vector3(0.036, 0.016, 0.016), plastic)
 
-	# 3. REAL 3D CPU + LGA Socket + Upgraded Cooler (at center-left of motherboard)
-	# Leere Steckplätze bleiben leer: nur eingebaute Teile werden gezeigt.
-	if has_part(components, "cpu"):
-		var cpu_lvl := get_visual_tier(components, "cpu")
-		var cpu_node := build_cpu_assembly(cpu_lvl)
-		cpu_node.position = Vector3(-0.07, 0.008, -0.01)
-		mb.add_child(cpu_node)
-
-	# 4. REAL 3D RAM DIMM Bank (right beside CPU!)
-	if has_part(components, "ram"):
-		var ram_lvl := get_visual_tier(components, "ram")
-		var ram_node := build_ram_bank(ram_lvl)
-		ram_node.position = Vector3(0.09, 0.008, -0.03)
-		mb.add_child(ram_node)
-
-	# 5. REAL 3D GPU (Grafikkarte) in PCIe x16 Slot (left side of motherboard)
-	if has_part(components, "gpu") or item_type == "gpu_server":
-		var gpu_lvl := get_visual_tier(components, "gpu")
-		if item_type == "gpu_server" and gpu_lvl == 0:
-			gpu_lvl = 1 # GPU-AI server always has at least a visible GPU installed!
-		var gpu_node := build_gpu_card(gpu_lvl, out_fans)
-		gpu_node.position = Vector3(-0.21, 0.008, 0.05)
-		mb.add_child(gpu_node)
-
-	# 6. REAL 3D M.2 NVMe SSDs mounted directly on the Motherboard
-	if has_part(components, "storage"):
-		var nvme_node := build_storage_module(stor_lvl)
-		nvme_node.position = Vector3(0.04, 0.008, 0.14)
-		mb.add_child(nvme_node)
-
-	# 7. REAL 3D Server Cooling Fan Wall (between drives & motherboard!)
-	if has_part(components, "cooling"):
-		var cool_lvl := get_visual_tier(components, "cooling")
-		var fan_wall := build_cooling_wall(cool_lvl, out_fans)
-		fan_wall.position = Vector3(-0.02, 0.018, 0.21)
-		root.add_child(fan_wall)
-
-	# 8. REAL 3D Server PSU Unit (rear-right bay inside chassis!)
-	if has_part(components, "psu"):
-		var psu_lvl := get_visual_tier(components, "psu")
-		var psu_node := build_psu_unit(psu_lvl)
-		psu_node.position = Vector3(0.285, 0.018, -0.17)
-		root.add_child(psu_node)
-
-	return root
-
 
 static func build_cpu_assembly(tier: int) -> Node3D:
+	var model := _load_part_model("part_cpu_t%d" % clampi(tier, 0, 3))
+	if model != null:
+		return model
 	var root := Node3D.new()
 	var steel := MatLib.get_mat("galvanized_steel")
 	var ihs := MatLib.get_mat("cpu_ihs")
@@ -222,6 +309,9 @@ static func build_cpu_assembly(tier: int) -> Node3D:
 
 
 static func build_gpu_card(tier: int, out_fans: Array = []) -> Node3D:
+	var model := _load_part_model("part_gpu_t%d" % clampi(tier, 0, 3), out_fans)
+	if model != null:
+		return model
 	var root := Node3D.new()
 	var plastic := MatLib.get_mat("plastic_black")
 	var steel := MatLib.get_mat("galvanized_steel")
@@ -333,6 +423,9 @@ static func build_gpu_card(tier: int, out_fans: Array = []) -> Node3D:
 
 
 static func build_ram_bank(tier: int) -> Node3D:
+	var model := _load_part_model("part_ram_t%d" % clampi(tier, 0, 3))
+	if model != null:
+		return model
 	var root := Node3D.new()
 	var plastic := MatLib.get_mat("plastic_black")
 	var pcb := MatLib.get_mat("pcb_green")
@@ -394,6 +487,9 @@ static func build_ram_bank(tier: int) -> Node3D:
 
 
 static func build_storage_module(tier: int) -> Node3D:
+	var model := _load_part_model("part_storage_t%d" % clampi(tier, 0, 3))
+	if model != null:
+		return model
 	var root := Node3D.new()
 	var pcb_b := MatLib.get_mat("pcb_black")
 	var ic := MatLib.get_mat("ic_chip")
@@ -432,6 +528,9 @@ static func build_storage_module(tier: int) -> Node3D:
 
 
 static func build_cooling_wall(tier: int, out_fans: Array = []) -> Node3D:
+	var model := _load_part_model("part_cooling_t%d" % clampi(tier, 0, 3), out_fans)
+	if model != null:
+		return model
 	var root := Node3D.new()
 	var plastic := MatLib.get_mat("plastic_black")
 	var steel := MatLib.get_mat("galvanized_steel")
@@ -491,6 +590,9 @@ static func build_cooling_wall(tier: int, out_fans: Array = []) -> Node3D:
 
 
 static func build_psu_unit(tier: int) -> Node3D:
+	var model := _load_part_model("part_psu_t%d" % clampi(tier, 0, 3))
+	if model != null:
+		return model
 	var root := Node3D.new()
 	var plastic := MatLib.get_mat("plastic_black")
 	var copper := MatLib.get_mat("copper_metal")

@@ -142,6 +142,9 @@ static func render_bank(host: Control, feedback: String, feedback_ok: bool) -> v
 		_money(float(FinanceManager.get_credit_limit())), _money(FinanceManager.get_free_credit())
 	], 13, COL_TEXT))
 	score_card.add_child(_label("Pünktlich bezahlte Rechnungen und Raten verbessern die Bonität. Mahnungen, Inkasso und geplatzte Raten senken sie.", 12, COL_MUTED, true))
+	score_card.add_child(_label(_t("Firmenstufe %d: Kreditrahmen +%d %%. Höhere Stufen schalten größere Kredite frei.") % [
+		GameState.get_company_level(), int(roundf((FinanceManager.get_credit_level_factor() - 1.0) * 100.0))
+	], 12, COL_MUTED, true))
 
 	# Laufende Kredite
 	_section(body, "Laufende Kredite")
@@ -194,8 +197,14 @@ static func render_bank(host: Control, feedback: String, feedback_ok: bool) -> v
 			int(roundf(float(offer["rate"]) * 100.0)), int(offer["days"]),
 			_money(float(FinanceManager.get_offer_total(offer))), _money(float(FinanceManager.get_offer_daily(offer)))
 		], 12, COL_MUTED, true))
+		var req := PackedStringArray()
+		var min_level := int(offer.get("min_level", 1))
+		if min_level > 1:
+			req.append(_t("Ab Firmenstufe %d") % min_level)
 		if int(offer["min_score"]) > 0:
-			info.add_child(_label(_t("Ab Bonität %d") % int(offer["min_score"]), 12, COL_MUTED))
+			req.append(_t("Ab Bonität %d") % int(offer["min_score"]))
+		if not req.is_empty():
+			info.add_child(_label("  •  ".join(req), 12, COL_MUTED))
 		if not reason.is_empty():
 			info.add_child(_label(reason, 12, COL_BAD, true))
 		row.add_child(_button("Kredit beantragen", COL_GOOD, func(): FinanceManager.request_take_loan(oid), reason.is_empty()))

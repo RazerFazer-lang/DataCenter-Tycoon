@@ -8,20 +8,33 @@ const MOVE_SPEED := 4.8
 const SPRINT_SPEED := 7.4
 const JUMP_VELOCITY := 4.6
 const GRAVITY := 13.5
+## Ducken: Kapselhöhe, Kamerahöhe und Tempo im Stehen bzw. geduckt.
+const CROUCH_SPEED := 2.4
+const STAND_HEIGHT := 1.72
+const CROUCH_HEIGHT := 1.12
+const STAND_HEAD_Y := 1.56
+const CROUCH_HEAD_Y := 0.98
+## Etwas schmaler als der Körper, damit eine Wand direkt daneben das Aufstehen nicht blockiert.
+const STAND_PROBE_RADIUS := 0.32
+## Zielhilfe für Kabelanschlüsse: maximaler Abstand des Ports quer zur Blickrichtung (Meter).
+const PORT_ASSIST_RADIUS := 0.16
+## Liegt ein Hindernis näher als das am Port, zählt er trotzdem als sichtbar (Ports sitzen bündig am Gehäuse).
+const PORT_ASSIST_SIGHT_SLACK := 0.25
 const INTERACT_RANGE := 3.6
 const PLACE_RANGE := 5.5
 const AVATAR_MODEL_ID := "player"
-
-enum ToolMode { HANDS = 0, POWER_CABLE = 1, NET_CABLE = 2 }
 
 var peer_id: int = 1
 var is_local: bool = false
 var player_name: String = "Spieler"
 var avatar_color: Color = Color(0.22, 0.72, 0.98)
 
-var tool_mode: int = ToolMode.HANDS
 var cable_active_type: String = "" # "" | "power" | "network"
 var cable_start_id: String = ""
+## Slot-System: Tasten 1-4 wählen den aktiven Slot. Was darin liegt, legt erst die Aufnahme fest.
+## cable_start_id / cable_active_type gehören immer zum aktiven Slot, die übrigen Slots liegen hier.
+var active_slot: int = 1
+var _slot_cables: Array = [{}, {}, {}, {}]
 var relocating_rack_id: String = ""
 var place_rot_y: float = 0.0
 
@@ -31,7 +44,7 @@ var is_typing_at_pc: bool = false
 var _pre_seat_pos: Vector3 = Vector3(2.78, 0.0, -2.05)
 var _pre_seat_yaw: float = 0.0
 var _stand_blend_timer: float = 0.0
-var _remote_pose_flag: int = 0 # 0=standing, 1=seated at PC, 2=seated & typing
+var _remote_pose_flag: int = 0 # 0=standing, 1=seated at PC, 2=seated & typing, 3=crouching
 
 # Kamerafahrt an den Monitor: erst hinsetzen, dann heranfahren, bis der Bildschirm das Bild füllt.
 const PC_SIT_SETTLE := 0.45
@@ -61,6 +74,10 @@ var _nametag: Label3D
 # Held visual (shown in first-person corner OR in remote avatar's hands)
 var _held_root: Node3D
 var _held_item_holder: Node3D
+## Ich-Perspektive: Unterarm + Hand (nur lokaler Spieler, sonst null).
+var _fp_hand: Node3D
+const FP_HAND_ITEM_POS := Vector3(0.0, -0.13, 0.02)
+const FP_HAND_EXT_POS := Vector3(0.0, 0.26, 0.0)
 var _held_item_type_cached: String = ""
 var _held_extinguisher: Node3D
 var _foam_root: Node3D
@@ -75,6 +92,7 @@ var _ghost_mesh: MeshInstance3D
 var _ghost_front_strip: MeshInstance3D
 var _ghost_mat: StandardMaterial3D
 var _ghost_valid: bool = false
+var _ghost_rot_y: float = 0.0
 var _ghost_pos: Vector3 = Vector3.ZERO
 
 # Remote interpolation targets
@@ -91,6 +109,16 @@ var _anim_time: float = 0.0
 var _walk_cycle: float = 0.0
 var _footstep_accum: float = 0.0
 
+# Ducken (nur lokaler Spieler)
+var is_crouching: bool = false
+var _body_col: CollisionShape3D
+var _body_shape: CapsuleShape3D
+var _stand_probe: CapsuleShape3D
+
+# Skin (Hose, Haut). Die Jacke steckt in avatar_color.
+var skin_pants_color: Color = Color(0.15, 0.17, 0.21)
+var skin_tone_color: Color = Color(0.88, 0.72, 0.60)
+
 
 func setup(p_peer_id: int, p_is_local: bool, p_name: String, p_color: Color, world_ref: Node) -> void:
 	peer_id = p_peer_id
@@ -98,6 +126,15 @@ func setup(p_peer_id: int, p_is_local: bool, p_name: String, p_color: Color, wor
 	player_name = p_name
 	avatar_color = p_color
 	_world = world_ref
+
+
+## Übernimmt den Skin aus dem Spieler-Eintrag. Nach setup() und vor add_child() aufrufen,
+## weil die Visuals in _ready() entstehen.
+func apply_skin(skin: Variant) -> void:
+	var colors := SettingsManager.skin_colors(skin, avatar_color)
+	avatar_color = colors["jacket"]
+	skin_pants_color = colors["pants"]
+	skin_tone_color = colors["tone"]
 
 
 func _ready() -> void:
@@ -108,10 +145,15 @@ func _ready() -> void:
 	var col := CollisionShape3D.new()
 	var cap := CapsuleShape3D.new()
 	cap.radius = 0.34
-	cap.height = 1.72
+	cap.height = STAND_HEIGHT
 	col.shape = cap
-	col.position = Vector3(0.0, 0.86, 0.0)
+	col.position = Vector3(0.0, STAND_HEIGHT * 0.5, 0.0)
 	add_child(col)
+	_body_col = col
+	_body_shape = cap
+	_stand_probe = CapsuleShape3D.new()
+	_stand_probe.radius = STAND_PROBE_RADIUS
+	_stand_probe.height = STAND_HEIGHT
 
 	_head_pivot = Node3D.new()
 	_head_pivot.position = Vector3(0.0, 1.56, 0.0)
@@ -142,6 +184,7 @@ func _ready() -> void:
 		_held_root.position = Vector3(0.36, -0.30, -0.62)
 		_held_root.scale = Vector3(0.62, 0.62, 0.62)
 		_camera.add_child(_held_root)
+		_build_fp_hand()
 
 		_build_placement_ghost()
 	else:
@@ -200,7 +243,6 @@ func set_typing_at_pc(active: bool) -> void:
 func start_relocate_rack(rack_id: String) -> void:
 	if not is_local or not GameState.racks.has(rack_id):
 		return
-	tool_mode = ToolMode.HANDS
 	cable_start_id = ""
 	relocating_rack_id = rack_id
 	place_rot_y = float(GameState.racks[rack_id].get("rot_y", 0.0))
@@ -228,22 +270,51 @@ func _unhandled_input(event: InputEvent) -> void:
 			deg_to_rad(82.0)
 		)
 
-	# Pure 1-Hand Contextual Interaction (no 1/2/3 tool switching!)
-	if event.is_action_pressed("rotate_item"):
+	# Kontext-Interaktion: Tasten 1-4 wählen den aktiven Slot, die Aufnahme legt fest, was darin liegt.
+	if event.is_action_pressed("tool_hands"):
+		_select_slot(1)
+	elif event.is_action_pressed("tool_power_cable"):
+		_select_slot(2)
+	elif event.is_action_pressed("tool_net_cable"):
+		_select_slot(3)
+	elif event.is_action_pressed("tool_slot_4"):
+		_select_slot(4)
+	elif event.is_action_pressed("rotate_item"):
 		place_rot_y = fmod(place_rot_y + PI * 0.5, TAU)
 		SfxManager.play("click", -10.0, 1.15)
 	elif event.is_action_pressed("drop_item"):
 		_handle_drop()
 	elif event.is_action_pressed("inspect_rack"):
 		_handle_inspect()
-	elif event.is_action_pressed("interact"):
+	elif event.is_action_pressed("interact"): # Interaktion nur über [E] (umlegbar), nicht per Linksklick
 		_handle_primary_interact()
-	elif event.is_action_pressed("primary_action"):
-		if Input.mouse_mode == Input.MOUSE_MODE_CAPTURED:
-			_handle_primary_interact()
 	elif event.is_action_pressed("secondary_action"):
 		if Input.mouse_mode == Input.MOUSE_MODE_CAPTURED:
 			_handle_secondary_action()
+
+
+## Kabeltyp in einem Slot ("" | "power" | "network"). Der aktive Slot liest das laufende Kabel.
+func get_slot_cable_type(slot: int) -> String:
+	if slot < 1 or slot > GameState.SLOT_COUNT:
+		return ""
+	if slot == active_slot:
+		return cable_active_type
+	var stored: Dictionary = _slot_cables[slot - 1]
+	return str(stored.get("type", ""))
+
+
+## Wechselt den aktiven Slot. Ein gezogenes Kabel bleibt im Slot, in dem es aufgenommen wurde.
+func _select_slot(slot: int) -> void:
+	if slot == active_slot or slot < 1 or slot > GameState.SLOT_COUNT:
+		return
+	_slot_cables[active_slot - 1] = {"start": cable_start_id, "type": cable_active_type, "slot": cable_start_slot}
+	var stored: Dictionary = _slot_cables[slot - 1]
+	cable_start_id = str(stored.get("start", ""))
+	cable_active_type = str(stored.get("type", ""))
+	cable_start_slot = int(stored.get("slot", -1))
+	active_slot = slot
+	GameState.request_set_active_slot(slot)
+	SfxManager.play("click", -10.0, 1.0)
 
 
 func _handle_inspect() -> void:
@@ -257,7 +328,7 @@ func _handle_inspect() -> void:
 	if itype == "rack_slot":
 		var sidx := int(target.get_meta("slot_index"))
 		_world.open_rack_inspector(eid, sidx)
-	elif (itype == "power_port" or itype == "net_port") and GameState.racks.has(eid):
+	elif (itype == "power_port" or itype == "net_port" or itype == "cluster_port") and GameState.racks.has(eid):
 		_world.open_rack_inspector(eid, 0)
 	elif itype == "wall_router":
 		_world.open_device_inspector("router", eid)
@@ -329,6 +400,8 @@ func _physics_process(delta: float) -> void:
 
 	# Smooth First-Person Sit-Down & Stand-Up Animation at the PC Office Chair!
 	if is_seated_at_pc:
+		if is_crouching:
+			_apply_crouch(false)
 		var seat_target := Vector3(2.78, 0.0, -2.84)
 		position = position.lerp(seat_target, clampf(delta * 9.0, 0.0, 1.0))
 		rotation.y = lerp_angle(rotation.y, -0.06, clampf(delta * 9.0, 0.0, 1.0))
@@ -342,9 +415,10 @@ func _physics_process(delta: float) -> void:
 		velocity = Vector3.ZERO
 	else:
 		# Gravity & Local WASD Movement
+		_update_crouch()
 		if not is_on_floor():
 			velocity.y -= GRAVITY * delta
-		elif not ui_locked and Input.is_action_just_pressed("jump"):
+		elif not ui_locked and not is_crouching and Input.is_action_just_pressed("jump"):
 			velocity.y = JUMP_VELOCITY
 
 		if ui_locked:
@@ -356,7 +430,11 @@ func _physics_process(delta: float) -> void:
 			var pushing_cart := not GameState.get_player_pushed_cart(peer_id).is_empty()
 			var base_spd := 4.3 if pushing_cart else MOVE_SPEED
 			var sprint_spd := 6.3 if pushing_cart else SPRINT_SPEED
-			var speed := sprint_spd if Input.is_action_pressed("sprint") else base_spd
+			var speed := base_spd
+			if is_crouching:
+				speed = CROUCH_SPEED
+			elif Input.is_action_pressed("sprint"):
+				speed = sprint_spd
 			if move_dir.length_squared() > 0.001:
 				velocity.x = move_dir.x * speed
 				velocity.z = move_dir.z * speed
@@ -377,15 +455,15 @@ func _physics_process(delta: float) -> void:
 	if not is_seated_at_pc and _stand_blend_timer <= 0.0:
 		if is_on_floor() and flat_speed > 0.6 and not ui_locked:
 			_walk_cycle += delta * (7.5 + flat_speed * 0.7)
-			_head_pivot.position.y = lerpf(_head_pivot.position.y, 1.56 + sin(_walk_cycle) * 0.030, clampf(delta * 12.0, 0.0, 1.0))
+			_head_pivot.position.y = lerpf(_head_pivot.position.y, _head_y() + sin(_walk_cycle) * 0.030, clampf(delta * 12.0, 0.0, 1.0))
 			var step_interval := 0.34 if flat_speed > 5.8 else 0.48
 			_footstep_accum += delta
 			if _footstep_accum >= step_interval:
 				_footstep_accum = 0.0
-				SfxManager.play("footstep", -17.0, randf_range(0.88, 1.12))
+				SfxManager.play_footstep(flat_speed > 5.8)
 		else:
 			_footstep_accum = 0.25
-			_head_pivot.position.y = lerpf(_head_pivot.position.y, 1.56, clampf(delta * 10.0, 0.0, 1.0))
+			_head_pivot.position.y = lerpf(_head_pivot.position.y, _head_y(), clampf(delta * 10.0, 0.0, 1.0))
 
 	if not ui_locked:
 		_update_placement_preview()
@@ -404,10 +482,41 @@ func _physics_process(delta: float) -> void:
 	if _net_send_accum >= 0.05:
 		_net_send_accum = 0.0
 		if _world != null and _world.has_method("send_local_pose"):
-			var pose_flag := 2 if is_typing_at_pc else (1 if is_seated_at_pc else 0)
+			var pose_flag := 2 if is_typing_at_pc else (1 if is_seated_at_pc else (3 if is_crouching else 0))
 			_world.send_local_pose(position, rotation.y, _head_pivot.rotation.x, pose_flag, _is_spraying_local)
 			if not pushed_cart.is_empty():
 				_world.send_cart_pose(str(pushed_cart["id"]), _compute_pushed_cart_pos(), rotation.y)
+
+
+## Ducken, solange die Taste gehalten wird. Aufstehen nur, wenn über dem Kopf Platz ist.
+func _update_crouch() -> void:
+	var want := not ui_locked and Input.is_action_pressed("crouch")
+	if want and not is_crouching:
+		_apply_crouch(true)
+	elif not want and is_crouching and _can_stand_up():
+		_apply_crouch(false)
+
+
+## Passt die Kapsel an. Die Füße bleiben am Boden, weil der Ursprung des Körpers unten liegt.
+func _apply_crouch(crouch: bool) -> void:
+	is_crouching = crouch
+	var h := CROUCH_HEIGHT if crouch else STAND_HEIGHT
+	_body_shape.height = h
+	_body_col.position.y = h * 0.5
+
+
+## Prüft mit einer stehenden Kapsel, ob Decke, Rack oder Regal das Aufstehen verhindern.
+func _can_stand_up() -> bool:
+	var params := PhysicsShapeQueryParameters3D.new()
+	params.shape = _stand_probe
+	params.transform = Transform3D(Basis.IDENTITY, global_position + Vector3(0.0, STAND_HEIGHT * 0.5 + 0.03, 0.0))
+	params.collision_mask = collision_mask
+	params.exclude = [get_rid()]
+	return get_world_3d().direct_space_state.intersect_shape(params, 1).is_empty()
+
+
+func _head_y() -> float:
+	return CROUCH_HEAD_Y if is_crouching else STAND_HEAD_Y
 
 
 func _compute_pushed_cart_pos() -> Vector3:
@@ -423,11 +532,12 @@ func _compute_pushed_cart_pos() -> Vector3:
 
 
 func _animate_remote_avatar(delta: float, horiz_speed: float) -> void:
-	var seated := (_remote_pose_flag >= 1)
+	var seated := (_remote_pose_flag == 1 or _remote_pose_flag == 2)
 	var typing := (_remote_pose_flag == 2)
+	var crouching := (_remote_pose_flag == 3)
 
 	if _avatar_root != null:
-		var target_y := -0.34 if seated else 0.0
+		var target_y := -0.34 if seated else (-0.42 if crouching else 0.0)
 		_avatar_root.position.y = lerpf(_avatar_root.position.y, target_y, clampf(delta * 10.0, 0.0, 1.0))
 
 	if _avatar_head != null:
@@ -452,10 +562,13 @@ func _animate_remote_avatar(delta: float, horiz_speed: float) -> void:
 	var moving := horiz_speed > 0.35
 	if moving:
 		_walk_cycle += delta * clampf(horiz_speed * 2.2, 6.0, 14.0)
-	var leg_swing := sin(_walk_cycle) * 0.55 if moving else 0.0
+	# Geduckt: Beine nach vorn angewinkelt, beim Schleichen nur kleiner Schritt.
+	var swing_amp := 0.22 if crouching else 0.55
+	var leg_base := 1.05 if crouching else 0.0
+	var leg_swing := sin(_walk_cycle) * swing_amp if moving else 0.0
 	if _left_leg != null and _right_leg != null:
-		_left_leg.rotation.x = lerpf(_left_leg.rotation.x, leg_swing, clampf(delta * 12.0, 0.0, 1.0))
-		_right_leg.rotation.x = lerpf(_right_leg.rotation.x, -leg_swing, clampf(delta * 12.0, 0.0, 1.0))
+		_left_leg.rotation.x = lerpf(_left_leg.rotation.x, leg_base + leg_swing, clampf(delta * 12.0, 0.0, 1.0))
+		_right_leg.rotation.x = lerpf(_right_leg.rotation.x, leg_base - leg_swing, clampf(delta * 12.0, 0.0, 1.0))
 
 	var holding := GameState.is_player_holding_anything(peer_id)
 	if _left_arm != null and _right_arm != null:
@@ -552,7 +665,8 @@ func _handle_primary_interact() -> void:
 			# Ziel voll oder schon verbunden: Kabel bleibt in der Hand
 			SfxManager.play("error")
 		else:
-			GameState.request_connect_cable(cable_active_type, cable_start_id, endpoint)
+			GameState.request_connect_cable(cable_active_type, cable_start_id, endpoint,
+				cable_start_slot, _aimed_socket_idx(cable_active_type, endpoint))
 			cable_start_id = ""
 			cable_active_type = ""
 		return
@@ -563,13 +677,14 @@ func _handle_primary_interact() -> void:
 		var cat_type := str(GameState.ITEM_CATALOG[item_type]["category"])
 		if cat_type == "placeable" and _ghost_root != null and _ghost_root.visible:
 			if _ghost_valid:
-				GameState.request_place_held_structure(_ghost_pos, place_rot_y)
+				GameState.request_place_held_structure(_ghost_pos, _ghost_rot_y)
 			else:
 				SfxManager.play("error")
 			return
 
 	var target := _get_aimed_interactable()
 	if target == null:
+		_try_assisted_cable_start()
 		return
 
 	var itype := str(target.get_meta("interact_type"))
@@ -599,18 +714,27 @@ func _handle_primary_interact() -> void:
 				# Contextual 1-Hand: Looking at Router grabs a blue Network Cable!
 				cable_active_type = "network"
 				cable_start_id = eid
+				cable_start_slot = _aimed_socket_idx("network", eid)
 				SfxManager.play("cable", -8.0, 1.15)
 		"power_port":
 			# Die Einspeisung unten am Stromkasten ist auch bei geschlossener Tür erreichbar.
 			if hands_empty:
 				cable_active_type = "power"
 				cable_start_id = eid
+				cable_start_slot = _aimed_socket_idx("power", eid)
 				SfxManager.play("cable", -8.0, 1.05)
 		"net_port":
 			if hands_empty:
 				cable_active_type = "network"
 				cable_start_id = eid
+				cable_start_slot = _aimed_socket_idx("network", eid)
 				SfxManager.play("cable", -8.0, 1.15)
+		"cluster_port":
+			if hands_empty:
+				cable_active_type = "cluster"
+				cable_start_id = eid
+				cable_start_slot = -1
+				SfxManager.play("cable", -8.0, 1.25)
 		"extinguisher_station":
 			if GameState.is_player_holding_extinguisher(peer_id):
 				GameState.request_return_extinguisher()
@@ -681,6 +805,8 @@ func _handle_secondary_action() -> void:
 			_unplug_into_hand("power", eid)
 		elif itype == "net_port" or itype == "wall_router":
 			_unplug_into_hand("network", eid)
+		elif itype == "cluster_port":
+			_unplug_into_hand("cluster", eid)
 
 
 func _update_continuous_actions(delta: float) -> void:
@@ -690,23 +816,23 @@ func _update_continuous_actions(delta: float) -> void:
 
 	if holding_ext and (Input.is_action_pressed("primary_action") or Input.is_action_pressed("interact")):
 		_is_spraying_local = true
+		SfxManager.keep_extinguisher_spraying()
 		_action_tick_accum += delta
 		if _action_tick_accum >= 0.16:
 			_action_tick_accum = 0.0
-			SfxManager.play("foam", -11.0, randf_range(0.9, 1.15))
 			if target != null and str(target.get_meta("interact_type")) == "rack_slot":
 				var eid := str(target.get_meta("entity_id"))
 				var sidx := int(target.get_meta("slot_index"))
 				GameState.request_extinguish_slot(eid, sidx, 0.20)
 		return
 
-	if tool_mode == ToolMode.HANDS and not GameState.is_player_holding_anything(peer_id) and Input.is_action_pressed("interact"):
+	if cable_start_id == "" and not GameState.is_player_holding_anything(peer_id) and Input.is_action_pressed("interact"):
 		if target != null and str(target.get_meta("interact_type")) == "rack_slot":
 			var eid := str(target.get_meta("entity_id"))
 			var sidx := int(target.get_meta("slot_index"))
 			if GameState.racks.has(eid):
 				var slot: Dictionary = GameState.racks[eid]["slots"][sidx]
-				if str(slot["item_type"]) != "" and str(slot["state"]) == "crashed":
+				if str(slot["item_type"]) != "" and str(slot["state"]) == "crashed" and not GameState.is_slot_awaiting_diagnosis(slot):
 					_action_tick_accum += delta
 					if _action_tick_accum >= 0.18:
 						_action_tick_accum = 0.0
@@ -717,10 +843,38 @@ func _update_continuous_actions(delta: float) -> void:
 	_action_tick_accum = 0.0
 
 
+## Buchse, an der das gezogene Kabel beginnt (-1 = Anschluss hat nur einen Steckpunkt).
+var cable_start_slot: int = -1
+
+
+## Freie Buchse am Anschluss, die dem Fadenkreuz am nächsten liegt. -1 = nur ein Steckpunkt oder alles belegt.
+func _aimed_socket_idx(cable_type: String, eid: String) -> int:
+	if eid == "" or _world == null or _camera == null or not _world.has_method("get_socket_positions"):
+		return -1
+	var socks: Array = _world.get_socket_positions(cable_type, eid)
+	if socks.is_empty():
+		return -1
+	var max_n := mini(socks.size(), GameState.get_max_ports(cable_type, eid))
+	var used: Array = GameState.get_cable_slot_map(cable_type, eid).values()
+	var origin := _camera.global_position
+	var fwd := -_camera.global_transform.basis.z
+	var best := -1
+	var best_off := INF
+	for i in range(max_n):
+		if used.has(i):
+			continue
+		var to_p: Vector3 = (socks[i] as Vector3) - origin
+		var off := (to_p - fwd * to_p.dot(fwd)).length()
+		if off < best_off:
+			best_off = off
+			best = i
+	return best
+
+
 func _resolve_aimed_cable_endpoint(cable_type: String) -> String:
 	var target := _get_aimed_interactable()
 	if target == null:
-		return ""
+		return _find_assisted_port(cable_type)
 	var itype := str(target.get_meta("interact_type"))
 	var eid := str(target.get_meta("entity_id"))
 	if cable_type == "power":
@@ -729,15 +883,100 @@ func _resolve_aimed_cable_endpoint(cable_type: String) -> String:
 		if itype == "wall_breaker":
 			return eid
 		if itype == "power_port" or itype == "rack_slot" or itype == "cooler_unit" or itype == "ups_unit":
-			if eid == GameState.WALL_BREAKER_ID or eid == GameState.HALL_C_BREAKER_ID or GameState.racks.has(eid) or GameState.coolers.has(eid) or GameState.ups_units.has(eid):
+			if eid == GameState.WALL_BREAKER_ID or eid == GameState.HALL_C_BREAKER_ID or GameState.racks.has(eid) or (GameState.coolers.has(eid) and not GameState.is_indoor_unit(eid)) or GameState.ups_units.has(eid):
 				return eid
+	elif cable_type == "cluster":
+		if (itype == "cluster_port" or itype == "rack_slot") and GameState.racks.has(eid):
+			return eid
 	else:
 		if itype == "wall_router":
 			return eid
 		if itype == "net_port" or itype == "rack_slot":
 			if eid == GameState.WALL_ROUTER_ID or eid == GameState.HALL_C_ROUTER_ID or GameState.racks.has(eid):
 				return eid
-	return ""
+	return _find_assisted_port(cable_type)
+
+
+## Zielhilfe: wählt den sichtbaren Port, der dem Fadenkreuz am nächsten liegt.
+## Gilt nur für Racks, Klimageräte und USVs; Wandanschlüsse brauchen weiter einen direkten Treffer.
+func _find_assisted_port(cable_type: String, racks_only: bool = false) -> String:
+	if _world == null or _camera == null or not _world.has_method("get_port_world_pos"):
+		return ""
+	var ids: Array = GameState.racks.keys()
+	if cable_type == "power" and not racks_only:
+		for cid_v in GameState.coolers.keys():
+			if not GameState.is_indoor_unit(str(cid_v)):
+				ids.append(cid_v)
+		ids = ids + GameState.ups_units.keys()
+	if ids.is_empty():
+		return ""
+	var origin := _camera.global_position
+	var fwd := -_camera.global_transform.basis.z
+	var best_id := ""
+	var best_off := PORT_ASSIST_RADIUS
+	for id_v in ids:
+		var eid := str(id_v)
+		var p: Variant = _world.get_port_world_pos(cable_type, eid)
+		if not (p is Vector3):
+			continue
+		var port_pos: Vector3 = p
+		var to_port := port_pos - origin
+		var along := to_port.dot(fwd)
+		if along <= 0.0 or along > INTERACT_RANGE:
+			continue
+		var off := (to_port - fwd * along).length()
+		if off < best_off and _port_in_sight(origin, port_pos):
+			best_off = off
+			best_id = eid
+	return best_id
+
+
+## Zielhilfe beim Kabelstart: Mit leerer Hand nimmt der Klick das Kabel am nächsten Rack-Port auf,
+## auch wenn der Strahl die Hitbox knapp verfehlt.
+func _try_assisted_cable_start() -> void:
+	if GameState.is_player_holding_anything(peer_id):
+		return
+	# Nächster Port quer zur Blickrichtung gewinnt; bei Gleichstand hat Strom Vorrang (Reihenfolge).
+	var pitch_by_type := {"power": 1.05, "network": 1.15, "cluster": 1.25}
+	var best_type := ""
+	var best_id := ""
+	var best_off := INF
+	for t_v in ["power", "network", "cluster"]:
+		var t := str(t_v)
+		var tid := _find_assisted_port(t, true)
+		if tid == "":
+			continue
+		var off := _aim_offset_to_port(t, tid)
+		if off < best_off:
+			best_off = off
+			best_type = t
+			best_id = tid
+	if best_id == "":
+		return
+	cable_active_type = best_type
+	cable_start_id = best_id
+	cable_start_slot = -1
+	SfxManager.play("cable", -8.0, float(pitch_by_type[best_type]))
+
+
+## Abstand eines Ports quer zur Blickrichtung (Meter). Unbekannte Ports liefern INF.
+func _aim_offset_to_port(cable_type: String, eid: String) -> float:
+	var p: Variant = _world.get_port_world_pos(cable_type, eid)
+	if not (p is Vector3):
+		return INF
+	var to_port: Vector3 = (p as Vector3) - _camera.global_position
+	var fwd := -_camera.global_transform.basis.z
+	return (to_port - fwd * to_port.dot(fwd)).length()
+
+
+## Sichtprüfung gegen feste Körper (Layer 1), damit kein Port durch Wände oder von hinten gewählt wird.
+func _port_in_sight(origin: Vector3, port_pos: Vector3) -> bool:
+	var query := PhysicsRayQueryParameters3D.create(origin, port_pos, 1)
+	query.exclude = [get_rid()]
+	var hit := get_world_3d().direct_space_state.intersect_ray(query)
+	if hit.is_empty():
+		return true
+	return (hit["position"] as Vector3).distance_to(port_pos) < PORT_ASSIST_SIGHT_SLACK
 
 
 func _update_placement_preview() -> void:
@@ -750,7 +989,7 @@ func _update_placement_preview() -> void:
 		ignore_rid = relocating_rack_id
 	else:
 		var held := GameState.get_player_held_crate(peer_id)
-		if held.is_empty() or tool_mode != ToolMode.HANDS:
+		if held.is_empty():
 			_ghost_root.visible = false
 			return
 		item_type = str(held["item_type"])
@@ -763,16 +1002,37 @@ func _update_placement_preview() -> void:
 	var end := origin + (-_camera.global_transform.basis.z) * PLACE_RANGE
 	var query := PhysicsRayQueryParameters3D.create(origin, end, 1)
 	var hit := space.intersect_ray(query)
-	if hit.is_empty() or (hit["normal"] as Vector3).y < 0.7:
+	if hit.is_empty():
 		_ghost_root.visible = false
 		return
 
 	var hpos: Vector3 = hit["position"]
-	_ghost_pos = Vector3(roundf(hpos.x * 2.0) * 0.5, 0.0, roundf(hpos.z * 2.0) * 0.5)
-	_ghost_valid = GameState.can_place_at(_ghost_pos, ignore_rid)
+	var hnormal: Vector3 = hit["normal"]
+	if item_type == GameState.INDOOR_UNIT_TYPE:
+		# Innengeräte rasten an der Innenwand ein, auf die man schaut
+		var spot: Dictionary = GameState.get_wall_mount_spot(hpos, hnormal)
+		if spot.is_empty():
+			if absf(hnormal.y) > 0.3:
+				_ghost_root.visible = false
+				return
+			_ghost_pos = hpos + hnormal * GameState.WALL_UNIT_OFFSET
+			_ghost_rot_y = atan2(hnormal.x, hnormal.z)
+			_ghost_valid = false
+		else:
+			_ghost_pos = spot["pos"]
+			_ghost_rot_y = float(spot["rot_y"])
+			_ghost_valid = true
+	else:
+		if hnormal.y < 0.7:
+			_ghost_root.visible = false
+			return
+		_ghost_pos = Vector3(roundf(hpos.x * 2.0) * 0.5, 0.0, roundf(hpos.z * 2.0) * 0.5)
+		# Außengeräte zeigen immer mit dem Lüfter zur Straße
+		_ghost_rot_y = 0.0 if GameState.is_heat_pump_type(item_type) else place_rot_y
+		_ghost_valid = GameState.can_place_item_at(item_type, _ghost_pos, _ghost_rot_y, ignore_rid)
 	_ghost_root.visible = true
 	_ghost_root.position = _ghost_pos
-	_ghost_root.rotation.y = place_rot_y
+	_ghost_root.rotation.y = _ghost_rot_y
 
 	var bm := _ghost_mesh.mesh as BoxMesh
 	if item_type == "rack_pro":
@@ -784,9 +1044,17 @@ func _update_placement_preview() -> void:
 		_ghost_mesh.position = Vector3(0.0, 1.06, 0.0)
 		_ghost_front_strip.position = Vector3(0.0, 1.06, 0.47)
 	elif item_type == "chiller":
-		bm.size = Vector3(0.78, 1.76, 0.62)
-		_ghost_mesh.position = Vector3(0.0, 0.88, 0.0)
-		_ghost_front_strip.position = Vector3(0.0, 0.88, 0.32)
+		bm.size = Vector3(1.14, 1.50, 0.52)
+		_ghost_mesh.position = Vector3(0.0, 0.75, 0.0)
+		_ghost_front_strip.position = Vector3(0.0, 0.75, 0.27)
+	elif item_type == "cooler":
+		bm.size = Vector3(1.04, 0.98, 0.48)
+		_ghost_mesh.position = Vector3(0.0, 0.49, 0.0)
+		_ghost_front_strip.position = Vector3(0.0, 0.49, 0.25)
+	elif item_type == GameState.INDOOR_UNIT_TYPE:
+		bm.size = Vector3(0.96, 0.30, 0.22)
+		_ghost_mesh.position = Vector3.ZERO
+		_ghost_front_strip.position = Vector3(0.0, 0.0, 0.12)
 	else:
 		bm.size = Vector3(0.74, 1.32, 0.60)
 		_ghost_mesh.position = Vector3(0.0, 0.66, 0.0)
@@ -817,7 +1085,8 @@ func _update_cable_preview() -> void:
 	var target_state := _cable_target_state(endpoint)
 	var snap: Variant = null
 	if target_state != CableRenderer.TARGET_NONE:
-		var p: Variant = _world.get_port_world_pos(cable_active_type, endpoint)
+		# Vorschau rastet an der Buchse ein, die beim Klick genommen wird
+		var p: Variant = _world.get_socket_world_pos(cable_active_type, endpoint, _aimed_socket_idx(cable_active_type, endpoint))
 		if p is Vector3 and (p as Vector3).distance_to(hand_pos) < 2.5:
 			snap = p
 	_world.update_cable_preview(true, cable_active_type, start_pos as Vector3, hand_pos, target_state, snap)
@@ -861,13 +1130,23 @@ func _unplug_into_hand(cable_type: String, endpoint_id: String) -> void:
 		cable_active_type = cable_type
 
 
+func _cable_label(cable_type: String) -> String:
+	match cable_type:
+		"power":
+			return tr("Stromkabel (Gelb)")
+		"cluster":
+			return tr("Cluster-Kabel (Lila)")
+		_:
+			return tr("Netzwerkkabel (Blau)")
+
+
 func _update_context_prompt() -> void:
 	current_prompt = ""
 	current_sub_prompt = ""
 
 	# Active 1-Hand Pulled Cable Prompt!
 	if cable_start_id != "" and cable_active_type != "":
-		var label := tr("Stromkabel (Gelb)") if cable_active_type == "power" else tr("Netzwerkkabel (Blau)")
+		var label := _cable_label(cable_active_type)
 		var endpoint := _resolve_aimed_cable_endpoint(cable_active_type)
 		if endpoint != "":
 			if cable_start_id == endpoint:
@@ -876,7 +1155,7 @@ func _update_context_prompt() -> void:
 				current_prompt = tr("%s: %s ist voll oder schon verbunden") % [label, endpoint.to_upper()]
 				current_sub_prompt = tr("[Rechtsklick / Q] Kabel loslassen")
 			else:
-				current_prompt = tr("[E / Klick] %s einstecken: %s ↔ %s") % [label, cable_start_id.to_upper(), endpoint.to_upper()]
+				current_prompt = tr("[E] %s einstecken: %s ↔ %s") % [label, cable_start_id.to_upper(), endpoint.to_upper()]
 				current_sub_prompt = tr("[Rechtsklick / Q] Kabel loslassen")
 		else:
 			current_prompt = tr("%s von %s in der Hand — Ziel-Buchse / Rack anvisieren") % [label, cable_start_id.to_upper()]
@@ -885,9 +1164,9 @@ func _update_context_prompt() -> void:
 
 	if relocating_rack_id != "":
 		if _ghost_root != null and _ghost_root.visible and _ghost_valid:
-			current_prompt = tr("[Klick / E] %s hier neu aufstellen") % relocating_rack_id.to_upper()
+			current_prompt = tr("[Klick / E] %s hier neu aufstellen") % GameState.get_rack_display_name(relocating_rack_id)
 		else:
-			current_prompt = tr("Neuen freien Bodenplatz für %s wählen") % relocating_rack_id.to_upper()
+			current_prompt = tr("Neuen freien Bodenplatz für %s wählen") % GameState.get_rack_display_name(relocating_rack_id)
 		current_sub_prompt = tr("[R] Drehen  •  [Q / Rechtsklick] Abbrechen (Alle Server bleiben erhalten)")
 		return
 
@@ -898,9 +1177,16 @@ func _update_context_prompt() -> void:
 		if str(cat["category"]) == "placeable" and _ghost_root != null and _ghost_root.visible:
 			if _ghost_valid:
 				current_prompt = tr("[Klick / E] %s hier platzieren") % tr(str(cat["name"]))
+			elif item_type == GameState.INDOOR_UNIT_TYPE:
+				current_prompt = tr("Hier geht es nicht – auf eine freie Innenwand zielen (nicht über dem Garagentor)")
+			elif GameState.is_heat_pump_type(item_type):
+				current_prompt = tr("Hier geht es nicht – nur auf dem Rasen rechts vom Garagentor aufstellen")
 			else:
 				current_prompt = tr("Platz blockiert – freien Bereich in der Garage wählen")
-			current_sub_prompt = tr("[R] Drehen  •  [Q] Karton ablegen")
+			if item_type == GameState.INDOOR_UNIT_TYPE or GameState.is_heat_pump_type(item_type):
+				current_sub_prompt = tr("[Q] Karton ablegen")
+			else:
+				current_sub_prompt = tr("[R] Drehen  •  [Q] Karton ablegen")
 			return
 
 	var target := _get_aimed_interactable()
@@ -924,7 +1210,9 @@ func _update_context_prompt() -> void:
 			if PcScreenState.is_occupied_by_other():
 				current_prompt = tr("PC besetzt: %s sitzt gerade davor") % PcScreenState.user_name
 		"wall_breaker":
-			if GameState.breaker_on:
+			if GameState.grid_outage_left > 0.0:
+				current_prompt = tr("Netzausfall der Stadtwerke: Strom kommt in ca. %d Min. zurück") % GameState.get_grid_outage_minutes()
+			elif GameState.breaker_on:
 				current_prompt = tr("[E] Hauptschalter AUSSCHALTEN")
 			elif not GameState.has_working_fuse():
 				current_prompt = tr("Hauptschalter gesperrt: keine intakte Sicherung eingesetzt")
@@ -967,6 +1255,14 @@ func _update_context_prompt() -> void:
 			current_prompt = tr("[E] Blaues Netzwerkkabel ziehen (%s • %d/%d Ports)") % [eid.to_upper(), used_np, max_np]
 			if used_np > 0:
 				current_sub_prompt = tr("[Rechtsklick] Letztes Netzwerkkabel hier abziehen")
+		"cluster_port":
+			var used_cp := GameState.count_cables_on("cluster", eid)
+			var max_cp := GameState.get_max_ports("cluster", eid)
+			current_prompt = tr("[E] Lila Cluster-Kabel ziehen (%s • %d/%d Ports)") % [eid.to_upper(), used_cp, max_cp]
+			if used_cp > 0:
+				current_sub_prompt = tr("[Rechtsklick] Letztes Cluster-Kabel hier abziehen")
+			else:
+				current_sub_prompt = tr("Verbundene Racks leihen sich bei Engpässen freie Hardware")
 		"extinguisher_station":
 			if GameState.is_player_holding_extinguisher(peer_id):
 				current_prompt = tr("[E] Feuerlöscher zurückhängen")
@@ -995,7 +1291,7 @@ func _update_context_prompt() -> void:
 				if not pc.is_empty():
 					var cnt := (pc.get("items", []) as Array).size()
 					if cnt < GameState.CART_MAX_ITEMS:
-						current_prompt = tr("[E / Klick] %s direkt auf Rollwagen laden (%d/%d)") % [cname, cnt, GameState.CART_MAX_ITEMS]
+						current_prompt = tr("[E] %s direkt auf Rollwagen laden (%d/%d)") % [cname, cnt, GameState.CART_MAX_ITEMS]
 					else:
 						current_prompt = tr("Rollwagen ist voll (4/4) – erst mit [Q] abstellen!")
 				elif GameState.is_player_holding_anything(peer_id):
@@ -1011,7 +1307,7 @@ func _update_context_prompt() -> void:
 					current_prompt = tr("Rollwagen wird von %s geschoben (%d/%d)") % [NetworkManager.get_player_name(pby), cnt, GameState.CART_MAX_ITEMS]
 				elif not held.is_empty():
 					var h_name := str(GameState.ITEM_CATALOG[str(held["item_type"])]["name"])
-					current_prompt = tr("[E / Klick] %s auf Rollwagen laden (%d/%d)") % [tr(h_name), cnt, GameState.CART_MAX_ITEMS]
+					current_prompt = tr("[E] %s auf Rollwagen laden (%d/%d)") % [tr(h_name), cnt, GameState.CART_MAX_ITEMS]
 				else:
 					current_prompt = tr("[E] Rollwagen schieben (%d/%d Kartons)") % [cnt, GameState.CART_MAX_ITEMS]
 					if cnt > 0:
@@ -1022,7 +1318,10 @@ func _update_context_prompt() -> void:
 			if GameState.coolers.has(eid):
 				var ctype := str(GameState.coolers[eid].get("cooler_type", "cooler"))
 				current_prompt = tr("[E / F] %s verwalten (Umsetzen / Verkaufen)") % str(GameState.ITEM_CATALOG[ctype]["name"])
-				current_sub_prompt = tr("Auf gelbe Buchse oben zielen für Stromkabel")
+				if ctype == GameState.INDOOR_UNIT_TYPE:
+					current_sub_prompt = tr("Kein Kabel nötig: läuft, sobald ein Goldis-Außengerät Strom hat")
+				else:
+					current_sub_prompt = tr("Auf die gelbe Buchse an der rechten Seite zielen für Stromkabel")
 		"ups_unit":
 			if GameState.ups_units.has(eid):
 				var ch := float(GameState.ups_units[eid]["charge"])
@@ -1039,12 +1338,15 @@ func _update_context_prompt() -> void:
 						current_prompt = tr("[Klick / E HALTEN] Brand in %s Slot %d löschen!") % [eid.to_upper(), sidx + 1]
 					else:
 						current_prompt = tr("SERVER BRENNT! Feuerlöscher an der Nordwand holen!")
+				elif st_state == "crashed" and GameState.is_slot_awaiting_diagnosis(slot):
+					current_prompt = tr("%s Slot %d: Defekt unbekannt") % [eid.to_upper(), sidx + 1]
+					current_sub_prompt = tr("[F] Rack-Menü öffnen und in der 3D-Vorschau das defekte Teil suchen")
 				elif st_state == "crashed":
 					current_prompt = tr("[E HALTEN] %s Slot %d reparieren (%.0f%%)") % [eid.to_upper(), sidx + 1, float(slot["repair_progress"]) * 100.0]
 					current_sub_prompt = tr("[F] Interaktives Rack-Menü öffnen")
 				elif st_item == "":
 					if not held.is_empty() and str(GameState.ITEM_CATALOG[str(held["item_type"])]["category"]) == "module":
-						current_prompt = tr("[E / Klick] %s in %s Slot %d einschieben") % [
+						current_prompt = tr("[E] %s in %s Slot %d einschieben") % [
 							str(GameState.ITEM_CATALOG[str(held["item_type"])]["name"]), eid.to_upper(), sidx + 1
 						]
 					else:
@@ -1063,6 +1365,9 @@ func _update_held_visuals() -> void:
 	var held_crate := GameState.get_player_held_crate(peer_id)
 
 	_held_extinguisher.visible = held_ext
+	if _fp_hand != null:
+		_fp_hand.visible = held_ext or not held_crate.is_empty() or not str(cable_active_type).is_empty()
+		_fp_hand.position = FP_HAND_EXT_POS if held_ext else FP_HAND_ITEM_POS
 	if not held_crate.is_empty():
 		var item_type := str(held_crate["item_type"])
 		_held_item_holder.visible = true
@@ -1103,13 +1408,13 @@ func _build_avatar_visuals() -> void:
 	add_child(_avatar_root)
 
 	var jacket_mat := _mat(avatar_color, 0.45, 0.12)
-	var pants_mat := _mat(Color(0.16, 0.19, 0.24), 0.72, 0.05)
+	var pants_mat := _mat(skin_pants_color, 0.72, 0.05)
 	var pack_mat := _mat(Color(0.24, 0.27, 0.32), 0.55, 0.25)
-	var skin_mat := _mat(Color(0.90, 0.76, 0.64), 0.65, 0.0)
+	var skin_mat := _mat(skin_tone_color, 0.65, 0.0)
 	var belt_mat := _mat(Color(0.12, 0.13, 0.15), 0.5, 0.3)
 
 	# Spielermodell aus assets/models/player.glb (tools/blender/build_player.py), sonst Box-Avatar.
-	if _build_model_avatar(jacket_mat):
+	if _build_model_avatar({"DCT_Jacket": jacket_mat, "DCT_Pants": pants_mat, "DCT_Skin": skin_mat}):
 		_add_nametag()
 		return
 
@@ -1172,7 +1477,7 @@ func _add_nametag() -> void:
 
 ## Lädt player.glb und übernimmt dessen Gelenke für _animate_remote_avatar().
 ## Gibt false zurück, wenn das Modell fehlt oder ein Gelenk nicht gefunden wird.
-func _build_model_avatar(jacket_mat: Material) -> bool:
+func _build_model_avatar(tint_mats: Dictionary) -> bool:
 	if not ModelLoader.has_custom_model(AVATAR_MODEL_ID):
 		return false
 	var model := ModelLoader.instantiate_custom_model(AVATAR_MODEL_ID)
@@ -1193,20 +1498,41 @@ func _build_model_avatar(jacket_mat: Material) -> bool:
 	_left_arm = left_arm
 	_right_arm = right_arm
 	_avatar_head = head
-	_tint_avatar_jacket(model, jacket_mat)
+	_tint_avatar(model, tint_mats)
 	return true
 
 
-func _tint_avatar_jacket(node: Node, jacket_mat: Material) -> void:
+## Ersetzt die Blender-Materialien (DCT_Jacket, DCT_Pants, DCT_Skin) durch die Skin-Materialien.
+func _tint_avatar(node: Node, tint_mats: Dictionary) -> void:
 	if node is MeshInstance3D:
 		var mi := node as MeshInstance3D
 		if mi.mesh != null:
 			for i in mi.mesh.get_surface_count():
 				var m := mi.mesh.surface_get_material(i)
-				if m != null and m.resource_name == "DCT_Jacket":
-					mi.set_surface_override_material(i, jacket_mat)
+				if m != null and tint_mats.has(m.resource_name):
+					mi.set_surface_override_material(i, tint_mats[m.resource_name] as Material)
 	for child in node.get_children():
-		_tint_avatar_jacket(child, jacket_mat)
+		_tint_avatar(child, tint_mats)
+
+
+## Ich-Perspektive: Hand und Unterarm im Jackenstoff, Maße wie beim Box-Avatar.
+## Hängt an _held_root und ist nur sichtbar, solange der aktive Slot etwas enthält.
+func _build_fp_hand() -> void:
+	_fp_hand = Node3D.new()
+	_fp_hand.visible = false
+	_fp_hand.position = FP_HAND_ITEM_POS
+	_held_root.add_child(_fp_hand)
+
+	var sleeve_mat := _mat(avatar_color, 0.45, 0.12)
+	var skin_mat := _mat(skin_tone_color, 0.65, 0.0)
+	_add_box(_fp_hand, Vector3.ZERO, Vector3(0.11, 0.09, 0.13), skin_mat)
+
+	# Unterarm läuft von der Hand nach hinten, leicht nach unten und nach rechts aus dem Bild.
+	var forearm := Node3D.new()
+	forearm.position = Vector3(0.02, -0.02, 0.06)
+	forearm.rotation_degrees = Vector3(18.0, 8.0, 0.0)
+	_fp_hand.add_child(forearm)
+	_add_box(forearm, Vector3(0.0, 0.0, 0.20), Vector3(0.13, 0.13, 0.40), sleeve_mat)
 
 
 func _build_held_visuals() -> void:

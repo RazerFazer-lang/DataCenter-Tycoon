@@ -61,7 +61,8 @@ const WATER_LEAK_COST := 150.0
 const PAYOUT_CYCLE_SECONDS := 5.0
 const AUTOSAVE_INTERVAL := 180.0
 # Echtzeit: ein Spieltag dauert einen echten Tag.
-const DAY_LENGTH_SECONDS := 86400.0
+## Echte Sekunden pro Spieltag (1440 = 24 Minuten, also 1 Spielminute pro Sekunde).
+const DAY_LENGTH_SECONDS := 1440.0
 # Grundpreis pro kWh. Der Tagespreis (electricity_rate) schwankt um diesen Wert.
 const ELECTRICITY_RATE_PER_KWH := 1.45
 const ELECTRICITY_RATE_MIN := 1.00
@@ -302,7 +303,7 @@ const ITEM_CATALOG := {
 		"compute": 0,
 		"heat": -18.0,
 		"color": Color(0.82, 0.92, 0.98),
-		"desc": "Kühlt Raum um -18°C | 300W (Stromkabel nötig)",
+		"desc": "Goldis-Wärmepumpe (Außengerät) | -18°C | 300W | Nur auf dem Rasen rechts vom Garagentor, braucht ein Goldis Innengerät",
 	},
 	"chiller": {
 		"name": "Industrie-Kühler AC-Pro",
@@ -312,7 +313,17 @@ const ITEM_CATALOG := {
 		"compute": 0,
 		"heat": -40.0,
 		"color": Color(0.28, 0.76, 0.98),
-		"desc": "Doppellüfter-Kühler (-40°C!) | 540W (Stromkabel nötig)",
+		"desc": "Goldis-Wärmepumpe Pro (Außengerät) | -40°C | 540W | Nur auf dem Rasen rechts vom Garagentor, braucht ein Goldis Innengerät",
+	},
+	"indoor_unit": {
+		"name": "Goldis Innengerät",
+		"category": "placeable",
+		"price": 180,
+		"watts": 0,
+		"compute": 0,
+		"heat": 0.0,
+		"color": Color(0.94, 0.95, 0.96),
+		"desc": "Wandgerät der Goldis-Wärmepumpe | Bläst die Kälte in den Raum | Kein Kabel nötig, läuft sobald ein Außengerät Strom hat",
 	},
 	"ups": {
 		"name": "USV-Notstrom-Batterie",
@@ -475,6 +486,15 @@ const COMPANY_VALUE_MILESTONES := [
 ]
 ## Anteil des Kaufpreises, mit dem verbaute Hardware in den Firmenwert eingeht.
 const COMPANY_HARDWARE_VALUE_FACTOR := 0.6
+## Firmenstufen: Mindest-Firmenwert für Stufe 1 bis 5. Die Stufe schaltet Bauteile und Mainboards frei.
+const COMPANY_LEVEL_THRESHOLDS := [0, 3000, 8000, 20000, 50000]
+## Benötigte Firmenstufe je Mainboard-Kategorie.
+const MAINBOARD_CATEGORY_LEVEL := {"entry": 1, "server": 2, "storage": 3, "gpu": 4}
+## Support-SLA: Sekunden, bis ein unbeantwortetes Ticket eskaliert, je Priorität.
+const TICKET_SLA_SECONDS := {"HOCH": 120.0, "KRITISCH": 60.0}
+const TICKET_DEFAULT_SLA := 120.0
+const TICKET_ESCALATION_SAT_PENALTY := 15.0
+const TICKET_ESCALATION_REP_PENALTY := 2.0
 
 # Authoritative world state
 var is_active: bool = false
@@ -492,6 +512,9 @@ var fuse_stock: int = 0
 const POWER_FUSE_SLOT := 1
 const OLD_FUSE_ITEM := "old_fuse"
 var power_fuse_stock: int = 0
+## Client-Kopie: Die Drehsicherung ist bestellt und mit dem Sprinter unterwegs.
+var power_fuse_on_way_synced: bool = false
+const POWER_FUSE_ACC := "acc:power_fuse"
 ## Steckleisten am Stromkasten und Netzwerk-Verteiler am Router (im Shop unter "Klima & USV").
 ## Ohne Zubehör: 1 Steckdose am Stromkasten, 2 Netzwerkdosen am Router.
 const BREAKER_BASE_SOCKETS := 1
@@ -507,6 +530,14 @@ var net_hubs: int = 0
 signal accessories_changed
 var ups_backup_active: bool = false
 var avg_ups_charge: float = 0.0
+## Netzausfall der Stadtwerke: Restdauer in Sekunden (0 = Netz da). Währenddessen ist breaker_on false.
+var grid_outage_left: float = 0.0
+## Stand des Hauptschalters vor dem Netzausfall; wird am Ende wiederhergestellt.
+var _grid_breaker_restore: bool = false
+var _grid_outage_cooldown: float = -1.0
+const GRID_OUTAGE_MIN_SEC := 35.0
+const GRID_OUTAGE_MAX_SEC := 110.0
+const GRID_OUTAGE_FIRST_DAY := 2
 var overload_timer: float = 0.0
 var power_tier: int = 0
 var router_tier: int = 0
@@ -515,6 +546,8 @@ var research_levels: Dictionary = {}
 var room_level: int = 0 # 0 = Garage, 1 = +Halle B, 2 = +Halle C Enterprise
 ## Zahl der erreichten Firmenwert-Meilensteine. -1 = alter Spielstand, wird beim nächsten Check still übernommen.
 var company_milestones_reached: int = 0
+## Erreichte Firmenstufe (1-5). 0 = alter Spielstand, wird beim nächsten Check aus dem Firmenwert berechnet.
+var company_level: int = 1
 var ai_platform_level: int = 0
 var ddos_active: bool = false
 var ddos_cooldown: float = 55.0
@@ -572,6 +605,11 @@ var checklist_opened_pc: bool = false
 var checklist_ordered_anything: bool = false
 var checklist_dismissed: bool = false
 var extinguisher_held_by: int = 0
+## Slot (1-4), in dem der Feuerlöscher liegt. Gilt nur, solange extinguisher_held_by != 0.
+var extinguisher_held_slot: int = 1
+## Aktiver Slot (1-4) je Spieler (peer_id -> Slot). Der Server verteilt Änderungen an alle.
+var player_active_slot: Dictionary = {}
+const SLOT_COUNT := 4
 
 # Delivery Van State ("idle" | "arriving" | "unloading" | "departing")
 var pending_delivery_items: Array = []
@@ -613,14 +651,11 @@ var _day_rollover_pending: bool = false
 # Client: Abweichung zur Host-Uhr, die weich über mehrere Frames ausgeglichen wird.
 var _time_correction: float = 0.0
 const TIME_SNAP_THRESHOLD := 0.02
-# Letzte gelesene Echtzeit (-1 = noch keine), damit Mitternacht als Tageswechsel erkannt wird.
-var _last_real_time: float = -1.0
 const TIME_CORRECTION_RATE := 2.0
 
 
 func _process(delta: float) -> void:
 	if not is_active or not NetworkManager.is_in_session:
-		_last_real_time = -1.0
 		return
 	if not multiplayer.is_server():
 		var corr := _time_correction * clampf(delta * TIME_CORRECTION_RATE, 0.0, 1.0)
@@ -628,21 +663,23 @@ func _process(delta: float) -> void:
 		time_of_day = fposmod(time_of_day + delta / DAY_LENGTH_SECONDS + corr, 1.0)
 		if van_phase != "idle":
 			van_phase_time += delta
+		# Ticket-Alter lokal weiterzählen, damit der SLA-Countdown läuft. Jeder Sync vom Host korrigiert den Wert.
+		for ctid in support_tickets.keys():
+			var ct: Dictionary = support_tickets[ctid]
+			ct["age"] = float(ct.get("age", 0.0)) + delta
 		return
 
 	# Dedizierter Server ohne verbundene Spieler: Welt pausiert (kein Geld, keine Ereignisse, kein Lieferwagen).
 	if is_world_paused_for_empty_server():
-		_last_real_time = -1.0
 		return
 
 	_update_delivery_van(delta)
 
-	# Die Spieluhr läuft in Echtzeit: der Host übernimmt die Uhrzeit seines Rechners.
-	var real_time := _real_time_of_day()
-	if _last_real_time >= 0.0 and real_time + 0.5 < _last_real_time:
+	# Eigene Spieluhr: ein Spieltag dauert DAY_LENGTH_SECONDS echte Sekunden.
+	var next_time := time_of_day + delta / DAY_LENGTH_SECONDS
+	if next_time >= 1.0:
 		_day_rollover_pending = true
-	_last_real_time = real_time
-	time_of_day = real_time
+	time_of_day = fposmod(next_time, 1.0)
 
 	_sim_accum += delta
 	if _sim_accum >= SIM_TICK_INTERVAL:
@@ -822,7 +859,8 @@ func _reset_van_trip() -> void:
 	_van_trip_items.clear()
 
 
-## Fasst bestellte Bauteile ("part:...") zu einem Sammelpaket zusammen, das als erstes ausgeliefert wird.
+## Fasst bestellte Bauteile ("part:...") und Zubehör ("acc:...") zu einem Sammelpaket zusammen,
+## das als erstes ausgeliefert wird. Zubehör bleibt mit Präfix "acc:" im Paket.
 func _pack_van_cargo(items: Array) -> Array:
 	var physical: Array = []
 	_van_parcel_parts.clear()
@@ -830,6 +868,10 @@ func _pack_van_cargo(items: Array) -> Array:
 		var s := str(entry)
 		if s.begins_with("part:"):
 			_van_parcel_parts.append(s.substr(5))
+		elif s.begins_with("acc:"):
+			_van_parcel_parts.append(s)
+		elif s == VAN_PARCEL_ITEM:
+			continue # alter Spielstand: Platzhalter ohne Inhalt
 		else:
 			physical.append(s)
 	if not _van_parcel_parts.is_empty():
@@ -840,14 +882,57 @@ func _pack_van_cargo(items: Array) -> Array:
 func _deliver_parts_parcel() -> void:
 	if _van_parcel_parts.is_empty():
 		return
+	var n_parts := 0
+	var n_fuses := 0
+	var n_strips := 0
+	var n_hubs := 0
+	var n_power := 0
 	for pid_v in _van_parcel_parts:
 		var pid := str(pid_v)
-		parts_inventory[pid] = int(parts_inventory.get(pid, 0)) + 1
-	var n := _van_parcel_parts.size()
+		match pid:
+			"acc:fuse":
+				fuse_stock += 1
+				n_fuses += 1
+			"acc:power_strip":
+				if power_strips < POWER_STRIP_MAX:
+					power_strips += 1
+					n_strips += 1
+				else:
+					money += float(POWER_STRIP_PRICE) # Maximum schon erreicht: Gutschrift
+			"acc:net_hub":
+				if net_hubs < NET_HUB_MAX:
+					net_hubs += 1
+					n_hubs += 1
+				else:
+					money += float(NET_HUB_PRICE)
+			"acc:power_fuse":
+				if power_fuse_stock == 0:
+					power_fuse_stock = 1
+					n_power += 1
+			_:
+				if pid.begins_with("acc:"):
+					continue
+				parts_inventory[pid] = int(parts_inventory.get(pid, 0)) + 1
+				n_parts += 1
 	_van_parcel_parts.clear()
-	_broadcast_inventory()
 	_rpc_play_sfx.rpc("pickup")
-	post_event_f("📦 %d Hardware-Bauteil(e) ins Teile-Lager geliefert! Jetzt am Rack einbauen [E].", [n], "good")
+	if n_parts > 0:
+		_broadcast_inventory()
+		post_event_f("📦 %d Hardware-Bauteil(e) ins Teile-Lager geliefert! Jetzt am Rack einbauen [E].", [n_parts], "good")
+	if n_fuses > 0 or n_power > 0:
+		_broadcast_fuses()
+	if n_fuses > 0:
+		post_event_f("📦 %d Sicherung(en) geliefert. Am Sicherungskasten mit [E] einsetzen.", [n_fuses], "good")
+	if n_power > 0:
+		post_event("📦 Drehsicherung geliefert. Am Sicherungskasten mit [E] in Steckplatz F2 einsetzen.", "good")
+	if n_strips > 0 or n_hubs > 0:
+		_rpc_sync_accessories.rpc(power_strips, net_hubs)
+		_recalculate_networks_and_metrics()
+		if n_strips > 0:
+			post_event_f("📦 %d Steckleiste(n) geliefert und am Stromkasten montiert (+%d Steckplätze).", [n_strips, n_strips * POWER_STRIP_EXTRA], "good")
+		if n_hubs > 0:
+			post_event_f("📦 %d Netzwerk-Verteiler geliefert und am Router montiert (+%d Ports).", [n_hubs, n_hubs * NET_HUB_EXTRA], "good")
+	_broadcast_sim_tick()
 
 
 func _cart_drop_pos(cart_count: int) -> Vector3:
@@ -935,6 +1020,9 @@ func initialize_new_world(save_id: String = "mein_datacenter", save_name: String
 	power_strips = 0
 	net_hubs = 0
 	breaker_on = true
+	grid_outage_left = 0.0
+	_grid_breaker_restore = false
+	_grid_outage_cooldown = -1.0
 	ups_backup_active = false
 	avg_ups_charge = 0.0
 	overload_timer = 0.0
@@ -952,6 +1040,7 @@ func initialize_new_world(save_id: String = "mein_datacenter", save_name: String
 	electricity_rate = ELECTRICITY_RATE_PER_KWH
 	last_bill_rate = ELECTRICITY_RATE_PER_KWH
 	company_milestones_reached = 0
+	company_level = 1
 	room_temp = 22.0
 	max_watts = int(POWER_TIERS[0]["watts"])
 	max_bandwidth_cu = int(ROUTER_TIERS[0]["max_cu"])
@@ -993,8 +1082,13 @@ func export_save_data() -> Dictionary:
 	data["delivery_slot_cursor"] = _delivery_slot_cursor
 	data["ddos_cooldown"] = ddos_cooldown
 	var all_pending: Array = []
+	# Inhalt des Sammelpakets statt des Platzhalters speichern, sonst gehen Bestellungen verloren.
+	for pid_v in _van_parcel_parts:
+		var ps := str(pid_v)
+		all_pending.append(ps if ps.begins_with("acc:") else "part:" + ps)
 	for item in van_cargo:
-		all_pending.append(str(item))
+		if str(item) != VAN_PARCEL_ITEM:
+			all_pending.append(str(item))
 	for item in pending_delivery_items:
 		all_pending.append(str(item))
 	data["pending_delivery_items"] = all_pending
@@ -1163,6 +1257,7 @@ func _make_rack_data(rack_id: String, rack_type: String, pos: Vector3, rot_y: fl
 		slots.append(_make_empty_slot())
 	return {
 		"id": rack_id,
+		"custom_name": "",
 		"rack_type": rack_type,
 		"pos": pos,
 		"rot_y": rot_y,
@@ -1186,6 +1281,8 @@ func _ensure_loaded_compat() -> void:
 		var r: Dictionary = racks[rid]
 		if not r.has("rack_type"):
 			r["rack_type"] = "rack"
+		if not (r.get("custom_name") is String):
+			r["custom_name"] = ""
 		if not r.has("rental_type"):
 			r["rental_type"] = "none"
 		if not r.has("rental_customer"):
@@ -1247,8 +1344,11 @@ func build_snapshot() -> Dictionary:
 		"breaker_fuses": breaker_fuses.duplicate(),
 		"fuse_stock": fuse_stock,
 		"power_fuse_stock": power_fuse_stock,
+		"power_fuse_on_way": _power_fuse_on_way(),
 		"power_strips": power_strips,
 		"net_hubs": net_hubs,
+		"grid_outage_left": grid_outage_left,
+		"grid_breaker_restore": _grid_breaker_restore,
 		"ups_backup_active": ups_backup_active,
 		"avg_ups_charge": avg_ups_charge,
 		"overload_timer": overload_timer,
@@ -1257,6 +1357,7 @@ func build_snapshot() -> Dictionary:
 		"research_levels": research_levels.duplicate(),
 		"room_level": room_level,
 		"company_milestones_reached": company_milestones_reached,
+		"company_level": company_level,
 		"ai_platform_level": ai_platform_level,
 		"ddos_active": ddos_active,
 		"day_number": day_number,
@@ -1294,6 +1395,7 @@ func build_snapshot() -> Dictionary:
 		"used_bandwidth_mbps": used_bandwidth_mbps,
 		"max_bandwidth_mbps": max_bandwidth_mbps,
 		"extinguisher_held_by": extinguisher_held_by,
+		"extinguisher_held_slot": extinguisher_held_slot,
 		"van_phase": van_phase,
 		"van_phase_time": van_phase_time,
 		"van_cargo_count": van_cargo.size(),
@@ -1325,9 +1427,13 @@ func _apply_snapshot(snap: Dictionary) -> void:
 	breaker_fuses = _sanitize_fuses(snap.get("breaker_fuses", null))
 	fuse_stock = maxi(0, int(snap.get("fuse_stock", 0)))
 	power_fuse_stock = clampi(int(snap.get("power_fuse_stock", 0)), 0, 1)
+	power_fuse_on_way_synced = bool(snap.get("power_fuse_on_way", false))
 	power_strips = clampi(int(snap.get("power_strips", 0)), 0, POWER_STRIP_MAX)
 	net_hubs = clampi(int(snap.get("net_hubs", 0)), 0, NET_HUB_MAX)
 	ups_backup_active = bool(snap.get("ups_backup_active", false))
+	grid_outage_left = maxf(0.0, float(snap.get("grid_outage_left", 0.0)))
+	_grid_breaker_restore = bool(snap.get("grid_breaker_restore", false))
+	_grid_outage_cooldown = -1.0
 	avg_ups_charge = float(snap.get("avg_ups_charge", 0.0))
 	overload_timer = float(snap.get("overload_timer", 0.0))
 	power_tier = int(snap.get("power_tier", 0))
@@ -1340,6 +1446,7 @@ func _apply_snapshot(snap: Dictionary) -> void:
 		room_level = 1 if bool(snap.get("room_expanded", false)) else 0
 	ai_platform_level = int(snap.get("ai_platform_level", 0))
 	company_milestones_reached = clampi(int(snap.get("company_milestones_reached", -1)), -1, COMPANY_VALUE_MILESTONES.size())
+	company_level = clampi(int(snap.get("company_level", 0)), 0, COMPANY_LEVEL_THRESHOLDS.size())
 	ddos_active = bool(snap.get("ddos_active", false))
 	day_number = maxi(1, int(snap.get("day_number", 1)))
 	time_of_day = clampf(float(snap.get("time_of_day", 0.36)), 0.0, 0.999)
@@ -1377,6 +1484,7 @@ func _apply_snapshot(snap: Dictionary) -> void:
 	used_bandwidth_mbps = float(snap.get("used_bandwidth_mbps", 0.0))
 	max_bandwidth_mbps = float(snap.get("max_bandwidth_mbps", float(ROUTER_TIERS[router_tier]["max_mbps"])))
 	extinguisher_held_by = int(snap.get("extinguisher_held_by", 0))
+	extinguisher_held_slot = clampi(int(snap.get("extinguisher_held_slot", 1)), 1, SLOT_COUNT)
 	shared_open_panels = _sanitize_open_panels(snap.get("open_panels", {}))
 	panel_states_changed.emit()
 	van_phase = str(snap.get("van_phase", "idle"))
@@ -1421,6 +1529,7 @@ func handle_player_disconnect(peer_id: int) -> void:
 			changed_carts = true
 	if changed_carts:
 		_broadcast_carts()
+	player_active_slot.erase(peer_id)
 	if extinguisher_held_by == peer_id:
 		extinguisher_held_by = 0
 		_rpc_sync_extinguisher.rpc(0)
@@ -1772,11 +1881,13 @@ func _trigger_water_leak() -> void:
 		var slot: Dictionary = slots[ok_idx[j]]
 		slot["state"] = "crashed"
 		slot["repair_progress"] = 0.0
+		slot["faulty_part"] = ""
+		slot["diagnosed"] = false
 		hit.append(str(ok_idx[j] + 1))
 
 	money = maxf(0.0, money - WATER_LEAK_COST)
 	post_event_f("WASSERSCHADEN über %s! Slot %s ausgefallen, Trocknung kostet $%d. Mit [E] reparieren.", [
-		target.to_upper(), ", ".join(hit), int(WATER_LEAK_COST)
+		get_rack_display_name(target), ", ".join(hit), int(WATER_LEAK_COST)
 	], "alert")
 	_rpc_play_sfx.rpc("alarm")
 	_recalculate_networks_and_metrics()
@@ -1842,10 +1953,16 @@ func get_device_sell_value(kind: String, eid: String) -> int:
 	return 0
 
 
+func get_active_slot(peer_id: int) -> int:
+	return clampi(int(player_active_slot.get(peer_id, 1)), 1, SLOT_COUNT)
+
+
+## Kiste im aktiven Slot des Spielers (Kisten in anderen Slots zählen nicht).
 func get_player_held_crate(peer_id: int) -> Dictionary:
+	var slot := get_active_slot(peer_id)
 	for cid in crates.keys():
 		var c: Dictionary = crates[cid]
-		if int(c.get("held_by", 0)) == peer_id:
+		if int(c.get("held_by", 0)) == peer_id and int(c.get("held_slot", 1)) == slot:
 			return c
 	return {}
 
@@ -1859,7 +1976,7 @@ func get_player_pushed_cart(peer_id: int) -> Dictionary:
 
 
 func is_player_holding_extinguisher(peer_id: int) -> bool:
-	return extinguisher_held_by == peer_id
+	return extinguisher_held_by == peer_id and extinguisher_held_slot == get_active_slot(peer_id)
 
 
 func is_player_holding_anything(peer_id: int) -> bool:
@@ -1902,7 +2019,57 @@ func count_cables_on(cable_type: String, endpoint_id: String) -> int:
 	return n
 
 
+## Buchse jedes Kabels an einem Anschluss: {cable_id: slot}. Kabel ohne gespeicherte Buchse
+## (alte Spielstände) bekommen der Reihe nach die freien Buchsen, sortiert nach Kabel-ID.
+func get_cable_slot_map(cable_type: String, endpoint_id: String) -> Dictionary:
+	var result := {}
+	var used := {}
+	var legacy: Array[String] = []
+	for cid in cables.keys():
+		var c: Dictionary = cables[cid]
+		if str(c.get("cable_type", "")) != cable_type:
+			continue
+		var s := -1
+		if str(c.get("from_id", "")) == endpoint_id:
+			s = int(c.get("from_slot", -1))
+		elif str(c.get("to_id", "")) == endpoint_id:
+			s = int(c.get("to_slot", -1))
+		else:
+			continue
+		if s >= 0 and not used.has(s):
+			result[str(cid)] = s
+			used[s] = true
+		else:
+			legacy.append(str(cid))
+	legacy.sort()
+	var next := 0
+	for cid in legacy:
+		while used.has(next):
+			next += 1
+		result[cid] = next
+		used[next] = true
+	return result
+
+
+## Gewünschte Buchse, wenn sie existiert und frei ist, sonst die erste freie. -1 = keine frei.
+func pick_free_slot(cable_type: String, endpoint_id: String, wanted: int) -> int:
+	var used: Array = get_cable_slot_map(cable_type, endpoint_id).values()
+	var max_n := get_max_ports(cable_type, endpoint_id)
+	if wanted >= 0 and wanted < max_n and not used.has(wanted):
+		return wanted
+	for i in range(max_n):
+		if not used.has(i):
+			return i
+	return -1
+
+
+## Cluster-Ports pro Rack: Ein Rack kann sich mit bis zu zwei Nachbar-Racks zusammenschließen.
+const CLUSTER_PORTS_PER_RACK := 2
+
+
 func get_max_ports(cable_type: String, endpoint_id: String) -> int:
+	if cable_type == "cluster":
+		return CLUSTER_PORTS_PER_RACK if racks.has(endpoint_id) else 0
 	if cable_type == "power":
 		if endpoint_id == WALL_BREAKER_ID:
 			return BREAKER_BASE_SOCKETS + power_strips * POWER_STRIP_EXTRA
@@ -1911,7 +2078,8 @@ func get_max_ports(cable_type: String, endpoint_id: String) -> int:
 		if racks.has(endpoint_id):
 			return 2
 		if coolers.has(endpoint_id):
-			return 1
+			# Das Innengerät hat keine Strombuchse, es läuft über das Außengerät.
+			return 0 if is_indoor_unit(endpoint_id) else 1
 		if ups_units.has(endpoint_id):
 			return 2 # Connect to breaker AND optionally daisy-chain out
 		return 0
@@ -1933,6 +2101,144 @@ func _count_rack_switches(rack_id: String) -> int:
 		if str(slot["item_type"]) == "net_switch" and str(slot["state"]) == "ok":
 			count += 1
 	return count
+
+
+const INDOOR_UNIT_TYPE := "indoor_unit"
+## Goldis-Außengeräte stehen nur auf dem Rasen rechts vom Garagentor (von der Straße aus gesehen).
+const HEAT_PUMP_LAWN_MIN := Vector2(4.5, 5.5)
+const HEAT_PUMP_LAWN_MAX := Vector2(10.0, 7.0)
+const HEAT_PUMP_TREE_POS := Vector2(6.8, 7.5)
+const HEAT_PUMP_TREE_CLEARANCE := 1.3
+const HEAT_PUMP_SPACING := 1.25
+## Goldis-Innengeräte hängen an den Innenseiten der Außenwände.
+const WALL_UNIT_Y := 2.35
+const WALL_UNIT_OFFSET := 0.12
+const WALL_UNIT_HALF_WIDTH := 0.5
+const WALL_UNIT_SPACING := 1.05
+const WALL_HIT_TOLERANCE := 0.3
+const WALL_FACE_NORTH_Z := -4.475
+const WALL_FACE_SOUTH_Z := 4.475
+const WALL_FACE_WEST_X := -5.475
+const WALL_FACE_EAST_X := 21.475
+const GARAGE_DOOR_HALF_WIDTH := 2.2
+
+
+func is_heat_pump_type(item_type: String) -> bool:
+	return item_type == "cooler" or item_type == "chiller"
+
+
+func is_indoor_unit(cooler_id: String) -> bool:
+	return coolers.has(cooler_id) and str(coolers[cooler_id].get("cooler_type", "cooler")) == INDOOR_UNIT_TYPE
+
+
+func has_indoor_unit() -> bool:
+	for cid in coolers.keys():
+		if str(coolers[cid].get("cooler_type", "cooler")) == INDOOR_UNIT_TYPE:
+			return true
+	return false
+
+
+## Platzierungsprüfung je nach Gerätetyp: Außengeräte auf den Rasen, Innengeräte an die Wand, alles andere in die Halle.
+func can_place_item_at(item_type: String, pos: Vector3, rot_y: float = 0.0, ignore_rack_id: String = "") -> bool:
+	if is_heat_pump_type(item_type):
+		return can_place_heat_pump_at(pos)
+	if item_type == INDOOR_UNIT_TYPE:
+		return can_place_wall_unit_at(pos, rot_y)
+	return can_place_at(pos, ignore_rack_id)
+
+
+func can_place_heat_pump_at(pos: Vector3) -> bool:
+	if pos.x < HEAT_PUMP_LAWN_MIN.x or pos.x > HEAT_PUMP_LAWN_MAX.x:
+		return false
+	if pos.z < HEAT_PUMP_LAWN_MIN.y or pos.z > HEAT_PUMP_LAWN_MAX.y:
+		return false
+	if Vector2(pos.x, pos.z).distance_to(HEAT_PUMP_TREE_POS) < HEAT_PUMP_TREE_CLEARANCE:
+		return false
+	for cid in coolers.keys():
+		var c: Dictionary = coolers[cid]
+		if str(c.get("cooler_type", "cooler")) == INDOOR_UNIT_TYPE:
+			continue
+		var cpos: Vector3 = c["pos"]
+		if Vector2(cpos.x - pos.x, cpos.z - pos.z).length() < HEAT_PUMP_SPACING:
+			return false
+	return true
+
+
+func _interior_max_x() -> float:
+	# Innenseite der jeweils letzten geschlossenen Trennwand bzw. der Ostwand
+	return 5.39 if room_level == 0 else (12.39 if room_level == 1 else WALL_FACE_EAST_X)
+
+
+func _snap_half(v: float) -> float:
+	return roundf(v * 2.0) * 0.5
+
+
+## Rechnet einen Treffer auf einer Innenwand in eine Montageposition um.
+## Ein leeres Dictionary bedeutet: keine gültige Wand an dieser Stelle.
+func get_wall_mount_spot(hit_pos: Vector3, normal: Vector3) -> Dictionary:
+	if absf(normal.y) > 0.3:
+		return {}
+	var pos := Vector3.ZERO
+	var rot_y := 0.0
+	if absf(normal.z) >= absf(normal.x):
+		if normal.z > 0.0:
+			if absf(hit_pos.z - WALL_FACE_NORTH_Z) > WALL_HIT_TOLERANCE:
+				return {}
+			pos = Vector3(_snap_half(hit_pos.x), WALL_UNIT_Y, WALL_FACE_NORTH_Z + WALL_UNIT_OFFSET)
+			rot_y = 0.0
+		else:
+			if absf(hit_pos.z - WALL_FACE_SOUTH_Z) > WALL_HIT_TOLERANCE:
+				return {}
+			pos = Vector3(_snap_half(hit_pos.x), WALL_UNIT_Y, WALL_FACE_SOUTH_Z - WALL_UNIT_OFFSET)
+			rot_y = PI
+	else:
+		if normal.x > 0.0:
+			if absf(hit_pos.x - WALL_FACE_WEST_X) > WALL_HIT_TOLERANCE:
+				return {}
+			pos = Vector3(WALL_FACE_WEST_X + WALL_UNIT_OFFSET, WALL_UNIT_Y, _snap_half(hit_pos.z))
+			rot_y = PI * 0.5
+		else:
+			if absf(hit_pos.x - WALL_FACE_EAST_X) > WALL_HIT_TOLERANCE:
+				return {}
+			pos = Vector3(WALL_FACE_EAST_X - WALL_UNIT_OFFSET, WALL_UNIT_Y, _snap_half(hit_pos.z))
+			rot_y = -PI * 0.5
+	if not can_place_wall_unit_at(pos, rot_y):
+		return {}
+	return {"pos": pos, "rot_y": rot_y}
+
+
+func can_place_wall_unit_at(pos: Vector3, rot_y: float) -> bool:
+	if absf(pos.y - WALL_UNIT_Y) > 0.02:
+		return false
+	var facing := Vector3(sin(rot_y), 0.0, cos(rot_y))
+	var margin := WALL_UNIT_HALF_WIDTH + 0.08
+	if facing.z > 0.9 or facing.z < -0.9:
+		var face_z := WALL_FACE_NORTH_Z + WALL_UNIT_OFFSET if facing.z > 0.0 else WALL_FACE_SOUTH_Z - WALL_UNIT_OFFSET
+		if absf(pos.z - face_z) > 0.02:
+			return false
+		if pos.x < WALL_FACE_WEST_X + margin or pos.x > _interior_max_x() - margin:
+			return false
+		# Über der offenen Garagentor-Öffnung gibt es keine Wand
+		if facing.z < 0.0 and absf(pos.x) < GARAGE_DOOR_HALF_WIDTH + margin:
+			return false
+	elif facing.x > 0.9 or facing.x < -0.9:
+		if facing.x < 0.0 and room_level < 2:
+			return false
+		var face_x := WALL_FACE_WEST_X + WALL_UNIT_OFFSET if facing.x > 0.0 else WALL_FACE_EAST_X - WALL_UNIT_OFFSET
+		if absf(pos.x - face_x) > 0.02:
+			return false
+		if pos.z < WALL_FACE_NORTH_Z + margin or pos.z > WALL_FACE_SOUTH_Z - margin:
+			return false
+	else:
+		return false
+	for cid in coolers.keys():
+		var c: Dictionary = coolers[cid]
+		if str(c.get("cooler_type", "cooler")) != INDOOR_UNIT_TYPE:
+			continue
+		var cpos: Vector3 = c["pos"]
+		if cpos.distance_to(pos) < WALL_UNIT_SPACING:
+			return false
+	return true
 
 
 func can_place_at(pos: Vector3, ignore_rack_id: String = "") -> bool:
@@ -2134,6 +2440,7 @@ func _check_company_milestones() -> void:
 	if not multiplayer.is_server():
 		return
 	var value := get_company_value()
+	_update_company_level(value)
 	var reached := _count_company_milestones(value)
 	if company_milestones_reached < 0:
 		company_milestones_reached = reached
@@ -2151,11 +2458,59 @@ func _check_company_milestones() -> void:
 ## Text für die Upgrades-App: aktueller Firmenwert und nächstes Ziel.
 func get_company_goal_text() -> String:
 	var value := get_company_value()
+	var level_text := tr("Firmenstufe %d") % get_company_level()
 	var idx := maxi(company_milestones_reached, 0)
 	if idx >= COMPANY_VALUE_MILESTONES.size():
-		return tr("Firmenwert: $%d  •  Endziel erreicht!") % value
+		return level_text + "  •  " + tr("Firmenwert: $%d  •  Endziel erreicht!") % value
 	var m: Dictionary = COMPANY_VALUE_MILESTONES[idx]
-	return tr("Firmenwert: $%d  •  Nächstes Ziel: $%d (%s)") % [value, int(m["value"]), tr(str(m["title"]))]
+	return level_text + "  •  " + tr("Firmenwert: $%d  •  Nächstes Ziel: $%d (%s)") % [value, int(m["value"]), tr(str(m["title"]))]
+
+
+func _level_for_value(value: int) -> int:
+	var lvl := 1
+	for i in range(1, COMPANY_LEVEL_THRESHOLDS.size()):
+		if value >= int(COMPANY_LEVEL_THRESHOLDS[i]):
+			lvl = i + 1
+	return lvl
+
+
+## Nur auf dem Host: Firmenstufe anheben. Eine erreichte Stufe geht nie verloren.
+func _update_company_level(value: int) -> void:
+	var target := _level_for_value(value)
+	if company_level <= 0:
+		company_level = target
+		return
+	while company_level < target:
+		company_level += 1
+		post_event_f("⭐ Firmenstufe %d erreicht! Neue Bauteile im Shop freigeschaltet.", [company_level], "good")
+		_rpc_play_sfx.rpc("upgrade")
+
+
+func get_company_level() -> int:
+	return clampi(company_level, 1, COMPANY_LEVEL_THRESHOLDS.size())
+
+
+## Bauteile der Leistungsstufe vtier N brauchen Firmenstufe N + 1.
+func get_part_required_level(pd: Dictionary) -> int:
+	return clampi(int(pd.get("vtier", 0)) + 1, 1, COMPANY_LEVEL_THRESHOLDS.size())
+
+
+func is_part_unlocked(pd: Dictionary) -> bool:
+	return get_company_level() >= get_part_required_level(pd)
+
+
+## Mainboards werden nach Kategorie freigeschaltet, alle anderen Artikel sind immer verfügbar.
+func get_item_required_level(item_type: String) -> int:
+	if not ITEM_CATALOG.has(item_type):
+		return 1
+	var item: Dictionary = ITEM_CATALOG[item_type]
+	if not bool(item.get("mainboard", false)):
+		return 1
+	return int(MAINBOARD_CATEGORY_LEVEL.get(str(item.get("mb_cat", "")), 1))
+
+
+func is_item_unlocked(item_type: String) -> bool:
+	return get_company_level() >= get_item_required_level(item_type)
 
 
 # ==============================================================================
@@ -2169,6 +2524,7 @@ func _run_simulation_step(dt: float) -> void:
 	# 0. Day/Night Clock & kWh Meter
 	var kw_now := float(total_watts) / 1000.0
 	if breaker_on:
+		# Verbrauch in Spielstunden: ein Spieltag zählt 24 Stunden Last (realistische kWh pro Tag).
 		daily_kwh += kw_now * (dt / DAY_LENGTH_SECONDS) * 24.0
 	if _day_rollover_pending:
 		_day_rollover_pending = false
@@ -2190,6 +2546,8 @@ func _run_simulation_step(dt: float) -> void:
 			post_event_f("⚡ Tag %d Stromrechnung erhalten: $%d (%.1f kWh verbraucht).", [day_number - 1, bill, billed_kwh], "warn")
 		else:
 			post_event_f("☀ Tag %d beginnt – keine Stromkosten angefallen.", [day_number], "info")
+
+	_tick_grid_outage(dt)
 
 	# 1. UPS Charging & Emergency Backup Discharging
 	var ups_dirty := false
@@ -2235,7 +2593,10 @@ func _run_simulation_step(dt: float) -> void:
 	if prev_ups_backup and not breaker_on and active_backup_ids.is_empty():
 		_recalculate_networks_and_metrics()
 		_rpc_play_sfx.rpc("power_down")
-		post_event("USV-BATTERIEN LEER! Vollständiger Blackout – Hauptsicherung einschalten!", "alert")
+		if grid_outage_left > 0.0:
+			post_event("USV-BATTERIEN LEER! Der Netzausfall dauert an. Alles steht, bis die Stadtwerke das Netz wiederherstellen.", "alert")
+		else:
+			post_event("USV-BATTERIEN LEER! Vollständiger Blackout – Hauptsicherung einschalten!", "alert")
 		ups_dirty = true
 
 	if ups_dirty:
@@ -2290,11 +2651,18 @@ func _run_simulation_step(dt: float) -> void:
 		var target_rack_temp := clampf(room_temp + local_hot_spot + (14.0 if _rack_has_fire(rack) else 0.0), 16.0, 105.0)
 		rack["temp"] = move_toward(float(rack["temp"]), target_rack_temp, dt * 3.0)
 
+	var heat_pump_capacity := 0.0
+	var indoor_units := 0
 	for cid in coolers.keys():
 		var cooler: Dictionary = coolers[cid]
-		if bool(cooler["powered"]):
-			var ctype := str(cooler.get("cooler_type", "cooler"))
-			total_cooling += absf(float(ITEM_CATALOG[ctype]["heat"]))
+		var ctype := str(cooler.get("cooler_type", "cooler"))
+		if ctype == INDOOR_UNIT_TYPE:
+			indoor_units += 1
+		elif bool(cooler["powered"]):
+			heat_pump_capacity += absf(float(ITEM_CATALOG[ctype]["heat"]))
+	# Die Kälte der Außengeräte kommt nur über ein Goldis Innengerät in den Raum.
+	if indoor_units > 0:
+		total_cooling += heat_pump_capacity
 
 	# Slight natural night cooling (-3°C at night)
 	var night_bonus := -3.0 if (time_of_day < 0.22 or time_of_day > 0.80) else 0.0
@@ -2322,19 +2690,28 @@ func _run_simulation_step(dt: float) -> void:
 					slot["state"] = "burning"
 					slot["fire_level"] = 1.0
 					racks_dirty = true
-					post_event_f("BRAND in %s (Slot %d)! Feuerlöscher von der Wand holen!", [rid.to_upper(), i + 1], "alert")
+					post_event_f("BRAND in %s (Slot %d)! Feuerlöscher von der Wand holen!", [get_rack_display_name(rid), i + 1], "alert")
 					_rpc_play_sfx.rpc("alarm")
 				elif rtemp >= 68.0 and randf() < 0.014 * fmult:
 					slot["state"] = "crashed"
 					slot["repair_progress"] = 0.0
+					slot["faulty_part"] = ""
+					slot["diagnosed"] = false
 					racks_dirty = true
-					post_event_f("Überhitzung: %s Slot %d abgestürzt! Mit [E] reparieren.", [rid.to_upper(), i + 1], "warn")
+					post_event_f("Überhitzung: %s Slot %d abgestürzt! Mit [E] reparieren.", [get_rack_display_name(rid), i + 1], "warn")
 					_rpc_play_sfx.rpc("alarm")
 				elif bool(rack["networked"]) and randf() < 0.0012 * fmult:
 					slot["state"] = "crashed"
 					slot["repair_progress"] = 0.0
+					# Ein eingebautes Bauteil geht kaputt. Welches, verrät die Meldung nicht:
+					# Der Spieler findet es in der 3D-Vorschau des Racks.
+					slot["faulty_part"] = _pick_faulty_part(slot)
+					slot["diagnosed"] = false
 					racks_dirty = true
-					post_event_f("Hardware-Fehler in %s Slot %d – Wartung [E] nötig.", [rid.to_upper(), i + 1], "warn")
+					if str(slot["faulty_part"]) != "":
+						post_event_f("Hardware-Fehler in %s! Ursache unbekannt – im Rack nachsehen.", [get_rack_display_name(rid)], "warn")
+					else:
+						post_event_f("Hardware-Fehler in %s Slot %d – Wartung [E] nötig.", [get_rack_display_name(rid), i + 1], "warn")
 					_rpc_play_sfx.rpc("error")
 
 	if racks_dirty:
@@ -2457,6 +2834,8 @@ func _update_rack_rentals_and_support(dt: float) -> void:
 	var worst_call_issue := ""
 	var worst_call_sat := 999.0
 	var rep_delta := 0.0
+	# Freie Hardware der Cluster-Racks, einmal pro Tick ermittelt und beim Verleihen verbraucht.
+	var cluster_spare := _compute_cluster_spare()
 
 	for rid in racks.keys():
 		var r: Dictionary = racks[rid]
@@ -2482,14 +2861,26 @@ func _update_rack_rentals_and_support(dt: float) -> void:
 
 		# Kunden kommen nach und nach: Jeder Dienst startet mit wenigen Nutzern und wächst je nach Ruf.
 		var online := powered and networked and active_servers > 0
+		# Auslastung aus dem letzten Tick bremst das Wachstum, bevor die Hardware an ihre Grenze kommt.
+		var prev_m: Dictionary = r["metrics"] if r.get("metrics") is Dictionary else {}
+		var prev_load := maxf(
+			maxf(float(prev_m.get("ram_pct", 0.0)), float(prev_m.get("cpu_pct", 0.0))),
+			maxf(maxf(float(prev_m.get("gpu_pct", 0.0)), float(prev_m.get("storage_pct", 0.0))), float(prev_m.get("net_pct", 0.0)))
+		)
 		var users_int := 0
 		for svc in services:
-			users_int += _update_service_users(svc as Dictionary, sat, online, dt, time_wave)
+			users_int += _update_service_users(svc as Dictionary, sat, online, dt, time_wave, prev_load)
 		users_int = maxi(1, users_int)
 		_sync_rack_rental_fields(r)
 		r["active_users"] = users_int
 		# Ressourcenbedarf und Preis pro Nutzer: Mittel aller Dienste, gewichtet nach Nutzerzahl.
 		prof = _blend_service_profiles(services)
+
+		# Cluster-Kabel: Reicht die eigene Hardware nicht, leiht sich das Rack freie Kapazität der verbundenen Racks.
+		var cluster_borrowed: Dictionary = {}
+		if active_servers > 0:
+			hw = hw.duplicate()
+			cluster_borrowed = _borrow_cluster_capacity(str(rid), hw, users_int, prof, cluster_spare)
 
 		# Calculate live per-resource utilization % so player can self-assess RAM/CPU/GPU/Storage/Router!
 		var ram_total := maxf(0.5, float(hw["ram_gb"]))
@@ -2548,6 +2939,7 @@ func _update_rack_rentals_and_support(dt: float) -> void:
 			"net_used_mbps": net_need_mbps,
 			"net_pct": net_pct,
 			"bottleneck": bottleneck,
+			"cluster_borrowed": cluster_borrowed,
 		}
 
 		# Satisfaction dynamics
@@ -2592,7 +2984,7 @@ func _update_rack_rentals_and_support(dt: float) -> void:
 			reputation = maxf(0.0, reputation - 8.0)
 			_clear_tickets_for_rack(rid)
 			tickets_dirty = true
-			post_event_f("❌ %s hat %s gekündigt (dauerhafte Überlastung)! Hardware aufrüsten & neu vermieten.", [cname, rid.to_upper()], "alert")
+			post_event_f("❌ %s hat %s gekündigt (dauerhafte Überlastung)! Hardware aufrüsten & neu vermieten.", [cname, get_rack_display_name(rid)], "alert")
 			_rpc_play_sfx.rpc("alarm")
 
 	reputation = clampf(reputation + rep_delta, 0.0, 100.0)
@@ -2630,9 +3022,22 @@ func _update_rack_rentals_and_support(dt: float) -> void:
 		post_event_f("📞 EINGEHENDER ANRUF AM PC: %s beschwert sich über %s! Zum PC [E] gehen!", [cname, worst_call_rack.to_upper()], "alert")
 		call_dirty = true
 
-	# Age existing tickets
+	# Tickets altern lassen. Unbeantwortete Tickets eskalieren nach Ablauf der SLA-Frist.
 	for tid in support_tickets.keys():
-		support_tickets[tid]["age"] = float(support_tickets[tid].get("age", 0.0)) + dt
+		var t: Dictionary = support_tickets[tid]
+		t["age"] = float(t.get("age", 0.0)) + dt
+		if bool(t.get("reassured", false)) or bool(t.get("escalated", false)):
+			continue
+		if float(t["age"]) < get_ticket_sla(t):
+			continue
+		t["escalated"] = true
+		var erid := str(t.get("rack_id", ""))
+		if racks.has(erid):
+			racks[erid]["satisfaction"] = maxf(0.0, float(racks[erid].get("satisfaction", 60.0)) - TICKET_ESCALATION_SAT_PENALTY)
+		reputation = maxf(0.0, reputation - TICKET_ESCALATION_REP_PENALTY)
+		tickets_dirty = true
+		_rpc_play_sfx.rpc("alarm")
+		post_event_f("⏰ Ticket %s eskaliert: %s wartet zu lange auf eine Antwort (-%d%% Zufriedenheit).", [str(tid), str(t.get("customer", "Kunde")), int(TICKET_ESCALATION_SAT_PENALTY)], "alert")
 
 	if tickets_dirty:
 		_broadcast_tickets()
@@ -2703,14 +3108,12 @@ func get_reputation_label() -> String:
 	return REPUTATION_LABELS[get_reputation_tier()]
 
 
-## Höchstzahl an Nutzern, die ein Dienst beim aktuellen Ruf anlockt.
-func get_service_user_cap(service_type: String) -> int:
-	if not HardwareCatalog.RENTAL_PROFILES.has(service_type):
-		return 0
-	var p: Dictionary = HardwareCatalog.RENTAL_PROFILES[service_type]
-	var base := float(p.get("base_users", 0))
-	var cap := float(p.get("max_users", 0)) * (0.12 + 0.88 * get_reputation_factor())
-	return int(roundf(maxf(base * 0.5, cap)))
+## Neue Kunden kommen nur, solange die Hardware des Racks noch Luft hat (höchste Auslastung in %).
+const USER_GROWTH_LOAD_LIMIT := 85.0
+## Bereich unter dem Limit, in dem das Wachstum weich ausläuft.
+const USER_GROWTH_SOFT_RANGE := 25.0
+## Ab dieser Auslastung wandern Kunden langsam ab, auch bei hoher Zufriedenheit.
+const USER_SHED_LOAD_LIMIT := 100.0
 
 
 ## Startnutzer eines neuen Dienstes: bei schlechtem Ruf nur eine Handvoll.
@@ -2720,24 +3123,24 @@ func _start_users_for(service_type: String) -> float:
 
 
 ## Nutzerzahl eines Dienstes fortschreiben. Gibt die gerundete Nutzerzahl zurück.
-func _update_service_users(svc: Dictionary, sat: float, online: bool, dt: float, time_wave: float) -> int:
+func _update_service_users(svc: Dictionary, sat: float, online: bool, dt: float, time_wave: float, load_pct: float = 0.0) -> int:
 	var st := str(svc.get("type", ""))
 	if not HardwareCatalog.RENTAL_PROFILES.has(st):
 		return 0
 	var p: Dictionary = HardwareCatalog.RENTAL_PROFILES[st]
 	var base := float(p.get("base_users", 1))
-	var cap := float(get_service_user_cap(st))
 	var prev := float(svc.get("users", base))
 	var cur := prev
 	if not online:
 		cur = maxf(base * 0.2, cur - 4.5 * dt)
 	elif sat >= 72.0:
-		if cur < cap:
+		if load_pct < USER_GROWTH_LOAD_LIMIT:
+			var headroom := clampf((USER_GROWTH_LOAD_LIMIT - load_pct) / USER_GROWTH_SOFT_RANGE, 0.0, 1.0)
 			var growth := float(p.get("growth_rate", 1.0)) * time_wave * (0.35 + 0.65 * get_reputation_factor())
-			cur = minf(cap, cur + growth * dt * 0.36)
-		else:
-			# Ruf gesunken: überzählige Kunden wandern langsam ab.
-			cur = maxf(cap, cur - 1.0 * dt)
+			cur += growth * headroom * dt * 0.36
+		elif load_pct >= USER_SHED_LOAD_LIMIT:
+			# Hardware voll ausgelastet: ein Teil der Kunden wandert langsam ab.
+			cur = maxf(base, cur - 1.0 * dt)
 	elif sat < 45.0:
 		cur = maxf(base * 0.25, cur - 2.2 * dt)
 	svc["users"] = cur
@@ -2802,7 +3205,7 @@ func _create_support_ticket(rack_id: String, rack: Dictionary, issue_key: String
 	var rtype := str(rack.get("rental_type", "web"))
 	var users := int(rack.get("active_users", 0))
 	var m: Dictionary = rack.get("metrics", {})
-	var rid_up := rack_id.to_upper()
+	var rid_up := get_rack_display_name(rack_id)
 	# Titel und Text bleiben Vorlagen mit Werten. Übersetzt wird erst beim
 	# Empfänger, damit jeder Spieler sie in seiner eigenen Sprache sieht.
 	var title := ""
@@ -2864,9 +3267,22 @@ func _create_support_ticket(rack_id: String, rack: Dictionary, issue_key: String
 		"age": 0.0,
 		"reassured": false,
 		"compensated": false,
+		"escalated": false,
 	}
 	_rpc_play_sfx.rpc("ticket_notify")
 	post_event_f("🎧 Neues Support-Ticket %s von %s: %s", [tid, cname, {"text": title, "args": title_args}], "warn")
+
+
+## Antwortfrist eines Tickets in Sekunden (nach Priorität).
+func get_ticket_sla(ticket: Dictionary) -> float:
+	return float(TICKET_SLA_SECONDS.get(str(ticket.get("priority", "HOCH")), TICKET_DEFAULT_SLA))
+
+
+## Restzeit bis zur Eskalation. 0 bei beantworteten oder bereits eskalierten Tickets.
+func get_ticket_sla_remaining(ticket: Dictionary) -> float:
+	if bool(ticket.get("reassured", false)) or bool(ticket.get("escalated", false)):
+		return 0.0
+	return maxf(0.0, get_ticket_sla(ticket) - float(ticket.get("age", 0.0)))
 
 
 ## Liefert den Anruftext als Vorlage plus Werte ({text, args}).
@@ -2874,7 +3290,7 @@ func _describe_issue_call(rack_id: String, rack: Dictionary, issue_key: String) 
 	var users := int(rack.get("active_users", 0))
 	var m: Dictionary = rack.get("metrics", {})
 	var who := str(rack.get("rental_customer", ""))
-	var rid_up := rack_id.to_upper()
+	var rid_up := get_rack_display_name(rack_id)
 	match issue_key:
 		"ram":
 			return {"text": "„Hallo?! Hier ist %s! Bei %d aktiven Usern ist der RAM auf %s zu %.0f%% voll — unsere Kunden fliegen ständig raus! Wann baut ihr mehr RAM ein?“",
@@ -2908,6 +3324,7 @@ func _recalculate_networks_and_metrics() -> void:
 	for rid in racks.keys():
 		racks[rid]["powered"] = false
 		racks[rid]["networked"] = false
+		racks[rid]["clustered"] = count_cables_on("cluster", str(rid)) > 0
 	for cid in coolers.keys():
 		coolers[cid]["powered"] = false
 	for uid in ups_units.keys():
@@ -2982,6 +3399,17 @@ func _recalculate_networks_and_metrics() -> void:
 					coolers[other]["powered"] = true
 				elif ups_units.has(other):
 					p_queue.append(other)
+
+		# Goldis Innengeräte laufen, sobald mindestens ein Außengerät Strom hat.
+		var any_heat_pump_on := false
+		for cid in coolers.keys():
+			if not is_indoor_unit(str(cid)) and bool(coolers[cid]["powered"]):
+				any_heat_pump_on = true
+				break
+		if any_heat_pump_on:
+			for cid in coolers.keys():
+				if is_indoor_unit(str(cid)):
+					coolers[cid]["powered"] = true
 
 		# BFS Network from Wall Router (+ Hall C Router if unlocked)
 		var n_visited: Dictionary = {WALL_ROUTER_ID: true}
@@ -3202,6 +3630,11 @@ func request_set_rack_rental(rack_id: String, rental_type: String) -> void:
 	_rpc_req_set_rack_rental.rpc_id(1, rack_id, rental_type)
 
 
+## Leerer Name setzt das Rack auf den Standardnamen „Rack N“ zurück.
+func request_rename_rack(rack_id: String, new_name: String) -> void:
+	_rpc_req_rename_rack.rpc_id(1, rack_id, new_name.left(RACK_NAME_MAX_LEN * 4))
+
+
 func request_reply_ticket(ticket_id: String, action: String) -> void:
 	_rpc_req_reply_ticket.rpc_id(1, ticket_id, action)
 
@@ -3214,8 +3647,9 @@ func request_resolve_call(choice: String) -> void:
 	_rpc_req_resolve_call.rpc_id(1, choice)
 
 
-func request_connect_cable(cable_type: String, from_id: String, to_id: String) -> void:
-	_rpc_req_connect_cable.rpc_id(1, cable_type, from_id, to_id)
+## from_slot/to_slot: angeschaute Buchse an den Enden (-1 = egal, Server nimmt die erste freie).
+func request_connect_cable(cable_type: String, from_id: String, to_id: String, from_slot: int = -1, to_slot: int = -1) -> void:
+	_rpc_req_connect_cable.rpc_id(1, cable_type, from_id, to_id, from_slot, to_slot)
 
 
 func request_disconnect_cables_on(cable_type: String, endpoint_id: String) -> void:
@@ -3313,6 +3747,61 @@ func request_extinguish_slot(rack_id: String, slot_idx: int, amount: float) -> v
 
 func request_repair_slot(rack_id: String, slot_idx: int, amount: float) -> void:
 	_rpc_req_repair_slot.rpc_id(1, rack_id, slot_idx, amount)
+
+
+func request_diagnose_slot(rack_id: String, slot_idx: int) -> void:
+	_rpc_req_diagnose_slot.rpc_id(1, rack_id, slot_idx)
+
+
+## Ausgefallen durch ein defektes Bauteil, das noch niemand in der 3D-Vorschau gefunden hat.
+func is_slot_awaiting_diagnosis(slot: Dictionary) -> bool:
+	return str(slot.get("state", "")) == "crashed" \
+		and str(slot.get("faulty_part", "")) != "" \
+		and not bool(slot.get("diagnosed", false))
+
+
+func get_component_label(cat: String) -> String:
+	# Das Mainboard ist kein austauschbares Bauteil, braucht aber einen Namen für den Hover.
+	if cat == "mainboard":
+		return tr("Mainboard")
+	return str((COMPONENT_CATALOG.get(cat, {}) as Dictionary).get("label", cat))
+
+
+## Wählt zufällig ein eingebautes Bauteil. Switches haben keine sichtbaren Bauteile in der Vorschau.
+func _pick_faulty_part(slot: Dictionary) -> String:
+	if get_chassis_visual(str(slot.get("item_type", ""))) == "net_switch":
+		return ""
+	var comps: Dictionary = slot.get("components", {}) as Dictionary
+	var cands: Array[String] = []
+	for cat_v in COMPONENT_ORDER:
+		var cat := str(cat_v)
+		# Dieselbe Regel wie beim Modellaufbau, damit der Defekt immer sichtbar ist.
+		if HardwareMeshFactory.has_part(comps, cat):
+			cands.append(cat)
+	if cands.is_empty():
+		return ""
+	return cands[randi() % cands.size()]
+
+
+@rpc("any_peer", "call_local", "reliable")
+func _rpc_req_diagnose_slot(rack_id: String, slot_idx: int) -> void:
+	if not multiplayer.is_server():
+		return
+	var peer_id := _get_sender_id()
+	if not racks.has(rack_id):
+		return
+	var slots: Array = racks[rack_id]["slots"]
+	if slot_idx < 0 or slot_idx >= slots.size():
+		return
+	var slot: Dictionary = slots[slot_idx]
+	if not is_slot_awaiting_diagnosis(slot):
+		return
+	slot["diagnosed"] = true
+	post_event_f("%s hat den Defekt gefunden: %s in %s Slot %d. Jetzt mit [E] reparieren.", [
+		NetworkManager.get_player_name(peer_id), get_component_label(str(slot["faulty_part"])),
+		get_rack_display_name(rack_id), slot_idx + 1
+	], "good")
+	_broadcast_racks()
 
 
 func request_toggle_contract(contract_id: String) -> void:
@@ -3428,6 +3917,7 @@ func _rpc_req_pickup_crate(crate_id: String) -> void:
 		_rpc_play_sfx.rpc_id(peer_id, "error")
 		return
 	crates[crate_id]["held_by"] = peer_id
+	crates[crate_id]["held_slot"] = get_active_slot(peer_id)
 	_broadcast_crates()
 	_rpc_play_sfx.rpc_id(peer_id, "pickup")
 
@@ -3461,7 +3951,13 @@ func _rpc_req_place_held_structure(pos: Vector3, rot_y: float) -> void:
 	if str(ITEM_CATALOG[item_type]["category"]) != "placeable":
 		return
 	var snapped := Vector3(roundf(pos.x * 2.0) * 0.5, 0.0, roundf(pos.z * 2.0) * 0.5)
-	if not can_place_at(snapped):
+	if item_type == INDOOR_UNIT_TYPE:
+		# Wandgeräte behalten Höhe und Wandabstand aus get_wall_mount_spot().
+		snapped = pos
+	elif is_heat_pump_type(item_type):
+		# Außengeräte zeigen immer mit dem Lüfter zur Straße.
+		rot_y = 0.0
+	if not can_place_item_at(item_type, snapped, rot_y):
 		_rpc_play_sfx.rpc_id(peer_id, "error")
 		return
 
@@ -3471,8 +3967,8 @@ func _rpc_req_place_held_structure(pos: Vector3, rot_y: float) -> void:
 		racks[rid] = _make_rack_data(rid, item_type, snapped, rot_y)
 		_recalculate_networks_and_metrics()
 		_broadcast_racks()
-		post_event_f("%s hat %s (%s) aufgestellt.", [NetworkManager.get_player_name(peer_id), rid.to_upper(), ITEM_CATALOG[item_type]["name"]], "info")
-	elif item_type == "cooler" or item_type == "chiller":
+		post_event_f("%s hat %s (%s) aufgestellt.", [NetworkManager.get_player_name(peer_id), get_rack_display_name(rid), ITEM_CATALOG[item_type]["name"]], "info")
+	elif is_heat_pump_type(item_type) or item_type == INDOOR_UNIT_TYPE:
 		var cid := _alloc_id("cooler")
 		coolers[cid] = {
 			"id": cid,
@@ -3483,7 +3979,10 @@ func _rpc_req_place_held_structure(pos: Vector3, rot_y: float) -> void:
 		}
 		_recalculate_networks_and_metrics()
 		_broadcast_coolers()
-		post_event_f("%s hat %s aufgestellt (Stromkabel anschließen!).", [NetworkManager.get_player_name(peer_id), ITEM_CATALOG[item_type]["name"]], "info")
+		if item_type == INDOOR_UNIT_TYPE:
+			post_event_f("%s hat ein %s an die Wand gehängt (läuft, sobald ein Außengerät Strom hat).", [NetworkManager.get_player_name(peer_id), ITEM_CATALOG[item_type]["name"]], "info")
+		else:
+			post_event_f("%s hat %s auf den Rasen gestellt (Stromkabel seitlich anschließen!).", [NetworkManager.get_player_name(peer_id), ITEM_CATALOG[item_type]["name"]], "info")
 	elif item_type == "ups":
 		var uid := _alloc_id("ups")
 		ups_units[uid] = {
@@ -3525,7 +4024,7 @@ func _rpc_req_relocate_rack(rack_id: String, pos: Vector3, rot_y: float) -> void
 	_broadcast_ups()
 	_broadcast_sim_tick()
 	_rpc_play_sfx.rpc("place")
-	post_event_f("%s hat %s umgesetzt (Kabel neu anschließen!).", [NetworkManager.get_player_name(peer_id), rack_id.to_upper()], "info")
+	post_event_f("%s hat %s umgesetzt (Kabel neu anschließen!).", [NetworkManager.get_player_name(peer_id), get_rack_display_name(rack_id)], "info")
 
 
 @rpc("any_peer", "call_local", "reliable")
@@ -3541,6 +4040,7 @@ func _rpc_req_sell_rack(rack_id: String) -> void:
 	if not active_call.is_empty() and str(active_call.get("rack_id", "")) == rack_id:
 		active_call.clear()
 		_broadcast_call()
+	var sold_name := get_rack_display_name(rack_id)
 	racks.erase(rack_id)
 	money += float(refund)
 	_recalculate_networks_and_metrics()
@@ -3551,7 +4051,7 @@ func _rpc_req_sell_rack(rack_id: String) -> void:
 	_broadcast_ups()
 	_broadcast_sim_tick()
 	_rpc_play_sfx.rpc("sell")
-	post_event_f("%s verkaufte %s für +$%d.", [NetworkManager.get_player_name(peer_id), rack_id.to_upper(), refund], "good")
+	post_event_f("%s verkaufte %s für +$%d.", [NetworkManager.get_player_name(peer_id), sold_name, refund], "good")
 
 
 @rpc("any_peer", "call_local", "reliable")
@@ -3578,7 +4078,7 @@ func _rpc_req_pack_device(kind: String, entity_id: String) -> void:
 		return
 
 	var cid := _alloc_id("crate")
-	crates[cid] = {"id": cid, "item_type": item_type, "pos": Vector3.ZERO, "held_by": peer_id}
+	crates[cid] = {"id": cid, "item_type": item_type, "pos": Vector3.ZERO, "held_by": peer_id, "held_slot": get_active_slot(peer_id)}
 	_recalculate_networks_and_metrics()
 	_broadcast_cables()
 	_broadcast_crates()
@@ -3651,7 +4151,7 @@ func _rpc_req_install_module(rack_id: String, slot_idx: int) -> void:
 	post_event_f("%s baute %s in %s (Slot %d) ein.", [
 		NetworkManager.get_player_name(peer_id),
 		ITEM_CATALOG[item_type]["name"],
-		rack_id.to_upper(),
+		get_rack_display_name(rack_id),
 		slot_idx + 1,
 	], "good")
 
@@ -3674,7 +4174,7 @@ func _rpc_req_remove_module(rack_id: String, slot_idx: int) -> void:
 
 	slots[slot_idx] = _make_empty_slot()
 	var cid := _alloc_id("crate")
-	crates[cid] = {"id": cid, "item_type": item_type, "pos": Vector3.ZERO, "held_by": peer_id}
+	crates[cid] = {"id": cid, "item_type": item_type, "pos": Vector3.ZERO, "held_by": peer_id, "held_slot": get_active_slot(peer_id)}
 	_recalculate_networks_and_metrics()
 	_broadcast_racks()
 	_broadcast_crates()
@@ -3706,7 +4206,7 @@ func _rpc_req_sell_slot_module(rack_id: String, slot_idx: int) -> void:
 	_broadcast_sim_tick()
 	_rpc_play_sfx.rpc("sell")
 	post_event_f("%s verkaufte Modul aus %s Slot %d für +$%d.", [
-		NetworkManager.get_player_name(peer_id), rack_id.to_upper(), slot_idx + 1, refund
+		NetworkManager.get_player_name(peer_id), get_rack_display_name(rack_id), slot_idx + 1, refund
 	], "good")
 
 
@@ -3775,7 +4275,7 @@ func _rpc_req_install_component(rack_id: String, slot_idx: int, category: String
 	_broadcast_sim_tick()
 	_rpc_play_sfx.rpc("upgrade")
 	post_event_f("%s baute %s aus dem Lager in %s Slot %d ein!", [
-		NetworkManager.get_player_name(peer_id), str(new_part["name"]), rack_id.to_upper(), slot_idx + 1
+		NetworkManager.get_player_name(peer_id), str(new_part["name"]), get_rack_display_name(rack_id), slot_idx + 1
 	], "good")
 
 
@@ -3798,7 +4298,7 @@ func _rpc_req_buy_install_component(rack_id: String, slot_idx: int, category: St
 	if new_part.is_empty():
 		return
 	var cost := float(new_part.get("cost", 0))
-	if cost <= 0.0 or money < cost:
+	if cost <= 0.0 or money < cost or not is_part_unlocked(new_part):
 		_rpc_play_sfx.rpc_id(peer_id, "error")
 		return
 	var comps := HardwareCatalog.normalize_components(slot.get("components", {}), item_type)
@@ -3828,7 +4328,7 @@ func _rpc_req_buy_install_module(rack_id: String, slot_idx: int, item_type: Stri
 		_rpc_play_sfx.rpc_id(peer_id, "error")
 		return
 	var cost := float(ITEM_CATALOG[item_type]["price"])
-	if money < cost:
+	if money < cost or not is_item_unlocked(item_type):
 		_rpc_play_sfx.rpc_id(peer_id, "error")
 		return
 
@@ -3848,7 +4348,7 @@ func _rpc_req_buy_install_module(rack_id: String, slot_idx: int, item_type: Stri
 	post_event_f("%s kaufte %s und baute es in %s (Slot %d) ein.", [
 		NetworkManager.get_player_name(peer_id),
 		ITEM_CATALOG[item_type]["name"],
-		rack_id.to_upper(),
+		get_rack_display_name(rack_id),
 		slot_idx + 1,
 	], "good")
 
@@ -3867,7 +4367,7 @@ func _rpc_req_checkout_cart(entries: Array) -> void:
 		var qty := clampi(int(e.get("qty", 1)), 1, 20)
 		if kind == "item":
 			var itype := str(e.get("id", ""))
-			if not ITEM_CATALOG.has(itype):
+			if not ITEM_CATALOG.has(itype) or not is_item_unlocked(itype):
 				continue
 			total_cost += float(ITEM_CATALOG[itype]["price"]) * float(qty)
 			for _q in range(qty):
@@ -3876,11 +4376,27 @@ func _rpc_req_checkout_cart(entries: Array) -> void:
 			var cat := str(e.get("cat", ""))
 			var pid := str(e.get("id", ""))
 			var pd := HardwareCatalog.get_part(cat, pid)
-			if pd.is_empty() or int(pd.get("cost", 0)) <= 0:
+			if pd.is_empty() or int(pd.get("cost", 0)) <= 0 or not is_part_unlocked(pd):
 				continue
 			total_cost += float(pd["cost"]) * float(qty)
 			for _q in range(qty):
 				queue_items.append("part:" + pid)
+		elif kind == "acc":
+			# Zubehör (Sicherung, Steckleiste, Netzwerk-Verteiler) kommt per Sprinter.
+			var aid := str(e.get("id", ""))
+			var aprice := _accessory_price(aid)
+			if aprice <= 0:
+				continue
+			var room := _accessory_order_room(aid)
+			for qi_prev in queue_items:
+				if str(qi_prev) == "acc:" + aid:
+					room -= 1
+			qty = mini(qty, room)
+			if qty <= 0:
+				continue
+			total_cost += float(aprice) * float(qty)
+			for _q in range(qty):
+				queue_items.append("acc:" + aid)
 
 	if queue_items.is_empty() or money < total_cost:
 		_rpc_play_sfx.rpc_id(peer_id, "error")
@@ -3891,10 +4407,16 @@ func _rpc_req_checkout_cart(entries: Array) -> void:
 		checklist_ordered_anything = true
 		_broadcast_checklist()
 	for qi in queue_items:
-		if van_phase == "arriving":
-			van_cargo.append(qi)
+		var qs := str(qi)
+		if van_phase != "arriving":
+			pending_delivery_items.append(qs)
+		elif qs.begins_with("part:") or qs.begins_with("acc:"):
+			# Bauteile und Zubehör gehören ins Sammelpaket, nicht als eigene Kiste in den Laderaum.
+			_van_parcel_parts.append(qs.substr(5) if qs.begins_with("part:") else qs)
+			if not van_cargo.has(VAN_PARCEL_ITEM):
+				van_cargo.push_front(VAN_PARCEL_ITEM)
 		else:
-			pending_delivery_items.append(qi)
+			van_cargo.append(qs)
 
 	_broadcast_van_state()
 	_broadcast_sim_tick()
@@ -3928,6 +4450,50 @@ func _rpc_req_sell_inventory_part(part_id: String) -> void:
 	], "good")
 
 
+## Höchstlänge eines selbst vergebenen Rack-Namens.
+const RACK_NAME_MAX_LEN := 24
+
+
+## Anzeigename eines Racks: eigener Name oder „Rack N“.
+## Die interne ID (z. B. rack_2) wird nur in Debug-Builds angehängt.
+func get_rack_display_name(rack_id: String) -> String:
+	var shown := ""
+	if racks.has(rack_id):
+		shown = str((racks[rack_id] as Dictionary).get("custom_name", ""))
+	if shown.is_empty():
+		var num := rack_id.get_slice("_", rack_id.get_slice_count("_") - 1)
+		shown = ("Rack %s" % num) if num.is_valid_int() else rack_id
+	if OS.is_debug_build():
+		shown += " [%s]" % rack_id
+	return shown
+
+
+## Entfernt Steuerzeichen und kürzt auf RACK_NAME_MAX_LEN.
+func _sanitize_rack_name(raw: String) -> String:
+	var out := ""
+	for ch in raw.strip_edges():
+		if ch.unicode_at(0) >= 32:
+			out += ch
+	return out.strip_edges().left(RACK_NAME_MAX_LEN)
+
+
+@rpc("any_peer", "call_local", "reliable")
+func _rpc_req_rename_rack(rack_id: String, new_name: String) -> void:
+	if not multiplayer.is_server():
+		return
+	if not racks.has(rack_id):
+		return
+	var peer_id := _get_sender_id()
+	var r: Dictionary = racks[rack_id]
+	var clean := _sanitize_rack_name(new_name.left(RACK_NAME_MAX_LEN * 4))
+	if clean == str(r.get("custom_name", "")):
+		return
+	var old_name := get_rack_display_name(rack_id)
+	r["custom_name"] = clean
+	_broadcast_racks()
+	post_event_f("%s hat %s in %s umbenannt.", [NetworkManager.get_player_name(peer_id), old_name, get_rack_display_name(rack_id)], "info")
+
+
 @rpc("any_peer", "call_local", "reliable")
 func _rpc_req_set_rack_rental(rack_id: String, rental_type: String) -> void:
 	if not multiplayer.is_server():
@@ -3945,18 +4511,18 @@ func _rpc_req_set_rack_rental(rack_id: String, rental_type: String) -> void:
 		if services.is_empty():
 			return
 		services.clear()
-		post_event_f("%s beendete alle Vermietungen von %s.", [pname, rack_id.to_upper()], "info")
+		post_event_f("%s beendete alle Vermietungen von %s.", [pname, get_rack_display_name(rack_id)], "info")
 	else:
 		var prof: Dictionary = HardwareCatalog.RENTAL_PROFILES[rental_type]
 		var idx := _find_service(services, rental_type)
 		if idx >= 0:
 			var gone: Dictionary = services[idx]
 			services.remove_at(idx)
-			post_event_f("%s beendete %s (%s) auf %s.", [pname, str(prof["short"]), str(gone.get("customer", "")), rack_id.to_upper()], "info")
+			post_event_f("%s beendete %s (%s) auf %s.", [pname, str(prof["short"]), str(gone.get("customer", "")), get_rack_display_name(rack_id)], "info")
 		else:
 			if services.size() >= MAX_SERVICES_PER_RACK:
 				_rpc_play_sfx.rpc_id(peer_id, "error")
-				post_event_f("%s hat schon %d Dienste. Beende erst einen, bevor du einen neuen startest.", [rack_id.to_upper(), MAX_SERVICES_PER_RACK], "warn")
+				post_event_f("%s hat schon %d Dienste. Beende erst einen, bevor du einen neuen startest.", [get_rack_display_name(rack_id), MAX_SERVICES_PER_RACK], "warn")
 				return
 			var cname := HardwareCatalog.pick_customer_name(rental_type, _next_entity_num + racks.size() + day_number + services.size())
 			var start_users := _start_users_for(rental_type)
@@ -3967,7 +4533,7 @@ func _rpc_req_set_rack_rental(rack_id: String, rental_type: String) -> void:
 			else:
 				r["grace_timer"] = maxf(float(r.get("grace_timer", 0.0)), 10.0)
 			post_event_f("🤝 %s vermietet %s als %s an %s (%d Start-User, Ruf: %s)!", [
-				pname, rack_id.to_upper(), str(prof["short"]), cname, int(start_users), get_reputation_label()
+				pname, get_rack_display_name(rack_id), str(prof["short"]), cname, int(start_users), get_reputation_label()
 			], "good")
 
 	_sync_rack_rental_fields(r)
@@ -4015,7 +4581,7 @@ func _rpc_req_reply_ticket(ticket_id: String, action: String) -> void:
 		"resolve":
 			if not is_ticket_issue_fixed(t):
 				_rpc_play_sfx.rpc_id(peer_id, "error")
-				post_event_f("Problem bei %s besteht noch! Erst Hardware/Kabel/Router beheben.", [rid.to_upper()], "warn")
+				post_event_f("Problem bei %s besteht noch! Erst Hardware/Kabel/Router beheben.", [get_rack_display_name(rid)], "warn")
 				return
 			var cname := str(t.get("customer", "Kunde"))
 			support_tickets.erase(ticket_id)
@@ -4078,11 +4644,11 @@ func _rpc_req_resolve_call(choice: String) -> void:
 
 
 @rpc("any_peer", "call_local", "reliable")
-func _rpc_req_connect_cable(cable_type: String, from_id: String, to_id: String) -> void:
+func _rpc_req_connect_cable(cable_type: String, from_id: String, to_id: String, from_slot: int, to_slot: int) -> void:
 	if not multiplayer.is_server():
 		return
 	var peer_id := _get_sender_id()
-	if cable_type != "power" and cable_type != "network":
+	if cable_type != "power" and cable_type != "network" and cable_type != "cluster":
 		return
 	if from_id == to_id:
 		_rpc_play_sfx.rpc_id(peer_id, "error")
@@ -4102,20 +4668,25 @@ func _rpc_req_connect_cable(cable_type: String, from_id: String, to_id: String) 
 
 	if count_cables_on(cable_type, from_id) >= get_max_ports(cable_type, from_id):
 		post_event_f("Kein freier %s-Port an %s (Rack-Switch oder Upgrade nötig).", [
-			"Strom" if cable_type == "power" else "Netzwerk", from_id.to_upper()
+			_cable_type_label(cable_type), from_id.to_upper()
 		], "warn")
 		_rpc_play_sfx.rpc_id(peer_id, "error")
 		return
 
 	if count_cables_on(cable_type, to_id) >= get_max_ports(cable_type, to_id):
 		post_event_f("Kein freier %s-Port an %s.", [
-			"Strom" if cable_type == "power" else "Netzwerk", to_id.to_upper()
+			_cable_type_label(cable_type), to_id.to_upper()
 		], "warn")
 		_rpc_play_sfx.rpc_id(peer_id, "error")
 		return
 
+	var use_from_slot := pick_free_slot(cable_type, from_id, from_slot)
+	var use_to_slot := pick_free_slot(cable_type, to_id, to_slot)
 	var cab_id := _alloc_id("cable")
-	cables[cab_id] = {"id": cab_id, "cable_type": cable_type, "from_id": from_id, "to_id": to_id}
+	cables[cab_id] = {
+		"id": cab_id, "cable_type": cable_type, "from_id": from_id, "to_id": to_id,
+		"from_slot": use_from_slot, "to_slot": use_to_slot,
+	}
 	_recalculate_networks_and_metrics()
 	_broadcast_cables()
 	_broadcast_racks()
@@ -4123,17 +4694,124 @@ func _rpc_req_connect_cable(cable_type: String, from_id: String, to_id: String) 
 	_broadcast_ups()
 	_broadcast_sim_tick()
 	_rpc_play_sfx.rpc("cable")
-	var label := "Stromkabel" if cable_type == "power" else "Netzwerkkabel"
+	var label := "%skabel" % _cable_type_label(cable_type)
 	post_event_f("%s verband %s: %s ↔ %s", [NetworkManager.get_player_name(peer_id), label, from_id.to_upper(), to_id.to_upper()], "info")
 
 
+## Verleihende Racks behalten diesen Anteil ihrer Hardware als Reserve für die eigenen Mieter.
+const CLUSTER_LENDER_RESERVE := 0.85
+## Ein leihendes Rack holt sich so viel, dass seine Auslastung unter diesem Wert bleibt.
+const CLUSTER_BORROW_TARGET := 0.85
+const CLUSTER_RESOURCES: Array[String] = ["ram_gb", "cpu_score", "gpu_score", "storage_tb"]
+
+
+## Racks, die über ein Cluster-Kabel direkt mit rack_id verbunden sind.
+func _cluster_neighbors(rack_id: String) -> Array[String]:
+	var out: Array[String] = []
+	for cid in cables.keys():
+		var c: Dictionary = cables[cid]
+		if str(c.get("cable_type", "")) != "cluster":
+			continue
+		var a := str(c.get("from_id", ""))
+		var b := str(c.get("to_id", ""))
+		if a == rack_id and racks.has(b):
+			out.append(b)
+		elif b == rack_id and racks.has(a):
+			out.append(a)
+	return out
+
+
+## Freie Hardware je Cluster-Rack aus der Auslastung des letzten Ticks.
+## Racks ohne Strom, ohne laufende Server, mit Brand oder überlasteter PSU verleihen nichts,
+## ebenso Racks, die selbst gerade leihen.
+func _compute_cluster_spare() -> Dictionary:
+	var spare: Dictionary = {}
+	for rid in racks.keys():
+		var rack_id := str(rid)
+		if count_cables_on("cluster", rack_id) == 0:
+			continue
+		var r: Dictionary = racks[rid]
+		if not bool(r.get("powered", false)) or _rack_has_fire(r):
+			continue
+		var hw := get_rack_hardware_summary(rack_id)
+		if int(hw["active_servers"]) <= 0 or bool(hw["psu_overloaded"]):
+			continue
+		var m: Dictionary = r["metrics"] if r.get("metrics") is Dictionary else {}
+		var lent_last: Variant = m.get("cluster_borrowed", {})
+		if lent_last is Dictionary and not (lent_last as Dictionary).is_empty():
+			continue
+		var has_tenants := not _get_rack_services(r).is_empty()
+		var used_frac := {
+			"ram_gb": float(m.get("ram_pct", 0.0)) / 100.0,
+			"cpu_score": float(m.get("cpu_pct", 0.0)) / 100.0,
+			"gpu_score": float(m.get("gpu_pct", 0.0)) / 100.0,
+			"storage_tb": float(m.get("storage_pct", 0.0)) / 100.0,
+		}
+		var free: Dictionary = {}
+		for key in CLUSTER_RESOURCES:
+			var total := float(hw[key])
+			var used := total * float(used_frac[key]) if has_tenants else 0.0
+			free[key] = maxf(0.0, total * CLUSTER_LENDER_RESERVE - used)
+		spare[rack_id] = free
+	return spare
+
+
+## Ergänzt hw um geliehene Kapazität der Nachbar-Racks und verbraucht sie in spare.
+## Gibt die geliehenen Mengen je Ressource zurück (leer, wenn nichts geliehen wurde).
+func _borrow_cluster_capacity(rack_id: String, hw: Dictionary, users: int, prof: Dictionary, spare: Dictionary) -> Dictionary:
+	var borrowed: Dictionary = {}
+	var neighbors := _cluster_neighbors(rack_id)
+	if neighbors.is_empty():
+		return borrowed
+	var needs := {
+		"ram_gb": float(users) * float(prof["ram_gb_per_user"]),
+		"cpu_score": float(users) * float(prof["cpu_per_user"]),
+		"gpu_score": float(users) * float(prof["gpu_per_user"]),
+		"storage_tb": float(users) * float(prof["storage_tb_per_user"]),
+	}
+	for key in CLUSTER_RESOURCES:
+		var want := float(needs[key]) / CLUSTER_BORROW_TARGET - float(hw[key])
+		if want <= 0.0:
+			continue
+		var got := 0.0
+		for nid in neighbors:
+			if not spare.has(nid):
+				continue
+			var ns: Dictionary = spare[nid]
+			var take := minf(want - got, float(ns.get(key, 0.0)))
+			if take <= 0.0:
+				continue
+			ns[key] = float(ns[key]) - take
+			got += take
+			if got >= want:
+				break
+		if got > 0.0:
+			hw[key] = float(hw[key]) + got
+			borrowed[key] = got
+	return borrowed
+
+
+func _cable_type_label(cable_type: String) -> String:
+	match cable_type:
+		"power":
+			return "Strom"
+		"cluster":
+			return "Cluster"
+		_:
+			return "Netzwerk"
+
+
 func _is_valid_cable_endpoint(cable_type: String, endpoint_id: String) -> bool:
+	# Cluster-Kabel verbinden nur Racks untereinander.
+	if cable_type == "cluster":
+		return racks.has(endpoint_id)
 	if cable_type == "power":
 		if endpoint_id == WALL_BREAKER_ID:
 			return true
 		if endpoint_id == HALL_C_BREAKER_ID and room_level >= 2:
 			return true
-		return racks.has(endpoint_id) or coolers.has(endpoint_id) or ups_units.has(endpoint_id)
+		# Das Goldis Innengerät hat keine Strombuchse.
+		return racks.has(endpoint_id) or (coolers.has(endpoint_id) and not is_indoor_unit(endpoint_id)) or ups_units.has(endpoint_id)
 	else:
 		if endpoint_id == WALL_ROUTER_ID:
 			return true
@@ -4164,11 +4842,84 @@ func _rpc_req_disconnect_cables_on(cable_type: String, endpoint_id: String) -> v
 	_rpc_play_sfx.rpc("cable_cut")
 
 
+## Zufällige Netzausfälle der Stadtwerke (nur Host). Der Hauptschalter fällt ab, die USV überbrückt,
+## und nach Ablauf kommt das Netz von selbst zurück.
+func _tick_grid_outage(dt: float) -> void:
+	if grid_outage_left > 0.0:
+		grid_outage_left = maxf(0.0, grid_outage_left - dt)
+		if grid_outage_left <= 0.0:
+			_end_grid_outage()
+		return
+	if day_number < GRID_OUTAGE_FIRST_DAY:
+		return
+	if _grid_outage_cooldown < 0.0:
+		_grid_outage_cooldown = _roll_grid_outage_cooldown()
+	_grid_outage_cooldown -= dt
+	if _grid_outage_cooldown <= 0.0:
+		_grid_outage_cooldown = _roll_grid_outage_cooldown()
+		_start_grid_outage(randf_range(GRID_OUTAGE_MIN_SEC, GRID_OUTAGE_MAX_SEC))
+
+
+func _roll_grid_outage_cooldown() -> float:
+	return randf_range(0.8, 2.2) * float(DAY_LENGTH_SECONDS)
+
+
+## Restdauer des Netzausfalls in Spielminuten (für HUD und Hinweise).
+func get_grid_outage_minutes() -> int:
+	if grid_outage_left <= 0.0:
+		return 0
+	return maxi(1, roundi(grid_outage_left / float(DAY_LENGTH_SECONDS) * 1440.0))
+
+
+func _broadcast_power_change() -> void:
+	_recalculate_networks_and_metrics()
+	_broadcast_racks()
+	_broadcast_coolers()
+	_broadcast_ups()
+	_broadcast_sim_tick()
+
+
+func _start_grid_outage(duration: float) -> void:
+	_grid_breaker_restore = breaker_on
+	grid_outage_left = duration
+	breaker_on = false
+	overload_timer = 0.0
+	_broadcast_power_change()
+	_rpc_play_sfx.rpc("power_down")
+	var minutes := get_grid_outage_minutes()
+	if ups_backup_active:
+		_rpc_play_sfx.rpc("ups_beep")
+		post_event_f("NETZAUSFALL! Die Stadtwerke melden eine Störung (ca. %d Min.). USV-Notstrom hat übernommen.", [minutes], "warn")
+	else:
+		post_event_f("NETZAUSFALL! Die Stadtwerke melden eine Störung (ca. %d Min.). Ohne USV steht alles still.", [minutes], "alert")
+
+
+func _end_grid_outage() -> void:
+	grid_outage_left = 0.0
+	var restore := _grid_breaker_restore and has_working_fuse()
+	_grid_breaker_restore = false
+	if restore:
+		breaker_on = true
+		overload_timer = 0.0
+	_broadcast_power_change()
+	if restore:
+		_rpc_play_sfx.rpc("breaker_on")
+		post_event("Netz wieder da: Die Stadtwerke haben die Störung behoben, der Strom läuft wieder.", "good")
+	else:
+		post_event("Netz wieder da. Der Hauptschalter ist aus und muss von Hand eingeschaltet werden.", "info")
+
+
 @rpc("any_peer", "call_local", "reliable")
 func _rpc_req_toggle_breaker() -> void:
 	if not multiplayer.is_server():
 		return
 	var peer_id := _get_sender_id()
+	if not breaker_on and grid_outage_left > 0.0:
+		# Wunsch merken: Nach dem Netzausfall schaltet der Hauptschalter wieder ein.
+		_grid_breaker_restore = true
+		_rpc_play_sfx.rpc_id(peer_id, "error")
+		post_event("Hauptschalter bleibt aus: Netzausfall der Stadtwerke. Der Strom kommt automatisch zurück.", "warn")
+		return
 	if not breaker_on and not has_working_fuse():
 		_rpc_play_sfx.rpc_id(peer_id, "error")
 		post_event("Hauptschalter lässt sich nicht einschalten: Im Sicherungskasten steckt keine intakte Sicherung.", "warn")
@@ -4195,6 +4946,8 @@ func _rpc_req_pickup_extinguisher() -> void:
 		_rpc_play_sfx.rpc_id(peer_id, "error")
 		return
 	extinguisher_held_by = peer_id
+	extinguisher_held_slot = get_active_slot(peer_id)
+	_rpc_sync_extinguisher_slot.rpc(extinguisher_held_slot)
 	_rpc_sync_extinguisher.rpc(extinguisher_held_by)
 	_rpc_play_sfx.rpc_id(peer_id, "pickup")
 
@@ -4204,11 +4957,38 @@ func _rpc_req_return_extinguisher() -> void:
 	if not multiplayer.is_server():
 		return
 	var peer_id := _get_sender_id()
-	if extinguisher_held_by != peer_id:
+	if not is_player_holding_extinguisher(peer_id):
 		return
 	extinguisher_held_by = 0
 	_rpc_sync_extinguisher.rpc(0)
 	_rpc_play_sfx.rpc_id(peer_id, "drop")
+
+
+func request_set_active_slot(slot: int) -> void:
+	# Lokal sofort setzen, damit Prüfungen direkt nach dem Tastendruck den neuen Slot sehen.
+	player_active_slot[multiplayer.get_unique_id()] = slot
+	_rpc_req_set_active_slot.rpc_id(1, slot)
+
+
+@rpc("any_peer", "call_local", "reliable")
+func _rpc_req_set_active_slot(slot: int) -> void:
+	if not multiplayer.is_server():
+		return
+	if slot < 1 or slot > SLOT_COUNT:
+		return
+	var peer_id := _get_sender_id()
+	player_active_slot[peer_id] = slot
+	_rpc_sync_active_slot.rpc(peer_id, slot)
+
+
+@rpc("authority", "call_local", "reliable")
+func _rpc_sync_active_slot(peer_id: int, slot: int) -> void:
+	player_active_slot[peer_id] = slot
+
+
+@rpc("authority", "call_local", "reliable")
+func _rpc_sync_extinguisher_slot(slot: int) -> void:
+	extinguisher_held_slot = slot
 
 
 @rpc("any_peer", "call_local", "reliable")
@@ -4216,7 +4996,7 @@ func _rpc_req_extinguish_slot(rack_id: String, slot_idx: int, amount: float) -> 
 	if not multiplayer.is_server():
 		return
 	var peer_id := _get_sender_id()
-	if extinguisher_held_by != peer_id or not racks.has(rack_id):
+	if not is_player_holding_extinguisher(peer_id) or not racks.has(rack_id):
 		return
 	var slots: Array = racks[rack_id]["slots"]
 	if slot_idx < 0 or slot_idx >= slots.size():
@@ -4228,9 +5008,11 @@ func _rpc_req_extinguish_slot(rack_id: String, slot_idx: int, amount: float) -> 
 	if float(slot["fire_level"]) <= 0.0:
 		slot["state"] = "crashed"
 		slot["repair_progress"] = 0.0
+		slot["faulty_part"] = ""
+		slot["diagnosed"] = false
 		racks[rack_id]["temp"] = minf(float(racks[rack_id]["temp"]), 55.0)
 		post_event_f("%s hat den Brand in %s Slot %d gelöscht! Jetzt reparieren [E].", [
-			NetworkManager.get_player_name(peer_id), rack_id.to_upper(), slot_idx + 1
+			NetworkManager.get_player_name(peer_id), get_rack_display_name(rack_id), slot_idx + 1
 		], "good")
 		_rpc_play_sfx.rpc("repair")
 	_broadcast_racks()
@@ -4249,14 +5031,19 @@ func _rpc_req_repair_slot(rack_id: String, slot_idx: int, amount: float) -> void
 	var slot: Dictionary = slots[slot_idx]
 	if str(slot["state"]) != "crashed":
 		return
+	# Erst das defekte Teil finden, dann reparieren.
+	if is_slot_awaiting_diagnosis(slot):
+		return
 	slot["repair_progress"] = minf(1.0, float(slot["repair_progress"]) + clampf(amount, 0.0, 1.0))
 	if float(slot["repair_progress"]) >= 1.0:
 		slot["state"] = "ok"
 		slot["repair_progress"] = 0.0
+		slot["faulty_part"] = ""
+		slot["diagnosed"] = false
 		_recalculate_networks_and_metrics()
 		_broadcast_sim_tick()
 		post_event_f("%s hat %s Slot %d repariert & neugestartet!", [
-			NetworkManager.get_player_name(peer_id), rack_id.to_upper(), slot_idx + 1
+			NetworkManager.get_player_name(peer_id), get_rack_display_name(rack_id), slot_idx + 1
 		], "good")
 		_rpc_play_sfx.rpc("repair")
 	_broadcast_racks()
@@ -4299,6 +5086,10 @@ func _rpc_req_upgrade_power() -> void:
 		_rpc_play_sfx.rpc_id(peer_id, "error")
 		post_event("Die Drehsicherung liegt schon im Lager. Setze sie am Sicherungskasten in F2 ein.", "warn")
 		return
+	if _power_fuse_on_way():
+		_rpc_play_sfx.rpc_id(peer_id, "error")
+		post_event("Die Drehsicherung ist schon bestellt und kommt mit dem Sprinter.", "warn")
+		return
 	if power_tier + 1 >= POWER_TIERS.size():
 		return
 	var next_tier: Dictionary = POWER_TIERS[power_tier + 1]
@@ -4307,11 +5098,18 @@ func _rpc_req_upgrade_power() -> void:
 		_rpc_play_sfx.rpc_id(peer_id, "error")
 		return
 	money -= cost
-	power_fuse_stock = 1
+	# Wie beim Warenkorb: Zubehör kommt ins Sammelpaket des Sprinters.
+	if van_phase != "arriving":
+		pending_delivery_items.append(POWER_FUSE_ACC)
+	else:
+		_van_parcel_parts.append(POWER_FUSE_ACC)
+		if not van_cargo.has(VAN_PARCEL_ITEM):
+			van_cargo.push_front(VAN_PARCEL_ITEM)
+	_broadcast_van_state()
 	_broadcast_fuses()
 	_broadcast_sim_tick()
 	_rpc_play_sfx.rpc("cash")
-	post_event_f("%s hat eine Drehsicherung für %s gekauft. Einsetzen: Sicherungskasten, Steckplatz F2.", [
+	post_event_f("%s hat eine Drehsicherung für %s bestellt. Sie kommt mit dem Sprinter im Sammelpaket.", [
 		NetworkManager.get_player_name(peer_id), str(next_tier["label"])
 	], "good")
 
@@ -4716,16 +5514,31 @@ func _blow_random_fuse() -> void:
 
 
 func _broadcast_fuses() -> void:
-	_rpc_sync_fuses.rpc(breaker_fuses, fuse_stock, power_fuse_stock)
+	_rpc_sync_fuses.rpc(breaker_fuses, fuse_stock, power_fuse_stock, _power_fuse_on_way())
 
 
 @rpc("authority", "call_local", "reliable")
-func _rpc_sync_fuses(fuses: Array, stock: int, power_stock: int) -> void:
+func _rpc_sync_fuses(fuses: Array, stock: int, power_stock: int, power_on_way: bool) -> void:
 	if not multiplayer.is_server():
 		breaker_fuses = _sanitize_fuses(fuses)
 		fuse_stock = maxi(0, stock)
 		power_fuse_stock = clampi(power_stock, 0, 1)
+		power_fuse_on_way_synced = power_on_way
 	fuses_changed.emit()
+
+
+## Server: sucht die Drehsicherung in allen Lieferwarteschlangen.
+func _power_fuse_on_way() -> bool:
+	return pending_delivery_items.has(POWER_FUSE_ACC) \
+		or van_cargo.has(POWER_FUSE_ACC) \
+		or _van_parcel_parts.has(POWER_FUSE_ACC)
+
+
+## Für die UI: Ist die Drehsicherung bestellt, aber noch nicht geliefert?
+func is_power_fuse_on_way() -> bool:
+	if multiplayer.is_server():
+		return _power_fuse_on_way()
+	return power_fuse_on_way_synced
 
 
 @rpc("any_peer", "call_local", "reliable")
@@ -4785,6 +5598,30 @@ func _rpc_sync_accessories(strips: int, hubs: int) -> void:
 	power_strips = clampi(strips, 0, POWER_STRIP_MAX)
 	net_hubs = clampi(hubs, 0, NET_HUB_MAX)
 	accessories_changed.emit()
+
+
+## Preis eines Zubehörteils aus dem Warenkorb (0 = unbekannte ID).
+func _accessory_price(aid: String) -> int:
+	match aid:
+		"fuse":
+			return FUSE_PRICE
+		"power_strip":
+			return POWER_STRIP_PRICE
+		"net_hub":
+			return NET_HUB_PRICE
+	return 0
+
+
+## Wie viele Stück noch bestellt werden dürfen. Lieferungen, die unterwegs sind, zählen mit.
+func _accessory_order_room(aid: String) -> int:
+	var key := "acc:" + aid
+	var on_way := pending_delivery_items.count(key) + van_cargo.count(key) + _van_parcel_parts.count(key)
+	match aid:
+		"power_strip":
+			return maxi(0, POWER_STRIP_MAX - power_strips - on_way)
+		"net_hub":
+			return maxi(0, NET_HUB_MAX - net_hubs - on_way)
+	return 20
 
 
 @rpc("any_peer", "call_local", "reliable")
@@ -4888,6 +5725,7 @@ func _broadcast_sim_tick() -> void:
 	var packet := {
 		"money": money,
 		"breaker_on": breaker_on,
+		"grid_outage_left": grid_outage_left,
 		"ups_backup_active": ups_backup_active,
 		"avg_ups_charge": avg_ups_charge,
 		"overload_timer": overload_timer,
@@ -4895,6 +5733,7 @@ func _broadcast_sim_tick() -> void:
 		"router_tier": router_tier,
 		"research_levels": research_levels.duplicate(),
 		"company_milestones_reached": company_milestones_reached,
+		"company_level": company_level,
 		"ai_platform_level": ai_platform_level,
 		"ddos_active": ddos_active,
 		"day_number": day_number,
@@ -4935,6 +5774,7 @@ func _rpc_sync_sim_tick(packet: Dictionary) -> void:
 		money = float(packet["money"])
 		breaker_on = bool(packet["breaker_on"])
 		ups_backup_active = bool(packet["ups_backup_active"])
+		grid_outage_left = float(packet.get("grid_outage_left", 0.0))
 		avg_ups_charge = float(packet["avg_ups_charge"])
 		overload_timer = float(packet["overload_timer"])
 		power_tier = int(packet["power_tier"])
@@ -4942,6 +5782,7 @@ func _rpc_sync_sim_tick(packet: Dictionary) -> void:
 		research_levels = _sanitize_research(packet.get("research_levels", {}))
 		ai_platform_level = int(packet["ai_platform_level"])
 		company_milestones_reached = int(packet.get("company_milestones_reached", company_milestones_reached))
+		company_level = int(packet.get("company_level", company_level))
 		ddos_active = bool(packet["ddos_active"])
 		day_number = int(packet["day_number"])
 		var host_time := float(packet["time_of_day"])

@@ -116,14 +116,46 @@ func _process(delta: float) -> void:
 		menu_camera.look_at(Vector3(-1.35, 1.25, -2.55), Vector3.UP)
 
 
+## Fokusverlust (Windows-Taste, Alt+Tab): Maus freigeben, damit man andere Fenster bedienen kann.
+## Ist die Maus im Spiel gefangen, geht das Pausemenü auf; offene Menüs zeigen die Maus ohnehin schon.
+func _notification(what: int) -> void:
+	if what != NOTIFICATION_APPLICATION_FOCUS_OUT and what != NOTIFICATION_WM_WINDOW_FOCUS_OUT:
+		return
+	_release_mouse_for_os()
+
+
+## Gibt die gefangene Maus an Windows zurück (Fokusverlust oder Windows-Taste).
+func _release_mouse_for_os() -> void:
+	if Input.mouse_mode != Input.MOUSE_MODE_CAPTURED:
+		return
+	if NetworkManager.is_in_session and not _is_paused and not _pc_entering and not terminal_ui.visible and not rack_inspector.visible:
+		_open_pause()
+	else:
+		Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
+
+
 func _input(event: InputEvent) -> void:
+	# Windows-Taste: Startmenü und andere Fenster sollen sofort bedienbar sein.
+	# Die Taste wird nicht als behandelt markiert, damit Windows sie weiter bekommt.
+	if event is InputEventKey and event.pressed and not event.echo and (event as InputEventKey).keycode == KEY_META:
+		_release_mouse_for_os()
+		return
+
 	if not NetworkManager.is_in_session:
 		return
 
 	if event is InputEventKey and event.pressed and not event.echo:
+		# Beim Umbenennen gehören alle Tasten dem Eingabefeld. [ESC] bricht nur die Eingabe ab.
+		if rack_inspector.visible and rack_inspector.is_typing():
+			if event.keycode == KEY_ESCAPE:
+				get_viewport().set_input_as_handled()
+				rack_inspector.cancel_typing()
+			return
 		if event.keycode == KEY_ESCAPE:
 			get_viewport().set_input_as_handled()
-			if rack_inspector.visible:
+			if rack_inspector.visible and rack_inspector.is_preview_fullscreen():
+				rack_inspector.set_preview_fullscreen(false)
+			elif rack_inspector.visible:
 				_close_rack_inspector()
 			elif _pc_entering:
 				_cancel_pc_enter()

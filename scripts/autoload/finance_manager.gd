@@ -4,7 +4,8 @@ extends Node
 ## Clients schicken nur Anfragen (einstellen, Kredit aufnehmen, Rechnung bezahlen ...).
 ##   - Mitarbeiter: Tageslohn. Support-Agenten beantworten Tickets, Buchhalter bezahlen Rechnungen.
 ##   - Bank: Kredite mit Zins, Laufzeit und täglicher Rate, Bonität und Kontoauszug.
-##   - Rechnungen: Strom (täglich), Garagenmiete, Internet und Versicherung (wöchentlich),
+##   - Rechnungen: Strom (täglich), Garagenmiete, Internet, Versicherung, Netzentgelt,
+##     Wartungsvertrag Klima & USV und Server-Lizenzen (wöchentlich),
 ##     jeweils mit Fälligkeit, Mahnstufen und am Ende Inkasso.
 
 signal finance_changed
@@ -27,6 +28,8 @@ const SCORE_MIN := 300
 const SCORE_MAX := 850
 const SCORE_START := 600
 const CREDIT_LIMIT_PER_POINT := 180
+## Jede Firmenstufe über 1 erhöht den Kreditrahmen um diesen Anteil.
+const CREDIT_LIMIT_LEVEL_BONUS := 0.25
 const SUPPORT_BASE_INTERVAL := 70.0
 const SUPPORT_SKILL_STEP := 10.0
 const SUPPORT_MIN_INTERVAL := 15.0
@@ -37,6 +40,11 @@ const INTERNET_BASE := 29.0
 const INTERNET_PER_MBPS := 0.12
 const INSURANCE_BASE := 60.0
 const INSURANCE_PER_RACK := 25.0
+const GRID_FEE_BASE := 35.0
+const GRID_FEE_PER_KW := 4.0
+const MAINTENANCE_PER_COOLER := 22.0
+const MAINTENANCE_PER_UPS := 18.0
+const LICENSE_PER_RACK := 15.0
 
 const ROLES := {
 	"support": {
@@ -56,12 +64,17 @@ const BILL_KINDS := {
 	"rent": {"vendor": "Immobilien Krämer KG", "title": "Garagenmiete", "icon": "building", "due_days": 4},
 	"internet": {"vendor": "NetLink Business", "title": "Internet-Anschluss", "icon": "net", "due_days": 5},
 	"insurance": {"vendor": "Hanse Gewerbeversicherung AG", "title": "Betriebsversicherung", "icon": "invoice", "due_days": 5},
+	"grid_fee": {"vendor": "Stadtwerke Netz GmbH", "title": "Netzentgelt", "icon": "power", "due_days": 5},
+	"maintenance": {"vendor": "KälteTec Service GmbH", "title": "Wartungsvertrag Klima & USV", "icon": "temp", "due_days": 6},
+	"license": {"vendor": "Nordlicht Software AG", "title": "Server-Lizenzen", "icon": "windows", "due_days": 5},
 }
 
 const LOAN_OFFERS := [
-	{"id": "mikro", "title": "Mikrokredit", "amount": 2500, "days": 5, "rate": 0.06, "min_score": 0},
-	{"id": "gruender", "title": "Gründerkredit", "amount": 10000, "days": 10, "rate": 0.10, "min_score": 560},
-	{"id": "invest", "title": "Investitionskredit", "amount": 40000, "days": 20, "rate": 0.15, "min_score": 680},
+	{"id": "mikro", "title": "Mikrokredit", "amount": 2500, "days": 5, "rate": 0.06, "min_score": 0, "min_level": 1},
+	{"id": "gruender", "title": "Gründerkredit", "amount": 10000, "days": 10, "rate": 0.10, "min_score": 560, "min_level": 2},
+	{"id": "invest", "title": "Investitionskredit", "amount": 40000, "days": 20, "rate": 0.15, "min_score": 680, "min_level": 3},
+	{"id": "wachstum", "title": "Wachstumskredit", "amount": 80000, "days": 25, "rate": 0.14, "min_score": 720, "min_level": 4},
+	{"id": "konzern", "title": "Konzernkredit", "amount": 120000, "days": 30, "rate": 0.12, "min_score": 780, "min_level": 5},
 ]
 
 const CANDIDATE_POOL := [
@@ -326,7 +339,13 @@ func get_daily_loan_payments() -> float:
 
 
 func get_credit_limit() -> int:
-	return maxi(0, (credit_score - 400) * CREDIT_LIMIT_PER_POINT)
+	var base := maxi(0, (credit_score - 400) * CREDIT_LIMIT_PER_POINT)
+	return int(float(base) * get_credit_level_factor())
+
+
+## Faktor auf den Kreditrahmen durch die Firmenstufe (Stufe 1 = 1.0).
+func get_credit_level_factor() -> float:
+	return 1.0 + CREDIT_LIMIT_LEVEL_BONUS * float(maxi(GameState.get_company_level() - 1, 0))
 
 
 func get_free_credit() -> float:
@@ -363,6 +382,10 @@ func get_offer_block_reason(offer: Dictionary) -> String:
 func _offer_block_parts(offer: Dictionary) -> Array:
 	if loans.size() >= MAX_ACTIVE_LOANS:
 		return ["Höchstens %d Kredite gleichzeitig.", [MAX_ACTIVE_LOANS]]
+	var min_level := int(offer.get("min_level", 1))
+	var level: int = GameState.get_company_level()
+	if level < min_level:
+		return ["Ab Firmenstufe %d verfügbar (aktuell %d).", [min_level, level]]
 	if credit_score < int(offer["min_score"]):
 		return ["Bonität ab %d nötig (aktuell %d).", [int(offer["min_score"]), credit_score]]
 	if float(get_offer_total(offer)) > get_free_credit():
@@ -710,6 +733,28 @@ func _issue_weekly_bills(day: int) -> void:
 		_detail("Inventar- und Elektronikversicherung"),
 		_detail("%d versicherte Racks à $%.0f", [rack_count, INSURANCE_PER_RACK]),
 	])
+	var kw := float(GameState.max_watts) / 1000.0
+	var grid_cost := roundf(GRID_FEE_BASE + kw * GRID_FEE_PER_KW)
+	_issue_bill("grid_fee", grid_cost, day, [
+		_detail("Abrechnungszeitraum: Tag %d bis %d", [day, last_day]),
+		_detail("Anschlussleistung: %.1f kW", [kw]),
+		_detail("Grundpreis $%.0f + $%.0f pro kW", [GRID_FEE_BASE, GRID_FEE_PER_KW]),
+	])
+	var cooler_count: int = GameState.coolers.size()
+	var ups_count: int = GameState.ups_units.size()
+	if cooler_count + ups_count > 0:
+		var maint_cost := MAINTENANCE_PER_COOLER * float(cooler_count) + MAINTENANCE_PER_UPS * float(ups_count)
+		_issue_bill("maintenance", maint_cost, day, [
+			_detail("Leistungszeitraum: Tag %d bis %d", [day, last_day]),
+			_detail("%d Klimageräte à $%.0f", [cooler_count, MAINTENANCE_PER_COOLER]),
+			_detail("%d USV-Anlagen à $%.0f", [ups_count, MAINTENANCE_PER_UPS]),
+		])
+	if rack_count > 0:
+		_issue_bill("license", LICENSE_PER_RACK * float(rack_count), day, [
+			_detail("Lizenzzeitraum: Tag %d bis %d", [day, last_day]),
+			_detail("Betriebssystem- und Management-Lizenzen"),
+			_detail("%d Racks à $%.0f", [rack_count, LICENSE_PER_RACK]),
+		])
 
 
 func _issue_bill(kind: String, amount: float, day: int, details: Array) -> void:
@@ -788,12 +833,12 @@ func _tick_employees(delta: float) -> void:
 		var interval := maxf(SUPPORT_MIN_INTERVAL, SUPPORT_BASE_INTERVAL - SUPPORT_SKILL_STEP * float(int(e["skill"])))
 		var acc := float(_work_accum.get(eid, 0.0)) + delta
 		if acc >= interval:
-			var tid := _find_unanswered_ticket()
-			if tid.is_empty():
+			var job := _find_support_job()
+			if job.is_empty():
 				acc = interval
 			else:
 				acc = 0.0
-				GameState.request_reply_ticket(tid, "reassure")
+				GameState.request_reply_ticket(str(job["id"]), str(job["action"]))
 				e["work_done"] = int(e["work_done"]) + 1
 		_work_accum[eid] = acc
 
@@ -803,12 +848,25 @@ func _tick_employees(delta: float) -> void:
 		_accountant_pay()
 
 
-func _find_unanswered_ticket() -> String:
+## Nächste Aufgabe für einen Support-Agenten als {id, action}, leer wenn nichts zu tun ist.
+## Zuerst werden Tickets mit bereits behobenem Problem geschlossen, danach das
+## unbeantwortete Ticket mit der kürzesten Restfrist beantwortet.
+func _find_support_job() -> Dictionary:
+	var best_id := ""
+	var best_remaining := INF
 	for tid in GameState.support_tickets.keys():
 		var t: Dictionary = GameState.support_tickets[tid]
-		if not bool(t.get("reassured", false)):
-			return str(tid)
-	return ""
+		if GameState.is_ticket_issue_fixed(t):
+			return {"id": str(tid), "action": "resolve"}
+		if bool(t.get("reassured", false)):
+			continue
+		var remaining := GameState.get_ticket_sla_remaining(t)
+		if remaining < best_remaining:
+			best_remaining = remaining
+			best_id = str(tid)
+	if best_id.is_empty():
+		return {}
+	return {"id": best_id, "action": "reassure"}
 
 
 func _accountant_pay() -> void:

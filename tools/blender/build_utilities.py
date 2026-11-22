@@ -1,4 +1,4 @@
-"""Baut Sicherungskasten, Sicherungen, Feuerloescher-Station und alle 5 Router-Stufen fuer DataCenter Tycoon.
+"""Baut Sicherungskasten, Sicherungen, Feuerloescher-Station, USV und alle 5 Router-Stufen fuer DataCenter Tycoon.
 
 Aufruf in Blender:
     p = r"<pfad>/build_utilities.py"
@@ -50,6 +50,8 @@ EXT_AT = (4.0, 0.0, 1.22)
 FUSE_AT = (3.53, -0.60, 0.0245)   # stehend auf dem Boden, Kontaktfuss unten
 ROUTER_X = (6.0, 7.1, 8.3, 9.5, 10.7)
 ROUTER_Z = 1.62
+UPS_X = 12.6
+UPS_DRAWERS_Y = (0.6975, 0.4625, 0.2275)   # Mitte der Batterieschubladen 1-3 (oben nach unten)
 
 # Name, Kameraposition, Ziel, Bildwinkel (Grad), Belichtung (Blendenstufen)
 SHOTS = (
@@ -59,6 +61,7 @@ SHOTS = (
     ("preview_routers", (8.35, -7.6, 2.5), (8.35, 0.0, 1.75), 45.0, 0.9),
     ("preview_router_dsl", (6.0, -1.6, 2.3), (6.0, 0.0, 2.0), 45.0, 0.8),
     ("preview_router_gateway", (8.3, -1.0, 1.75), (8.3, 0.0, 1.70), 40.0, 0.8),
+    ("preview_ups", (14.0, -3.2, 1.65), (12.6, 0.0, 0.70), 40.0, 0.6),
 )
 
 
@@ -291,6 +294,9 @@ def build_materials():
         "warn_yellow": mat("WarnYellow", (0.95, 0.78, 0.10), 0.50, 0.10),
         "test_yellow": mat("TestYellow", (0.95, 0.80, 0.16), 0.40),
         "socket_yellow": mat("SocketYellow", (0.84, 0.66, 0.14), 0.48, 0.08),
+        "hall_c_housing": mat("HallCHousing", (0.30, 0.32, 0.35), 0.42, 0.50),
+        "hall_c_socket": mat("HallCSocket", (0.08, 0.08, 0.09), 0.70, 0.0),
+        "hall_c_cover": mat("HallCCover", (0.52, 0.54, 0.57), 0.55, 0.30),
         "conduit": mat("Conduit", (0.45, 0.49, 0.54), 0.40, 0.65),
         "gland": mat("Gland", (0.20, 0.21, 0.23), 0.60),
         "brass": mat("Brass", (0.78, 0.62, 0.30), 0.35, 0.85),
@@ -336,6 +342,12 @@ def build_materials():
         "cab_face": mat("CabinetFace", (0.10, 0.11, 0.13), 0.45, 0.35),
         "router_led": mat("RouterLED", (0.20, 0.72, 0.36), 0.30, emission=(0.20, 0.72, 0.36), strength=1.2),
         "amber_led": mat("AmberLED", (1.0, 0.62, 0.10), 0.30, emission=(1.0, 0.62, 0.10), strength=1.0),
+        "ups_body": mat("UpsBody", (0.18, 0.19, 0.21), 0.40, 0.55),
+        "ups_face": mat("UpsFace", (0.09, 0.10, 0.11), 0.50, 0.30),
+        "ups_status": mat("UpsStatus", (0.22, 0.76, 0.38), 0.30, emission=(0.22, 0.76, 0.38), strength=1.0),
+        # Ein Material je Segment: das Spiel schaltet die Segmente der Ladeanzeige einzeln.
+        **{f"ups_bar{i}": mat(f"UpsBar{i}", (0.24, 0.78, 0.40), 0.30, emission=(0.24, 0.78, 0.40), strength=1.0)
+           for i in range(1, 6)},
     }
 
 
@@ -918,6 +930,97 @@ def build_router_cabinet(coll, M, is_100g):
 
 
 # ---------------------------------------------------------------------------
+# USV (Notstrom-Batterieschrank)
+# ---------------------------------------------------------------------------
+
+def build_ups(coll, M):
+    """USV-Batterieschrank UPS-1, Masse wie scripts/world/ups_prop.gd (Kollision 0.70 x 1.28 x 0.62).
+
+    Das Spiel faerbt DCT_U_UpsBar1..5 (Ladeanzeige) und DCT_U_UpsStatus (Status-LED) zur Laufzeit um.
+    Die Frontflaeche der CEE-Steckdose oben liegt bei (0, 1.30, 0.29); dort endet das Stromkabel.
+    """
+    n = "ups"
+    root = make_root(coll, n, (UPS_X, 0.0, 0.0), (0.0, 0.0, 0.0))
+    zf = 0.28   # Gehaeusefront
+    p = GPart(f"{n}_Body")
+
+    # Sockel mit Stellfuessen und Lueftungsschlitzen
+    p.gbox((0.0, 0.045, 0.0), (0.70, 0.07, 0.60), M["ups_face"])
+    for sx in (-0.30, 0.30):
+        for sz in (-0.25, 0.25):
+            p.gcyl((sx, 0.005, sz), 0.022, 0.022, 0.01, M["rubber"], segs=14)
+    for i in range(9):
+        p.gbox((-0.24 + 0.06 * i, 0.045, 0.3005), (0.04, 0.03, 0.002), M["hole"])
+
+    # Gehaeuse, Deckel, Kantenleisten, Seiten mit Warnstreifen und Lueftungsschlitzen
+    p.gbox((0.0, 0.65, 0.0), (0.66, 1.14, 0.56), M["ups_body"])
+    p.gbox((0.0, 1.235, 0.0), (0.68, 0.03, 0.58), M["ups_face"])
+    for sx in (-0.325, 0.325):
+        side = 1.0 if sx > 0.0 else -1.0
+        p.gbox((sx, 0.65, 0.275), (0.018, 1.14, 0.018), M["ups_face"])
+        p.gbox((sx + side * 0.006, 0.62, 0.22), (0.004, 0.96, 0.03), M["warn_yellow"])
+        for i in range(10):
+            p.gbox((sx + side * 0.006, 0.30 + 0.035 * i, -0.04), (0.004, 0.012, 0.30), M["hole"])
+
+    # Bedienfeld: LCD, Ladeanzeige als Batteriesymbol mit 5 Segmenten, Status-LED, Ein/Aus-Taster
+    p.gbox((0.0, 1.01, zf + 0.004), (0.60, 0.32, 0.008), M["ups_face"])
+    p.gbox((-0.14, 1.09, zf + 0.010), (0.26, 0.11, 0.004), M["dark"])
+    p.gbox((-0.14, 1.09, zf + 0.0125), (0.24, 0.09, 0.002), M["screen"])
+    p.gbox((-0.14, 0.96, zf + 0.008), (0.31, 0.05, 0.003), M["dark"])
+    p.gbox((0.021, 0.96, zf + 0.008), (0.012, 0.022, 0.003), M["dark"])
+    for i in range(5):
+        p.gbox((-0.26 + 0.06 * i, 0.96, zf + 0.0095), (0.05, 0.032, 0.003), M[f"ups_bar{i + 1}"])
+    p.gcyl((0.17, 1.10, zf + 0.009), 0.017, 0.017, 0.004, M["dark"], axis="Z", segs=16)
+    p.gcyl((0.17, 1.10, zf + 0.011), 0.011, 0.011, 0.006, M["ups_status"], axis="Z", segs=16)
+    p.gcyl((0.17, 0.965, zf + 0.009), 0.026, 0.026, 0.004, M["chrome"], axis="Z", segs=20)
+    p.gcyl((0.17, 0.965, zf + 0.012), 0.020, 0.020, 0.008, M["plastic_black"], axis="Z", segs=20)
+
+    # Drei Batterieschubladen mit Griff, Schrauben, Lueftungsschlitzen und Warnschild
+    for cy in UPS_DRAWERS_Y:
+        p.gbox((0.0, cy, zf + 0.005), (0.60, 0.215, 0.010), M["ups_face"])
+        for j in range(5):
+            p.gbox((-0.06, cy - 0.06 + 0.025 * j, zf + 0.0105), (0.36, 0.008, 0.002), M["hole"])
+        for sy in (-0.05, 0.05):
+            p.gbox((0.24, cy + sy, zf + 0.016), (0.014, 0.014, 0.012), M["chrome"])
+        p.gbox((0.24, cy, zf + 0.025), (0.018, 0.13, 0.008), M["chrome"])
+        for sx in (-0.285, 0.285):
+            for sy in (-0.085, 0.085):
+                p.gcyl((sx, cy + sy, zf + 0.012), 0.006, 0.006, 0.004, M["screw"], axis="Z", segs=12)
+        p.gbox((-0.20, cy + 0.075, zf + 0.0105), (0.07, 0.025, 0.001), M["warn_yellow"])
+
+    # CEE-Steckdose oben vorne (5 Kontakte) mit aufgeklapptem Deckel
+    p.gbox((0.0, 1.30, 0.20), (0.22, 0.10, 0.13), M["ups_face"])
+    p.gcyl((0.0, 1.30, 0.275), 0.040, 0.040, 0.03, M["socket_yellow"], axis="Z", segs=24)
+    p.gcyl((0.0, 1.30, 0.2905), 0.031, 0.031, 0.001, M["dark"], axis="Z", segs=24)
+    for a in range(5):
+        ang = math.radians(90.0 + 72.0 * a)
+        p.gcyl((0.018 * math.cos(ang), 1.30 + 0.018 * math.sin(ang), 0.2912), 0.0045, 0.0045, 0.0008,
+               M["hole"], axis="Z", segs=10)
+    p.gcyl((0.0, 1.343, 0.29), 0.006, 0.006, 0.07, M["socket_yellow"], axis="X", segs=12)
+    p.gbox((0.0, 1.368, 0.293), (0.08, 0.05, 0.006), M["socket_yellow"])
+
+    # Rueckseite: zwei Luefter mit Gitter, Kabelverschraubung
+    for fy in (0.95, 0.62):
+        p.gcyl((0.0, fy, -0.2805), 0.078, 0.078, 0.001, M["hole"], axis="Z", segs=24)
+        p.gtorus((0.0, fy, -0.282), 0.078, 0.088, M["chrome"], axis="Z", major=28, minor=8)
+        for j in range(5):
+            p.gbox((0.0, fy - 0.05 + 0.025 * j, -0.2835), (0.16, 0.004, 0.002), M["chrome"])
+    p.gcyl((0.20, 0.25, -0.29), 0.02, 0.02, 0.02, M["gland"], axis="Z", segs=16)
+    p.build(coll, root)
+
+    add_text(coll, root, f"{n}_Txt_Brand", "DCT POWERCELL 6000", (0.0, 1.195, zf + 0.0005), 0.024, M["text_light"])
+    add_text(coll, root, f"{n}_Txt_Lcd1", "UPS-1   6 kVA", (-0.14, 1.105, zf + 0.0136), 0.018, M["lcd_text"])
+    add_text(coll, root, f"{n}_Txt_Lcd2", "230 V  50 Hz", (-0.14, 1.075, zf + 0.0136), 0.018, M["lcd_text"])
+    add_text(coll, root, f"{n}_Txt_Charge", "LADUNG", (-0.14, 0.997, zf + 0.0085), 0.013, M["text_light"])
+    add_text(coll, root, f"{n}_Txt_Status", "STATUS", (0.17, 1.065, zf + 0.0085), 0.012, M["text_light"])
+    add_text(coll, root, f"{n}_Txt_Power", "EIN / AUS", (0.17, 0.925, zf + 0.0085), 0.012, M["text_light"])
+    for k, cy in enumerate(UPS_DRAWERS_Y):
+        add_text(coll, root, f"{n}_Txt_Batt{k + 1}", f"BATTERIE {k + 1}", (0.0, cy + 0.075, zf + 0.0105),
+                 0.016, M["text_light"])
+    return root
+
+
+# ---------------------------------------------------------------------------
 # Aufbau und Vorschau
 # ---------------------------------------------------------------------------
 
@@ -930,10 +1033,19 @@ def build_all():
     build_extinguisher(coll, M)
     build_router_conduit(coll, M)
     build_router_dsl(coll, M)
-    build_router_vdsl(coll, M)
-    build_router_gateway(coll, M)
-    build_router_cabinet(coll, M, False)
-    build_router_cabinet(coll, M, True)
+    # Stufen 1-4: detailliertere Modelle aus build_routers.py (PLAN.md Punkt 4)
+    import build_routers as rt  # noqa: E402
+    importlib.reload(rt)
+    rt.setup(globals())
+    rt.build_router_vdsl(coll, M)
+    rt.build_router_gateway(coll, M)
+    rt.build_router_cabinet(coll, M, False)
+    rt.build_router_cabinet(coll, M, True)
+    build_ups(coll, M)
+    # Halle-C-Unterverteilung, eigenes Modul (siehe build_hall_c.py)
+    import build_hall_c as hc  # noqa: E402
+    importlib.reload(hc)
+    hc.build_hall_c_subpanel(coll, M, GPart, make_root, add_text)
     return coll
 
 

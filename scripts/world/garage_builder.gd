@@ -1,5 +1,8 @@
 class_name GarageBuilder
 extends Node3D
+
+## Wird gesendet, nachdem das Router-Modell (und damit router_port_pos) neu aufgebaut wurde.
+signal router_visuals_rebuilt
 ## Constructs the PBR Modern Tech / Stylized Indie Garage, Hall B Expansion,
 ## Enterprise Hall C (with dedicated Power & Fiber Subpanel), Exterior Yard,
 ## Streetlamp, Trees, Dusk/Night Floodlight, and Dynamic Blackout/UPS Lighting.
@@ -15,7 +18,6 @@ var _ceiling_lights: Array[SpotLight3D] = []
 var _light_bar_mats: Array[StandardMaterial3D] = []
 var _reflection_probes: Array[ReflectionProbe] = []
 var _desk_glow_light: OmniLight3D
-var _ext_ac_fan: Node3D
 var _emergency_light: OmniLight3D
 var _exterior_lamp_light: OmniLight3D
 var _street_lamp_light: OmniLight3D
@@ -62,6 +64,8 @@ var _hall_c_socket_pos: Array[Vector3] = []
 var _hall_c_socket_covers: Array[MeshInstance3D] = []
 
 var _router_root: Node3D
+## Weltpositionen der LAN-Buchsen der aktuellen Router-Stufe (Reihenfolge = Buchsennummer).
+var _router_jack_pos: Array[Vector3] = []
 var _router_mesh_holder: Node3D
 var _router_visual_tier: int = -1
 var _router_led_mat: StandardMaterial3D
@@ -94,8 +98,6 @@ func _ready() -> void:
 
 func _process(delta: float) -> void:
 	_blink_time += delta
-	if _ext_ac_fan != null:
-		_ext_ac_fan.rotation.z += delta * 11.0
 	_update_dynamic_visuals()
 
 
@@ -271,6 +273,8 @@ func _update_dynamic_visuals() -> void:
 		var used_p := GameState.count_cables_on("power", GameState.WALL_BREAKER_ID)
 		var max_p := GameState.get_max_ports("power", GameState.WALL_BREAKER_ID)
 		var state_txt := tr("EIN") if GameState.breaker_on else (tr("USV-NOTSTROM!") if on_ups else tr("AUS (BLACKOUT!)"))
+		if GameState.is_active and GameState.grid_outage_left > 0.0:
+			state_txt = tr("NETZAUSFALL") + ((" / " + tr("USV")) if on_ups else "")
 		_breaker_label.text = tr("SICHERUNGSKASTEN\nStatus: %s\n%dW / %dW\nSteckdosen: %d / %d") % [
 			state_txt, GameState.total_watts, GameState.max_watts, used_p, max_p
 		]
@@ -397,21 +401,7 @@ func _build_architecture() -> void:
 		Color(0.88, 0.90, 0.94)
 	)
 
-	var wing_b_sign := Label3D.new()
-	wing_b_sign.text = "HALLE B — SERVERRAUM"
-	wing_b_sign.font_size = 42
-	wing_b_sign.pixel_size = 0.0056
-	wing_b_sign.position = Vector3(9.0, 2.95, -4.42)
-	wing_b_sign.modulate = Color(0.20, 0.22, 0.25)
-	add_child(wing_b_sign)
-
-	var wing_c_sign := Label3D.new()
-	wing_c_sign.text = "HALLE C — ENTERPRISE RECHENZENTRUM"
-	wing_c_sign.font_size = 44
-	wing_c_sign.pixel_size = 0.0056
-	wing_c_sign.position = Vector3(17.2, 2.98, -4.42)
-	wing_c_sign.modulate = Color(0.20, 0.22, 0.25)
-	add_child(wing_c_sign)
+	# Die Hallenschilder an der Wand (HALLE B / HALLE C) wurden entfernt.
 
 
 func _build_expansion_wall(wname: String, x_pos: float, sign_text: String, sign_col: Color) -> StaticBody3D:
@@ -715,7 +705,7 @@ func _build_exterior_environment() -> void:
 		BuildingPropFactory.build_realistic_tree(self, Vector3(tx, 0.0, trng.randf_range(30.0, 38.0)), trng.randf_range(1.2, 1.6))
 		tx += trng.randf_range(5.0, 8.0)
 
-	# Architectural Exterior Brick Cladding, Gutter, Spinning Exterior AC Condenser & Recycling Bin
+	# Architectural Exterior Brick Cladding, Gutter & Recycling Bin
 	var brick_mat := MatLib.get_mat("exterior_brick")
 	_add_box_visual(self, Vector3(-3.85, 1.9, 4.76), Vector3(3.35, 3.82, 0.08), brick_mat)
 	_add_box_visual(self, Vector3(11.85, 1.9, 4.76), Vector3(19.35, 3.82, 0.08), brick_mat)
@@ -723,73 +713,7 @@ func _build_exterior_environment() -> void:
 	# Aluminum Rain Gutter & Vertical Downspout
 	_add_box_visual(self, Vector3(8.0, 3.92, 4.88), Vector3(27.8, 0.11, 0.12), pole_mat)
 	_add_box_visual(self, Vector3(-5.35, 1.95, 4.86), Vector3(0.09, 3.9, 0.09), pole_mat)
-	# Außen-Klimagerät auf Wandkonsole: Gehäuse, rundes Lüftergitter, Lamellen, Kältemittelleitungen
-	var ac_body_mat := _mat(Color(0.86, 0.87, 0.85), 0.5, 0.12)
-	var ac_dark := _mat(Color(0.08, 0.09, 0.10), 0.8, 0.2)
-	var copper_mat := _mat(Color(0.72, 0.45, 0.28), 0.35, 0.85)
-	var insul_mat := _mat(Color(0.12, 0.12, 0.12), 0.9, 0.0)
-	var badge_mat := _mat(Color(0.16, 0.34, 0.62), 0.45, 0.1)
-	var blade_mat := _mat(Color(0.20, 0.22, 0.24), 0.55, 0.3)
-	var ac_c := Vector3(3.75, 0.62, 5.13)
-	var front_z := ac_c.z + 0.21
-	var fan_c := Vector3(ac_c.x - 0.13, ac_c.y, front_z)
-	var add_disc := func(par: Node3D, p: Vector3, r: float, h: float, m: Material) -> void:
-		var mi := MeshInstance3D.new()
-		var cm := CylinderMesh.new()
-		cm.top_radius = r
-		cm.bottom_radius = r
-		cm.height = h
-		cm.radial_segments = 32
-		mi.mesh = cm
-		mi.material_override = m
-		mi.rotation_degrees.x = 90.0
-		mi.position = p
-		par.add_child(mi)
-	for bxv in [-0.36, 0.36]:
-		var bxf := float(bxv)
-		_add_box_visual(self, Vector3(ac_c.x + bxf, 0.235, 5.07), Vector3(0.05, 0.05, 0.50), pole_mat)
-		_add_box_visual(self, Vector3(ac_c.x + bxf, 0.13, 4.835), Vector3(0.05, 0.26, 0.05), pole_mat)
-	_add_box_visual(self, ac_c, Vector3(0.95, 0.72, 0.42), ac_body_mat)
-	_add_box_visual(self, ac_c + Vector3(0.0, 0.375, 0.0), Vector3(0.98, 0.03, 0.45), ac_body_mat)
-	_add_box_visual(self, ac_c + Vector3(0.0, -0.37, 0.0), Vector3(0.97, 0.025, 0.44), ac_dark)
-	add_disc.call(self, fan_c + Vector3(0.0, 0.0, 0.006), 0.27, 0.012, ac_dark)
-	# Lamellen und Typenschild rechts neben dem Lüfter
-	_add_box_visual(self, Vector3(ac_c.x + 0.33, ac_c.y, front_z + 0.002), Vector3(0.22, 0.60, 0.004), ac_dark)
-	for li in range(8):
-		_add_box_visual(self, Vector3(ac_c.x + 0.33, ac_c.y - 0.26 + float(li) * 0.074, front_z + 0.008), Vector3(0.22, 0.018, 0.012), ac_body_mat)
-	_add_box_visual(self, Vector3(ac_c.x + 0.33, ac_c.y + 0.325, front_z + 0.004), Vector3(0.12, 0.022, 0.006), badge_mat)
-	# Drehender Lüfter mit drei angestellten Blättern
-	_ext_ac_fan = Node3D.new()
-	_ext_ac_fan.position = fan_c + Vector3(0.0, 0.0, 0.018)
-	add_child(_ext_ac_fan)
-	for bi in range(3):
-		var piv := Node3D.new()
-		piv.rotation.z = TAU * float(bi) / 3.0
-		_ext_ac_fan.add_child(piv)
-		var blade_tilt := Node3D.new()
-		blade_tilt.position = Vector3(0.12, 0.0, 0.0)
-		blade_tilt.rotation.x = 0.35
-		piv.add_child(blade_tilt)
-		_add_box_visual(blade_tilt, Vector3.ZERO, Vector3(0.20, 0.10, 0.006), blade_mat)
-	add_disc.call(_ext_ac_fan, Vector3.ZERO, 0.045, 0.03, blade_mat)
-	# Schutzgitter: Rand, konzentrische Ringe, Kreuzstreben
-	for rr in [0.285, 0.20, 0.12]:
-		var ring := MeshInstance3D.new()
-		var tm := TorusMesh.new()
-		tm.inner_radius = float(rr) - (0.02 if float(rr) > 0.28 else 0.008)
-		tm.outer_radius = float(rr)
-		tm.rings = 40
-		tm.ring_segments = 6
-		ring.mesh = tm
-		ring.material_override = pole_mat
-		ring.rotation_degrees.x = 90.0
-		ring.position = fan_c + Vector3(0.0, 0.0, 0.045)
-		add_child(ring)
-	_add_box_visual(self, fan_c + Vector3(0.0, 0.0, 0.045), Vector3(0.54, 0.012, 0.008), pole_mat)
-	_add_box_visual(self, fan_c + Vector3(0.0, 0.0, 0.045), Vector3(0.012, 0.54, 0.008), pole_mat)
-	# Kältemittelleitungen von der Geräterückseite in die Wand
-	add_disc.call(self, Vector3(ac_c.x + 0.30, 0.42, 4.865), 0.012, 0.13, copper_mat)
-	add_disc.call(self, Vector3(ac_c.x + 0.38, 0.50, 4.865), 0.02, 0.13, insul_mat)
+	# Das feste Außen-Klimagerät ist entfernt. Die Goldis-Wärmepumpe stellt der Spieler selbst auf den Rasen.
 	# Recycling Bin beside Garage Door
 	_add_box_visual(self, Vector3(-3.35, 0.46, 5.20), Vector3(0.56, 0.88, 0.56), _mat(Color(0.18, 0.34, 0.56), 0.55, 0.10))
 	_add_box_visual(self, Vector3(-3.35, 0.93, 5.20), Vector3(0.60, 0.08, 0.60), _mat(Color(0.14, 0.26, 0.44), 0.50, 0.10))
@@ -1184,7 +1108,8 @@ func _build_hall_c_subpanel() -> void:
 	_add_box_visual(n_root, Vector3.ZERO, Vector3(0.74, 0.44, 0.22), MatLib.make_brushed_metal(Color(0.20, 0.22, 0.25), 0.40, 0.55))
 	var c_mat := _mat(Color(0.22, 0.46, 0.72), 0.45, 0.25)
 	_add_box_visual(n_root, Vector3(0.0, -0.10, 0.13), Vector3(0.42, 0.09, 0.055), c_mat)
-	hall_c_router_port_pos = n_root.position + Vector3(0.0, -0.10, 0.18)
+	# Vorderkante der Buchsenleiste (Box bei z = 0.13, Tiefe 0.055)
+	hall_c_router_port_pos = n_root.position + Vector3(0.0, -0.10, 0.158)
 
 	var n_area := _make_interact_area(Vector3(0.84, 0.60, 0.42), {
 		"interact_type": "net_port",
@@ -1668,12 +1593,36 @@ func _rebuild_router_visuals(tier: int) -> void:
 	if _router_mesh_holder == null:
 		return
 	_router_visual_tier = tier
+	router_visuals_rebuilt.emit()
 	for c in _router_mesh_holder.get_children():
 		c.queue_free()
 
 	for pid in _panels.keys():
 		if str(pid).begins_with("router:"):
 			_panels.erase(pid)
+
+	# Kabelende auf eine echte RJ45-Buchse der aktuellen Stufe legen (Werte aus den Router-GLBs:
+	# Mitte des blauen Buchsenrahmens, z = Vorderkante der Buchsenöffnung).
+	const ROUTER_JACK_OFFSETS: Array[Vector3] = [
+		Vector3(-0.04, -0.08, 0.075),
+		Vector3(0.0, -0.062, 0.121),
+		Vector3(-0.27, -0.06, 0.141),
+		Vector3(-0.26, -0.095, 0.167),
+		Vector3(-0.26, -0.095, 0.167),
+	]
+	router_port_pos = _router_root.position + ROUTER_JACK_OFFSETS[clampi(tier, 0, ROUTER_JACK_OFFSETS.size() - 1)]
+
+	# Einzelne LAN-Buchsen je Stufe (Anzahl, erste Buchse und Abstand wie in den Router-Modellen)
+	const ROUTER_JACK_COUNTS: Array[int] = [2, 3, 5, 6, 6]
+	const ROUTER_JACK_FIRST_X: Array[float] = [-0.12, -0.14, -0.27, -0.26, -0.26]
+	const ROUTER_JACK_PITCH: Array[float] = [0.08, 0.14, 0.09, 0.104, 0.104]
+	var jt := clampi(tier, 0, ROUTER_JACK_COUNTS.size() - 1)
+	_router_jack_pos.clear()
+	for j in range(ROUTER_JACK_COUNTS[jt]):
+		_router_jack_pos.append(_router_root.position + Vector3(
+			ROUTER_JACK_FIRST_X[jt] + ROUTER_JACK_PITCH[jt] * float(j),
+			ROUTER_JACK_OFFSETS[jt].y,
+			ROUTER_JACK_OFFSETS[jt].z))
 
 	var h := _router_mesh_holder
 	var model_ids: Array[String] = ["router_t0_dsl", "router_t1_vdsl", "router_t2_gateway", "router_t3_core10g", "router_t4_core100g"]
@@ -1971,24 +1920,7 @@ func _build_terminal_desk() -> void:
 		chair.rotation_degrees.y = -18.0
 		root.add_child(chair)
 
-	# Schild über dem PC: hohe Glyphen-Auflösung bei kleiner Pixelgröße (scharf statt verwaschen),
-	# helle Schrift auf dunkler Metallplatte statt frei schwebender dunkler Schrift.
-	var lbl := Label3D.new()
-	lbl.text = "WINDOWS SERVER-PC [E]\nShop • Support • Upgrades"
-	lbl.font_size = 56
-	lbl.pixel_size = 0.0011
-	lbl.outline_size = 4
-	lbl.outline_modulate = Color(0.02, 0.02, 0.03)
-	lbl.modulate = Color(0.90, 0.93, 0.96)
-	lbl.position = root.position + Vector3(-0.08, 1.76, -0.14)
-	add_child(lbl)
-
-	var sign_font: Font = lbl.font if lbl.font != null else ThemeDB.fallback_font
-	var text_px := sign_font.get_multiline_string_size(lbl.text, HORIZONTAL_ALIGNMENT_CENTER, -1, lbl.font_size)
-	var plate_size := Vector3(text_px.x * lbl.pixel_size + 0.08, text_px.y * lbl.pixel_size + 0.05, 0.012)
-	var plate_mat := MatLib.make_brushed_metal(Color(0.09, 0.10, 0.12), 0.40, 0.55)
-	_add_box_visual(self, lbl.position + Vector3(0.0, 0.0, -0.012), plate_size, plate_mat)
-
+	# Das Schild über dem PC wurde entfernt; der Hinweis kommt beim Anschauen über den Interaktions-Prompt.
 	var area := _make_interact_area(Vector3(1.85, 1.25, 1.05), {
 		"interact_type": "terminal",
 		"entity_id": "terminal",
@@ -2157,6 +2089,16 @@ func get_hall_c_socket_pos(idx: int) -> Vector3:
 	if _hall_c_socket_pos.is_empty():
 		return hall_c_breaker_port_pos
 	return _hall_c_socket_pos[clampi(idx, 0, _hall_c_socket_pos.size() - 1)]
+
+
+## Alle Buchsen am Kasten in Halle C (Weltpositionen, Reihenfolge = Buchsennummer).
+func get_hall_c_socket_positions() -> Array[Vector3]:
+	return _hall_c_socket_pos.duplicate()
+
+
+## Alle LAN-Buchsen am Wand-Router der aktuellen Stufe.
+func get_router_jack_positions() -> Array[Vector3]:
+	return _router_jack_pos.duplicate()
 
 
 func _add_small_label(parent: Node3D, pos: Vector3, text: String, font_size: int, px_size: float, col: Color) -> Label3D:

@@ -8,13 +8,15 @@ const MIX_RATE := 44100
 # Erzeugte Klänge werden hier gespeichert, damit nur der erste Start rechnen muss (~870 ms gemessen).
 const SFX_CACHE_DIR := "user://sfx_cache"
 # Erhöhen, wenn sich ein Generator oder seine Parameter ändern, sonst bleiben die alten Klänge im Cache.
-const SFX_CACHE_VERSION := 1
+const SFX_CACHE_VERSION := 2
 
 var _sounds: Dictionary = {}
 var _loops: Dictionary = {}
 var _pool: Array[AudioStreamPlayer] = []
 var _pool_index: int = 0
 var _room_amb_player: AudioStreamPlayer
+var _overload_player: AudioStreamPlayer
+var _overload_stinger_accum: float = 0.0
 
 
 func _ready() -> void:
@@ -45,8 +47,10 @@ func _generate_sounds() -> void:
 	_sounds["breaker_trip"] = _gen_breaker_trip()
 	_sounds["power_down"] = _gen_power_down_whine()
 	_sounds["upgrade"] = _gen_hardware_install_ratchet()
-	_sounds["footstep"] = _gen_footstep()
-	_sounds["foam"] = _gen_filtered_noise(0.16, 0.22, 0.30)
+	for v in range(FOOTSTEP_VARIANTS):
+		_sounds["footstep_%d" % v] = _gen_footstep(v)
+	_sounds["footstep"] = _sounds["footstep_0"]
+	_sounds["extinguisher_start"] = _gen_extinguisher_burst()
 	_sounds["van_horn"] = _gen_van_horn()
 	_sounds["van_door"] = _gen_sliding_door()
 	_sounds["cart_load"] = _gen_handling_thud(185.0, 0.10, false)
@@ -75,14 +79,25 @@ func _generate_sounds() -> void:
 	_sounds["win_open"] = _gen_filtered_noise(0.09, 0.07, 0.45)
 
 	# 100% Seamless, Click-Free Looping 3D Spatial Hardware & Room Ambience
-	_loops["server_fan"] = _gen_server_fan_loop(2.0)
+	_loops["server_fan"] = _gen_server_fan_loop(3.0)
 	_loops["cooler_fan"] = _gen_cooler_fan_loop(2.0)
 	_loops["pc_hum"] = _gen_pc_workstation_loop(2.0)
 	_loops["breaker_hum"] = _gen_mains_hum_loop(2.0, 50.0)
-	_loops["ups_hum"] = _gen_mains_hum_loop(2.0, 100.0)
+	_loops["ups_hum"] = _gen_ups_loop(2.0)
 	_loops["room_ambience"] = _gen_room_hvac_loop(3.0)
 	_loops["van_engine"] = _gen_van_engine_loop(2.0)
 	_loops["cart_roll"] = _gen_cart_roll_loop(2.0)
+	_loops["extinguisher_spray"] = _gen_extinguisher_spray_loop(2.0)
+
+
+const FOOTSTEP_VARIANTS := 4
+## Wie lange der Sprühton nach dem letzten keep_extinguisher_spraying()-Aufruf weiterläuft.
+const SPRAY_HOLD_TIME := 0.12
+
+var _last_footstep := -1
+var _spray_player: AudioStreamPlayer
+var _spray_hold := 0.0
+var _spray_level := 0.0
 
 
 func _setup_room_ambience() -> void:
@@ -92,6 +107,14 @@ func _setup_room_ambience() -> void:
 	_room_amb_player.volume_db = -80.0
 	add_child(_room_amb_player)
 	SettingsManager.settings_changed.connect(_update_room_ambience_volume)
+	_overload_player = AudioStreamPlayer.new()
+	_overload_player.stream = _loops["breaker_hum"]
+	_overload_player.volume_db = -80.0
+	add_child(_overload_player)
+	_spray_player = AudioStreamPlayer.new()
+	_spray_player.stream = _loops.get("extinguisher_spray") as AudioStreamWAV
+	_spray_player.volume_db = -80.0
+	add_child(_spray_player)
 
 
 func _cache_index_path() -> String:
@@ -157,7 +180,9 @@ func _save_streams(source: Dictionary, kind: String) -> bool:
 	return true
 
 
-func _process(_delta: float) -> void:
+func _process(delta: float) -> void:
+	_update_overload_hum(delta)
+	_update_extinguisher_spray(delta)
 	if _room_amb_player == null:
 		return
 	var should_play := GameState.is_active and SettingsManager.get_effective_fan_gain() > 0.005
@@ -181,6 +206,30 @@ func _update_room_ambience_volume() -> void:
 		_room_amb_player.volume_db = linear_to_db(gain) - 33.0
 
 
+## Überlast-Kulisse: Während der Hauptschalter über der Leistungsgrenze läuft, wird das
+## Brummen lauter und höher, und in unregelmäßigen Abständen kommt ein Alarmstoß.
+## Der Pegel steigt mit dem Überlast-Timer (0 bis 3 Sekunden bis zum Auslösen).
+func _update_overload_hum(delta: float) -> void:
+	if _overload_player == null:
+		return
+	var gain := SettingsManager.get_effective_sfx_gain()
+	var overloaded := GameState.is_active and GameState.breaker_on and GameState.total_watts > GameState.max_watts
+	var level := clampf(GameState.overload_timer / 3.0, 0.0, 1.0) if overloaded else 0.0
+	if level <= 0.01 or gain <= 0.005:
+		if _overload_player.playing:
+			_overload_player.stop()
+		_overload_stinger_accum = 0.0
+		return
+	if not _overload_player.playing:
+		_overload_player.play()
+	_overload_player.volume_db = linear_to_db(gain) - 18.0 + level * 10.0
+	_overload_player.pitch_scale = lerpf(1.0, 1.3, level)
+	_overload_stinger_accum += delta
+	if _overload_stinger_accum >= lerpf(3.0, 1.2, level):
+		_overload_stinger_accum = 0.0
+		play("alarm", -10.0 + level * 4.0, lerpf(0.9, 1.15, level))
+
+
 func play(sfx_name: String, volume_db: float = -6.0, pitch: float = 1.0) -> void:
 	if not _sounds.has(sfx_name):
 		return
@@ -197,6 +246,39 @@ func play(sfx_name: String, volume_db: float = -6.0, pitch: float = 1.0) -> void
 
 func play_typing_key(volume_db: float = -10.5) -> void:
 	play("key_type", volume_db, randf_range(0.88, 1.16))
+
+
+## Spielt eine zufällige Schritt-Variante, nie zweimal dieselbe hintereinander.
+func play_footstep(sprinting: bool = false) -> void:
+	var idx := randi() % FOOTSTEP_VARIANTS
+	if idx == _last_footstep:
+		idx = (idx + 1) % FOOTSTEP_VARIANTS
+	_last_footstep = idx
+	var vol := -15.5 if sprinting else -17.5
+	play("footstep_%d" % idx, vol + randf_range(-1.2, 1.2), randf_range(0.94, 1.06))
+
+
+## Jeden Frame aufrufen, solange gesprüht wird. Bleibt der Aufruf aus, blendet der Ton kurz aus.
+func keep_extinguisher_spraying() -> void:
+	_spray_hold = SPRAY_HOLD_TIME
+
+
+func _update_extinguisher_spray(delta: float) -> void:
+	if _spray_player == null or _spray_player.stream == null:
+		return
+	_spray_hold = maxf(_spray_hold - delta, 0.0)
+	var target := 1.0 if (_spray_hold > 0.0 and GameState.is_active) else 0.0
+	var rate := 14.0 if target > _spray_level else 6.0
+	_spray_level = move_toward(_spray_level, target, delta * rate)
+	var gain := SettingsManager.get_effective_sfx_gain()
+	if _spray_level <= 0.001 or gain <= 0.005:
+		if _spray_player.playing:
+			_spray_player.stop()
+		return
+	if not _spray_player.playing:
+		play("extinguisher_start", -12.0, randf_range(0.95, 1.05))
+		_spray_player.play(randf_range(0.0, 1.5))
+	_spray_player.volume_db = linear_to_db(gain * _spray_level) - 14.0
 
 
 func get_loop_stream(loop_name: String) -> AudioStreamWAV:
@@ -275,6 +357,82 @@ func _make_seamless_noise(count: int, fade: int, alpha1: float, alpha2: float, w
 	if count > 4:
 		out[count - 1] = lerpf(out[count - 2], out[0], 0.5)
 	return out
+
+
+## Einpoliger Tiefpass über einen Loop-Puffer. Der erste Durchlauf schwingt den Filter
+## ein, dadurch läuft das Ergebnis an der Loop-Grenze ohne Sprung weiter.
+func _loop_lowpass(src: PackedFloat32Array, alpha: float) -> PackedFloat32Array:
+	var n := src.size()
+	var out := PackedFloat32Array()
+	out.resize(n)
+	if n == 0:
+		return out
+	var y := 0.0
+	for i in range(n):
+		y = lerpf(y, src[i], alpha)
+	for i in range(n):
+		y = lerpf(y, src[i], alpha)
+		out[i] = y
+	return out
+
+
+## Ganze Schwingungen pro Loop, damit ein Ton an der Loop-Grenze nahtlos weiterläuft.
+func _loop_cycles(hz: float, duration: float) -> float:
+	return maxf(1.0, roundf(hz * duration))
+
+
+## Skaliert einen Puffer auf einen Ziel-RMS, damit die Lautstärke-Balance der Props stimmt.
+func _normalize_rms(samples: PackedFloat32Array, target_rms: float) -> PackedFloat32Array:
+	var n := samples.size()
+	if n == 0:
+		return samples
+	var acc := 0.0
+	for i in range(n):
+		acc += samples[i] * samples[i]
+	var rms := sqrt(acc / float(n))
+	if rms < 0.000001:
+		return samples
+	var g := target_rms / rms
+	for i in range(n):
+		samples[i] = clampf(samples[i] * g, -0.95, 0.95)
+	return samples
+
+
+## Ein Sample Trafobrummen: Grundton plus Obertöne durch weiches Clipping (Kernsättigung).
+func _transformer_hum(ph: float, cycles: float) -> float:
+	return tanh((sin(ph * cycles) + 0.35 * sin(ph * cycles * 2.0 + 0.4)) * 1.8)
+
+
+## Mischt kurze, gedämpfte Kopf-Seek-Ticks einer Festplatte in einen Loop.
+## Fester Seed, damit der Loop bei jedem Start gleich klingt.
+func _add_disk_seeks(samples: PackedFloat32Array, seeks: int, seed_value: int) -> PackedFloat32Array:
+	var n := samples.size()
+	var tick_len := int(MIX_RATE * 0.014)
+	var margin := int(MIX_RATE * 0.05)
+	if n <= tick_len + margin * 2:
+		return samples
+	var rng := RandomNumberGenerator.new()
+	rng.seed = seed_value
+	for _s in range(seeks):
+		var start := rng.randi_range(margin, n - tick_len - margin)
+		var amp := rng.randf_range(0.012, 0.026)
+		var hz := rng.randf_range(2200.0, 3400.0)
+		for k in range(tick_len):
+			var tk := float(k) / float(MIX_RATE)
+			var env := exp(-tk * 420.0)
+			samples[start + k] = clampf(samples[start + k] + sin(TAU * hz * tk) * env * amp, -0.95, 0.95)
+	return samples
+
+
+## Hängt die ersten zwei Samples hinten an. _make_wav setzt loop_end = n - 2, dadurch läuft
+## der Loop genau über die ursprüngliche Periode, und hinter loop_end liegen die echten
+## Folgesamples für den kubischen Interpolator.
+func _pad_loop_wrap(samples: PackedFloat32Array) -> PackedFloat32Array:
+	if samples.size() < 2:
+		return samples
+	samples.append(samples[0])
+	samples.append(samples[1])
+	return samples
 
 
 # ==============================================================================
@@ -530,20 +688,85 @@ func _gen_hardware_install_ratchet() -> AudioStreamWAV:
 	return _make_wav(s)
 
 
-func _gen_footstep() -> AudioStreamWAV:
-	var duration := 0.095
+## Schuh auf Beton: dumpfer Fersenaufsatz mit etwas Körnung, kurz danach Abrollen der Sohle
+## mit leichtem Schleifen. Jede Variante hat einen festen Seed und klingt dadurch leicht anders.
+func _gen_footstep(variant: int) -> AudioStreamWAV:
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 7919 + variant * 104729
+	var duration := 0.18
 	var count := int(MIX_RATE * duration)
 	var s := PackedFloat32Array()
 	s.resize(count)
-	var lp := 0.0
+	var heel_hz := rng.randf_range(78.0, 96.0)
+	var toe_at := rng.randf_range(0.048, 0.066)
+	var toe_gain := rng.randf_range(0.35, 0.55)
+	var scuff_gain := rng.randf_range(0.10, 0.22)
+	var phase := 0.0
+	var lp1 := 0.0
+	var lp2 := 0.0
+	var hp_in := 0.0
+	var hp_out := 0.0
+	var lp_scuff := 0.0
 	for i in range(count):
 		var t := float(i) / float(MIX_RATE)
-		var u := t / duration
-		lp = lerpf(lp, randf_range(-1.0, 1.0), 0.18)
-		var env := sin(minf(u * 10.0, 1.0) * PI * 0.5) * exp(-u * 6.5)
-		var heel := sin(TAU * lerpf(135.0, 62.0, u) * t) * 0.54 + lp * 0.48
-		s[i] = clampf(heel * env * 0.46, -0.95, 0.95)
+		var w := rng.randf_range(-1.0, 1.0)
+		lp1 = lerpf(lp1, w, 0.12)
+		lp2 = lerpf(lp2, lp1, 0.30)
+		hp_out = 0.90 * (hp_out + w - hp_in)
+		hp_in = w
+		lp_scuff = lerpf(lp_scuff, hp_out, 0.30)
+		# Ferse: kurzer, tiefer Aufprall mit leicht fallender Tonhöhe
+		phase += TAU * heel_hz * (1.0 - 0.35 * minf(t / 0.05, 1.0)) / float(MIX_RATE)
+		var heel_env := minf(t / 0.0015, 1.0) * exp(-t * 60.0)
+		var heel := (lp2 * 2.2 + sin(phase) * 0.45) * heel_env
+		var grit := lp_scuff * 0.12 * exp(-t * 90.0)
+		# Sohle: zweiter, leiserer Aufsatz und kurzes Schleifen
+		var toe := 0.0
+		var scuff := 0.0
+		if t >= toe_at:
+			var tt := t - toe_at
+			toe = lp2 * 2.0 * toe_gain * minf(tt / 0.002, 1.0) * exp(-tt * 75.0)
+			scuff = lp_scuff * scuff_gain * sin(minf(tt / 0.05, 1.0) * PI)
+		s[i] = heel + grit + toe + scuff
+	s = _normalize_peak(s, 0.45)
 	return _make_wav(s)
+
+
+## Ventil öffnet: kurzer Druckstoß mit dumpfem Ploppen, läuft vor dem Sprüh-Loop an.
+func _gen_extinguisher_burst() -> AudioStreamWAV:
+	var duration := 0.16
+	var count := int(MIX_RATE * duration)
+	var s := PackedFloat32Array()
+	s.resize(count)
+	var hp_in := 0.0
+	var hp_out := 0.0
+	var lp_hiss := 0.0
+	var lp_body := 0.0
+	for i in range(count):
+		var t := float(i) / float(MIX_RATE)
+		var w := randf_range(-1.0, 1.0)
+		hp_out = 0.94 * (hp_out + w - hp_in)
+		hp_in = w
+		lp_hiss = lerpf(lp_hiss, hp_out, 0.55)
+		lp_body = lerpf(lp_body, w, 0.10)
+		var env := minf(t / 0.003, 1.0) * exp(-t * 22.0)
+		var pop := sin(TAU * 95.0 * t) * exp(-t * 45.0) * 0.5
+		s[i] = (lp_hiss * 0.8 + lp_body * 1.4) * env + pop
+	s = _normalize_peak(s, 0.5)
+	return _make_wav(s)
+
+
+func _normalize_peak(samples: PackedFloat32Array, target: float) -> PackedFloat32Array:
+	var peak := 0.0
+	for v in samples:
+		peak = maxf(peak, absf(v))
+	var out := samples.duplicate()
+	if peak <= 0.0001:
+		return out
+	var k := target / peak
+	for i in range(out.size()):
+		out[i] = clampf(out[i] * k, -0.95, 0.95)
+	return out
 
 
 func _gen_sliding_door() -> AudioStreamWAV:
@@ -636,71 +859,183 @@ func _gen_filtered_noise(duration: float, amp: float, alpha: float) -> AudioStre
 	return _make_wav(s)
 
 
+## Druckgas-Zischen des Feuerlöschers: helles Rauschen plus tieferes Rauschen der Düse.
+## Das Ende wird per Equal-Power-Crossfade in den Anfang geblendet, damit der Loop nicht klickt.
+func _gen_extinguisher_spray_loop(duration: float) -> AudioStreamWAV:
+	var count := int(MIX_RATE * duration)
+	var fade := int(MIX_RATE * 0.25)
+	var total := count + fade
+	var raw := PackedFloat32Array()
+	raw.resize(total)
+	var hp_in := 0.0
+	var hp_out := 0.0
+	var lp_hiss := 0.0
+	var lp_body1 := 0.0
+	var lp_body2 := 0.0
+	for i in range(total + 4096):
+		var w := randf_range(-1.0, 1.0)
+		hp_out = 0.94 * (hp_out + w - hp_in)
+		hp_in = w
+		lp_hiss = lerpf(lp_hiss, hp_out, 0.55)
+		lp_body1 = lerpf(lp_body1, w, 0.08)
+		lp_body2 = lerpf(lp_body2, lp_body1, 0.25)
+		# Die ersten 4096 Samples wärmen nur die Filter auf
+		if i >= 4096:
+			raw[i - 4096] = lp_hiss * 0.55 + lp_body2 * 1.6
+	var s := PackedFloat32Array()
+	s.resize(count)
+	for i in range(count):
+		s[i] = raw[i]
+	for i in range(fade):
+		var a := float(i) / float(fade)
+		s[i] = raw[i] * sin(a * PI * 0.5) + raw[count + i] * cos(a * PI * 0.5)
+	# Leichtes Flattern des Drucks, ganze Perioden pro Loop, damit die Naht unhörbar bleibt
+	var c1 := maxf(roundf(3.0 * duration), 1.0)
+	var c2 := maxf(roundf(7.0 * duration), 1.0)
+	for i in range(count):
+		var u := float(i) / float(count)
+		s[i] *= 1.0 + 0.06 * sin(TAU * c1 * u) + 0.04 * sin(TAU * c2 * u + 1.3)
+	s = _normalize_peak(s, 0.55)
+	return _make_wav(s, true)
+
+
 # ==============================================================================
 # 100% CLICK-FREE SEAMLESS 3D SPATIAL AMBIENCE & HARDWARE HUM LOOPS
 # ==============================================================================
 
 func _gen_server_fan_loop(duration: float) -> AudioStreamWAV:
+	# Mehrere 40-mm-Hochdrehzahllüfter (~11.000-12.000 U/min, 7 Blätter): breitbandiges
+	# Luftrauschen, drei leicht verstimmte Blattfrequenzen mit hörbarer Schwebung,
+	# leises Netzteilbrummen und vereinzelte Festplatten-Seeks.
 	var count := int(MIX_RATE * duration)
 	var fade := int(MIX_RATE * 0.35)
-	var noise := _make_seamless_noise(count, fade, 0.22, 0.06, 0.28, 0.72)
+	var white := _make_seamless_noise(count, fade, 1.0, 1.0, 1.0, 0.0)
+	var band_top := _loop_lowpass(white, 0.45)
+	var band_low := _loop_lowpass(white, 0.04)
+	var b1 := _loop_cycles(183.0 * 7.0, duration)
+	var b2 := _loop_cycles(189.5 * 7.0, duration)
+	var b3 := _loop_cycles(196.0 * 7.0, duration)
+	var r1 := _loop_cycles(183.0, duration)
+	var hum := _loop_cycles(100.0, duration)
+	var w1 := _loop_cycles(0.7, duration)
+	var w2 := _loop_cycles(1.9, duration)
 	var samples := PackedFloat32Array()
 	samples.resize(count)
-	var c1 := roundf(100.0 * duration)
-	var c2 := roundf(200.0 * duration)
-	var c3 := roundf(300.0 * duration)
 	for i in range(count):
-		var t := float(i) / float(count)
-		var hum := sin(TAU * c1 * t) * 0.055 + sin(TAU * c2 * t) * 0.035 + sin(TAU * c3 * t) * 0.018
-		samples[i] = clampf(noise[i] * 0.36 + hum, -0.95, 0.95)
-	return _make_wav(samples, true)
+		var ph := TAU * float(i) / float(count)
+		var wobble := 1.0 + 0.07 * sin(ph * w1 + 0.6) + 0.04 * sin(ph * w2 + 2.1)
+		var air := (band_top[i] - band_low[i]) * 0.9 + (white[i] - band_top[i]) * 0.10 + band_low[i] * 0.6
+		var blades := (
+			sin(ph * b1) * 0.050 + sin(ph * b1 * 2.0 + 0.9) * 0.018
+			+ sin(ph * b2 + 1.7) * 0.045 + sin(ph * b2 * 2.0 + 2.4) * 0.016
+			+ sin(ph * b3 + 3.1) * 0.040 + sin(ph * b3 * 2.0 + 0.3) * 0.014
+		)
+		var imbalance := sin(ph * r1) * 0.012
+		var psu := sin(ph * hum) * 0.010 + sin(ph * hum * 3.0) * 0.004
+		samples[i] = air * wobble + blades * (0.85 + 0.15 * wobble) + imbalance + psu
+	samples = _normalize_rms(samples, 0.06)
+	samples = _add_disk_seeks(samples, maxi(1, int(duration * 1.4)), 7341)
+	return _make_wav(_pad_loop_wrap(samples), true)
 
 
 func _gen_cooler_fan_loop(duration: float) -> AudioStreamWAV:
+	# Präzisionsklima/Chiller: zwei große Axiallüfter (~900 U/min, 5 Blätter) mit tiefem
+	# Luftstrom, ein Verdichter mit Motorschlupf (48,5 Hz) und leises Kältemittelzischen.
 	var count := int(MIX_RATE * duration)
 	var fade := int(MIX_RATE * 0.35)
-	var noise := _make_seamless_noise(count, fade, 0.08, 0.03, 0.38, 0.80)
+	var white := _make_seamless_noise(count, fade, 1.0, 1.0, 1.0, 0.0)
+	var low := _loop_lowpass(white, 0.012)
+	var mid := _loop_lowpass(white, 0.10)
+	var top := _loop_lowpass(white, 0.32)
+	var f1 := _loop_cycles(14.6 * 5.0, duration)
+	var f2 := _loop_cycles(15.4 * 5.0, duration)
+	var comp := _loop_cycles(48.5, duration)
+	var w1 := _loop_cycles(0.4, duration)
+	var w2 := _loop_cycles(1.1, duration)
 	var samples := PackedFloat32Array()
 	samples.resize(count)
-	var c1 := roundf(50.0 * duration)
-	var c2 := roundf(100.0 * duration)
-	var c3 := roundf(150.0 * duration)
 	for i in range(count):
-		var t := float(i) / float(count)
-		var comp := sin(TAU * c1 * t) * 0.085 + sin(TAU * c2 * t) * 0.042 + sin(TAU * c3 * t) * 0.018
-		samples[i] = clampf(noise[i] * 0.38 + comp, -0.95, 0.95)
-	return _make_wav(samples, true)
+		var ph := TAU * float(i) / float(count)
+		var gust := 1.0 + 0.09 * sin(ph * w1 + 1.2) + 0.05 * sin(ph * w2 + 0.4)
+		var air := low[i] * 1.6 + (mid[i] - low[i]) * 0.75 + (top[i] - mid[i]) * 0.10
+		var blades := (
+			sin(ph * f1) * 0.060 + sin(ph * f1 * 2.0 + 0.8) * 0.025 + sin(ph * f1 * 3.0 + 1.9) * 0.010
+			+ sin(ph * f2 + 2.2) * 0.055 + sin(ph * f2 * 2.0 + 0.1) * 0.022
+		)
+		var motor := sin(ph * comp) + 0.45 * sin(ph * comp * 2.0 + 0.5) + 0.20 * sin(ph * comp * 3.0 + 1.3)
+		var compressor := tanh(motor * 1.4) * 0.07
+		samples[i] = (air + blades) * gust + compressor
+	return _make_wav(_pad_loop_wrap(_normalize_rms(samples, 0.075)), true)
 
 
 func _gen_pc_workstation_loop(duration: float) -> AudioStreamWAV:
+	# Büro-Tower: zwei 120-mm-Gehäuselüfter (~900 U/min, 7 Blätter), CPU-Kühler
+	# (~1.100 U/min, 9 Blätter), weiches Luftrauschen und das leise 120-Hz-Singen
+	# einer 7.200er-Festplatte.
 	var count := int(MIX_RATE * duration)
 	var fade := int(MIX_RATE * 0.35)
-	var noise := _make_seamless_noise(count, fade, 0.07, 0.025, 0.30, 0.72)
+	var white := _make_seamless_noise(count, fade, 1.0, 1.0, 1.0, 0.0)
+	var soft := _loop_lowpass(white, 0.06)
+	var base := _loop_lowpass(white, 0.008)
+	var c1 := _loop_cycles(15.0 * 7.0, duration)
+	var c2 := _loop_cycles(16.2 * 7.0, duration)
+	var cpu := _loop_cycles(18.3 * 9.0, duration)
+	var hdd := _loop_cycles(120.0, duration)
+	var w1 := _loop_cycles(0.6, duration)
 	var samples := PackedFloat32Array()
 	samples.resize(count)
-	var c1 := roundf(90.0 * duration)
-	var c2 := roundf(180.0 * duration)
 	for i in range(count):
-		var t := float(i) / float(count)
-		var hum := sin(TAU * c1 * t) * 0.040 + sin(TAU * c2 * t) * 0.018
-		samples[i] = clampf(noise[i] * 0.25 + hum, -0.95, 0.95)
-	return _make_wav(samples, true)
+		var ph := TAU * float(i) / float(count)
+		var air := (soft[i] - base[i]) * 0.8 + base[i] * 1.2
+		var fans := (
+			sin(ph * c1) * 0.035 + sin(ph * c1 * 2.0 + 1.1) * 0.012
+			+ sin(ph * c2 + 2.0) * 0.030
+			+ sin(ph * cpu + 0.7) * 0.022 + sin(ph * cpu * 2.0 + 2.6) * 0.008
+		)
+		var hdd_tone := sin(ph * hdd) * 0.008 + sin(ph * hdd * 2.0 + 0.5) * 0.004
+		samples[i] = air * (1.0 + 0.05 * sin(ph * w1)) + fans + hdd_tone
+	return _make_wav(_pad_loop_wrap(_normalize_rms(samples, 0.045)), true)
 
 
 func _gen_mains_hum_loop(duration: float, base_hz: float) -> AudioStreamWAV:
+	# Trafo-/Schützbrummen: Grundton mit sättigungsbedingten Obertönen, leichte
+	# Lastschwankung und ein Hauch Rauschen, damit es nicht nach reinem Sinus klingt.
 	var count := int(MIX_RATE * duration)
+	var fade := int(MIX_RATE * 0.35)
+	var hiss := _loop_lowpass(_make_seamless_noise(count, fade, 1.0, 1.0, 1.0, 0.0), 0.05)
+	var c1 := _loop_cycles(base_hz, duration)
+	var cw := _loop_cycles(0.5, duration)
 	var samples := PackedFloat32Array()
 	samples.resize(count)
-	var c1 := roundf(base_hz * duration)
 	for i in range(count):
-		var t := float(i) / float(count)
-		var h := (
-			sin(TAU * c1 * t) * 0.26
-			+ sin(TAU * c1 * 2.0 * t) * 0.14
-			+ sin(TAU * c1 * 3.0 * t) * 0.06
-		)
-		samples[i] = clampf(h, -0.95, 0.95)
-	return _make_wav(samples, true)
+		var ph := TAU * float(i) / float(count)
+		var sway := 1.0 + 0.04 * sin(ph * cw)
+		samples[i] = _transformer_hum(ph, c1) * 0.30 * sway + hiss[i] * 0.25
+	return _make_wav(_pad_loop_wrap(_normalize_rms(samples, 0.20)), true)
+
+
+func _gen_ups_loop(duration: float) -> AudioStreamWAV:
+	# Online-USV: 100-Hz-Trafobrummen, kleiner 60-mm-Lüfter (~2.900 U/min, 7 Blätter)
+	# und leises Spulenfiepen des Wechselrichters.
+	var count := int(MIX_RATE * duration)
+	var fade := int(MIX_RATE * 0.35)
+	var white := _make_seamless_noise(count, fade, 1.0, 1.0, 1.0, 0.0)
+	var air_top := _loop_lowpass(white, 0.25)
+	var air_low := _loop_lowpass(white, 0.03)
+	var c_hum := _loop_cycles(100.0, duration)
+	var fan := _loop_cycles(48.0 * 7.0, duration)
+	var whine := _loop_cycles(3150.0, duration)
+	var cw := _loop_cycles(1.5, duration)
+	var samples := PackedFloat32Array()
+	samples.resize(count)
+	for i in range(count):
+		var ph := TAU * float(i) / float(count)
+		var hum := _transformer_hum(ph, c_hum) * 0.26
+		var air := (air_top[i] - air_low[i]) * 0.25
+		var fan_tone := sin(ph * fan) * 0.022 + sin(ph * fan * 2.0 + 1.4) * 0.008
+		var coil := sin(ph * whine) * 0.006 * (0.7 + 0.3 * sin(ph * cw))
+		samples[i] = hum + air + fan_tone + coil
+	return _make_wav(_pad_loop_wrap(_normalize_rms(samples, 0.19)), true)
 
 
 func _gen_room_hvac_loop(duration: float) -> AudioStreamWAV:

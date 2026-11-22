@@ -45,6 +45,10 @@ var _save_toast_timer: float = 0.0
 
 # Realistic Mechanical Keyboard Typing Animation & Sound
 var _typing_ticket_id: String = ""
+## Status-Labels der Ticket-Karten (Ticket-ID -> Label) für die Countdown-Anzeige.
+var _ticket_status_labels: Dictionary = {}
+var _ticket_status_accum: float = 0.0
+const TICKET_STATUS_REFRESH_INTERVAL := 0.5
 var _typing_timer: float = 0.0
 var _typing_key_accum: float = 0.0
 var _manual_typing_pulse: float = 0.0
@@ -177,6 +181,32 @@ func _process(delta: float) -> void:
 	if _tray_accum >= TRAY_REFRESH_INTERVAL:
 		_tray_accum = 0.0
 		_refresh_tray()
+
+	if _active_app == "support" and not _ticket_status_labels.is_empty():
+		_ticket_status_accum += delta
+		if _ticket_status_accum >= TICKET_STATUS_REFRESH_INTERVAL:
+			_ticket_status_accum = 0.0
+			_update_ticket_status_labels()
+
+
+func _ticket_status_text(t: Dictionary, is_fixed: bool) -> String:
+	if is_fixed:
+		return tr("BEHOBEN!")
+	if bool(t.get("escalated", false)):
+		return tr("⏰ ESKALIERT")
+	if not bool(t.get("reassured", false)):
+		return tr("AKTIV • Antwort in %ds") % ceili(GameState.get_ticket_sla_remaining(t))
+	return tr("AKTIV")
+
+
+## Ändert nur den Text der Status-Labels, damit Entwürfe und Scroll-Position erhalten bleiben.
+func _update_ticket_status_labels() -> void:
+	for tid in _ticket_status_labels.keys():
+		var lbl: Variant = _ticket_status_labels[tid]
+		if not is_instance_valid(lbl) or not GameState.support_tickets.has(tid):
+			continue
+		var t: Dictionary = GameState.support_tickets[tid]
+		(lbl as Label).text = _ticket_status_text(t, GameState.is_ticket_issue_fixed(t))
 
 
 func _input(event: InputEvent) -> void:
@@ -699,53 +729,53 @@ func _checkout_cart() -> void:
 # ==============================================================================
 # APP 1: HARDWARE SHOP (CLOUDPARTS.DE) + REAL SHOPPING CART + TEILE-LAGER!
 # ==============================================================================
-## Sicherungen werden ohne Lieferung direkt ins Lager gebucht und am Sicherungskasten eingesetzt.
+## Sicherungen kommen mit dem Sprinter im Sammelpaket und landen dann im Lager.
 func _add_fuse_shop_card(list: VBoxContainer) -> void:
+	var fuse_name := "Schraubsicherung 63 A (Sicherungskasten)"
 	_add_shop_item_card(list, {
-		"title": tr("Schraubsicherung 63 A (Sicherungskasten)"),
-		"desc": tr("Kommt sofort ins Lager, ohne Lieferung. Am Sicherungskasten mit [E] in einen leeren oder durchgebrannten Steckplatz stecken."),
+		"title": tr(fuse_name),
+		"desc": tr("Lieferung per Sprinter im Sammelpaket. Danach am Sicherungskasten mit [E] in einen leeren oder durchgebrannten Steckplatz stecken."),
 		"info": tr("Im Lager: %d  •  Intakt im Kasten: %d / %d") % [GameState.fuse_stock, GameState.count_working_fuses(), GameState.FUSE_SLOT_COUNT],
 		"color": Color(0.86, 0.70, 0.36),
 		"price": GameState.FUSE_PRICE,
-		"instant": true,
-		"on_buy": func(): GameState.request_buy_fuse(),
+		"on_buy": func(): _cart_add("acc", "fuse", "", fuse_name, GameState.FUSE_PRICE),
 	})
 
 
-## Steckleisten (Stromkasten) und Netzwerk-Verteiler (Router): werden sofort montiert, ohne Lieferung.
+## Steckleisten (Stromkasten) und Netzwerk-Verteiler (Router): kommen per Sprinter und werden bei Ankunft montiert.
 func _add_power_strip_card(list: VBoxContainer) -> void:
 	var breaker_cap := GameState.BREAKER_BASE_SOCKETS + GameState.power_strips * GameState.POWER_STRIP_EXTRA
 	var at_max := GameState.power_strips >= GameState.POWER_STRIP_MAX
+	var strip_name := "Steckleiste 4-fach (Stromkasten)"
 	_add_shop_item_card(list, {
-		"title": tr("Steckleiste 4-fach (Stromkasten)"),
-		"desc": tr("Wird sofort am Stromkasten montiert. Belegt eine Steckdose und bringt +%d Steckplätze.") % GameState.POWER_STRIP_EXTRA,
+		"title": tr(strip_name),
+		"desc": tr("Lieferung per Sprinter, wird bei Ankunft am Stromkasten montiert. Belegt eine Steckdose und bringt +%d Steckplätze.") % GameState.POWER_STRIP_EXTRA,
 		"info": tr("Steckplätze am Kasten: %d  •  Montiert: %d / %d") % [breaker_cap, GameState.power_strips, GameState.POWER_STRIP_MAX],
 		"color": Color(0.84, 0.66, 0.14),
 		"price": GameState.POWER_STRIP_PRICE,
-		"instant": true,
 		"disabled": at_max,
 		"btn_text": tr("Maximum erreicht") if at_max else "",
-		"on_buy": func(): GameState.request_buy_power_strip(),
+		"on_buy": func(): _cart_add("acc", "power_strip", "", strip_name, GameState.POWER_STRIP_PRICE),
 	})
 
 
 func _add_net_hub_card(list: VBoxContainer) -> void:
 	var router_cap := GameState.ROUTER_BASE_PORTS + GameState.net_hubs * GameState.NET_HUB_EXTRA
 	var at_max := GameState.net_hubs >= GameState.NET_HUB_MAX
+	var hub_name := "Netzwerk-Verteiler 4-Port (Router)"
 	_add_shop_item_card(list, {
-		"title": tr("Netzwerk-Verteiler 4-Port (Router)"),
-		"desc": tr("Wird sofort am Router montiert. Belegt einen Port und bringt +%d Netzwerkdosen.") % GameState.NET_HUB_EXTRA,
+		"title": tr(hub_name),
+		"desc": tr("Lieferung per Sprinter, wird bei Ankunft am Router montiert. Belegt einen Port und bringt +%d Netzwerkdosen.") % GameState.NET_HUB_EXTRA,
 		"info": tr("Ports am Router: %d  •  Montiert: %d / %d") % [router_cap, GameState.net_hubs, GameState.NET_HUB_MAX],
 		"color": Color(0.16, 0.40, 0.68),
 		"price": GameState.NET_HUB_PRICE,
-		"instant": true,
 		"disabled": at_max,
 		"btn_text": tr("Maximum erreicht") if at_max else "",
-		"on_buy": func(): GameState.request_buy_net_hub(),
+		"on_buy": func(): _cart_add("acc", "net_hub", "", hub_name, GameState.NET_HUB_PRICE),
 	})
 
 
-## Steckleisten und Netzwerk-Verteiler werden sofort montiert, ohne Lieferung.
+## Steckleisten und Netzwerk-Verteiler kommen per Sprinter und werden bei Ankunft montiert.
 func _add_accessory_shop_cards(list: VBoxContainer) -> void:
 	_add_power_strip_card(list)
 	_add_net_hub_card(list)
@@ -1018,7 +1048,7 @@ func _render_shop_app() -> void:
 		_populate_physical_shop_list(left_list, ["net_switch"])
 	elif _shop_tab == "infra":
 		_add_shop_section(left_list, tr("Kühlung"), tr("Hält die Raumtemperatur unter Kontrolle."))
-		_populate_physical_shop_list(left_list, ["cooler", "chiller"])
+		_populate_physical_shop_list(left_list, ["cooler", "chiller", "indoor_unit"])
 		_add_shop_section(left_list, tr("Stromversorgung"), tr("Notstrom, Sicherungen und zusätzliche Steckplätze am Stromkasten."))
 		_populate_physical_shop_list(left_list, ["ups"])
 		_add_power_strip_card(left_list)
@@ -1168,7 +1198,7 @@ func _populate_parts_shop_list(parent: VBoxContainer, cat: String) -> void:
 		var cap_cost := cost
 		var stock := GameState.get_part_stock(cap_pid)
 		var tag := tr(str(pd.get("tag", "")))
-		_add_shop_item_card(parent, {
+		var card_opts := {
 			"title": ("[%s]  %s" % [tag, cap_name]) if tag != "" else cap_name,
 			"info": (tr("Im Lager: %d×") % stock) if stock > 0 else "",
 			"color": _part_accent(cap_cat),
@@ -1176,7 +1206,12 @@ func _populate_parts_shop_list(parent: VBoxContainer, cat: String) -> void:
 			"strength_pct": HardwareCatalog.get_part_strength_pct(cap_cat, pd),
 			"specs": _format_part_specs_short(cap_cat, pd),
 			"on_buy": func(): _cart_add("part", cap_pid, cap_cat, cap_name, cap_cost),
-		})
+		}
+		# Gesperrte Teile bleiben sichtbar, damit man sieht, was spätere Firmenstufen bringen.
+		if not GameState.is_part_unlocked(pd):
+			card_opts["disabled"] = true
+			card_opts["btn_text"] = tr("🔒 Ab Firmenstufe %d") % GameState.get_part_required_level(pd)
+		_add_shop_item_card(parent, card_opts)
 
 
 ## Akzentfarbe je Einzelteil-Kategorie, damit die Karten pro Kategorie erkennbar bleiben.
@@ -1329,6 +1364,7 @@ func _render_support_hub_app() -> void:
 
 
 func _render_support_tickets_subtab(content: VBoxContainer) -> void:
+	_ticket_status_labels.clear()
 	var total_users := 0
 	var rented_count := 0
 	for rid in GameState.racks.keys():
@@ -1383,7 +1419,8 @@ func _render_support_tickets_subtab(content: VBoxContainer) -> void:
 			top_r.add_child(ttl)
 
 			var st_l := Label.new()
-			st_l.text = "BEHOBEN!" if is_fixed else "AKTIV"
+			st_l.text = _ticket_status_text(t, is_fixed)
+			_ticket_status_labels[str(tid)] = st_l
 			st_l.add_theme_font_size_override("font_size", 12)
 			st_l.modulate = Color(0.10, 0.54, 0.26) if is_fixed else Color(0.78, 0.20, 0.16)
 			top_r.add_child(st_l)
@@ -1610,7 +1647,7 @@ func _render_ai_firewall_subtab(content: VBoxContainer) -> void:
 		ubtn.custom_minimum_size = Vector2(0, 38)
 		ubtn.disabled = (GameState.money < float(ncost)) or (GameState.total_ram_gb < mram) or (GameState.total_gpu_score < mgpu)
 		_style_win_btn(ubtn, Color(0.10, 0.48, 0.84) if not ubtn.disabled else Color(0.84, 0.86, 0.89), Color(0.08, 0.38, 0.70), Color.WHITE if not ubtn.disabled else Color(0.45, 0.48, 0.52))
-		ubtn.pressed.connect(func(): GameState.request_upgrade_ai_platform())
+		ubtn.pressed.connect(_open_ai_overlay)
 		av.add_child(ubtn)
 	else:
 		var ml := Label.new()
@@ -1666,7 +1703,7 @@ func _render_upgrades_app() -> void:
 		rtbtn.text = "$%d" % int(nxt["cost"])
 		rtbtn.disabled = GameState.money < float(nxt["cost"])
 		_style_win_btn(rtbtn, Color(0.10, 0.48, 0.84) if not rtbtn.disabled else Color(0.84, 0.86, 0.89), Color(0.08, 0.38, 0.70), Color.WHITE if not rtbtn.disabled else Color(0.45, 0.48, 0.52))
-		rtbtn.pressed.connect(func(): GameState.request_upgrade_router())
+		rtbtn.pressed.connect(_open_router_overlay)
 	else:
 		rtbtn.text = "100 Gbit/s Max"
 		rtbtn.disabled = true
@@ -1697,6 +1734,10 @@ func _render_upgrades_app() -> void:
 	pbtn.custom_minimum_size = Vector2(210, 38)
 	if GameState.power_fuse_stock > 0:
 		pbtn.text = tr("Im Lager: am Kasten in F2 einsetzen")
+		pbtn.disabled = true
+		_style_win_btn(pbtn, Color(0.88, 0.90, 0.93), Color(0.76, 0.79, 0.82), Color(0.32, 0.36, 0.42))
+	elif GameState.is_power_fuse_on_way():
+		pbtn.text = tr("Unterwegs mit dem Sprinter")
 		pbtn.disabled = true
 		_style_win_btn(pbtn, Color(0.88, 0.90, 0.93), Color(0.76, 0.79, 0.82), Color(0.32, 0.36, 0.42))
 	elif GameState.power_tier + 1 < GameState.POWER_TIERS.size():
@@ -1745,7 +1786,7 @@ func _render_upgrades_app() -> void:
 		rbtn.text = (tr("Halle B ($%d)") if GameState.room_level == 0 else tr("Halle C ($%d)")) % rcost
 		rbtn.disabled = GameState.money < float(rcost)
 		_style_win_btn(rbtn, Color(0.10, 0.48, 0.84) if not rbtn.disabled else Color(0.84, 0.86, 0.89), Color(0.08, 0.38, 0.70), Color.WHITE if not rbtn.disabled else Color(0.45, 0.48, 0.52))
-		rbtn.pressed.connect(func(): GameState.request_expand_room())
+		rbtn.pressed.connect(_open_hall_overlay)
 	else:
 		rbtn.text = "Alle Hallen offen"
 		rbtn.disabled = true
@@ -1840,14 +1881,185 @@ func _render_monitor_app() -> void:
 			var rent_txt := "Standby"
 			if r_rent != "none" and HardwareCatalog.RENTAL_PROFILES.has(r_rent):
 				rent_txt = tr("%s (%d User)") % [tr(str(HardwareCatalog.RENTAL_PROFILES[r_rent]["short"])), int(r.get("active_users", 0))]
-			var row_l := Label.new()
-			row_l.text = tr("• %s:  %d/%d W  •  %d GB RAM  •  %.1f TB  •  %.0f°C  •  %s  •  Strom:%s LAN:%s") % [
+			var row_btn := Button.new()
+			row_btn.text = tr("• %s:  %d/%d W  •  %d GB RAM  •  %.1f TB  •  %.0f°C  •  %s  •  Strom:%s LAN:%s") % [
 				str(rid).to_upper(), int(hw["watts"]), max_pdu, int(hw["ram_gb"]), float(hw["storage_tb"]),
 				float(r["temp"]), rent_txt, tr("an") if bool(r["powered"]) else tr("aus"), tr("ok") if bool(r["networked"]) else tr("fehlt")
 			]
-			row_l.add_theme_font_size_override("font_size", 12)
-			row_l.modulate = Color(0.14, 0.16, 0.20)
-			tv.add_child(row_l)
+			row_btn.alignment = HORIZONTAL_ALIGNMENT_LEFT
+			row_btn.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+			row_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+			row_btn.tooltip_text = tr("Klicken für Details zu diesem Rack")
+			row_btn.add_theme_font_size_override("font_size", 12)
+			_style_win_btn(row_btn, Color(0.97, 0.98, 0.99), Color(0.86, 0.89, 0.93), Color(0.14, 0.16, 0.20))
+			var detail_id := str(rid)
+			row_btn.pressed.connect(func(): _open_rack_detail_overlay(detail_id))
+			tv.add_child(row_btn)
+			for fault_txt in _rack_fault_lines(r):
+				var fl := Label.new()
+				fl.text = "      → " + fault_txt
+				fl.add_theme_font_size_override("font_size", 12)
+				fl.modulate = Color(0.78, 0.22, 0.14)
+				tv.add_child(fl)
+
+
+## Störungen eines Racks für die Live-Übersicht. Ein defektes Bauteil wird erst genannt,
+## nachdem es jemand in der 3D-Vorschau am Rack gefunden hat.
+func _rack_fault_lines(r: Dictionary) -> PackedStringArray:
+	var out := PackedStringArray()
+	var slots: Array = r.get("slots", []) as Array
+	for si in range(slots.size()):
+		var sl: Dictionary = slots[si]
+		if str(sl.get("item_type", "")) == "":
+			continue
+		var st := str(sl.get("state", ""))
+		if st == "burning":
+			out.append(tr("Slot %d: BRAND!") % (si + 1))
+		elif st == "crashed":
+			if GameState.is_slot_awaiting_diagnosis(sl):
+				out.append(tr("Störung – Ursache unbekannt, am Rack nachsehen"))
+			elif str(sl.get("faulty_part", "")) != "":
+				out.append(tr("Slot %d: %s defekt – Reparatur [E] am Rack") % [si + 1, GameState.get_component_label(str(sl["faulty_part"]))])
+			else:
+				out.append(tr("Slot %d ausgefallen – Reparatur [E] am Rack") % (si + 1))
+	return out
+
+
+## Detailansicht eines Racks aus der Live-Übersicht. Das defekte Bauteil steht erst drin,
+## nachdem es jemand in der 3D-Vorschau am Rack gefunden hat.
+func _open_rack_detail_overlay(rack_id: String) -> void:
+	_close_price_overlay()
+	if not GameState.racks.has(rack_id):
+		return
+	var r: Dictionary = GameState.racks[rack_id]
+	var rtype := str(r.get("rack_type", "rack"))
+	var max_pdu := int((GameState.ITEM_CATALOG.get(rtype, {}) as Dictionary).get("max_pdu_watts", 3200))
+	var hw := GameState.get_rack_hardware_summary(rack_id)
+
+	_price_overlay = Control.new()
+	_price_overlay.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_price_overlay.mouse_filter = Control.MOUSE_FILTER_STOP
+	add_child(_price_overlay)
+
+	var dim := ColorRect.new()
+	dim.color = Color(0.0, 0.0, 0.0, 0.55)
+	dim.set_anchors_preset(Control.PRESET_FULL_RECT)
+	dim.mouse_filter = Control.MOUSE_FILTER_STOP
+	_price_overlay.add_child(dim)
+
+	var center := CenterContainer.new()
+	center.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_price_overlay.add_child(center)
+
+	var card := _make_light_card(Color.WHITE, Color(0.80, 0.84, 0.89), 10, 22, 18)
+	card.custom_minimum_size = Vector2(600, 0)
+	center.add_child(card)
+
+	var col := VBoxContainer.new()
+	col.add_theme_constant_override("separation", 12)
+	card.add_child(col)
+
+	var title := Label.new()
+	title.text = GameState.get_rack_display_name(rack_id)
+	title.add_theme_font_size_override("font_size", 18)
+	title.modulate = Color(0.10, 0.12, 0.16)
+	col.add_child(title)
+
+	var rent_txt := tr("Standby")
+	var r_rent := str(r.get("rental_type", "none"))
+	if r_rent != "none" and HardwareCatalog.RENTAL_PROFILES.has(r_rent):
+		rent_txt = tr("%s (%d User)") % [tr(str(HardwareCatalog.RENTAL_PROFILES[r_rent]["short"])), int(r.get("active_users", 0))]
+
+	var info_grid := GridContainer.new()
+	info_grid.columns = 2
+	info_grid.add_theme_constant_override("h_separation", 18)
+	info_grid.add_theme_constant_override("v_separation", 6)
+	col.add_child(info_grid)
+	var info_rows: Array = [
+		[tr("Strom"), tr("an") if bool(r.get("powered", false)) else tr("aus")],
+		[tr("LAN"), tr("ok") if bool(r.get("networked", false)) else tr("fehlt")],
+		[tr("Verbrauch"), "%d / %d W" % [int(hw["watts"]), max_pdu]],
+		[tr("Temperatur"), "%.1f °C" % float(r.get("temp", 0.0))],
+		[tr("RAM"), "%d GB" % int(hw["ram_gb"])],
+		[tr("Speicher"), "%.1f TB" % float(hw["storage_tb"])],
+		[tr("Vermietung"), rent_txt],
+	]
+	for row in info_rows:
+		var k := Label.new()
+		k.text = str(row[0])
+		k.custom_minimum_size = Vector2(120, 0)
+		k.add_theme_font_size_override("font_size", 13)
+		k.modulate = Color(0.36, 0.40, 0.46)
+		info_grid.add_child(k)
+		var v := Label.new()
+		v.text = str(row[1])
+		v.add_theme_font_size_override("font_size", 13)
+		v.modulate = Color(0.10, 0.12, 0.16)
+		info_grid.add_child(v)
+
+	var slot_head := Label.new()
+	slot_head.text = tr("GERÄTE IM RACK")
+	slot_head.add_theme_font_size_override("font_size", 11)
+	slot_head.modulate = Color(0.34, 0.40, 0.48)
+	col.add_child(slot_head)
+
+	var scroll := ScrollContainer.new()
+	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	col.add_child(scroll)
+	var slot_list := VBoxContainer.new()
+	slot_list.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	slot_list.add_theme_constant_override("separation", 4)
+	scroll.add_child(slot_list)
+
+	var slots: Array = r.get("slots", []) as Array
+	var shown := 0
+	for si in range(slots.size()):
+		var sl: Dictionary = slots[si]
+		var itype := str(sl.get("item_type", ""))
+		if itype == "":
+			continue
+		shown += 1
+		var item_label := str((GameState.ITEM_CATALOG.get(itype, {}) as Dictionary).get("label", itype))
+		var st := str(sl.get("state", ""))
+		var status_txt := tr("läuft")
+		var status_col := Color(0.08, 0.44, 0.24)
+		if st == "burning":
+			status_txt = tr("BRAND!")
+			status_col = Color(0.78, 0.22, 0.14)
+		elif st == "crashed":
+			status_col = Color(0.78, 0.22, 0.14)
+			if GameState.is_slot_awaiting_diagnosis(sl):
+				status_txt = tr("ausgefallen – Ursache unbekannt, am Rack in der 3D-Vorschau nachsehen")
+			elif str(sl.get("faulty_part", "")) != "":
+				status_txt = tr("%s defekt – Reparatur [E] am Rack") % GameState.get_component_label(str(sl["faulty_part"]))
+			else:
+				status_txt = tr("ausgefallen – Reparatur [E] am Rack")
+		elif st != "ok":
+			status_txt = st
+			status_col = Color(0.45, 0.48, 0.52)
+		var sl_lbl := Label.new()
+		sl_lbl.text = tr("Slot %d: %s  •  %s") % [si + 1, tr(item_label), status_txt]
+		sl_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		sl_lbl.add_theme_font_size_override("font_size", 12)
+		sl_lbl.modulate = status_col
+		slot_list.add_child(sl_lbl)
+	if shown == 0:
+		var empty_lbl := Label.new()
+		empty_lbl.text = tr("Keine Geräte eingebaut.")
+		empty_lbl.add_theme_font_size_override("font_size", 12)
+		empty_lbl.modulate = Color(0.42, 0.46, 0.52)
+		slot_list.add_child(empty_lbl)
+	scroll.custom_minimum_size = Vector2(0, clampf(float(maxi(shown, 1)) * 26.0, 30.0, 300.0))
+
+	var btn_row := HBoxContainer.new()
+	btn_row.alignment = BoxContainer.ALIGNMENT_END
+	col.add_child(btn_row)
+	var close_btn := Button.new()
+	close_btn.text = tr("Schließen")
+	close_btn.custom_minimum_size = Vector2(120, 38)
+	_style_win_btn(close_btn, Color(0.92, 0.93, 0.95), Color(0.76, 0.79, 0.82), Color(0.20, 0.24, 0.30))
+	close_btn.pressed.connect(_close_price_overlay)
+	btn_row.add_child(close_btn)
 
 
 func _add_research_card(content: VBoxContainer) -> void:
@@ -2503,7 +2715,7 @@ func _close_price_overlay() -> void:
 ## Preis-Overlay für die Stromstufe: Vergleich "Aktuell" gegen "Neu", unten der Kaufen-Button.
 func _open_power_overlay() -> void:
 	_close_price_overlay()
-	if GameState.power_fuse_stock > 0:
+	if GameState.power_fuse_stock > 0 or GameState.is_power_fuse_on_way():
 		return
 	if GameState.power_tier + 1 >= GameState.POWER_TIERS.size():
 		return
@@ -2578,7 +2790,7 @@ func _open_power_overlay() -> void:
 			grid.add_child(lbl)
 
 	var note := Label.new()
-	note.text = tr("Du kaufst eine Drehsicherung. Sie kommt ins Lager. Setze sie am Sicherungskasten mit [E] in Steckplatz F2 ein: Erst dann steigt die Stromstufe, und die alte Sicherung bekommst du in die Hand.")
+	note.text = tr("Du kaufst eine Drehsicherung. Sie kommt mit dem Sprinter im Sammelpaket ins Lager. Setze sie am Sicherungskasten mit [E] in Steckplatz F2 ein: Erst dann steigt die Stromstufe, und die alte Sicherung bekommst du in die Hand.")
 	note.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	note.add_theme_font_size_override("font_size", 12)
 	note.modulate = Color(0.36, 0.40, 0.46)
@@ -2606,6 +2818,161 @@ func _open_power_overlay() -> void:
 		_close_price_overlay()
 	)
 	btn_row.add_child(buy_btn)
+
+
+## Gemeinsames Vergleichs-Overlay für Gebäude-Upgrades (Router, Hallen, KI-Plattform).
+## rows: Array aus 3er-Arrays [Merkmal, Aktuell, Neu]; die erste Zeile ist die Kopfzeile.
+func _open_upgrade_overlay(title_text: String, rows: Array, note_text: String, cost: int, can_buy: bool, on_buy: Callable) -> void:
+	_close_price_overlay()
+
+	_price_overlay = Control.new()
+	_price_overlay.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_price_overlay.mouse_filter = Control.MOUSE_FILTER_STOP
+	add_child(_price_overlay)
+
+	var dim := ColorRect.new()
+	dim.color = Color(0.0, 0.0, 0.0, 0.55)
+	dim.set_anchors_preset(Control.PRESET_FULL_RECT)
+	dim.mouse_filter = Control.MOUSE_FILTER_STOP
+	_price_overlay.add_child(dim)
+
+	var center := CenterContainer.new()
+	center.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_price_overlay.add_child(center)
+
+	var card := _make_light_card(Color.WHITE, Color(0.80, 0.84, 0.89), 10, 22, 18)
+	card.custom_minimum_size = Vector2(560, 0)
+	center.add_child(card)
+
+	var col := VBoxContainer.new()
+	col.add_theme_constant_override("separation", 12)
+	card.add_child(col)
+
+	var title := Label.new()
+	title.text = title_text
+	title.add_theme_font_size_override("font_size", 18)
+	title.modulate = Color(0.10, 0.12, 0.16)
+	col.add_child(title)
+
+	var grid := GridContainer.new()
+	grid.columns = 3
+	grid.add_theme_constant_override("h_separation", 18)
+	grid.add_theme_constant_override("v_separation", 8)
+	col.add_child(grid)
+
+	for r in range(rows.size()):
+		var row: Array = rows[r]
+		for c in range(3):
+			var lbl := Label.new()
+			lbl.text = str(row[c])
+			lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+			lbl.custom_minimum_size = Vector2(150 if c > 0 else 90, 0)
+			lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+			lbl.add_theme_font_size_override("font_size", 13)
+			if r == 0 or c == 0:
+				lbl.modulate = Color(0.36, 0.40, 0.46)
+			elif c == 1:
+				lbl.modulate = Color(0.45, 0.48, 0.52)
+			else:
+				lbl.modulate = Color(0.08, 0.44, 0.24)
+			grid.add_child(lbl)
+
+	if note_text != "":
+		var note := Label.new()
+		note.text = note_text
+		note.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		note.add_theme_font_size_override("font_size", 12)
+		note.modulate = Color(0.36, 0.40, 0.46)
+		col.add_child(note)
+
+	var btn_row := HBoxContainer.new()
+	btn_row.add_theme_constant_override("separation", 10)
+	btn_row.alignment = BoxContainer.ALIGNMENT_END
+	col.add_child(btn_row)
+
+	var cancel_btn := Button.new()
+	cancel_btn.text = tr("Abbrechen")
+	cancel_btn.custom_minimum_size = Vector2(120, 38)
+	_style_win_btn(cancel_btn, Color(0.92, 0.93, 0.95), Color(0.76, 0.79, 0.82), Color(0.20, 0.24, 0.30))
+	cancel_btn.pressed.connect(_close_price_overlay)
+	btn_row.add_child(cancel_btn)
+
+	var buy_btn := Button.new()
+	buy_btn.text = tr("Kaufen ($%d)") % cost
+	buy_btn.custom_minimum_size = Vector2(170, 38)
+	buy_btn.disabled = not can_buy
+	_style_win_btn(buy_btn, Color(0.12, 0.56, 0.32) if can_buy else Color(0.84, 0.86, 0.89), Color(0.08, 0.44, 0.24), Color.WHITE if can_buy else Color(0.45, 0.48, 0.52))
+	buy_btn.pressed.connect(func():
+		on_buy.call()
+		_close_price_overlay()
+	)
+	btn_row.add_child(buy_btn)
+
+
+## Router-Overlay: zeigt Geschwindigkeit, Ports und DDoS-Schutz der nächsten Stufe.
+func _open_router_overlay() -> void:
+	_close_price_overlay()
+	var rt := clampi(GameState.router_tier, 0, GameState.ROUTER_TIERS.size() - 1)
+	if rt + 1 >= GameState.ROUTER_TIERS.size():
+		return
+	var cur: Dictionary = GameState.ROUTER_TIERS[rt]
+	var nxt: Dictionary = GameState.ROUTER_TIERS[rt + 1]
+	var cost := int(nxt["cost"])
+	var rows: Array = [
+		["", tr("Aktuell"), tr("Neu")],
+		[tr("Geschwindigkeit"), str(cur["speed"]), str(nxt["speed"])],
+		[tr("LAN-Ports"), str(int(cur["ports"])), str(int(nxt["ports"]))],
+		[tr("DDoS-Schutz"),
+			"+%.0f%%" % ((float(cur["ddos_mult"]) - 1.0) * 100.0),
+			"+%.0f%%" % ((float(nxt["ddos_mult"]) - 1.0) * 100.0)],
+		[tr("Preis"), "–", "$%d" % cost],
+	]
+	_open_upgrade_overlay(tr("Internet-Router upgraden"), rows, "", cost, GameState.money >= float(cost), GameState.request_upgrade_router)
+
+
+## Hallen-Overlay: zeigt, welcher Gebäudeteil dazukommt und wie viel Fläche er bringt.
+func _open_hall_overlay() -> void:
+	_close_price_overlay()
+	if GameState.room_level >= 2:
+		return
+	var cost := GameState.HALL_B_COST if GameState.room_level == 0 else GameState.HALL_C_COST
+	var cur_name := tr("Garage") if GameState.room_level == 0 else tr("Garage + Halle B")
+	var nxt_name := tr("Garage + Halle B") if GameState.room_level == 0 else tr("Vollausbau (3/3 Hallen)")
+	var area := "+63 m²" if GameState.room_level == 0 else "+81 m²"
+	var note := tr("Öffnet HALLE B (+63 m² Doppelboden-Serverraum).") if GameState.room_level == 0 else tr("Öffnet HALLE C — ENTERPRISE RECHENZENTRUM (+81 m²) mit eigenem Strom- & Glasfaserbus!")
+	var rows: Array = [
+		["", tr("Aktuell"), tr("Neu")],
+		[tr("Gebäude"), cur_name, nxt_name],
+		[tr("Zusatzfläche"), "–", area],
+		[tr("Preis"), "–", "$%d" % cost],
+	]
+	_open_upgrade_overlay(tr("Gebäude-Ausbau"), rows, note, cost, GameState.money >= float(cost), GameState.request_expand_room)
+
+
+## KI-Plattform-Overlay: zeigt die nächste Stufe mit den nötigen RAM- und GPU-Werten.
+func _open_ai_overlay() -> void:
+	_close_price_overlay()
+	var cur_lvl := GameState.ai_platform_level
+	if cur_lvl + 1 >= GameState.AI_TIERS.size():
+		return
+	var cur: Dictionary = GameState.AI_TIERS[cur_lvl]
+	var nxt: Dictionary = GameState.AI_TIERS[cur_lvl + 1]
+	var cost := int(nxt["cost"])
+	var mram := int(nxt.get("min_ram_gb", 16))
+	var mgpu := int(nxt.get("min_gpu", 30))
+	var have_ram := int(GameState.total_ram_gb)
+	var have_gpu := int(GameState.total_gpu_score)
+	var can_buy := GameState.money >= float(cost) and have_ram >= mram and have_gpu >= mgpu
+	var rows: Array = [
+		["", tr("Aktuell"), tr("Neu")],
+		[tr("Stufe"), "%d / %d" % [cur_lvl + 1, GameState.AI_TIERS.size()], "%d / %d" % [cur_lvl + 2, GameState.AI_TIERS.size()]],
+		[tr("Plattform"), tr(str(cur["label"])), tr(str(nxt["label"]))],
+		[tr("Mindest-RAM"), "%d GB" % int(cur.get("min_ram_gb", 0)), "%d GB" % mram],
+		[tr("Mindest-GPU"), str(int(cur.get("min_gpu", 0))), str(mgpu)],
+		[tr("Preis"), "–", "$%d" % cost],
+	]
+	var note := tr("Dein Bestand: %d GB RAM, GPU-Wert %d.") % [have_ram, have_gpu]
+	_open_upgrade_overlay(tr("KI-Plattform upgraden"), rows, note, cost, can_buy, GameState.request_upgrade_ai_platform)
 
 
 func _make_light_card(bg: Color, border: Color, radius: int, pad_x: int, pad_y: int) -> PanelContainer:

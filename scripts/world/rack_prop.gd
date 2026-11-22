@@ -16,6 +16,8 @@ var _power_port_marker: Node3D
 var _net_port_marker: Node3D
 var _power_led_mat: StandardMaterial3D
 var _net_led_mat: StandardMaterial3D
+var _cluster_port_marker: Node3D
+var _cluster_led_mat: StandardMaterial3D
 var _header_label: Label3D
 var _fan_audio: AudioStreamPlayer3D
 var _fire_light: OmniLight3D
@@ -46,11 +48,15 @@ func setup(id: String, p_rack_type: String = "rack", p_showcase: bool = false) -
 
 
 func get_power_port_global_pos() -> Vector3:
-	return _power_port_marker.global_position if _power_port_marker != null else global_position + Vector3(0.0, 2.02, 0.49)
+	return _power_port_marker.global_position if _power_port_marker != null else to_global(Vector3(0.0, 2.02, -0.49))
 
 
 func get_net_port_global_pos() -> Vector3:
-	return _net_port_marker.global_position if _net_port_marker != null else global_position + Vector3(0.0, 2.02, 0.49)
+	return _net_port_marker.global_position if _net_port_marker != null else to_global(Vector3(0.0, 2.02, -0.49))
+
+
+func get_cluster_port_global_pos() -> Vector3:
+	return _cluster_port_marker.global_position if _cluster_port_marker != null else to_global(Vector3(0.0, 2.02, -0.49))
 
 
 func apply_data(data: Dictionary) -> void:
@@ -217,6 +223,11 @@ func _refresh_visuals() -> void:
 		_net_led_mat.emission = Color(0.24, 0.78, 0.38) if networked else Color(0.18, 0.18, 0.18)
 		_net_led_mat.emission_energy_multiplier = 0.80 if networked else 0.04
 
+	if _cluster_led_mat != null:
+		var clustered := bool(_rack_data.get("clustered", false))
+		_cluster_led_mat.emission = Color(0.62, 0.38, 0.92) if clustered else Color(0.18, 0.18, 0.18)
+		_cluster_led_mat.emission_energy_multiplier = 0.80 if clustered else 0.04
+
 	var used_slots := 0
 	var rack_ram_gb := 0
 	for i in range(mini(slots.size(), _slot_visuals.size())):
@@ -294,7 +305,7 @@ func _refresh_visuals() -> void:
 			var warn_tag := (" ⚠" + bneck.to_upper()) if bneck != "ok" else ""
 			rent_line = tr("%s %s • %d User%s • %.0f°C") % [str(prof["icon"]), tr(str(prof["short"])), users, warn_tag, temp]
 		_header_label.text = "%s%s | %d/%d (%d GB RAM)\n%s" % [
-			rack_id.to_upper(), pro_tag, used_slots, slot_count, rack_ram_gb, rent_line
+			GameState.get_rack_display_name(rack_id), pro_tag, used_slots, slot_count, rack_ram_gb, rent_line
 		]
 		var bm := str((_rack_data.get("metrics", {}) as Dictionary).get("bottleneck", "ok"))
 		if temp >= 75.0 or (rtype_rent != "none" and bm != "ok"):
@@ -467,18 +478,19 @@ func _build_rack_geometry() -> void:
 	_fire_light.shadow_enabled = false
 	add_child(_fire_light)
 
+	# Anschlüsse sitzen oben an der Rückseite (-Z), damit die Kabel hinter dem Rack verlaufen.
 	# Realistic Matte Yellow Power IEC Receptacle Pod (Left) + Pinpoint Status LED
-	_add_box(self, Vector3(-0.27, top_y, 0.445), Vector3(0.24, 0.12, 0.055), dark_mat)
-	_add_box(self, Vector3(-0.29, top_y, 0.470), Vector3(0.12, 0.065, 0.032), _mat(Color(0.84, 0.66, 0.14), 0.48, 0.08))
+	_add_box(self, Vector3(-0.27, top_y, -0.445), Vector3(0.24, 0.12, 0.055), dark_mat)
+	_add_box(self, Vector3(-0.29, top_y, -0.470), Vector3(0.12, 0.065, 0.032), _mat(Color(0.84, 0.66, 0.14), 0.48, 0.08))
 	_power_led_mat = StandardMaterial3D.new()
 	_power_led_mat.albedo_color = Color(0.24, 0.78, 0.38)
 	_power_led_mat.emission_enabled = true
 	_power_led_mat.emission = Color(0.24, 0.78, 0.38)
 	_power_led_mat.emission_energy_multiplier = 0.04
-	_limit_detail_range(_add_box(self, Vector3(-0.18, top_y, 0.474), Vector3(0.024, 0.024, 0.016), _power_led_mat))
+	_limit_detail_range(_add_box(self, Vector3(-0.18, top_y, -0.474), Vector3(0.024, 0.024, 0.016), _power_led_mat))
 
 	_power_port_marker = Node3D.new()
-	_power_port_marker.position = Vector3(-0.27, top_y, 0.50)
+	_power_port_marker.position = Vector3(-0.27, top_y, -0.50)
 	add_child(_power_port_marker)
 
 	if not is_showcase_only:
@@ -486,21 +498,21 @@ func _build_rack_geometry() -> void:
 			"interact_type": "power_port",
 			"entity_id": rack_id,
 		})
-		p_area.position = Vector3(-0.27, top_y, 0.46)
+		p_area.position = Vector3(-0.27, top_y, -0.46)
 		add_child(p_area)
 
 	# Realistic Matte Blue Network RJ45 Patch Pod (Right) + Pinpoint Link LED
-	_add_box(self, Vector3(0.27, top_y, 0.445), Vector3(0.24, 0.12, 0.055), dark_mat)
-	_add_box(self, Vector3(0.25, top_y, 0.470), Vector3(0.12, 0.065, 0.032), _mat(Color(0.20, 0.44, 0.72), 0.45, 0.22))
+	_add_box(self, Vector3(0.27, top_y, -0.445), Vector3(0.24, 0.12, 0.055), dark_mat)
+	_add_box(self, Vector3(0.25, top_y, -0.470), Vector3(0.12, 0.065, 0.032), _mat(Color(0.20, 0.44, 0.72), 0.45, 0.22))
 	_net_led_mat = StandardMaterial3D.new()
 	_net_led_mat.albedo_color = Color(0.24, 0.78, 0.38)
 	_net_led_mat.emission_enabled = true
 	_net_led_mat.emission = Color(0.24, 0.78, 0.38)
 	_net_led_mat.emission_energy_multiplier = 0.04
-	_limit_detail_range(_add_box(self, Vector3(0.36, top_y, 0.474), Vector3(0.024, 0.024, 0.016), _net_led_mat))
+	_limit_detail_range(_add_box(self, Vector3(0.36, top_y, -0.474), Vector3(0.024, 0.024, 0.016), _net_led_mat))
 
 	_net_port_marker = Node3D.new()
-	_net_port_marker.position = Vector3(0.27, top_y, 0.50)
+	_net_port_marker.position = Vector3(0.27, top_y, -0.50)
 	add_child(_net_port_marker)
 
 	if not is_showcase_only:
@@ -508,11 +520,33 @@ func _build_rack_geometry() -> void:
 			"interact_type": "net_port",
 			"entity_id": rack_id,
 		})
-		n_area.position = Vector3(0.27, top_y, 0.46)
+		n_area.position = Vector3(0.27, top_y, -0.46)
 		add_child(n_area)
 
+	# Lila Cluster-Port (Mitte): verbundene Racks leihen sich bei Engpässen freie Hardware.
+	_add_box(self, Vector3(0.0, top_y, -0.445), Vector3(0.14, 0.12, 0.055), dark_mat)
+	_add_box(self, Vector3(-0.015, top_y, -0.470), Vector3(0.08, 0.065, 0.032), _mat(Color(0.52, 0.28, 0.74), 0.45, 0.22))
+	_cluster_led_mat = StandardMaterial3D.new()
+	_cluster_led_mat.albedo_color = Color(0.62, 0.38, 0.92)
+	_cluster_led_mat.emission_enabled = true
+	_cluster_led_mat.emission = Color(0.18, 0.18, 0.18)
+	_cluster_led_mat.emission_energy_multiplier = 0.04
+	_limit_detail_range(_add_box(self, Vector3(0.045, top_y, -0.474), Vector3(0.024, 0.024, 0.016), _cluster_led_mat))
+
+	_cluster_port_marker = Node3D.new()
+	_cluster_port_marker.position = Vector3(-0.015, top_y, -0.50)
+	add_child(_cluster_port_marker)
+
+	if not is_showcase_only:
+		var c_area := _make_area(Vector3(0.16, 0.24, 0.22), {
+			"interact_type": "cluster_port",
+			"entity_id": rack_id,
+		})
+		c_area.position = Vector3(0.0, top_y, -0.46)
+		add_child(c_area)
+
 	_header_label = Label3D.new()
-	_header_label.text = rack_id.to_upper()
+	_header_label.text = GameState.get_rack_display_name(rack_id)
 	_header_label.font_size = 24
 	_header_label.pixel_size = 0.0040
 	_header_label.position = Vector3(0.0, top_y + 0.28, 0.32)

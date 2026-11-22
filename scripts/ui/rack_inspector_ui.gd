@@ -19,6 +19,12 @@ const SCREEN_MARGIN := 24.0
 const RACK_COL_W := 268.0
 const SIDE_COL_W := 300.0
 const PREVIEW_H := 240.0
+## Kameraposition der 3D-Vorschau bei Zoom 1.0. Die Kamera zielt ungefähr auf den Ursprung,
+## deshalb zoomt das Skalieren dieser Position zur Modellmitte hin.
+const PREVIEW_CAM_POS := Vector3(0.0, 0.64, 0.92)
+const PREVIEW_ZOOM_MIN := 0.45
+const PREVIEW_ZOOM_MAX := 1.6
+const PREVIEW_ZOOM_STEP := 0.9
 const SLOT_ROW_H := 58.0
 const TILE_H := 58.0
 ## Mausrad in Listen: Pixel pro Raste und wie schnell die Liste zum Ziel gleitet.
@@ -59,6 +65,8 @@ var _scroll_key: String = ""
 var _card: PanelContainer
 var _title_lbl: Label
 var _subtitle_lbl: Label
+var _rename_edit: LineEdit
+var _rename_cancelled := false
 var _status_panel: PanelContainer
 var _status_lbl: Label
 var _kpi_row: HBoxContainer
@@ -96,6 +104,23 @@ var _preview_sig: String = ""
 var _preview_dragging: bool = false
 var _preview_yaw: float = 0.45
 var _preview_pitch: float = -0.05
+var _preview_cam: Camera3D
+var _preview_overlay: Control
+## Kleiner als 1.0 = näher dran.
+var _preview_zoom: float = 1.0
+## Im Vollbild hängt _preview_frame in _preview_fs_host. In der Seitenspalte hält
+## _preview_placeholder den Platz frei, damit die Vorschau beim Beenden dorthin zurückkann.
+var _preview_fullscreen := false
+var _preview_fs_host: PanelContainer
+var _preview_fs_btn: Button
+var _preview_placeholder: Control
+# Fehlersuche: Bauteile im Modell tragen die Meta "part_cat" (siehe HardwareMeshFactory).
+var _preview_part_nodes: Array = []
+var _preview_faulty_cat: String = ""
+var _preview_fault_mat: StandardMaterial3D
+var _preview_hover_lbl: Label
+## Verhindert, dass jede Mausbewegung über dem defekten Teil eine neue Diagnose-RPC schickt.
+var _diag_requested_key: String = ""
 
 
 func _ready() -> void:
@@ -214,7 +239,7 @@ func _live_signature() -> String:
 	return "%s|%d|%d|%d|%s|%s|%s|%d|%d|%d|%d|%d|%d|%d|%s" % [
 		_active_tab,
 		(r.get("services", []) as Array).size(),
-		GameState.get_reputation_tier(),
+		GameState.get_reputation_tier() * 10 + GameState.get_company_level(),
 		roundi(float(r.get("temp", 22.0))),
 		str(r.get("powered", false)),
 		str(r.get("networked", false)),
@@ -233,7 +258,7 @@ func _live_signature() -> String:
 func _mb_affordable_count() -> int:
 	var n := 0
 	for id in GameState.get_mainboards():
-		if float(GameState.ITEM_CATALOG[id]["price"]) <= float(GameState.money):
+		if float(GameState.ITEM_CATALOG[id]["price"]) <= float(GameState.money) and GameState.is_item_unlocked(str(id)):
 			n += 1
 	return n
 
@@ -284,10 +309,11 @@ func _process(delta: float) -> void:
 		if is_instance_valid(n):
 			(n as CanvasItem).modulate.a = pulse
 
+	# Nach einem Neuaufbau ohne Vorschau (z. B. leerer Einschub) bleibt sonst ein leeres Vollbild stehen.
+	if _preview_fullscreen and not _preview_frame.is_inside_tree():
+		set_preview_fullscreen(false)
 	if _preview_vp == null or not _preview_frame.is_inside_tree() or not _preview_frame.visible:
 		return
-	if not _preview_dragging:
-		_preview_yaw += delta * 0.28
 	if _preview_pivot != null:
 		_preview_pivot.rotation.y = _preview_yaw
 		_preview_pivot.rotation.x = _preview_pitch
@@ -298,10 +324,21 @@ func _process(delta: float) -> void:
 				fnode.rotation.x += delta * 14.0
 			else:
 				fnode.rotation.z += delta * 14.0
+	if _preview_fault_mat != null and _preview_faulty_cat != "":
+		_preview_fault_mat.albedo_color.a = 0.15 + 0.30 * absf(sin(_pulse_t * 3.0))
 
 
 func _input(event: InputEvent) -> void:
 	if not visible:
+		return
+	# Beim Tippen gehören die Tasten dem Umbenennen-Feld. Ein Klick daneben beendet die Eingabe.
+	if is_typing():
+		if event is InputEventMouseButton and (event as InputEventMouseButton).pressed \
+				and not _rename_edit.get_global_rect().has_point(get_global_mouse_position()):
+			_rename_edit.release_focus()
+		return
+	# Im Vollbild gehören Maus und Mausrad der Vorschau. [ESC] wird in main.gd behandelt.
+	if _preview_fullscreen:
 		return
 	if event is InputEventMouseMotion:
 		if (event as InputEventMouseMotion).relative.length_squared() > 1.0:
@@ -350,6 +387,9 @@ func open_rack(rack_id: String, initial_slot: int = 0) -> void:
 	_selected_slot = clampi(initial_slot, 0, maxi(slot_n - 1, 0))
 	_active_tab = "hardware"
 	_focus_key = "slot_%d" % _selected_slot
+	_rename_cancelled = false
+	_rename_edit.visible = true
+	_rename_edit.text = str((GameState.racks[rack_id] as Dictionary).get("custom_name", ""))
 	_open_common()
 
 
@@ -357,13 +397,42 @@ func open_device(kind: String, entity_id: String) -> void:
 	_mode = kind
 	_entity_id = entity_id
 	_focus_key = "primary"
+	_rename_edit.visible = false
 	_open_common()
+
+
+## true, solange das Umbenennen-Feld den Tastaturfokus hat. main.gd leitet dann keine Tasten um.
+func is_typing() -> bool:
+	return is_instance_valid(_rename_edit) and _rename_edit.has_focus()
+
+
+## [ESC] beim Tippen: Eingabe verwerfen, Menü bleibt offen.
+func cancel_typing() -> void:
+	if not is_typing():
+		return
+	_rename_cancelled = true
+	_rename_edit.release_focus()
+
+
+func _commit_rename() -> void:
+	if _mode != "rack" or not GameState.racks.has(_entity_id):
+		_rename_cancelled = false
+		return
+	var current := str((GameState.racks[_entity_id] as Dictionary).get("custom_name", ""))
+	if _rename_cancelled:
+		_rename_cancelled = false
+		_rename_edit.text = current
+		return
+	var wanted := _rename_edit.text.strip_edges()
+	if wanted != current:
+		GameState.request_rename_rack(_entity_id, wanted)
 
 
 func close_inspector() -> void:
 	_confirm_sell_entity = false
 	_confirm_sell_module = false
 	_preview_dragging = false
+	set_preview_fullscreen(false)
 	if _preview_vp != null:
 		_preview_vp.render_target_update_mode = SubViewport.UPDATE_DISABLED
 	UIStyle.animate_popup_close(self, _card)
@@ -472,7 +541,12 @@ func _render_rack_view() -> void:
 	var powered := bool(rack["powered"])
 	var networked := bool(rack["networked"])
 
-	_title_lbl.text = "%s  —  %s" % [_entity_id.to_upper(), tr(str(cat_rack["name"]))]
+	_title_lbl.text = "%s  —  %s" % [GameState.get_rack_display_name(_entity_id), tr(str(cat_rack["name"]))]
+	# Namen übernehmen, den ein Mitspieler vergeben hat, außer während hier getippt wird.
+	if not is_typing():
+		var saved_name := str(rack.get("custom_name", ""))
+		if _rename_edit.text != saved_name:
+			_rename_edit.text = saved_name
 	_subtitle_lbl.text = tr("Guthaben: $%.0f   •   Teile im Lager: %d   •   Haus-Router: %s") % [
 		GameState.money, GameState.get_total_inventory_parts(), HardwareCatalog.format_speed_mbps(GameState.max_bandwidth_mbps)
 	]
@@ -942,7 +1016,8 @@ func _make_mb_group_header(cd: Dictionary, count: int) -> PanelContainer:
 func _make_mainboard_card(item_type: String) -> Button:
 	var item: Dictionary = GameState.ITEM_CATALOG[item_type]
 	var price := int(item.get("price", 0))
-	var affordable := GameState.money >= float(price)
+	var unlocked := GameState.is_item_unlocked(item_type)
+	var affordable := unlocked and GameState.money >= float(price)
 	var accent := item.get("color", UIStyle.COL_ACCENT) as Color
 	var bonus := int(roundf(float(item.get("revenue_bonus", 0.0)) * 100.0))
 
@@ -994,7 +1069,12 @@ func _make_mainboard_card(item_type: String) -> Button:
 	var price_l := _make_label("$%d" % price, 17, UIStyle.COL_GOLD_TEXT if affordable else UIStyle.COL_RED, true)
 	price_l.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
 	pv.add_child(price_l)
-	var act_l := _make_label(tr("KAUFEN & EINBAUEN") if affordable else tr("ZU WENIG GELD"), 9, UIStyle.COL_TEXT_SUB, true)
+	var act_text := tr("KAUFEN & EINBAUEN")
+	if not unlocked:
+		act_text = tr("🔒 AB FIRMENSTUFE %d") % GameState.get_item_required_level(item_type)
+	elif not affordable:
+		act_text = tr("ZU WENIG GELD")
+	var act_l := _make_label(act_text, 9, UIStyle.COL_TEXT_SUB, true)
 	act_l.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
 	pv.add_child(act_l)
 
@@ -1044,8 +1124,11 @@ func _build_slot_detail(parent: VBoxContainer, slot: Dictionary, itype: String) 
 		top.add_child(_make_chip(tr("ONLINE"), UIStyle.COL_GREEN))
 
 	if state == "crashed":
-		var rep := _make_btn(tr("Reparieren"), "slot_repair", Vector2(120, 32))
+		var awaiting_diag := GameState.is_slot_awaiting_diagnosis(slot)
+		var rep := _make_btn(tr("Erst Defekt finden") if awaiting_diag else tr("Reparieren"), "slot_repair", Vector2(150 if awaiting_diag else 120, 32))
 		_style_btn(rep, Color(0.18, 0.30, 0.18), UIStyle.COL_GREEN)
+		# Der Server lehnt Reparaturen vor der Diagnose ohnehin ab; der Button zeigt das nur an.
+		rep.disabled = awaiting_diag
 		rep.pressed.connect(func(): GameState.request_repair_slot(_entity_id, _selected_slot, 1.0))
 		top.add_child(rep)
 
@@ -1188,7 +1271,8 @@ func _build_part_picker(parent: VBoxContainer, comps: Dictionary, state: String)
 	_parts_scroll = ScrollContainer.new()
 	_parts_scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	_parts_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
-	_parts_scroll.follow_focus = true
+	# Aus: beim Neuaufbau bekommt ein Knopf den Fokus, sonst springt die Liste dorthin.
+	_parts_scroll.follow_focus = false
 	parent.add_child(_parts_scroll)
 	var plist := VBoxContainer.new()
 	plist.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -1275,6 +1359,10 @@ func _make_part_row(pd: Dictionary, installed: bool, is_default: bool, stock: in
 		ibtn.pressed.connect(func():
 			GameState.request_install_component(_entity_id, _selected_slot, cap_cat, pid)
 		)
+	elif not GameState.is_part_unlocked(pd):
+		ibtn.text = tr("🔒 Ab Firmenstufe %d") % GameState.get_part_required_level(pd)
+		ibtn.disabled = true
+		_style_btn(ibtn, Color(0.13, 0.13, 0.14), UIStyle.COL_BORDER)
 	else:
 		var buy_cost := int(pd["cost"])
 		ibtn.text = tr("Kaufen & einbauen ($%d)") % buy_cost
@@ -1294,7 +1382,26 @@ func _build_side_column(side: VBoxContainer, slot: Dictionary, itype: String) ->
 		_preview_frame.custom_minimum_size = Vector2(0, PREVIEW_H)
 		_preview_frame.size_flags_vertical = Control.SIZE_EXPAND_FILL
 		side.add_child(_preview_frame)
-		_update_3d_preview(itype, slot.get("components", {}) as Dictionary)
+		if _preview_fullscreen:
+			_move_preview_to_fullscreen()
+		var faulty_cat := str(slot.get("faulty_part", "")) if str(slot.get("state", "")) == "crashed" else ""
+		# Vor der Diagnose bleibt das defekte Teil unmarkiert; der Hover erkennt es trotzdem.
+		var reveal_fault := not GameState.is_slot_awaiting_diagnosis(slot)
+		_update_3d_preview(itype, slot.get("components", {}) as Dictionary, faulty_cat, reveal_fault)
+		if GameState.is_slot_awaiting_diagnosis(slot):
+			var hint := Label.new()
+			hint.text = tr("Störung ohne bekannte Ursache: Fahre mit der Maus über die Bauteile, um das defekte Teil zu finden.")
+			hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+			hint.add_theme_font_size_override("font_size", 12)
+			hint.add_theme_color_override("font_color", UIStyle.COL_AMBER)
+			side.add_child(hint)
+		elif faulty_cat != "":
+			var found := Label.new()
+			found.text = tr("Defekt: %s – mit [E] am Rack reparieren.") % GameState.get_component_label(faulty_cat)
+			found.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+			found.add_theme_font_size_override("font_size", 12)
+			found.add_theme_color_override("font_color", UIStyle.COL_RED)
+			side.add_child(found)
 	else:
 		_update_3d_preview("", {})
 		var ph := PanelContainer.new()
@@ -1385,6 +1492,21 @@ func _render_rack_rental(rack: Dictionary, hw: Dictionary) -> void:
 		var lh := _make_label("%s  —  %s" % [tr(str(prof["short"])).to_upper(), str(rack.get("rental_customer", ""))], 14, UIStyle.COL_TEXT_MAIN, true)
 		lh.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 		lv.add_child(lh)
+		# Geliehene Hardware über Cluster-Kabel anzeigen.
+		var cb: Dictionary = m["cluster_borrowed"] if m.get("cluster_borrowed") is Dictionary else {}
+		if not cb.is_empty():
+			var parts := PackedStringArray()
+			if cb.has("ram_gb"):
+				parts.append(tr("%.1f GB RAM") % float(cb["ram_gb"]))
+			if cb.has("cpu_score"):
+				parts.append(tr("%.0f CPU") % float(cb["cpu_score"]))
+			if cb.has("gpu_score"):
+				parts.append(tr("%.0f GPU") % float(cb["gpu_score"]))
+			if cb.has("storage_tb"):
+				parts.append(tr("%.2f TB Speicher") % float(cb["storage_tb"]))
+			var cl := _make_label(tr("🔗 Vom Cluster geliehen: %s") % ", ".join(parts), 12, UIStyle.COL_ACCENT, false)
+			cl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+			lv.add_child(cl)
 		# Live-Feedback pro Dienst: Nutzer, Trend und Obergrenze beim aktuellen Ruf.
 		var svc_list: Array = rack.get("services", [])
 		for s in svc_list:
@@ -1397,9 +1519,9 @@ func _render_rack_rental(rack: Dictionary, hw: Dictionary) -> void:
 			var sp: Dictionary = HardwareCatalog.RENTAL_PROFILES[stype]
 			var trend := float(sd.get("trend", 0.0))
 			var trend_col := UIStyle.COL_GREEN if trend > 0.3 else (UIStyle.COL_RED if trend < -0.3 else UIStyle.COL_TEXT_SUB)
-			var sl := _make_label(tr("%s %s – %s: %d / %d Nutzer  (%+.1f/min)") % [
+			var sl := _make_label(tr("%s %s – %s: %d Nutzer  (%+.1f/min)") % [
 				str(sp.get("icon", "")), tr(str(sp.get("short", stype))), str(sd.get("customer", "")),
-				int(roundf(float(sd.get("users", 0.0)))), GameState.get_service_user_cap(stype), trend,
+				int(roundf(float(sd.get("users", 0.0)))), trend,
 			], 12, trend_col)
 			sl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 			lv.add_child(sl)
@@ -1474,7 +1596,6 @@ func _make_rental_button(k: String, active: Array) -> Button:
 	var pay_s := ""
 	if k != "none":
 		pay_s = "   •   " + tr("$%.2f pro Nutzer") % float(prof.get("pay_per_user", 0.0))
-		pay_s += "   •   " + tr("bis %d Nutzer") % GameState.get_service_user_cap(k)
 	iv.add_child(_make_label(tr(str(prof["label"])) + pay_s, 14, UIStyle.COL_GREEN if is_cur else UIStyle.COL_TEXT_MAIN, true))
 	var dl := _make_label(tr(str(prof.get("desc", ""))), 11, UIStyle.COL_TEXT_SUB)
 	dl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
@@ -1596,13 +1717,25 @@ func _render_device_view(kind: String) -> void:
 			var cat: Dictionary = GameState.ITEM_CATALOG[ctype]
 			var on := bool(c["powered"])
 			_title_lbl.text = "%s  —  %s" % [_entity_id.to_upper(), tr(str(cat["name"]))]
-			_set_status(tr("AKTIV") if on else tr("KEIN STROM"), UIStyle.COL_GREEN if on else UIStyle.COL_RED)
-			_add_kpi("KÜHLLEISTUNG", "%.0f °C" % float(cat["heat"]), "", UIStyle.COL_BLUE, -1.0, "temp")
-			_add_kpi("STROMVERBRAUCH", "%d W" % int(cat["watts"]), "", UIStyle.COL_AMBER, -1.0, "power")
-			_add_kpi("ANSCHLUSS", tr("Strom OK") if on else tr("Strom FEHLT"), "",
-				UIStyle.COL_GREEN if on else UIStyle.COL_RED, -1.0, "check" if on else "warn")
-			if not on:
-				note = tr("Kein Strom: die gelbe Buchse verkabeln.")
+			if ctype == GameState.INDOOR_UNIT_TYPE:
+				_set_status(tr("KÜHLT") if on else tr("AUSSENGERÄT AUS"), UIStyle.COL_GREEN if on else UIStyle.COL_RED)
+				_add_kpi("KÜHLLEISTUNG", tr("über Außengerät"), "", UIStyle.COL_BLUE, -1.0, "temp")
+				_add_kpi("ANSCHLUSS", tr("Kein Kabel nötig"), "", UIStyle.COL_GREEN, -1.0, "check")
+				if not on:
+					note = tr("Kein Außengerät mit Strom: eine Goldis-Wärmepumpe auf den Rasen rechts vom Garagentor stellen und seitlich verkabeln.")
+			else:
+				var has_indoor := GameState.has_indoor_unit()
+				_set_status(tr("AKTIV") if on else tr("KEIN STROM"), UIStyle.COL_GREEN if on else UIStyle.COL_RED)
+				_add_kpi("KÜHLLEISTUNG", "%.0f °C" % float(cat["heat"]), "", UIStyle.COL_BLUE, -1.0, "temp")
+				_add_kpi("STROMVERBRAUCH", "%d W" % int(cat["watts"]), "", UIStyle.COL_AMBER, -1.0, "power")
+				_add_kpi("ANSCHLUSS", tr("Strom OK") if on else tr("Strom FEHLT"), "",
+					UIStyle.COL_GREEN if on else UIStyle.COL_RED, -1.0, "check" if on else "warn")
+				_add_kpi("INNENGERÄT", tr("Vorhanden") if has_indoor else tr("FEHLT"), "",
+					UIStyle.COL_GREEN if has_indoor else UIStyle.COL_RED, -1.0, "check" if has_indoor else "warn")
+				if not on:
+					note = tr("Kein Strom: die gelbe Buchse an der rechten Seite verkabeln.")
+				elif not has_indoor:
+					note = tr("Ohne Goldis Innengerät kommt keine Kälte in den Raum. Innengerät im Shop kaufen und an eine Innenwand hängen.")
 		"ups":
 			var u: Dictionary = GameState.ups_units[_entity_id]
 			var charge := float(u.get("charge", 0.0))
@@ -1734,7 +1867,7 @@ func _button_under_pointer() -> Button:
 
 
 func _focus_under_pointer() -> void:
-	if _preview_dragging:
+	if _preview_dragging or is_typing():
 		return
 	var btn := _button_under_pointer()
 	if btn != null and not btn.has_focus():
@@ -1771,6 +1904,8 @@ func _first_focusable() -> Button:
 
 
 func _ensure_focus() -> void:
+	if is_typing():
+		return
 	var fo := get_viewport().gui_get_focus_owner()
 	if fo != null and _all_buttons().has(fo):
 		return
@@ -2181,6 +2316,20 @@ func _build_ui() -> void:
 	UIStyle.style_label(_subtitle_lbl, 12, UIStyle.COL_TEXT_SUB)
 	title_box.add_child(_subtitle_lbl)
 
+	# Umbenennen: nur bei Racks sichtbar. Enter oder Verlassen speichert, leer = Standardname.
+	_rename_edit = LineEdit.new()
+	_rename_edit.placeholder_text = tr("Rack umbenennen …")
+	_rename_edit.tooltip_text = tr("Enter speichert, leer = Standardname, [ESC] bricht ab")
+	_rename_edit.max_length = GameState.RACK_NAME_MAX_LEN
+	_rename_edit.custom_minimum_size = Vector2(220, 36)
+	_rename_edit.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	_rename_edit.select_all_on_focus = true
+	_rename_edit.visible = false
+	UIStyle.style_line_edit(_rename_edit)
+	_rename_edit.text_submitted.connect(func(_t: String) -> void: _rename_edit.release_focus())
+	_rename_edit.focus_exited.connect(_commit_rename)
+	header.add_child(_rename_edit)
+
 	_status_panel = PanelContainer.new()
 	_status_panel.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	_status_panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -2254,12 +2403,22 @@ func _build_preview() -> void:
 	vp_overlay.mouse_filter = Control.MOUSE_FILTER_STOP
 	vp_overlay.gui_input.connect(_on_preview_gui_input)
 	_preview_frame.add_child(vp_overlay)
+	_preview_overlay = vp_overlay
 
 	var vp_container := SubViewportContainer.new()
 	vp_container.set_anchors_preset(Control.PRESET_FULL_RECT)
 	vp_container.stretch = true
 	vp_container.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	vp_overlay.add_child(vp_container)
+
+	# Bauteilname unter der Maus; liegt über dem Viewport, fängt selbst keine Klicks.
+	_preview_hover_lbl = Label.new()
+	_preview_hover_lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_preview_hover_lbl.visible = false
+	_preview_hover_lbl.add_theme_font_size_override("font_size", 13)
+	_preview_hover_lbl.add_theme_stylebox_override("normal", UIStyle.make_panel(Color(0.05, 0.06, 0.08, 0.92), UIStyle.COL_BORDER, 6, 1, 8, 4))
+	vp_overlay.add_child(_preview_hover_lbl)
+	vp_overlay.mouse_exited.connect(_clear_preview_hover)
 
 	_preview_vp = SubViewport.new()
 	_preview_vp.own_world_3d = true
@@ -2288,10 +2447,11 @@ func _build_preview() -> void:
 	_preview_vp.add_child(fill_l)
 
 	var cam := Camera3D.new()
-	cam.position = Vector3(0.0, 0.64, 0.92)
+	cam.position = PREVIEW_CAM_POS * _preview_zoom
 	cam.rotation_degrees = Vector3(-33.5, 0.0, 0.0)
 	cam.fov = 38.0
 	_preview_vp.add_child(cam)
+	_preview_cam = cam
 
 	_preview_pivot = Node3D.new()
 	_preview_vp.add_child(_preview_pivot)
@@ -2308,31 +2468,251 @@ func _build_preview() -> void:
 	_preview_pivot.add_child(_preview_model_holder)
 
 	var hint_lbl := Label.new()
-	hint_lbl.text = tr("Maus ziehen zum Drehen")
+	hint_lbl.text = tr("Maus ziehen zum Drehen, Mausrad zum Zoomen")
 	UIStyle.style_label(hint_lbl, 11, UIStyle.COL_GOLD_TEXT, _display_font, true)
 	hint_lbl.position = Vector2(12, 10)
 	hint_lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	vp_overlay.add_child(hint_lbl)
 
+	# Unten rechts, damit der Knopf in schmalen Spalten nicht über dem Hinweistext liegt.
+	_preview_fs_btn = Button.new()
+	_preview_fs_btn.text = tr("Vollbild")
+	_preview_fs_btn.focus_mode = Control.FOCUS_NONE
+	_preview_fs_btn.add_theme_font_size_override("font_size", 12)
+	_style_btn(_preview_fs_btn, Color(0.165, 0.170, 0.182, 0.97), UIStyle.COL_ACCENT)
+	_preview_fs_btn.anchor_left = 1.0
+	_preview_fs_btn.anchor_right = 1.0
+	_preview_fs_btn.anchor_top = 1.0
+	_preview_fs_btn.anchor_bottom = 1.0
+	_preview_fs_btn.offset_left = -8.0
+	_preview_fs_btn.offset_right = -8.0
+	_preview_fs_btn.offset_top = -8.0
+	_preview_fs_btn.offset_bottom = -8.0
+	_preview_fs_btn.grow_horizontal = Control.GROW_DIRECTION_BEGIN
+	_preview_fs_btn.grow_vertical = Control.GROW_DIRECTION_BEGIN
+	_preview_fs_btn.pressed.connect(func() -> void: set_preview_fullscreen(not _preview_fullscreen))
+	vp_overlay.add_child(_preview_fs_btn)
+
+	# Liegt als letztes Kind über der Karte und fängt alle Klicks daneben ab.
+	_preview_fs_host = PanelContainer.new()
+	_preview_fs_host.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_preview_fs_host.mouse_filter = Control.MOUSE_FILTER_STOP
+	_preview_fs_host.add_theme_stylebox_override("panel", UIStyle.make_panel(Color(0.03, 0.035, 0.045, 0.94), UIStyle.COL_BORDER, 0, 0, 32, 32))
+	_preview_fs_host.hide()
+	add_child(_preview_fs_host)
+
+
+func is_preview_fullscreen() -> bool:
+	return _preview_fullscreen
+
+
+func set_preview_fullscreen(on: bool) -> void:
+	if on == _preview_fullscreen:
+		return
+	if on and (_preview_frame.get_parent() == null or not _preview_frame.is_visible_in_tree()):
+		return
+	_preview_fullscreen = on
+	_preview_dragging = false
+	if on:
+		_move_preview_to_fullscreen()
+		_preview_fs_host.show()
+	else:
+		_restore_preview_home()
+		_preview_fs_host.hide()
+	_preview_fs_btn.text = tr("Vollbild beenden [ESC]") if on else tr("Vollbild")
+	SfxManager.play("click", -10.0, 1.0)
+
+
+func _move_preview_to_fullscreen() -> void:
+	var home := _preview_frame.get_parent()
+	if home == null or home == _preview_fs_host:
+		return
+	var idx := _preview_frame.get_index()
+	home.remove_child(_preview_frame)
+	_preview_placeholder = Control.new()
+	_preview_placeholder.custom_minimum_size = Vector2(0, PREVIEW_H)
+	_preview_placeholder.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	home.add_child(_preview_placeholder)
+	home.move_child(_preview_placeholder, idx)
+	_preview_fs_host.add_child(_preview_frame)
+
+
+func _restore_preview_home() -> void:
+	var cur := _preview_frame.get_parent()
+	if cur != null:
+		cur.remove_child(_preview_frame)
+	if is_instance_valid(_preview_placeholder) and _preview_placeholder.is_inside_tree() \
+			and not _preview_placeholder.is_queued_for_deletion():
+		var home := _preview_placeholder.get_parent()
+		var idx := _preview_placeholder.get_index()
+		home.add_child(_preview_frame)
+		home.move_child(_preview_frame, idx)
+		home.remove_child(_preview_placeholder)
+		_preview_placeholder.queue_free()
+	# Ohne gültigen Platzhalter bleibt die Vorschau frei, der nächste Aufbau hängt sie wieder ein.
+	_preview_placeholder = null
+
 
 func _on_preview_gui_input(event: InputEvent) -> void:
-	if event is InputEventMouseButton and (event as InputEventMouseButton).button_index == MOUSE_BUTTON_LEFT:
-		_preview_dragging = (event as InputEventMouseButton).pressed
-	elif event is InputEventMouseMotion and _preview_dragging:
+	if event is InputEventMouseButton:
+		var mb := event as InputEventMouseButton
+		if mb.button_index == MOUSE_BUTTON_LEFT:
+			_preview_dragging = mb.pressed
+		elif mb.button_index == MOUSE_BUTTON_WHEEL_UP or mb.button_index == MOUSE_BUTTON_WHEEL_DOWN:
+			if mb.pressed:
+				var step := PREVIEW_ZOOM_STEP if mb.button_index == MOUSE_BUTTON_WHEEL_UP else 1.0 / PREVIEW_ZOOM_STEP
+				_set_preview_zoom(_preview_zoom * step)
+			# Das Mausrad gehört hier der Vorschau, sonst scrollt die Seite mit.
+			_preview_overlay.accept_event()
+	elif event is InputEventMouseMotion:
 		var mm := event as InputEventMouseMotion
-		_preview_yaw += mm.relative.x * 0.012
-		_preview_pitch = clampf(_preview_pitch + mm.relative.y * 0.008, -0.45, 0.35)
+		if _preview_dragging:
+			_preview_yaw += mm.relative.x * 0.012
+			_preview_pitch = clampf(_preview_pitch + mm.relative.y * 0.008, -0.45, 0.35)
+		_update_preview_hover(mm.position)
 
 
-func _update_3d_preview(item_type: String, comps: Dictionary) -> void:
+func _update_preview_hover(pos: Vector2) -> void:
+	if _preview_cam == null or _preview_vp == null or _preview_overlay == null or _preview_hover_lbl == null:
+		return
+	var ov_size := _preview_overlay.size
+	if ov_size.x <= 0.0 or ov_size.y <= 0.0 or _preview_part_nodes.is_empty():
+		_clear_preview_hover()
+		return
+	var vp_pos := pos * (Vector2(_preview_vp.size) / ov_size)
+	var cat := _pick_preview_part(_preview_cam.project_ray_origin(vp_pos), _preview_cam.project_ray_normal(vp_pos))
+	if cat == "":
+		_clear_preview_hover()
+		return
+	var faulty := cat == _preview_faulty_cat
+	var txt := GameState.get_component_label(cat)
+	if faulty:
+		txt = tr("%s – DEFEKT!") % txt
+	_preview_hover_lbl.text = txt
+	_preview_hover_lbl.add_theme_color_override("font_color", UIStyle.COL_RED if faulty else Color(0.92, 0.94, 0.97))
+	_preview_hover_lbl.visible = true
+	_preview_hover_lbl.reset_size()
+	var lsize := _preview_hover_lbl.get_combined_minimum_size()
+	var p := pos + Vector2(14.0, 10.0)
+	p.x = maxf(0.0, minf(p.x, ov_size.x - lsize.x - 4.0))
+	p.y = maxf(0.0, minf(p.y, ov_size.y - lsize.y - 4.0))
+	_preview_hover_lbl.position = p
+	if faulty:
+		_try_diagnose_selected_slot()
+
+
+func _clear_preview_hover() -> void:
+	if _preview_hover_lbl != null:
+		_preview_hover_lbl.visible = false
+
+
+## Nächstes Bauteil entlang des Mausstrahls. Getestet wird gegen die Welt-AABBs der Meshes,
+## das reicht für die groben Bauteilformen und braucht keine Kollisionsformen.
+func _pick_preview_part(origin: Vector3, dir: Vector3) -> String:
+	# Ein Bauteil auf der Grundplatte gewinnt auch dann, wenn es bis zu so viel weiter weg getroffen wird
+	# (gleiche Höhe wie die Platine, z. B. Sockel und Steckplätze).
+	const BASE_MARGIN := 0.004
+	var best_cat := ""
+	var best_d := INF
+	# Grundplatten (Meta part_base, z. B. das Mainboard) gewinnen nur, wenn sie klar näher liegen
+	# als jedes getroffene Bauteil. Sonst würde eine weit entfernte Bauteil-Box die ganze Platine verdecken.
+	var base_cat := ""
+	var base_d := INF
+	for part_v in _preview_part_nodes:
+		if not is_instance_valid(part_v):
+			continue
+		var part := part_v as Node
+		var d := _ray_hit_distance(part, origin, dir)
+		if bool(part.get_meta("part_base", false)):
+			if d < base_d:
+				base_d = d
+				base_cat = str(part.get_meta("part_cat", ""))
+		elif d < best_d:
+			best_d = d
+			best_cat = str(part.get_meta("part_cat", ""))
+	if best_cat == "":
+		return base_cat
+	if base_cat != "" and base_d + BASE_MARGIN < best_d:
+		return base_cat
+	return best_cat
+
+
+func _ray_hit_distance(n: Node, origin: Vector3, dir: Vector3) -> float:
+	var best := INF
+	if n is MeshInstance3D:
+		var mi := n as MeshInstance3D
+		if mi.mesh != null and mi.is_visible_in_tree():
+			var box: AABB = mi.global_transform * mi.get_aabb()
+			var hit: Variant = box.intersects_ray(origin, dir)
+			if hit != null:
+				best = origin.distance_to(hit as Vector3)
+	for c in n.get_children():
+		# Eingebaute Bauteile (z. B. die CPU auf dem Mainboard) werden einzeln getestet.
+		if c.has_meta("part_cat"):
+			continue
+		best = minf(best, _ray_hit_distance(c, origin, dir))
+	return best
+
+
+func _try_diagnose_selected_slot() -> void:
+	if not GameState.racks.has(_entity_id):
+		return
+	var slots: Array = GameState.racks[_entity_id]["slots"]
+	if _selected_slot < 0 or _selected_slot >= slots.size():
+		return
+	if not GameState.is_slot_awaiting_diagnosis(slots[_selected_slot] as Dictionary):
+		return
+	var key := "%s:%d" % [_entity_id, _selected_slot]
+	if _diag_requested_key == key:
+		return
+	_diag_requested_key = key
+	SfxManager.play("click", -8.0, 0.8)
+	GameState.request_diagnose_slot(_entity_id, _selected_slot)
+
+
+func _collect_preview_parts(n: Node) -> void:
+	if n.has_meta("part_cat"):
+		_preview_part_nodes.append(n)
+	for c in n.get_children():
+		_collect_preview_parts(c)
+
+
+func _set_overlay_recursive(n: Node, mat: Material) -> void:
+	if n is GeometryInstance3D:
+		(n as GeometryInstance3D).material_overlay = mat
+	for c in n.get_children():
+		# Nur das markierte Bauteil einfärben, nicht die Teile, die darauf sitzen.
+		if c.has_meta("part_cat"):
+			continue
+		_set_overlay_recursive(c, mat)
+
+
+func _get_fault_mat() -> StandardMaterial3D:
+	if _preview_fault_mat == null:
+		_preview_fault_mat = StandardMaterial3D.new()
+		_preview_fault_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+		_preview_fault_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+		_preview_fault_mat.albedo_color = Color(1.0, 0.12, 0.08, 0.35)
+	return _preview_fault_mat
+
+
+func _set_preview_zoom(value: float) -> void:
+	_preview_zoom = clampf(value, PREVIEW_ZOOM_MIN, PREVIEW_ZOOM_MAX)
+	if _preview_cam != null:
+		_preview_cam.position = PREVIEW_CAM_POS * _preview_zoom
+
+
+func _update_3d_preview(item_type: String, comps: Dictionary, faulty_cat: String = "", reveal_fault: bool = true) -> void:
 	if _preview_vp == null:
 		return
 	if item_type == "":
 		_preview_vp.render_target_update_mode = SubViewport.UPDATE_DISABLED
+		_preview_faulty_cat = ""
+		_clear_preview_hover()
 		return
 	_preview_vp.render_target_update_mode = SubViewport.UPDATE_ALWAYS
 
-	var sig := "%s:%s:%s:%s:%s:%s:%s" % [
+	var sig := "%s:%s:%s:%s:%s:%s:%s:%s:%s:%s" % [
 		item_type,
 		str(comps.get("cpu", "")),
 		str(comps.get("gpu", "")),
@@ -2340,15 +2720,28 @@ func _update_3d_preview(item_type: String, comps: Dictionary) -> void:
 		str(comps.get("storage", "")),
 		str(comps.get("cooling", "")),
 		str(comps.get("psu", "")),
+		faulty_cat,
+		"%s:%d" % [_entity_id, _selected_slot],
+		str(reveal_fault),
 	]
 	if _preview_sig == sig:
 		return
 	_preview_sig = sig
+	_diag_requested_key = ""
+	_preview_faulty_cat = faulty_cat
+	_clear_preview_hover()
 
 	_clear(_preview_model_holder)
 	_preview_fans.clear()
+	_preview_part_nodes.clear()
 	var srv := HardwareMeshFactory.build_open_server_chassis(item_type, comps, _preview_fans)
 	_preview_model_holder.add_child(srv)
+	_collect_preview_parts(srv)
+	if faulty_cat != "" and reveal_fault:
+		for part_v in _preview_part_nodes:
+			var part := part_v as Node
+			if str(part.get_meta("part_cat", "")) == faulty_cat:
+				_set_overlay_recursive(part, _get_fault_mat())
 
 
 ## Die Vorschau hängt zwischen zwei Aufbauten frei im Speicher und wird hier mit aufgeräumt.
