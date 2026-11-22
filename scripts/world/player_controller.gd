@@ -548,6 +548,9 @@ func _handle_primary_interact() -> void:
 			cable_start_id = ""
 			cable_active_type = ""
 			SfxManager.play("cable_cut", -10.0, 0.9)
+		elif _cable_target_state(endpoint) == CableRenderer.TARGET_INVALID:
+			# Ziel voll oder schon verbunden: Kabel bleibt in der Hand
+			SfxManager.play("error")
 		else:
 			GameState.request_connect_cable(cable_active_type, cable_start_id, endpoint)
 			cable_start_id = ""
@@ -675,9 +678,9 @@ func _handle_secondary_action() -> void:
 		elif itype == "cart":
 			GameState.request_unload_cart_to_hands(eid)
 		elif itype == "power_port":
-			GameState.request_disconnect_cables_on("power", eid)
+			_unplug_into_hand("power", eid)
 		elif itype == "net_port" or itype == "wall_router":
-			GameState.request_disconnect_cables_on("network", eid)
+			_unplug_into_hand("network", eid)
 
 
 func _update_continuous_actions(delta: float) -> void:
@@ -810,7 +813,52 @@ func _update_cable_preview() -> void:
 		_world.update_cable_preview(false, "power", Vector3.ZERO, Vector3.ZERO)
 		return
 	var hand_pos := _camera.global_position + (-_camera.global_transform.basis.z) * 1.05 + Vector3(0.0, -0.22, 0.0)
-	_world.update_cable_preview(true, cable_active_type, start_pos as Vector3, hand_pos)
+	var endpoint := _resolve_aimed_cable_endpoint(cable_active_type)
+	var target_state := _cable_target_state(endpoint)
+	var snap: Variant = null
+	if target_state != CableRenderer.TARGET_NONE:
+		var p: Variant = _world.get_port_world_pos(cable_active_type, endpoint)
+		if p is Vector3 and (p as Vector3).distance_to(hand_pos) < 2.5:
+			snap = p
+	_world.update_cable_preview(true, cable_active_type, start_pos as Vector3, hand_pos, target_state, snap)
+
+
+## Prüft das anvisierte Ziel wie der Server: freie Ports an beiden Enden, keine doppelte Verbindung.
+func _cable_target_state(endpoint: String) -> int:
+	if endpoint == "" or cable_active_type == "" or endpoint == cable_start_id:
+		return CableRenderer.TARGET_NONE
+	if GameState.count_cables_on(cable_active_type, endpoint) >= GameState.get_max_ports(cable_active_type, endpoint):
+		return CableRenderer.TARGET_INVALID
+	if GameState.count_cables_on(cable_active_type, cable_start_id) >= GameState.get_max_ports(cable_active_type, cable_start_id):
+		return CableRenderer.TARGET_INVALID
+	for cid in GameState.cables.keys():
+		var c: Dictionary = GameState.cables[cid]
+		if str(c.get("cable_type", "")) != cable_active_type:
+			continue
+		var a := str(c.get("from_id", ""))
+		var b := str(c.get("to_id", ""))
+		if (a == cable_start_id and b == endpoint) or (a == endpoint and b == cable_start_id):
+			return CableRenderer.TARGET_INVALID
+	return CableRenderer.TARGET_VALID
+
+
+## Zieht das zuletzt gesteckte Kabel an diesem Port ab (wie der Server) und nimmt das freie Ende in die Hand.
+func _unplug_into_hand(cable_type: String, endpoint_id: String) -> void:
+	var other := ""
+	for cid in GameState.cables.keys():
+		var c: Dictionary = GameState.cables[cid]
+		if str(c.get("cable_type", "")) != cable_type:
+			continue
+		var a := str(c.get("from_id", ""))
+		var b := str(c.get("to_id", ""))
+		if a == endpoint_id:
+			other = b
+		elif b == endpoint_id:
+			other = a
+	GameState.request_disconnect_cables_on(cable_type, endpoint_id)
+	if other != "":
+		cable_start_id = other
+		cable_active_type = cable_type
 
 
 func _update_context_prompt() -> void:
@@ -824,6 +872,9 @@ func _update_context_prompt() -> void:
 		if endpoint != "":
 			if cable_start_id == endpoint:
 				current_prompt = tr("[E / Rechtsklick] %s abbrechen") % label
+			elif _cable_target_state(endpoint) == CableRenderer.TARGET_INVALID:
+				current_prompt = tr("%s: %s ist voll oder schon verbunden") % [label, endpoint.to_upper()]
+				current_sub_prompt = tr("[Rechtsklick / Q] Kabel loslassen")
 			else:
 				current_prompt = tr("[E / Klick] %s einstecken: %s ↔ %s") % [label, cable_start_id.to_upper(), endpoint.to_upper()]
 				current_sub_prompt = tr("[Rechtsklick / Q] Kabel loslassen")

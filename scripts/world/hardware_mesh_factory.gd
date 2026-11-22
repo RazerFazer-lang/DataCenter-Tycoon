@@ -8,6 +8,17 @@ extends RefCounted
 ## Workbench loose parts, and Handheld 3D Hardware Items!
 
 
+## Ein Steckplatz ist leer, wenn die Bauteil-ID ein leerer String ist (neu gekaufte Mainboards).
+## Fehlt der Schlüssel ganz, ist es ein alter Spielstand: dann wie früher ein Basisteil zeigen.
+static func has_part(components: Dictionary, cat: String) -> bool:
+	if not components.has(cat):
+		return true
+	var val: Variant = components[cat]
+	if val is String:
+		return not str(val).is_empty()
+	return true
+
+
 static func get_visual_tier(components: Dictionary, cat: String) -> int:
 	if not components.has(cat):
 		return 0
@@ -97,41 +108,48 @@ static func build_open_server_chassis(item_type: String, components: Dictionary,
 		_box(mb, Vector3(0.24, 0.016, 0.12 + float(s_i) * 0.024), Vector3(0.036, 0.016, 0.016), plastic)
 
 	# 3. REAL 3D CPU + LGA Socket + Upgraded Cooler (at center-left of motherboard)
-	var cpu_lvl := get_visual_tier(components, "cpu")
-	var cpu_node := build_cpu_assembly(cpu_lvl)
-	cpu_node.position = Vector3(-0.07, 0.008, -0.01)
-	mb.add_child(cpu_node)
+	# Leere Steckplätze bleiben leer: nur eingebaute Teile werden gezeigt.
+	if has_part(components, "cpu"):
+		var cpu_lvl := get_visual_tier(components, "cpu")
+		var cpu_node := build_cpu_assembly(cpu_lvl)
+		cpu_node.position = Vector3(-0.07, 0.008, -0.01)
+		mb.add_child(cpu_node)
 
 	# 4. REAL 3D RAM DIMM Bank (right beside CPU!)
-	var ram_lvl := get_visual_tier(components, "ram")
-	var ram_node := build_ram_bank(ram_lvl)
-	ram_node.position = Vector3(0.09, 0.008, -0.03)
-	mb.add_child(ram_node)
+	if has_part(components, "ram"):
+		var ram_lvl := get_visual_tier(components, "ram")
+		var ram_node := build_ram_bank(ram_lvl)
+		ram_node.position = Vector3(0.09, 0.008, -0.03)
+		mb.add_child(ram_node)
 
 	# 5. REAL 3D GPU (Grafikkarte) in PCIe x16 Slot (left side of motherboard)
-	var gpu_lvl := get_visual_tier(components, "gpu")
-	if item_type == "gpu_server" and gpu_lvl == 0:
-		gpu_lvl = 1 # GPU-AI server always has at least a visible GPU installed!
-	var gpu_node := build_gpu_card(gpu_lvl, out_fans)
-	gpu_node.position = Vector3(-0.21, 0.008, 0.05)
-	mb.add_child(gpu_node)
+	if has_part(components, "gpu") or item_type == "gpu_server":
+		var gpu_lvl := get_visual_tier(components, "gpu")
+		if item_type == "gpu_server" and gpu_lvl == 0:
+			gpu_lvl = 1 # GPU-AI server always has at least a visible GPU installed!
+		var gpu_node := build_gpu_card(gpu_lvl, out_fans)
+		gpu_node.position = Vector3(-0.21, 0.008, 0.05)
+		mb.add_child(gpu_node)
 
 	# 6. REAL 3D M.2 NVMe SSDs mounted directly on the Motherboard
-	var nvme_node := build_storage_module(stor_lvl)
-	nvme_node.position = Vector3(0.04, 0.008, 0.14)
-	mb.add_child(nvme_node)
+	if has_part(components, "storage"):
+		var nvme_node := build_storage_module(stor_lvl)
+		nvme_node.position = Vector3(0.04, 0.008, 0.14)
+		mb.add_child(nvme_node)
 
 	# 7. REAL 3D Server Cooling Fan Wall (between drives & motherboard!)
-	var cool_lvl := get_visual_tier(components, "cooling")
-	var fan_wall := build_cooling_wall(cool_lvl, out_fans)
-	fan_wall.position = Vector3(-0.02, 0.018, 0.21)
-	root.add_child(fan_wall)
+	if has_part(components, "cooling"):
+		var cool_lvl := get_visual_tier(components, "cooling")
+		var fan_wall := build_cooling_wall(cool_lvl, out_fans)
+		fan_wall.position = Vector3(-0.02, 0.018, 0.21)
+		root.add_child(fan_wall)
 
 	# 8. REAL 3D Server PSU Unit (rear-right bay inside chassis!)
-	var psu_lvl := get_visual_tier(components, "psu")
-	var psu_node := build_psu_unit(psu_lvl)
-	psu_node.position = Vector3(0.285, 0.018, -0.17)
-	root.add_child(psu_node)
+	if has_part(components, "psu"):
+		var psu_lvl := get_visual_tier(components, "psu")
+		var psu_node := build_psu_unit(psu_lvl)
+		psu_node.position = Vector3(0.285, 0.018, -0.17)
+		root.add_child(psu_node)
 
 	return root
 

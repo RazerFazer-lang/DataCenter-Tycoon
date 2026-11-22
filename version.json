@@ -1,8 +1,23 @@
 {
-  "version": "1.0.3",
-  "codename": "v1.0.3 Co-op-Fix",
+  "version": "1.0.4",
+  "codename": "v1.0.4 Kabel-Overhaul",
   "release_date": "2026-11-22",
   "changelog": [
+    {
+      "version": "v1.0.4",
+      "title": "Kabel-Overhaul, mehr Vermietungsdienste, Steckdosen in Halle C und aufgeräumtes Lager",
+      "items": [
+        "Kabel laufen rechtwinklig über den Boden, Strom- und Datenkabel auf getrennten Spuren, mit Kabelschellen und neuen Steckern (Kaltgeräte und RJ45).",
+        "Das Kabel in der Hand hängt wie ein echtes Seil und rastet am Port ein: grün heißt frei, rot heißt voll oder schon verbunden. Bei einem vollen Port bleibt das Kabel in der Hand.",
+        "Rechtsklick auf einen Port zieht ein Kabel ab und gibt dir das freie Ende zum Umstecken in die Hand.",
+        "Der Sicherungskasten in Halle C hat 14 einzelne Steckdosen. Gesperrte sind grau abgedeckt, und jedes Kabel steckt in einer eigenen Buchse.",
+        "Das Teile-Lager im Shop nutzt dieselben Karten wie der restliche Shop und ist nach Kategorien sortiert.",
+        "Vermietung: 26 statt 6 Dienste in 5 Kategorien, zum Beispiel E-Mail, VPS, CDN, Cloud-Gaming, Archiv und Medizin-Daten. Ein Rack kann mehrere Dienste gleichzeitig vermieten.",
+        "Der Ruf deiner Firma bestimmt, wie viele Kunden ein Dienst anlockt und wie schnell sie kommen.",
+        "Neue Mainboards kommen ohne Bauteile. Leere Steckplätze sind im offenen Server leer, und der Rack-Inspektor zeigt fehlende Pflichtteile an.",
+        "Enthält alle Neuerungen aus v1.0.3."
+      ]
+    },
     {
       "version": "v1.0.3",
       "title": "Mitspieler sind für den Host wieder sichtbar",

@@ -265,7 +265,23 @@ const PARTS := {
 # ==============================================================================
 # RACK RENTAL PROFILES (Player chooses purpose & self-assesses live hardware load!)
 # ==============================================================================
-const RENTAL_ORDER: Array[String] = ["none", "web", "game", "storage", "stream", "database", "ai"]
+const RENTAL_ORDER: Array[String] = [
+	"none",
+	"web", "mail", "dns", "vps", "saas", "elearning",
+	"game", "cloudgaming", "stream", "music", "cdn", "voip",
+	"storage", "archive", "surveillance", "database", "analytics", "health",
+	"fintech", "vpn", "iot",
+	"git", "hpc", "render", "ai", "ml_train",
+]
+
+## Gruppierung der Dienste im Vermietungs-Reiter.
+const RENTAL_CATEGORIES: Array = [
+	{"id": "web", "label": "Hosting & Web", "keys": ["web", "mail", "dns", "vps", "saas", "elearning"]},
+	{"id": "media", "label": "Medien & Spiele", "keys": ["game", "cloudgaming", "stream", "music", "cdn", "voip"]},
+	{"id": "data", "label": "Daten & Speicher", "keys": ["storage", "archive", "surveillance", "database", "analytics", "health"]},
+	{"id": "network", "label": "Netzwerk & Finanzen", "keys": ["fintech", "vpn", "iot"]},
+	{"id": "compute", "label": "Rechenleistung & KI", "keys": ["git", "hpc", "render", "ai", "ml_train"]},
+]
 
 const RENTAL_PROFILES := {
 	"none": {
@@ -380,6 +396,146 @@ const RENTAL_PROFILES := {
 		"mbps_per_user": 3.40,
 		"customers": ["VektorLabs AI", "Synthetix Corp", "DeepPrompt GmbH", "NeuralForge EU", "Helios Vision"],
 	},
+	"mail": {
+		"label": "E-Mail- & Groupware-Hosting", "short": "E-Mail", "icon": "📧",
+		"desc": "Viele Postfächer mit Anhängen. Braucht vor allem Speicher (TB) und etwas RAM, wenig CPU.",
+		"base_users": 24, "max_users": 1100, "growth_rate": 4.4, "pay_per_user": 0.38,
+		"cpu_per_user": 0.18, "ram_gb_per_user": 0.08, "gpu_per_user": 0.0, "storage_tb_per_user": 0.02, "mbps_per_user": 0.20,
+		"customers": ["PostHaus Mail", "MailBuddy EU", "KanzleiNet", "Inboxa GmbH", "Briefkasten.io"],
+	},
+	"dns": {
+		"label": "DNS- & Domain-Hosting", "short": "DNS", "icon": "🔤",
+		"desc": "Sehr wenig Last pro Kunde, dafür sehr viele Kunden. Läuft auch auf schwacher Hardware.",
+		"base_users": 30, "max_users": 1600, "growth_rate": 5.0, "pay_per_user": 0.16,
+		"cpu_per_user": 0.06, "ram_gb_per_user": 0.02, "gpu_per_user": 0.0, "storage_tb_per_user": 0.001, "mbps_per_user": 0.05,
+		"customers": ["NameGrid", "DomainKiste", "ResolveOne", "Zonenwerk", "Ankerpunkt DNS"],
+	},
+	"vps": {
+		"label": "Virtuelle Server (VPS)", "short": "VPS", "icon": "🖥",
+		"desc": "Kunden mieten feste Anteile. Braucht viel RAM pro Kunde und solide Mehrkern-CPUs.",
+		"base_users": 10, "max_users": 260, "growth_rate": 2.2, "pay_per_user": 2.10,
+		"cpu_per_user": 1.30, "ram_gb_per_user": 1.00, "gpu_per_user": 0.0, "storage_tb_per_user": 0.06, "mbps_per_user": 0.90,
+		"customers": ["HostFabrik", "CloudKiez", "VirtuWerk", "DevBox24", "Serverbude"],
+	},
+	"saas": {
+		"label": "SaaS-Business-Apps", "short": "SaaS", "icon": "💼",
+		"desc": "Büro-Software für Firmenkunden. Ausgewogene Last, zahlt zuverlässig.",
+		"base_users": 16, "max_users": 520, "growth_rate": 3.0, "pay_per_user": 1.10,
+		"cpu_per_user": 0.60, "ram_gb_per_user": 0.40, "gpu_per_user": 0.0, "storage_tb_per_user": 0.03, "mbps_per_user": 0.70,
+		"customers": ["Teamwerk Suite", "Planbar AG", "OfficeFlow", "Rechnungsprofi", "HRcloud DE"],
+	},
+	"elearning": {
+		"label": "E-Learning-Plattform", "short": "E-Learning", "icon": "🎓",
+		"desc": "Video-Kurse und Prüfungen. Die Last schwankt über den Tag, braucht Bandbreite.",
+		"base_users": 20, "max_users": 700, "growth_rate": 3.6, "pay_per_user": 0.80,
+		"cpu_per_user": 0.40, "ram_gb_per_user": 0.20, "gpu_per_user": 0.05, "storage_tb_per_user": 0.03, "mbps_per_user": 1.40,
+		"customers": ["LernWerk", "Campus Online", "SkillHub EU", "Akademie360", "Schulcloud Nord"],
+	},
+	"cloudgaming": {
+		"label": "Cloud-Gaming", "short": "Cloud-Gaming", "icon": "🕹",
+		"desc": "Spiele laufen auf deinen GPUs und werden live gestreamt. Braucht GPU, CPU und sehr viel Bandbreite.",
+		"base_users": 8, "max_users": 240, "growth_rate": 2.0, "pay_per_user": 3.60,
+		"cpu_per_user": 1.40, "ram_gb_per_user": 0.80, "gpu_per_user": 2.40, "storage_tb_per_user": 0.05, "mbps_per_user": 4.50,
+		"customers": ["PlayStream EU", "GameWolke", "PixelRun Cloud", "Zockerzone", "FrameFlow"],
+	},
+	"music": {
+		"label": "Musik- & Podcast-Streaming", "short": "Audio-Streaming", "icon": "🎧",
+		"desc": "Viele Hörer gleichzeitig. Braucht Speicher und Uplink, kaum GPU.",
+		"base_users": 26, "max_users": 1000, "growth_rate": 4.0, "pay_per_user": 0.62,
+		"cpu_per_user": 0.22, "ram_gb_per_user": 0.10, "gpu_per_user": 0.0, "storage_tb_per_user": 0.03, "mbps_per_user": 0.90,
+		"customers": ["Tonspur FM", "PodWelle", "BeatBunker", "Klangraum Media", "AudioNord"],
+	},
+	"cdn": {
+		"label": "CDN & Edge-Caching", "short": "CDN", "icon": "🛰",
+		"desc": "Liefert Bilder und Downloads aus. Braucht viel Bandbreite und schnellen Speicher.",
+		"base_users": 18, "max_users": 800, "growth_rate": 3.4, "pay_per_user": 1.05,
+		"cpu_per_user": 0.30, "ram_gb_per_user": 0.30, "gpu_per_user": 0.0, "storage_tb_per_user": 0.06, "mbps_per_user": 3.00,
+		"customers": ["EdgeWerk", "FastPixel CDN", "Lieferwolke", "CacheMeister", "Kante Networks"],
+	},
+	"voip": {
+		"label": "VoIP & Telefonanlagen", "short": "VoIP", "icon": "☎",
+		"desc": "Telefonate in Echtzeit. Wenig Last, reagiert aber empfindlich auf einen langsamen Router.",
+		"base_users": 20, "max_users": 900, "growth_rate": 3.8, "pay_per_user": 0.48,
+		"cpu_per_user": 0.25, "ram_gb_per_user": 0.08, "gpu_per_user": 0.0, "storage_tb_per_user": 0.002, "mbps_per_user": 0.60,
+		"customers": ["Rufwerk", "TelKom Mittelstand", "CallCenter Süd", "SprachNetz", "HalloCloud"],
+	},
+	"archive": {
+		"label": "Langzeit-Archiv (Cold Storage)", "short": "Archiv", "icon": "🗃",
+		"desc": "Daten werden selten gelesen, aber jahrelang gelagert. Fast nur Speicher (TB), kaum CPU.",
+		"base_users": 14, "max_users": 500, "growth_rate": 2.6, "pay_per_user": 0.95,
+		"cpu_per_user": 0.08, "ram_gb_per_user": 0.04, "gpu_per_user": 0.0, "storage_tb_per_user": 0.40, "mbps_per_user": 0.20,
+		"customers": ["Tresor Archiv", "AktenBunker", "Langzeit.de", "Gedächtnis AG", "KellerCloud"],
+	},
+	"surveillance": {
+		"label": "Video-Überwachung (NVR)", "short": "Videoüberwachung", "icon": "📹",
+		"desc": "Kameras zeichnen rund um die Uhr auf. Braucht viel Speicher und gleichmäßige Bandbreite.",
+		"base_users": 12, "max_users": 450, "growth_rate": 2.4, "pay_per_user": 1.20,
+		"cpu_per_user": 0.30, "ram_gb_per_user": 0.12, "gpu_per_user": 0.15, "storage_tb_per_user": 0.30, "mbps_per_user": 1.60,
+		"customers": ["WachWerk Security", "Objektschutz Nord", "Kameranetz24", "ParkWache", "SicherSicht"],
+	},
+	"analytics": {
+		"label": "Big-Data-Analytics", "short": "Analytics", "icon": "📊",
+		"desc": "Auswertungen über riesige Datenmengen. Braucht RAM, Speicher und schnelle CPUs.",
+		"base_users": 8, "max_users": 300, "growth_rate": 2.2, "pay_per_user": 2.60,
+		"cpu_per_user": 1.30, "ram_gb_per_user": 1.50, "gpu_per_user": 0.10, "storage_tb_per_user": 0.30, "mbps_per_user": 1.10,
+		"customers": ["DatenMine", "Einblick Analytics", "Zahlenwerk", "Metrikhaus", "InsightNord"],
+	},
+	"health": {
+		"label": "Medizin-Datenhosting", "short": "Medizin-Daten", "icon": "🏥",
+		"desc": "Patientenakten und Röntgenbilder. Hohe Miete, braucht Speicher, RAM und Ausfallsicherheit.",
+		"base_users": 8, "max_users": 280, "growth_rate": 1.9, "pay_per_user": 2.90,
+		"cpu_per_user": 0.70, "ram_gb_per_user": 0.90, "gpu_per_user": 0.0, "storage_tb_per_user": 0.25, "mbps_per_user": 1.00,
+		"customers": ["Klinikverbund Süd", "PraxisCloud", "RadioBild Net", "MediArchiv", "PflegeDaten AG"],
+	},
+	"fintech": {
+		"label": "Zahlungsabwicklung (Fintech)", "short": "Fintech", "icon": "💳",
+		"desc": "Sehr hohe Miete, aber keine Toleranz: braucht starke CPUs, viel RAM und stabile Kühlung.",
+		"base_users": 10, "max_users": 300, "growth_rate": 2.0, "pay_per_user": 3.10,
+		"cpu_per_user": 1.60, "ram_gb_per_user": 1.20, "gpu_per_user": 0.0, "storage_tb_per_user": 0.04, "mbps_per_user": 1.20,
+		"customers": ["ZahlFix", "PayBridge EU", "Kassenwerk", "Münzwerk Pay", "TransferOne"],
+	},
+	"vpn": {
+		"label": "VPN-Dienst", "short": "VPN", "icon": "🔒",
+		"desc": "Verschlüsselter Datenverkehr. Braucht CPU für die Verschlüsselung und viel Bandbreite.",
+		"base_users": 22, "max_users": 850, "growth_rate": 3.6, "pay_per_user": 0.70,
+		"cpu_per_user": 0.55, "ram_gb_per_user": 0.06, "gpu_per_user": 0.0, "storage_tb_per_user": 0.001, "mbps_per_user": 1.80,
+		"customers": ["Tarnkappe VPN", "SecureTunnel", "Privatnetz24", "ShieldWay", "NordSchild"],
+	},
+	"iot": {
+		"label": "IoT-Plattform", "short": "IoT", "icon": "📡",
+		"desc": "Tausende Sensoren senden Messwerte. Viele kleine Anfragen, braucht RAM und Speicher.",
+		"base_users": 26, "max_users": 1200, "growth_rate": 4.2, "pay_per_user": 0.34,
+		"cpu_per_user": 0.15, "ram_gb_per_user": 0.10, "gpu_per_user": 0.0, "storage_tb_per_user": 0.02, "mbps_per_user": 0.15,
+		"customers": ["SensorPark", "SmartFarm DE", "Zählerwerk", "FleetTrack", "HausHirn"],
+	},
+	"git": {
+		"label": "Git-Hosting & CI/CD", "short": "CI/CD", "icon": "🛠",
+		"desc": "Entwickler bauen und testen Code. Kurze, harte CPU-Spitzen und viel RAM.",
+		"base_users": 12, "max_users": 380, "growth_rate": 2.6, "pay_per_user": 1.45,
+		"cpu_per_user": 1.40, "ram_gb_per_user": 0.55, "gpu_per_user": 0.0, "storage_tb_per_user": 0.05, "mbps_per_user": 0.60,
+		"customers": ["CodeSchmiede", "BuildBot GmbH", "MergeWerk", "PipelineHaus", "DevOps Nord"],
+	},
+	"hpc": {
+		"label": "Wissenschaftliches Rechnen (HPC)", "short": "HPC", "icon": "🔬",
+		"desc": "Simulationen für Unis und Forschung. Braucht sehr viele CPU-Kerne und RAM.",
+		"base_users": 6, "max_users": 220, "growth_rate": 1.8, "pay_per_user": 3.40,
+		"cpu_per_user": 2.60, "ram_gb_per_user": 1.60, "gpu_per_user": 0.40, "storage_tb_per_user": 0.10, "mbps_per_user": 0.80,
+		"customers": ["Uni Klimamodell", "Institut für Strömung", "GenomLabor", "AstroRechner", "Rechenzentrum Campus"],
+	},
+	"render": {
+		"label": "3D-Render-Farm", "short": "Render-Farm", "icon": "🎬",
+		"desc": "Animationsstudios rendern Szenen. Sehr GPU- und CPU-lastig, braucht viel Speicher.",
+		"base_users": 6, "max_users": 200, "growth_rate": 1.8, "pay_per_user": 4.80,
+		"cpu_per_user": 2.20, "ram_gb_per_user": 1.20, "gpu_per_user": 3.40, "storage_tb_per_user": 0.25, "mbps_per_user": 1.00,
+		"customers": ["Frameworks Studio", "TrickWerk", "PolyPixel", "Lichtspiel VFX", "RenderHaus"],
+	},
+	"ml_train": {
+		"label": "KI-Training (Batch-Jobs)", "short": "KI-Training", "icon": "🧠",
+		"desc": "Lange Trainingsläufe auf vielen GPUs. Höchste GPU-Last, braucht viel VRAM, RAM und Strom.",
+		"base_users": 4, "max_users": 160, "growth_rate": 1.6, "pay_per_user": 6.20,
+		"cpu_per_user": 1.60, "ram_gb_per_user": 2.20, "gpu_per_user": 4.80, "storage_tb_per_user": 0.20, "mbps_per_user": 2.00,
+		"customers": ["TensorWerk", "ModellFabrik", "GradientLabs", "Lernmaschine AG", "Neuronix"],
+	},
 }
 
 
@@ -390,6 +546,9 @@ static func get_category_parts(cat: String) -> Array:
 
 
 static func get_part(cat: String, part_id: String) -> Dictionary:
+	# Leerer Steckplatz: kein Ersatzteil unterschieben.
+	if part_id.is_empty():
+		return {}
 	if PARTS.has(cat):
 		var arr: Array = PARTS[cat]
 		for p in arr:
@@ -416,15 +575,29 @@ static func make_default_components(server_type: String) -> Dictionary:
 	return DEFAULT_PARTS.duplicate(true)
 
 
+## Neu gekaufte Mainboards kommen ohne Bauteile: "" heißt "Steckplatz leer".
+static func make_empty_components() -> Dictionary:
+	var res := {}
+	for cat in CATEGORY_ORDER:
+		res[cat] = ""
+	return res
+
+
 static func normalize_components(raw_upgrades: Dictionary, server_type: String = "web_server") -> Dictionary:
 	# Supports BOTH v1.0 string part IDs and legacy v0.1-v0.8 integer tier indices!
-	var res := make_default_components(server_type)
+	# Nur die alten Fertig-Server haben Standardteile. Mainboards starten leer:
+	# fehlende oder unbekannte Einträge bleiben "" (Steckplatz leer), statt mit RAM/CPU aufgefüllt zu werden.
+	var legacy := SERVER_DEFAULT_PARTS.has(server_type)
+	var res := make_default_components(server_type) if legacy else make_empty_components()
 	for cat in CATEGORY_ORDER:
 		if not raw_upgrades.has(cat):
 			continue
 		var val: Variant = raw_upgrades[cat]
 		if val is String:
 			var pid := str(val)
+			if pid.is_empty():
+				res[cat] = ""
+				continue
 			var found := false
 			for p in get_category_parts(cat):
 				if str((p as Dictionary)["id"]) == pid:
@@ -432,7 +605,7 @@ static func normalize_components(raw_upgrades: Dictionary, server_type: String =
 					found = true
 					break
 			if not found:
-				res[cat] = DEFAULT_PARTS[cat]
+				res[cat] = DEFAULT_PARTS[cat] if legacy else ""
 		elif val is int or val is float:
 			var legacy_tier := clampi(int(val), 0, 3)
 			var arr := get_category_parts(cat)

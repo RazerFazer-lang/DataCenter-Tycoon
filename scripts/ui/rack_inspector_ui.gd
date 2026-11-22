@@ -82,6 +82,9 @@ var _smooth_written: int = 0
 var _smooth_active: bool = false
 var _mb_money_label: Label
 var _mb_afford_sig: int = -1
+const LIVE_REFRESH_MS := 1000
+var _last_live_refresh_ms: int = 0
+var _live_sig: String = ""
 
 # Drehbare 3D-Vorschau (wird bei jedem Aufbau in die rechte Spalte gehängt)
 var _preview_frame: PanelContainer
@@ -99,13 +102,82 @@ func _ready() -> void:
 	set_anchors_preset(Control.PRESET_FULL_RECT)
 	visible = false
 	_build_ui()
-	GameState.racks_changed.connect(_refresh)
-	GameState.coolers_changed.connect(_refresh)
-	GameState.ups_changed.connect(_refresh)
-	GameState.carts_changed.connect(_refresh)
-	GameState.inventory_changed.connect(_refresh)
+	# Sync-Signale kommen jeden Tick. Sie laufen gebündelt über _queue_refresh, statt das Menü
+	# jedes Mal komplett neu aufzubauen (das ließ es zittern und Klicks ins Leere gehen).
+	GameState.racks_changed.connect(_queue_refresh)
+	GameState.coolers_changed.connect(_queue_refresh)
+	GameState.ups_changed.connect(_queue_refresh)
+	GameState.carts_changed.connect(_queue_refresh)
+	GameState.inventory_changed.connect(_queue_refresh)
 	GameState.state_updated.connect(_on_state_updated)
 	get_viewport().size_changed.connect(_on_viewport_resized)
+
+
+## Rack-Felder, die sich jeden Tick ändern. Sie laufen über den gedrosselten Live-Pfad (_live_signature).
+const VOLATILE_RACK_KEYS: Array[String] = [
+	"temp", "metrics", "active_users", "satisfaction", "services", "grace_timer", "rental_income",
+]
+
+var _refresh_queued := false
+var _struct_sig := ""
+
+
+## Fasst mehrere Signale aus demselben Frame zu einer Prüfung zusammen.
+func _queue_refresh() -> void:
+	if not visible or _refresh_queued:
+		return
+	_refresh_queued = true
+	_flush_refresh.call_deferred()
+
+
+func _flush_refresh() -> void:
+	_refresh_queued = false
+	if not visible:
+		return
+	if _struct_signature() != _struct_sig:
+		_refresh()
+		return
+	# Nur Live-Werte geändert: gedrosselt über den Live-Pfad aktualisieren.
+	_on_state_updated()
+
+
+## Struktur des geöffneten Geräts (Bauteile, Dienste, Strom/Netz, Lager). Ändert sie sich, wird sofort neu gebaut.
+## Außerhalb der Rack-Ansicht bleibt das alte Verhalten (immer neu bauen).
+func _struct_signature() -> String:
+	if _mode != "rack":
+		return "%s|%d" % [_mode, Time.get_ticks_usec()]
+	if not GameState.racks.has(_entity_id):
+		return "missing"
+	var r: Dictionary = GameState.racks[_entity_id]
+	var parts := PackedStringArray([_entity_id, str(GameState.get_total_inventory_parts())])
+	for k in r.keys():
+		if VOLATILE_RACK_KEYS.has(str(k)):
+			continue
+		parts.append("%s=%s" % [str(k), _coarse_str(r[k])])
+	for s in r.get("services", []):
+		if s is Dictionary:
+			var sd: Dictionary = s
+			parts.append("svc=%s/%s" % [str(sd.get("type", "")), str(sd.get("customer", ""))])
+	return "|".join(parts)
+
+
+## Wandelt Werte grob gerundet in Text um, damit winzige Float-Schwankungen keinen Neuaufbau auslösen.
+func _coarse_str(v: Variant) -> String:
+	if v is float:
+		return str(roundi(float(v) * 20.0))
+	if v is Dictionary:
+		var d: Dictionary = v
+		var out := PackedStringArray()
+		for k in d.keys():
+			out.append("%s:%s" % [str(k), _coarse_str(d[k])])
+		return "{" + ",".join(out) + "}"
+	if v is Array:
+		var a: Array = v
+		var out_a := PackedStringArray()
+		for e in a:
+			out_a.append(_coarse_str(e))
+		return "[" + ",".join(out_a) + "]"
+	return str(v)
 
 
 ## Spiel-Tick: Bei offener Mainboard-Liste wird nur das Guthaben aktualisiert. Neu gebaut wird nur,
@@ -116,9 +188,46 @@ func _on_state_updated() -> void:
 	if _mb_picker_open and _mode == "rack" and is_instance_valid(_parts_scroll):
 		if is_instance_valid(_mb_money_label):
 			_mb_money_label.text = "$%.0f" % GameState.money
-		if _mb_affordable_count() == _mb_afford_sig:
-			return
+		# Offene Mainboard-Liste: nur neu aufbauen, wenn sich die Zahl bezahlbarer Boards ändert.
+		if _mb_affordable_count() != _mb_afford_sig:
+			_refresh()
+		return
+	# Live-Werte: nur neu aufbauen, wenn sich etwas Sichtbares geändert hat, und höchstens 1x pro Sekunde.
+	# Der Neuaufbau bei jedem Tick ließ das Menü zittern und Klicks ins Leere gehen.
+	var sig := _live_signature()
+	if sig == _live_sig:
+		return
+	var now := Time.get_ticks_msec()
+	if now - _last_live_refresh_ms < LIVE_REFRESH_MS:
+		return
+	_last_live_refresh_ms = now
+	_live_sig = sig
 	_refresh()
+
+
+## Gerundete Kennwerte, die das Rack-Menü anzeigt. Kleine Schwankungen lösen keinen Neuaufbau aus.
+func _live_signature() -> String:
+	if _mode != "rack" or not GameState.racks.has(_entity_id):
+		return str(floori(Time.get_ticks_msec() / 2000.0))
+	var r: Dictionary = GameState.racks[_entity_id]
+	var m: Dictionary = r.get("metrics", {})
+	return "%s|%d|%d|%d|%s|%s|%s|%d|%d|%d|%d|%d|%d|%d|%s" % [
+		_active_tab,
+		(r.get("services", []) as Array).size(),
+		GameState.get_reputation_tier(),
+		roundi(float(r.get("temp", 22.0))),
+		str(r.get("powered", false)),
+		str(r.get("networked", false)),
+		str(r.get("rental_type", "none")),
+		int(r.get("active_users", 0)),
+		roundi(float(r.get("satisfaction", 100.0)) / 2.0),
+		roundi(float(m.get("ram_pct", 0.0)) / 5.0),
+		roundi(float(m.get("cpu_pct", 0.0)) / 5.0),
+		roundi(float(m.get("gpu_pct", 0.0)) / 5.0),
+		roundi(float(m.get("storage_pct", 0.0)) / 5.0),
+		roundi(float(m.get("net_pct", 0.0)) / 5.0),
+		str(m.get("bottleneck", "ok")),
+	]
 
 
 func _mb_affordable_count() -> int:
@@ -309,6 +418,10 @@ func _refresh() -> void:
 			return
 	_restore_focus()
 	_animate_next = false
+	# Stand merken, damit identische Sync-Signale danach keinen weiteren Neuaufbau auslösen.
+	_struct_sig = _struct_signature()
+	_live_sig = _live_signature()
+	_last_live_refresh_ms = Time.get_ticks_msec()
 
 
 func _device_exists(kind: String) -> bool:
@@ -1012,7 +1125,11 @@ func _make_category_tile(cat_k: String, comps: Dictionary) -> Button:
 	if stock_n > 0:
 		tr_row.add_child(_make_label(tr("%d im Lager") % stock_n, 10, UIStyle.COL_GREEN))
 
-	v.add_child(_make_label(str(part.get("name", "-")), 13, UIStyle.COL_TEXT_MAIN))
+	if part.is_empty():
+		var required := GameState.REQUIRED_PART_CATS.has(cat_k)
+		v.add_child(_make_label(tr("Leer – Pflichtteil fehlt") if required else tr("Leer – optional"), 13, UIStyle.COL_RED if required else UIStyle.COL_TEXT_SUB))
+	else:
+		v.add_child(_make_label(str(part.get("name", "-")), 13, UIStyle.COL_TEXT_MAIN))
 	var strength := 0.0 if part.is_empty() else HardwareCatalog.get_part_strength_pct(cat_k, part)
 	v.add_child(_make_bar(strength, UIStyle.COL_GOLD_TEXT if sel else UIStyle.COL_GREEN, 5))
 
@@ -1268,6 +1385,29 @@ func _render_rack_rental(rack: Dictionary, hw: Dictionary) -> void:
 		var lh := _make_label("%s  —  %s" % [tr(str(prof["short"])).to_upper(), str(rack.get("rental_customer", ""))], 14, UIStyle.COL_TEXT_MAIN, true)
 		lh.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 		lv.add_child(lh)
+		# Live-Feedback pro Dienst: Nutzer, Trend und Obergrenze beim aktuellen Ruf.
+		var svc_list: Array = rack.get("services", [])
+		for s in svc_list:
+			if not (s is Dictionary):
+				continue
+			var sd: Dictionary = s
+			var stype := str(sd.get("type", ""))
+			if not HardwareCatalog.RENTAL_PROFILES.has(stype):
+				continue
+			var sp: Dictionary = HardwareCatalog.RENTAL_PROFILES[stype]
+			var trend := float(sd.get("trend", 0.0))
+			var trend_col := UIStyle.COL_GREEN if trend > 0.3 else (UIStyle.COL_RED if trend < -0.3 else UIStyle.COL_TEXT_SUB)
+			var sl := _make_label(tr("%s %s – %s: %d / %d Nutzer  (%+.1f/min)") % [
+				str(sp.get("icon", "")), tr(str(sp.get("short", stype))), str(sd.get("customer", "")),
+				int(roundf(float(sd.get("users", 0.0)))), GameState.get_service_user_cap(stype), trend,
+			], 12, trend_col)
+			sl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+			lv.add_child(sl)
+		var rep_l := _make_label(tr("Ruf: %s (%.0f/100). Höherer Ruf bringt mehr und schneller Kunden.") % [
+			tr(GameState.get_reputation_label()), GameState.reputation,
+		], 11, UIStyle.COL_GOLD_TEXT)
+		rep_l.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		lv.add_child(rep_l)
 		_add_load_bar_row(lv, "RAM", "%.1f / %.0f GB" % [float(m.get("ram_used_gb", 0.0)), float(m.get("ram_total_gb", 0.0))], float(m.get("ram_pct", 0.0)))
 		_add_load_bar_row(lv, "CPU", tr("%.0f%% Last") % float(m.get("cpu_pct", 0.0)), float(m.get("cpu_pct", 0.0)))
 		_add_load_bar_row(lv, "Speicher", "%.2f / %.1f TB" % [float(m.get("storage_used_tb", 0.0)), float(m.get("storage_total_tb", 0.0))], float(m.get("storage_pct", 0.0)))
@@ -1295,13 +1435,28 @@ func _render_rack_rental(rack: Dictionary, hw: Dictionary) -> void:
 	var pick := _make_label(tr("Schätze selbst ein, ob RAM, CPU, Speicher und Router für den Dienst reichen."), 12, UIStyle.COL_TEXT_SUB)
 	pick.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	rv.add_child(pick)
-	for key in HardwareCatalog.RENTAL_ORDER:
-		rv.add_child(_make_rental_button(str(key), r_rent))
+	var active_types: Array = []
+	for s in rack.get("services", []):
+		if s is Dictionary:
+			active_types.append(str((s as Dictionary).get("type", "")))
+	var cnt := _make_label(tr("Aktive Dienste: %d / %d   •   Ruf: %s") % [
+		active_types.size(), GameState.MAX_SERVICES_PER_RACK, tr(GameState.get_reputation_label()),
+	], 12, UIStyle.COL_GOLD_TEXT, true)
+	rv.add_child(cnt)
+	# "Alle beenden" oben, danach die Dienste nach Kategorie gruppiert.
+	rv.add_child(_make_rental_button("none", active_types))
+	for cat in HardwareCatalog.RENTAL_CATEGORIES:
+		var cd: Dictionary = cat
+		rv.add_child(_section_label(tr(str(cd.get("label", ""))).to_upper()))
+		for key in cd.get("keys", []):
+			if HardwareCatalog.RENTAL_PROFILES.has(str(key)):
+				rv.add_child(_make_rental_button(str(key), active_types))
 
 
-func _make_rental_button(k: String, current: String) -> Button:
+func _make_rental_button(k: String, active: Array) -> Button:
 	var prof: Dictionary = HardwareCatalog.RENTAL_PROFILES[k]
-	var is_cur := (k == current)
+	var is_cur := active.is_empty() if k == "none" else active.has(k)
+	var full := active.size() >= GameState.MAX_SERVICES_PER_RACK
 	var btn := _make_btn("", "rent_%s" % k, Vector2(0, 76))
 	btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_style_btn(btn, Color(0.11, 0.19, 0.14, 0.96) if is_cur else UIStyle.COL_BG_CARD, UIStyle.COL_GREEN if is_cur else UIStyle.COL_BORDER)
@@ -1319,22 +1474,33 @@ func _make_rental_button(k: String, current: String) -> Button:
 	var pay_s := ""
 	if k != "none":
 		pay_s = "   •   " + tr("$%.2f pro Nutzer") % float(prof.get("pay_per_user", 0.0))
+		pay_s += "   •   " + tr("bis %d Nutzer") % GameState.get_service_user_cap(k)
 	iv.add_child(_make_label(tr(str(prof["label"])) + pay_s, 14, UIStyle.COL_GREEN if is_cur else UIStyle.COL_TEXT_MAIN, true))
 	var dl := _make_label(tr(str(prof.get("desc", ""))), 11, UIStyle.COL_TEXT_SUB)
 	dl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	dl.max_lines_visible = 2
 	iv.add_child(dl)
 
-	var act_txt := tr("AKTIV")
+	var act_txt := tr("AKTIV – Beenden")
 	var act_col := UIStyle.COL_GREEN
-	if not is_cur:
-		act_txt = tr("Freigeben") if k == "none" else tr("Vermieten")
-		act_col = UIStyle.COL_GOLD_TEXT
+	var clickable := true
+	if k == "none":
+		act_txt = tr("Nicht vermietet") if is_cur else tr("Alle beenden")
+		act_col = UIStyle.COL_TEXT_SUB if is_cur else UIStyle.COL_GOLD_TEXT
+		clickable = not is_cur
+	elif not is_cur:
+		if full:
+			act_txt = tr("Rack voll")
+			act_col = UIStyle.COL_TEXT_SUB
+			clickable = false
+		else:
+			act_txt = tr("+ Vermieten")
+			act_col = UIStyle.COL_GOLD_TEXT
 	var al := _make_label(act_txt, 12, act_col, true)
 	al.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	row.add_child(al)
 
-	if not is_cur:
+	if clickable:
 		btn.pressed.connect(func():
 			SfxManager.play("click", -10.0, 1.1)
 			GameState.request_set_rack_rental(_entity_id, k)

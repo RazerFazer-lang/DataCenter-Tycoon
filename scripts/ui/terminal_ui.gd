@@ -701,99 +701,219 @@ func _checkout_cart() -> void:
 # ==============================================================================
 ## Sicherungen werden ohne Lieferung direkt ins Lager gebucht und am Sicherungskasten eingesetzt.
 func _add_fuse_shop_card(list: VBoxContainer) -> void:
-	var fz_card := _make_light_card(Color(0.99, 0.97, 0.92), Color(0.86, 0.70, 0.36), 6, 12, 8)
-	list.add_child(fz_card)
-	var fz_row := HBoxContainer.new()
-	fz_row.add_theme_constant_override("separation", 10)
-	fz_card.add_child(fz_row)
-
-	var fz_info := VBoxContainer.new()
-	fz_info.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	fz_info.add_theme_constant_override("separation", 3)
-	fz_row.add_child(fz_info)
-
-	var fz_title := Label.new()
-	fz_title.text = tr("Schraubsicherung 63 A (Sicherungskasten)")
-	fz_title.add_theme_font_size_override("font_size", 13)
-	fz_title.modulate = Color(0.12, 0.16, 0.24)
-	fz_info.add_child(fz_title)
-
-	var fz_desc := Label.new()
-	fz_desc.text = tr("Kommt sofort ins Lager, ohne Lieferung. Am Sicherungskasten mit [E] in einen leeren oder durchgebrannten Steckplatz stecken.") + "\n" + (tr("Im Lager: %d  •  Intakt im Kasten: %d / %d") % [GameState.fuse_stock, GameState.count_working_fuses(), GameState.FUSE_SLOT_COUNT])
-	fz_desc.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	fz_desc.add_theme_font_size_override("font_size", 11)
-	fz_desc.modulate = Color(0.32, 0.36, 0.44)
-	fz_info.add_child(fz_desc)
-
-	var fz_buy := Button.new()
-	fz_buy.text = tr("Kaufen  $%d") % GameState.FUSE_PRICE
-	fz_buy.custom_minimum_size = Vector2(110, 32)
-	fz_buy.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-	fz_buy.disabled = GameState.money < float(GameState.FUSE_PRICE)
-	_style_win_btn(fz_buy, Color(0.10, 0.46, 0.82), Color(0.08, 0.36, 0.68), Color.WHITE)
-	fz_buy.pressed.connect(func():
-		SfxManager.play("click", -12.0, 1.1)
-		GameState.request_buy_fuse()
-	)
-	fz_row.add_child(fz_buy)
+	_add_shop_item_card(list, {
+		"title": tr("Schraubsicherung 63 A (Sicherungskasten)"),
+		"desc": tr("Kommt sofort ins Lager, ohne Lieferung. Am Sicherungskasten mit [E] in einen leeren oder durchgebrannten Steckplatz stecken."),
+		"info": tr("Im Lager: %d  •  Intakt im Kasten: %d / %d") % [GameState.fuse_stock, GameState.count_working_fuses(), GameState.FUSE_SLOT_COUNT],
+		"color": Color(0.86, 0.70, 0.36),
+		"price": GameState.FUSE_PRICE,
+		"instant": true,
+		"on_buy": func(): GameState.request_buy_fuse(),
+	})
 
 
 ## Steckleisten (Stromkasten) und Netzwerk-Verteiler (Router): werden sofort montiert, ohne Lieferung.
-func _add_accessory_shop_cards(list: VBoxContainer) -> void:
+func _add_power_strip_card(list: VBoxContainer) -> void:
 	var breaker_cap := GameState.BREAKER_BASE_SOCKETS + GameState.power_strips * GameState.POWER_STRIP_EXTRA
+	var at_max := GameState.power_strips >= GameState.POWER_STRIP_MAX
+	_add_shop_item_card(list, {
+		"title": tr("Steckleiste 4-fach (Stromkasten)"),
+		"desc": tr("Wird sofort am Stromkasten montiert. Belegt eine Steckdose und bringt +%d Steckplätze.") % GameState.POWER_STRIP_EXTRA,
+		"info": tr("Steckplätze am Kasten: %d  •  Montiert: %d / %d") % [breaker_cap, GameState.power_strips, GameState.POWER_STRIP_MAX],
+		"color": Color(0.84, 0.66, 0.14),
+		"price": GameState.POWER_STRIP_PRICE,
+		"instant": true,
+		"disabled": at_max,
+		"btn_text": tr("Maximum erreicht") if at_max else "",
+		"on_buy": func(): GameState.request_buy_power_strip(),
+	})
+
+
+func _add_net_hub_card(list: VBoxContainer) -> void:
 	var router_cap := GameState.ROUTER_BASE_PORTS + GameState.net_hubs * GameState.NET_HUB_EXTRA
-	_add_accessory_card(list,
-		tr("Steckleiste 4-fach (Stromkasten)"),
-		tr("Wird sofort am Stromkasten montiert. Belegt eine Steckdose und bringt +%d Steckplätze.") % GameState.POWER_STRIP_EXTRA
-			+ "\n" + (tr("Steckplätze am Kasten: %d  •  Montiert: %d / %d") % [breaker_cap, GameState.power_strips, GameState.POWER_STRIP_MAX]),
-		GameState.POWER_STRIP_PRICE,
-		GameState.power_strips >= GameState.POWER_STRIP_MAX,
-		func(): GameState.request_buy_power_strip())
-	_add_accessory_card(list,
-		tr("Netzwerk-Verteiler 4-Port (Router)"),
-		tr("Wird sofort am Router montiert. Belegt einen Port und bringt +%d Netzwerkdosen.") % GameState.NET_HUB_EXTRA
-			+ "\n" + (tr("Ports am Router: %d  •  Montiert: %d / %d") % [router_cap, GameState.net_hubs, GameState.NET_HUB_MAX]),
-		GameState.NET_HUB_PRICE,
-		GameState.net_hubs >= GameState.NET_HUB_MAX,
-		func(): GameState.request_buy_net_hub())
+	var at_max := GameState.net_hubs >= GameState.NET_HUB_MAX
+	_add_shop_item_card(list, {
+		"title": tr("Netzwerk-Verteiler 4-Port (Router)"),
+		"desc": tr("Wird sofort am Router montiert. Belegt einen Port und bringt +%d Netzwerkdosen.") % GameState.NET_HUB_EXTRA,
+		"info": tr("Ports am Router: %d  •  Montiert: %d / %d") % [router_cap, GameState.net_hubs, GameState.NET_HUB_MAX],
+		"color": Color(0.16, 0.40, 0.68),
+		"price": GameState.NET_HUB_PRICE,
+		"instant": true,
+		"disabled": at_max,
+		"btn_text": tr("Maximum erreicht") if at_max else "",
+		"on_buy": func(): GameState.request_buy_net_hub(),
+	})
 
 
-func _add_accessory_card(list: VBoxContainer, title: String, desc: String, price: int, at_max: bool, on_buy: Callable) -> void:
-	var card := _make_light_card(Color(0.94, 0.97, 0.99), Color(0.46, 0.64, 0.86), 6, 12, 8)
+## Steckleisten und Netzwerk-Verteiler werden sofort montiert, ohne Lieferung.
+func _add_accessory_shop_cards(list: VBoxContainer) -> void:
+	_add_power_strip_card(list)
+	_add_net_hub_card(list)
+
+
+## Abschnittsüberschrift im Shop, gruppiert die Karten nach Kategorie.
+func _add_shop_section(list: VBoxContainer, heading: String, hint: String) -> void:
+	var box := VBoxContainer.new()
+	box.add_theme_constant_override("separation", 2)
+	list.add_child(box)
+	if list.get_child_count() > 1:
+		var gap := Control.new()
+		gap.custom_minimum_size = Vector2(0, 6)
+		box.add_child(gap)
+
+	var h := Label.new()
+	h.text = heading.to_upper()
+	h.add_theme_font_size_override("font_size", 12)
+	h.modulate = Color(0.10, 0.24, 0.44)
+	box.add_child(h)
+
+	if hint != "":
+		var s := Label.new()
+		s.text = hint
+		s.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		s.add_theme_font_size_override("font_size", 11)
+		s.modulate = Color(0.42, 0.46, 0.54)
+		box.add_child(s)
+
+	box.add_child(HSeparator.new())
+
+
+## Einheitliche Karte für alle bestellbaren Artikel.
+## opts: title, desc, info, color, price, instant (sofort gebucht statt Warenkorb), disabled, btn_text, on_buy
+func _add_shop_item_card(list: VBoxContainer, opts: Dictionary) -> void:
+	var instant := bool(opts.get("instant", false))
+	var price := int(opts.get("price", 0))
+	var accent: Color = opts.get("color", Color(0.46, 0.50, 0.56))
+	var is_disabled := bool(opts.get("disabled", false)) or (instant and GameState.money < float(price))
+
+	var card := _make_light_card(Color.WHITE, Color(0.82, 0.85, 0.89), 6, 12, 9)
 	list.add_child(card)
 	var row := HBoxContainer.new()
-	row.add_theme_constant_override("separation", 10)
+	row.add_theme_constant_override("separation", 12)
 	card.add_child(row)
 
-	var info := VBoxContainer.new()
-	info.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	info.add_theme_constant_override("separation", 3)
-	row.add_child(info)
+	var swatch := ColorRect.new()
+	swatch.custom_minimum_size = Vector2(6, 44)
+	swatch.color = accent
+	row.add_child(swatch)
 
-	var t := Label.new()
-	t.text = title
-	t.add_theme_font_size_override("font_size", 13)
-	t.modulate = Color(0.12, 0.16, 0.24)
-	info.add_child(t)
+	var info_box := VBoxContainer.new()
+	info_box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	info_box.add_theme_constant_override("separation", 3)
+	row.add_child(info_box)
 
-	var d := Label.new()
-	d.text = desc
-	d.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	d.add_theme_font_size_override("font_size", 11)
-	d.modulate = Color(0.32, 0.36, 0.44)
-	info.add_child(d)
+	var head := HBoxContainer.new()
+	head.add_theme_constant_override("separation", 8)
+	info_box.add_child(head)
 
-	var buy := Button.new()
-	buy.text = tr("Maximum") if at_max else (tr("Kaufen  $%d") % price)
-	buy.custom_minimum_size = Vector2(110, 32)
-	buy.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-	buy.disabled = at_max or GameState.money < float(price)
-	_style_win_btn(buy, Color(0.10, 0.46, 0.82), Color(0.08, 0.36, 0.68), Color.WHITE)
-	buy.pressed.connect(func():
-		SfxManager.play("click", -12.0, 1.1)
-		on_buy.call()
+	var title_lbl := Label.new()
+	title_lbl.text = str(opts.get("title", ""))
+	title_lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	title_lbl.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+	title_lbl.tooltip_text = title_lbl.text
+	title_lbl.add_theme_font_size_override("font_size", 14)
+	title_lbl.modulate = Color(0.10, 0.12, 0.16)
+	head.add_child(title_lbl)
+
+	var badge := _make_light_card(
+		Color(0.90, 0.97, 0.91) if instant else Color(0.92, 0.95, 1.0),
+		Color(0.52, 0.78, 0.58) if instant else Color(0.62, 0.74, 0.90),
+		4, 6, 1)
+	badge.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	head.add_child(badge)
+	var badge_lbl := Label.new()
+	var badge_txt := str(opts.get("badge", ""))
+	if badge_txt == "":
+		badge_txt = tr("Sofort verfügbar") if instant else tr("Lieferung per Sprinter")
+	badge_lbl.text = badge_txt
+	badge_lbl.add_theme_font_size_override("font_size", 10)
+	badge_lbl.modulate = Color(0.14, 0.44, 0.22) if instant else Color(0.12, 0.32, 0.58)
+	badge.add_child(badge_lbl)
+
+	var desc := str(opts.get("desc", ""))
+	if desc != "":
+		var desc_lbl := Label.new()
+		desc_lbl.text = desc
+		desc_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		desc_lbl.add_theme_font_size_override("font_size", 11)
+		desc_lbl.modulate = Color(0.36, 0.40, 0.46)
+		info_box.add_child(desc_lbl)
+
+	var extra := str(opts.get("info", ""))
+	if extra != "":
+		var extra_lbl := Label.new()
+		extra_lbl.text = extra
+		extra_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		extra_lbl.add_theme_font_size_override("font_size", 11)
+		extra_lbl.modulate = Color(0.20, 0.36, 0.56)
+		info_box.add_child(extra_lbl)
+
+	# Optional: Leistungsbalken mit Kurz-Specs (Einzelteile)
+	if opts.has("strength_pct"):
+		var bar_row := HBoxContainer.new()
+		bar_row.add_theme_constant_override("separation", 8)
+		info_box.add_child(bar_row)
+		var pb := ProgressBar.new()
+		pb.min_value = 0.0
+		pb.max_value = 100.0
+		pb.value = clampf(float(opts.get("strength_pct", 0.0)), 0.0, 100.0)
+		pb.show_percentage = false
+		pb.custom_minimum_size = Vector2(90, 7)
+		pb.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+		var bg_sb := StyleBoxFlat.new()
+		bg_sb.bg_color = Color(0.88, 0.90, 0.93)
+		bg_sb.set_corner_radius_all(3)
+		var fill_sb := StyleBoxFlat.new()
+		fill_sb.bg_color = accent
+		fill_sb.set_corner_radius_all(3)
+		pb.add_theme_stylebox_override("background", bg_sb)
+		pb.add_theme_stylebox_override("fill", fill_sb)
+		bar_row.add_child(pb)
+		var specs := str(opts.get("specs", ""))
+		if specs != "":
+			var specs_lbl := Label.new()
+			specs_lbl.text = specs
+			specs_lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+			specs_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+			specs_lbl.add_theme_font_size_override("font_size", 11)
+			specs_lbl.modulate = Color(0.36, 0.40, 0.48)
+			bar_row.add_child(specs_lbl)
+
+	var buy_col := VBoxContainer.new()
+	buy_col.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	buy_col.add_theme_constant_override("separation", 4)
+	row.add_child(buy_col)
+
+	var price_lbl := Label.new()
+	var has_price_text := opts.has("price_text")
+	price_lbl.text = str(opts.get("price_text", "$%d" % price))
+	price_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	price_lbl.add_theme_font_size_override("font_size", 16)
+	if has_price_text:
+		price_lbl.modulate = Color(0.10, 0.44, 0.24)
+	else:
+		price_lbl.modulate = Color(0.10, 0.44, 0.24) if GameState.money >= float(price) else Color(0.78, 0.16, 0.14)
+	buy_col.add_child(price_lbl)
+
+	var btn_text := str(opts.get("btn_text", ""))
+	if btn_text == "":
+		btn_text = tr("Sofort kaufen") if instant else tr("+ Warenkorb")
+	var btn := Button.new()
+	btn.text = btn_text
+	btn.custom_minimum_size = Vector2(140, 32)
+	btn.disabled = is_disabled
+	if str(opts.get("btn_style", "")) == "danger":
+		_style_win_btn(btn, Color(0.82, 0.24, 0.20), Color(0.66, 0.16, 0.14), Color.WHITE)
+	else:
+		_style_win_btn(btn, Color(0.10, 0.48, 0.84), Color(0.08, 0.38, 0.70), Color.WHITE)
+	var on_buy: Callable = opts.get("on_buy", Callable())
+	btn.pressed.connect(func():
+		if instant:
+			SfxManager.play("click", -12.0, 1.1)
+		if on_buy.is_valid():
+			on_buy.call()
 	)
-	row.add_child(buy)
+	buy_col.add_child(btn)
 
 
 func _render_shop_app() -> void:
@@ -892,11 +1012,21 @@ func _render_shop_app() -> void:
 		tip.add_child(tl)
 
 	if _shop_tab == "chassis":
-		_populate_physical_shop_list(left_list, ["rack", "rack_pro", "net_switch"])
+		_add_shop_section(left_list, tr("Server-Racks"), tr("Gehäuse für deine Einschübe. Lieferung per Sprinter."))
+		_populate_physical_shop_list(left_list, ["rack", "rack_pro"])
+		_add_shop_section(left_list, tr("Netzwerk"), tr("Switches für mehr Netzwerk-Ports im Rack."))
+		_populate_physical_shop_list(left_list, ["net_switch"])
 	elif _shop_tab == "infra":
-		_populate_physical_shop_list(left_list, ["cooler", "chiller", "ups", "cart"])
+		_add_shop_section(left_list, tr("Kühlung"), tr("Hält die Raumtemperatur unter Kontrolle."))
+		_populate_physical_shop_list(left_list, ["cooler", "chiller"])
+		_add_shop_section(left_list, tr("Stromversorgung"), tr("Notstrom, Sicherungen und zusätzliche Steckplätze am Stromkasten."))
+		_populate_physical_shop_list(left_list, ["ups"])
+		_add_power_strip_card(left_list)
 		_add_fuse_shop_card(left_list)
-		_add_accessory_shop_cards(left_list)
+		_add_shop_section(left_list, tr("Netzwerk-Zubehör"), tr("Mehr Netzwerkdosen am Router."))
+		_add_net_hub_card(left_list)
+		_add_shop_section(left_list, tr("Transport"), tr("Hilfsmittel zum Bewegen von Hardware."))
+		_populate_physical_shop_list(left_list, ["cart"])
 	elif _shop_tab == "warehouse":
 		_populate_warehouse_list(left_list)
 	elif HardwareCatalog.PARTS.has(_shop_tab):
@@ -1009,47 +1139,19 @@ func _render_shop_app() -> void:
 
 func _populate_physical_shop_list(parent: VBoxContainer, keys: Array) -> void:
 	for item_type in keys:
-		var it := str(item_type)
-		var cat: Dictionary = GameState.ITEM_CATALOG[it]
-		var price := int(cat["price"])
-		var row := _make_light_card(Color.WHITE, Color(0.82, 0.85, 0.89), 6, 12, 9)
-		parent.add_child(row)
-		var hb := HBoxContainer.new()
-		hb.add_theme_constant_override("separation", 10)
-		row.add_child(hb)
-
-		var sw := ColorRect.new()
-		sw.custom_minimum_size = Vector2(6, 38)
-		sw.color = cat["color"]
-		hb.add_child(sw)
-
-		var iv := VBoxContainer.new()
-		iv.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		iv.add_theme_constant_override("separation", 2)
-		hb.add_child(iv)
-
-		var nl := Label.new()
-		nl.text = tr(str(cat["name"]))
-		nl.add_theme_font_size_override("font_size", 14)
-		nl.modulate = Color(0.10, 0.12, 0.16)
-		iv.add_child(nl)
-
-		var dl := Label.new()
-		dl.text = tr(str(cat["desc"]))
-		dl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-		dl.add_theme_font_size_override("font_size", 11.5)
-		dl.modulate = Color(0.36, 0.40, 0.46)
-		iv.add_child(dl)
-
-		var btn := Button.new()
-		btn.text = tr("+ Warenkorb ($%d)") % price
-		btn.custom_minimum_size = Vector2(148, 34)
-		_style_win_btn(btn, Color(0.10, 0.48, 0.84), Color(0.08, 0.38, 0.70), Color.WHITE)
-		var cap_it := it
+		var cap_it := str(item_type)
+		if not GameState.ITEM_CATALOG.has(cap_it):
+			continue
+		var cat: Dictionary = GameState.ITEM_CATALOG[cap_it]
 		var cap_n := str(cat["name"])
-		var cap_p := price
-		btn.pressed.connect(func(): _cart_add("item", cap_it, "", cap_n, cap_p))
-		hb.add_child(btn)
+		var cap_p := int(cat["price"])
+		_add_shop_item_card(parent, {
+			"title": tr(cap_n),
+			"desc": tr(str(cat.get("desc", ""))),
+			"color": cat.get("color", Color(0.46, 0.50, 0.56)),
+			"price": cap_p,
+			"on_buy": func(): _cart_add("item", cap_it, "", cap_n, cap_p),
+		})
 
 
 func _populate_parts_shop_list(parent: VBoxContainer, cat: String) -> void:
@@ -1060,73 +1162,45 @@ func _populate_parts_shop_list(parent: VBoxContainer, cat: String) -> void:
 			continue # Zero-cost barebones stock defaults don't need to be bought!
 		if not HardwareCatalog.matches_filter(cat, pd, _shop_subfilter):
 			continue
-		var pid := str(pd["id"])
-		var stock := GameState.get_part_stock(pid)
-		var row := _make_light_card(Color.WHITE, Color(0.82, 0.85, 0.89), 6, 12, 8)
-		parent.add_child(row)
-		var hb := HBoxContainer.new()
-		hb.add_theme_constant_override("separation", 10)
-		row.add_child(hb)
-
-		var iv := VBoxContainer.new()
-		iv.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		iv.add_theme_constant_override("separation", 3)
-		hb.add_child(iv)
-
-		var nl := Label.new()
-		var st_txt := ("   " + tr("(Lager: %d×)") % stock) if stock > 0 else ""
-		nl.text = "[%s]  %s%s" % [tr(str(pd.get("tag", ""))), str(pd["name"]), st_txt]
-		nl.add_theme_font_size_override("font_size", 13)
-		nl.modulate = Color(0.10, 0.14, 0.20)
-		iv.add_child(nl)
-
-		var brow := HBoxContainer.new()
-		brow.add_theme_constant_override("separation", 8)
-		iv.add_child(brow)
-		var pb := ProgressBar.new()
-		pb.min_value = 0.0
-		pb.max_value = 100.0
-		pb.value = HardwareCatalog.get_part_strength_pct(cat, pd)
-		pb.show_percentage = false
-		pb.custom_minimum_size = Vector2(80, 7)
-		var bsb := StyleBoxFlat.new()
-		bsb.bg_color = Color(0.88, 0.90, 0.93)
-		bsb.set_corner_radius_all(3)
-		var fsb := StyleBoxFlat.new()
-		fsb.bg_color = Color(0.12, 0.50, 0.84)
-		fsb.set_corner_radius_all(3)
-		pb.add_theme_stylebox_override("background", bsb)
-		pb.add_theme_stylebox_override("fill", fsb)
-		brow.add_child(pb)
-
-		var sl := Label.new()
-		sl.text = _format_part_specs_short(cat, pd)
-		sl.add_theme_font_size_override("font_size", 11)
-		sl.modulate = Color(0.36, 0.40, 0.48)
-		brow.add_child(sl)
-
-		var btn := Button.new()
-		btn.text = tr("+ Warenkorb ($%d)") % cost
-		btn.custom_minimum_size = Vector2(148, 34)
-		_style_win_btn(btn, Color(0.10, 0.48, 0.84), Color(0.08, 0.38, 0.70), Color.WHITE)
-		var cap_pid := pid
+		var cap_pid := str(pd["id"])
 		var cap_cat := cat
 		var cap_name := str(pd["name"])
 		var cap_cost := cost
-		btn.pressed.connect(func(): _cart_add("part", cap_pid, cap_cat, cap_name, cap_cost))
-		hb.add_child(btn)
+		var stock := GameState.get_part_stock(cap_pid)
+		var tag := tr(str(pd.get("tag", "")))
+		_add_shop_item_card(parent, {
+			"title": ("[%s]  %s" % [tag, cap_name]) if tag != "" else cap_name,
+			"info": (tr("Im Lager: %d×") % stock) if stock > 0 else "",
+			"color": _part_accent(cap_cat),
+			"price": cap_cost,
+			"strength_pct": HardwareCatalog.get_part_strength_pct(cap_cat, pd),
+			"specs": _format_part_specs_short(cap_cat, pd),
+			"on_buy": func(): _cart_add("part", cap_pid, cap_cat, cap_name, cap_cost),
+		})
+
+
+## Akzentfarbe je Einzelteil-Kategorie, damit die Karten pro Kategorie erkennbar bleiben.
+func _part_accent(cat: String) -> Color:
+	match cat:
+		"cpu":
+			return Color(0.20, 0.50, 0.84)
+		"ram":
+			return Color(0.30, 0.64, 0.38)
+		"gpu":
+			return Color(0.56, 0.32, 0.78)
+		"storage":
+			return Color(0.86, 0.52, 0.16)
+		"cooling":
+			return Color(0.18, 0.64, 0.74)
+		"psu":
+			return Color(0.84, 0.66, 0.14)
+	return Color(0.46, 0.50, 0.56)
 
 
 func _populate_warehouse_list(parent: VBoxContainer) -> void:
 	var inv_n := GameState.get_total_inventory_parts()
-	var hdr := _make_light_card(Color(0.93, 0.96, 1.0), Color(0.72, 0.82, 0.92), 6, 12, 8)
-	parent.add_child(hdr)
-	var hl := Label.new()
-	hl.text = tr("MEIN TEILE-LAGER (%d Bauteile auf Lager) — Am Rack mit [E] → Tab „Hardware-Bau“ kostenlos einbauen oder ungenutzte Teile hier verkaufen!") % inv_n
-	hl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	hl.add_theme_font_size_override("font_size", 12)
-	hl.modulate = Color(0.12, 0.24, 0.38)
-	hdr.add_child(hl)
+	_add_shop_section(parent, tr("Mein Teile-Lager (%d Bauteile)") % inv_n,
+		tr("Am Rack mit [E] → Tab „Hardware-Bau“ kostenlos einbauen oder ungenutzte Teile hier verkaufen."))
 
 	if inv_n == 0:
 		var el := Label.new()
@@ -1136,34 +1210,53 @@ func _populate_warehouse_list(parent: VBoxContainer) -> void:
 		parent.add_child(el)
 		return
 
+	# Lagerbestand nach Kategorie gruppieren (Reihenfolge wie CATEGORY_ORDER, Unbekanntes zuletzt)
+	var by_cat := {}
 	for pid_k in GameState.parts_inventory.keys():
 		var pid := str(pid_k)
-		var cnt := int(GameState.parts_inventory[pid])
-		if cnt <= 0:
+		if int(GameState.parts_inventory[pid]) <= 0:
 			continue
 		var cat := HardwareCatalog.find_part_category(pid)
-		var pd := HardwareCatalog.get_part(cat, pid)
-		var refund := maxi(5, int(roundf(float(pd.get("cost", 0)) * 0.60)))
-		var row := _make_light_card(Color.WHITE, Color(0.82, 0.85, 0.89), 6, 12, 8)
-		parent.add_child(row)
-		var hb := HBoxContainer.new()
-		hb.add_theme_constant_override("separation", 10)
-		row.add_child(hb)
+		if not by_cat.has(cat):
+			by_cat[cat] = []
+		(by_cat[cat] as Array).append(pid)
 
-		var nl := Label.new()
-		nl.text = "%d×  [%s] %s   (%s)" % [cnt, tr(str(pd.get("tag", ""))), str(pd.get("name", pid)), _format_part_specs_short(cat, pd)]
-		nl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		nl.add_theme_font_size_override("font_size", 12.5)
-		nl.modulate = Color(0.12, 0.14, 0.18)
-		hb.add_child(nl)
+	var cat_order: Array = []
+	for c in HardwareCatalog.CATEGORY_ORDER:
+		if by_cat.has(c):
+			cat_order.append(c)
+	for c in by_cat.keys():
+		if not cat_order.has(c):
+			cat_order.append(c)
 
-		var sbtn := Button.new()
-		sbtn.text = tr("Verkaufen (+$%d)") % refund
-		sbtn.custom_minimum_size = Vector2(138, 30)
-		_style_win_btn(sbtn, Color(0.82, 0.24, 0.20), Color(0.66, 0.16, 0.14), Color.WHITE)
-		var cap_p := pid
-		sbtn.pressed.connect(func(): GameState.request_sell_inventory_part(cap_p))
-		hb.add_child(sbtn)
+	for cat_k in cat_order:
+		var cat := str(cat_k)
+		var meta: Dictionary = HardwareCatalog.CATEGORY_META.get(cat, {})
+		var heading := str(meta.get("label", "")) if not meta.is_empty() else tr("Sonstiges")
+		_add_shop_section(parent, tr(heading), "")
+		for pid_v in by_cat[cat]:
+			var pid := str(pid_v)
+			var cnt := int(GameState.parts_inventory[pid])
+			var pd := HardwareCatalog.get_part(cat, pid)
+			var refund := maxi(5, int(roundf(float(pd.get("cost", 0)) * 0.60)))
+			var tag := tr(str(pd.get("tag", "")))
+			var pname := str(pd.get("name", pid))
+			var cap_p := pid
+			var opts := {
+				"title": ("[%s]  %s" % [tag, pname]) if tag != "" else pname,
+				"info": tr("Im Lager: %d×") % cnt,
+				"color": _part_accent(cat),
+				"price": refund,
+				"price_text": "+$%d" % refund,
+				"badge": tr("Im Lager"),
+				"btn_text": tr("Verkaufen"),
+				"btn_style": "danger",
+				"on_buy": func(): GameState.request_sell_inventory_part(cap_p),
+			}
+			if not pd.is_empty():
+				opts["strength_pct"] = HardwareCatalog.get_part_strength_pct(cat, pd)
+				opts["specs"] = _format_part_specs_short(cat, pd)
+			_add_shop_item_card(parent, opts)
 
 
 func _format_part_specs_short(cat: String, pd: Dictionary) -> String:

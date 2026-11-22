@@ -55,6 +55,11 @@ var _breaker_label: Label3D
 
 var _hall_c_breaker_label: Label3D
 var _hall_c_router_label: Label3D
+## Steckdosenleiste am Kasten in Halle C: 2 Reihen × 7 Buchsen (max. 6 + 4 × 2 = 14 Anschlüsse).
+const HALL_C_SOCKET_COLS := 7
+const HALL_C_SOCKET_ROWS := 2
+var _hall_c_socket_pos: Array[Vector3] = []
+var _hall_c_socket_covers: Array[MeshInstance3D] = []
 
 var _router_root: Node3D
 var _router_mesh_holder: Node3D
@@ -282,6 +287,12 @@ func _update_dynamic_visuals() -> void:
 		var used_cp := GameState.count_cables_on("power", GameState.HALL_C_BREAKER_ID)
 		var max_cp := GameState.get_max_ports("power", GameState.HALL_C_BREAKER_ID)
 		_hall_c_breaker_label.text = tr("HALLE-C STROMBUS\nSteckdosen: %d / %d") % [used_cp, max_cp]
+		# Gesperrte Buchsen (über der aktuellen Stromstufe) sind abgedeckt
+		for i in range(_hall_c_socket_covers.size()):
+			_hall_c_socket_covers[i].visible = i >= max_cp
+		# Neues Kabel startet an der nächsten freien Buchse
+		if not _hall_c_socket_pos.is_empty():
+			hall_c_breaker_port_pos = get_hall_c_socket_pos(mini(used_cp, maxi(max_cp - 1, 0)))
 
 	if _hall_c_router_label != null:
 		var used_cn := GameState.count_cables_on("network", GameState.HALL_C_ROUTER_ID)
@@ -1068,14 +1079,12 @@ func _build_breaker_box() -> void:
 		_add_box_visual(root, Vector3(0.0, 0.028, 0.097), Vector3(0.66, 0.016, 0.002), label_paper)
 		_add_box_visual(root, Vector3(0.0, -0.212, 0.097), Vector3(0.66, 0.016, 0.002), label_paper)
 
-		# Einspeisung unten: Klemmengehäuse mit 3 gelben Steckdosen mit Klappdeckel
+		# Einspeisung unten: Klemmengehäuse mit einer mittigen gelben Steckdose mit Klappdeckel
 		_add_box_visual(root, Vector3(0.0, -0.37, 0.112), Vector3(0.40, 0.17, 0.04), dark)
 		_add_small_label(root, Vector3(0.0, -0.305, 0.1325), "EINSPEISUNG 230 V", 18, 0.0012, Color(0.85, 0.86, 0.86))
-		for i in range(3):
-			var px := -0.12 + 0.12 * float(i)
-			_add_cyl_visual(root, Vector3(px, -0.378, 0.145), 0.030, 0.030, 0.03, port_mat, Vector3(90, 0, 0), 20)
-			_add_cyl_visual(root, Vector3(px, -0.378, 0.161), 0.021, 0.021, 0.003, dark, Vector3(90, 0, 0), 20)
-			_add_box_visual(root, Vector3(px, -0.338, 0.150), Vector3(0.05, 0.012, 0.014), port_mat)
+		_add_cyl_visual(root, Vector3(0.0, -0.378, 0.145), 0.030, 0.030, 0.03, port_mat, Vector3(90, 0, 0), 20)
+		_add_cyl_visual(root, Vector3(0.0, -0.378, 0.161), 0.021, 0.021, 0.003, dark, Vector3(90, 0, 0), 20)
+		_add_box_visual(root, Vector3(0.0, -0.338, 0.150), Vector3(0.05, 0.012, 0.014), port_mat)
 
 		# Kabelschutzrohre nach oben mit Verschraubung und Rohrschellen
 		for i in range(2):
@@ -1096,7 +1105,7 @@ func _build_breaker_box() -> void:
 	sw_area.position = Vector3(0.0, 0.27, 0.08)
 	root.add_child(sw_area)
 
-	var port_area := _make_interact_area(Vector3(0.56, 0.34, 0.42), {
+	var port_area := _make_interact_area(Vector3(0.30, 0.30, 0.42), {
 		"interact_type": "power_port",
 		"entity_id": GameState.WALL_BREAKER_ID,
 	})
@@ -1143,8 +1152,24 @@ func _build_hall_c_subpanel() -> void:
 	add_child(p_root)
 	_add_box_visual(p_root, Vector3.ZERO, Vector3(0.72, 0.94, 0.20), MatLib.make_brushed_metal(Color(0.30, 0.32, 0.35), 0.42, 0.50))
 	var y_mat := _mat(Color(0.84, 0.66, 0.14), 0.48, 0.08)
-	_add_box_visual(p_root, Vector3(0.0, -0.34, 0.13), Vector3(0.30, 0.11, 0.055), y_mat)
-	hall_c_breaker_port_pos = p_root.position + Vector3(0.0, -0.34, 0.18)
+	var sock_mat := _mat(Color(0.08, 0.08, 0.09), 0.70, 0.0)
+	var cover_mat := _mat(Color(0.52, 0.54, 0.57), 0.55, 0.30)
+	# Gelbe Trägerplatte mit 2 × 7 Buchsen statt eines einzelnen Anschlussblocks
+	_add_box_visual(p_root, Vector3(0.0, -0.265, 0.11), Vector3(0.64, 0.25, 0.02), y_mat)
+	_hall_c_socket_pos.clear()
+	_hall_c_socket_covers.clear()
+	for r in range(HALL_C_SOCKET_ROWS):
+		for c in range(HALL_C_SOCKET_COLS):
+			var sx := -0.255 + 0.085 * float(c)
+			var sy := -0.20 - 0.13 * float(r)
+			_add_box_visual(p_root, Vector3(sx, sy, 0.126), Vector3(0.058, 0.058, 0.012), sock_mat)
+			var cover := _add_box_visual(p_root, Vector3(sx, sy, 0.134), Vector3(0.062, 0.062, 0.006), cover_mat)
+			cover.visible = false
+			_hall_c_socket_covers.append(cover)
+			_hall_c_socket_pos.append(p_root.position + Vector3(sx, sy, 0.14))
+	hall_c_breaker_port_pos = get_hall_c_socket_pos(0)
+
+	_hall_c_breaker_label = _add_small_label(p_root, Vector3(0.0, 0.30, 0.102), tr("HALLE-C STROMBUS"), 28, 0.0016, Color(0.90, 0.91, 0.93))
 
 	var p_area := _make_interact_area(Vector3(0.84, 1.04, 0.44), {
 		"interact_type": "power_port",
@@ -1226,12 +1251,20 @@ func _setup_breaker_model(model: Node3D, root: Node3D) -> void:
 			deg_to_rad(_glb_extra(door_h, "dct_open_deg", -110.0)), GameState.WALL_BREAKER_ID,
 			Vector3(0.38, -0.08, 0.16), Vector3(0.80, 0.76, 0.46))
 
+	# Nur die mittlere Einspeisedose ist in Betrieb. Alle Kabel kommen dort heraus.
+	# Die beiden äußeren Dosen bekommen eine graue Blindabdeckung, ihre Deckel werden ausgeblendet.
 	_socket_lids.clear()
 	_socket_lid_closed.clear()
 	_socket_lid_open.clear()
+	var blank_mat := _mat(Color(0.72, 0.73, 0.72), 0.55, 0.15)
 	for i in range(1, 4):
 		var lid := _glb_find(model, "_Hinge_SocketLid_%d" % i)
 		if lid == null:
+			continue
+		if i != 2:
+			lid.visible = false
+			var bx := -0.12 if i == 1 else 0.12
+			_add_box_visual(root, Vector3(bx, -0.372, 0.164), Vector3(0.074, 0.078, 0.008), blank_mat)
 			continue
 		_socket_lids.append(lid)
 		_socket_lid_closed.append(lid.rotation.x)
@@ -2119,6 +2152,13 @@ func _add_torus_visual(parent: Node3D, pos: Vector3, inner_r: float, outer_r: fl
 
 
 ## Kleine aufgedruckte Beschriftung ohne Outline und ohne Schatten, nur von vorn sichtbar.
+## Weltposition der Buchse idx am Kasten in Halle C (geklemmt auf die vorhandenen Buchsen).
+func get_hall_c_socket_pos(idx: int) -> Vector3:
+	if _hall_c_socket_pos.is_empty():
+		return hall_c_breaker_port_pos
+	return _hall_c_socket_pos[clampi(idx, 0, _hall_c_socket_pos.size() - 1)]
+
+
 func _add_small_label(parent: Node3D, pos: Vector3, text: String, font_size: int, px_size: float, col: Color) -> Label3D:
 	var l := Label3D.new()
 	l.text = text

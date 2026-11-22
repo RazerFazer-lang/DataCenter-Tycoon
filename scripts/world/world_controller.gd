@@ -347,7 +347,7 @@ func show_menu_showcase() -> void:
 		if eid == "sc_cooler_1":
 			return cooler_a.get_power_port_global_pos()
 		return null
-	_cable_renderer.rebuild_cables(showcase_cables, resolver)
+	_cable_renderer.rebuild_cables(showcase_cables, resolver, get_port_world_dir)
 
 
 func clear_menu_showcase() -> void:
@@ -393,9 +393,9 @@ func start_relocate_rack(rack_id: String) -> void:
 		local_player.start_relocate_rack(rack_id)
 
 
-func update_cable_preview(active: bool, cable_type: String, start_pos: Vector3, end_pos: Vector3) -> void:
+func update_cable_preview(active: bool, cable_type: String, start_pos: Vector3, end_pos: Vector3, target_state: int = CableRenderer.TARGET_NONE, snap_pos: Variant = null) -> void:
 	if _cable_renderer != null:
-		_cable_renderer.update_preview_cable(active, cable_type, start_pos, end_pos)
+		_cable_renderer.update_preview_cable(active, cable_type, start_pos, end_pos, target_state, snap_pos)
 
 
 func get_port_world_pos(cable_type: String, endpoint_id: String) -> Variant:
@@ -568,7 +568,43 @@ func _sync_crates() -> void:
 
 
 func _sync_cables() -> void:
-	_cable_renderer.rebuild_cables(GameState.cables, get_port_world_pos)
+	_cable_renderer.rebuild_cables(GameState.cables, get_port_world_pos, get_port_world_dir, _make_cable_socket_resolver())
+
+
+## Verteilt die Stromkabel am Kasten in Halle C auf einzelne Buchsen (stabile Reihenfolge nach Kabel-ID).
+func _make_cable_socket_resolver() -> Callable:
+	var hall_c_ids: Array[String] = []
+	for cid in GameState.cables.keys():
+		var c: Dictionary = GameState.cables[cid]
+		if str(c.get("cable_type", "")) != "power":
+			continue
+		if str(c.get("from_id", "")) == GameState.HALL_C_BREAKER_ID or str(c.get("to_id", "")) == GameState.HALL_C_BREAKER_ID:
+			hall_c_ids.append(str(cid))
+	hall_c_ids.sort()
+	var slot_of := {}
+	for i in range(hall_c_ids.size()):
+		slot_of[hall_c_ids[i]] = i
+	return func(cid: String, _ctype: String, eid: String) -> Variant:
+		if eid == GameState.HALL_C_BREAKER_ID and slot_of.has(cid):
+			return _garage.get_hall_c_socket_pos(int(slot_of[cid]))
+		return null
+
+
+## Richtung, in die ein Port zeigt (Kabel verlässt die Buchse in diese Richtung). null = unbekannt.
+func get_port_world_dir(_cable_type: String, endpoint_id: String) -> Variant:
+	# Wandkästen hängen an der Rückwand und zeigen in den Raum (+Z)
+	if endpoint_id == GameState.WALL_BREAKER_ID or endpoint_id == GameState.HALL_C_BREAKER_ID \
+			or endpoint_id == GameState.WALL_ROUTER_ID or endpoint_id == GameState.HALL_C_ROUTER_ID:
+		return Vector3.BACK
+	if _rack_nodes.has(endpoint_id):
+		var rp: RackProp = _rack_nodes[endpoint_id]
+		if is_instance_valid(rp) and rp.is_inside_tree():
+			return rp.global_transform.basis.z
+	if _ups_nodes.has(endpoint_id):
+		var up: UpsProp = _ups_nodes[endpoint_id]
+		if is_instance_valid(up) and up.is_inside_tree():
+			return up.global_transform.basis.z
+	return null
 
 
 func _sync_all_players() -> void:

@@ -559,6 +559,15 @@ var parts_inventory: Dictionary = {} # part_id -> int count in player's warehous
 var support_tickets: Dictionary = {}
 var active_call: Dictionary = {}
 var total_rental_income_per_cycle: float = 0.0
+## Ruf der Firma (0-100). Bestimmt, wie viele Kunden ein Dienst anlockt und wie schnell sie kommen.
+var reputation: float = 10.0
+var _last_rep_tier: int = -1
+const REPUTATION_START := 10.0
+const MAX_SERVICES_PER_RACK := 4
+const REPUTATION_LABELS: Array[String] = ["Unbekannt", "Lokal bekannt", "Gefragt", "Etabliert", "Marktführer"]
+const REPUTATION_THRESHOLDS: Array[float] = [15.0, 35.0, 60.0, 85.0]
+## Bedarf pro Nutzer, der bei mehreren Diensten nach Nutzerzahl gemittelt wird.
+const _BLEND_KEYS: Array[String] = ["ram_gb_per_user", "cpu_per_user", "gpu_per_user", "storage_tb_per_user", "mbps_per_user", "pay_per_user"]
 var checklist_opened_pc: bool = false
 var checklist_ordered_anything: bool = false
 var checklist_dismissed: bool = false
@@ -948,6 +957,8 @@ func initialize_new_world(save_id: String = "mein_datacenter", save_name: String
 	max_bandwidth_cu = int(ROUTER_TIERS[0]["max_cu"])
 	raw_compute = 0
 	total_rental_income_per_cycle = 0.0
+	reputation = REPUTATION_START
+	_last_rep_tier = -1
 	next_payout_in = PAYOUT_CYCLE_SECONDS
 	_next_entity_num = 1
 	_next_ticket_num = 101
@@ -1124,7 +1135,14 @@ func _alloc_id(prefix: String) -> String:
 	return id
 
 
+## Ohne diese Bauteile läuft ein Server nicht. Eine Grafikkarte ist optional.
+const REQUIRED_PART_CATS: Array[String] = ["cpu", "ram", "storage", "cooling", "psu"]
+
+
 func _default_components(server_type: String = "web_server") -> Dictionary:
+	# Mainboards kommen nackt: CPU, RAM, GPU, Speicher, Kühlung und Netzteil kauft der Spieler danach selbst.
+	if is_mainboard(server_type):
+		return HardwareCatalog.make_empty_components()
 	return HardwareCatalog.make_default_components(server_type)
 
 
@@ -1158,6 +1176,7 @@ func _make_rack_data(rack_id: String, rack_type: String, pos: Vector3, rot_y: fl
 		"grace_timer": 0.0,
 		"rental_income": 0.0,
 		"metrics": {},
+		"services": [],
 		"slots": slots,
 	}
 
@@ -1181,6 +1200,18 @@ func _ensure_loaded_compat() -> void:
 			r["rental_income"] = 0.0
 		if not r.has("metrics") or not (r["metrics"] is Dictionary):
 			r["metrics"] = {}
+		# Alte Spielstände hatten genau einen Dienst pro Rack: in die Dienstliste übernehmen.
+		if not (r.get("services") is Array):
+			var migrated: Array = []
+			var old_type := str(r.get("rental_type", "none"))
+			if old_type != "none" and HardwareCatalog.RENTAL_PROFILES.has(old_type):
+				migrated.append({
+					"type": old_type,
+					"customer": str(r.get("rental_customer", "")),
+					"users": float(r.get("active_users", 0)),
+					"trend": 0.0,
+				})
+			r["services"] = migrated
 		var slots: Array = r.get("slots", [])
 		for s in slots:
 			var sd: Dictionary = s
@@ -1255,6 +1286,7 @@ func build_snapshot() -> Dictionary:
 		"support_tickets": support_tickets.duplicate(true),
 		"active_call": active_call.duplicate(true),
 		"total_rental_income_per_cycle": total_rental_income_per_cycle,
+		"reputation": reputation,
 		"total_ram_gb": total_ram_gb,
 		"total_cpu_score": total_cpu_score,
 		"total_gpu_score": total_gpu_score,
@@ -1336,6 +1368,8 @@ func _apply_snapshot(snap: Dictionary) -> void:
 	support_tickets = snap.get("support_tickets", {}).duplicate(true)
 	active_call = snap.get("active_call", {}).duplicate(true)
 	total_rental_income_per_cycle = float(snap.get("total_rental_income_per_cycle", 0.0))
+	reputation = clampf(float(snap.get("reputation", REPUTATION_START)), 0.0, 100.0)
+	_last_rep_tier = -1
 	total_ram_gb = int(snap.get("total_ram_gb", 0))
 	total_cpu_score = int(snap.get("total_cpu_score", 0))
 	total_gpu_score = int(snap.get("total_gpu_score", 0))
@@ -1537,6 +1571,7 @@ func get_slot_stats(slot: Dictionary) -> Dictionary:
 			"revenue_bonus": 0.0, "total_value": 0,
 			"cpu_score": 0, "ram_gb": 0, "gpu_score": 0, "vram_gb": 0,
 			"storage_tb": 0.0, "psu_max_watts": 0, "psu_overloaded": false, "ram_tag": "",
+			"missing_parts": [], "complete": false,
 		}
 
 	var base: Dictionary = ITEM_CATALOG[item_type]
@@ -1554,6 +1589,7 @@ func get_slot_stats(slot: Dictionary) -> Dictionary:
 	var storage_tb := 0.0
 	var psu_max_watts := 550
 	var ram_tag := "DDR3"
+	var missing: Array = []
 
 	if is_slot_upgradeable(item_type):
 		var raw_comps: Dictionary = slot.get("components", {})
@@ -1563,7 +1599,11 @@ func get_slot_stats(slot: Dictionary) -> Dictionary:
 		heat = 2.0
 		compute = int(ITEM_CATALOG[item_type].get("base_compute", 4 if item_type == "web_server" else (6 if item_type == "storage_server" else 10)))
 		for cat in HardwareCatalog.CATEGORY_ORDER:
-			var part_id := str(comps.get(cat, HardwareCatalog.DEFAULT_PARTS[cat]))
+			var part_id := str(comps.get(cat, ""))
+			if part_id.is_empty():
+				if REQUIRED_PART_CATS.has(cat):
+					missing.append(cat)
+				continue
 			var pd := HardwareCatalog.get_part(cat, part_id)
 			if pd.is_empty():
 				continue
@@ -1587,7 +1627,12 @@ func get_slot_stats(slot: Dictionary) -> Dictionary:
 				psu_max_watts = int(pd.get("psu_max_watts", 350))
 				watt_mult *= float(pd.get("watt_mult", 1.0))
 
-	var psu_overloaded := is_slot_upgradeable(item_type) and (watts > float(psu_max_watts))
+	# Ohne Pflichtteile startet das Board nicht: keine Rechenleistung, nur Standby-Verbrauch.
+	if not missing.is_empty():
+		compute = 0
+		watts = 10.0
+		heat = 0.5
+	var psu_overloaded := is_slot_upgradeable(item_type) and not missing.has("psu") and (watts > float(psu_max_watts))
 	if psu_overloaded:
 		fault_mult *= 2.4
 		heat += 4.5
@@ -1614,6 +1659,8 @@ func get_slot_stats(slot: Dictionary) -> Dictionary:
 		"psu_max_watts": psu_max_watts,
 		"psu_overloaded": psu_overloaded,
 		"ram_tag": ram_tag,
+		"missing_parts": missing,
+		"complete": missing.is_empty(),
 	}
 
 
@@ -1639,7 +1686,9 @@ func get_rack_hardware_summary(rack_id: String) -> Dictionary:
 		out["watts"] = int(out["watts"]) + int(st["watts"])
 		if bool(st["psu_overloaded"]):
 			out["psu_overloaded"] = true
-		if powered and networked and str(sd.get("state", "ok")) == "ok" and is_slot_upgradeable(itype):
+		if not bool(st.get("complete", true)) and is_slot_upgradeable(itype):
+			out["incomplete_servers"] = int(out.get("incomplete_servers", 0)) + 1
+		if powered and networked and str(sd.get("state", "ok")) == "ok" and is_slot_upgradeable(itype) and bool(st.get("complete", true)):
 			out["active_servers"] = int(out["active_servers"]) + 1
 			out["cpu_score"] = int(out["cpu_score"]) + int(st["cpu_score"])
 			out["ram_gb"] = int(out["ram_gb"]) + int(st["ram_gb"])
@@ -2407,16 +2456,20 @@ func _update_rack_rentals_and_support(dt: float) -> void:
 	var worst_call_rack := ""
 	var worst_call_issue := ""
 	var worst_call_sat := 999.0
+	var rep_delta := 0.0
 
 	for rid in racks.keys():
 		var r: Dictionary = racks[rid]
-		var rtype := str(r.get("rental_type", "none"))
-		if rtype == "none" or not HardwareCatalog.RENTAL_PROFILES.has(rtype):
+		var services := _get_rack_services(r)
+		if services.is_empty():
+			r["rental_type"] = "none"
+			r["rental_customer"] = ""
 			r["active_users"] = 0
 			r["rental_income"] = 0.0
 			r["metrics"] = {}
 			continue
 
+		var rtype := str((services[0] as Dictionary)["type"])
 		var prof: Dictionary = HardwareCatalog.RENTAL_PROFILES[rtype]
 		var hw := get_rack_hardware_summary(rid)
 		var powered := bool(r.get("powered", false))
@@ -2427,18 +2480,16 @@ func _update_rack_rentals_and_support(dt: float) -> void:
 		var grace := maxf(0.0, float(r.get("grace_timer", 0.0)) - dt)
 		r["grace_timer"] = grace
 
-		# Organic active user growth (grows steadily when customer is happy, shrinks when unhappy)
-		var cur_users := float(r.get("active_users", int(prof["base_users"])))
-		var max_u := float(prof["max_users"])
-		var growth := float(prof["growth_rate"]) * time_wave
-		if not powered or not networked or active_servers == 0:
-			cur_users = maxf(float(prof["base_users"]) * 0.4, cur_users - 4.5 * dt)
-		elif sat >= 72.0:
-			cur_users = minf(max_u, cur_users + growth * dt * 0.36)
-		elif sat < 45.0:
-			cur_users = maxf(float(prof["base_users"]) * 0.5, cur_users - 2.2 * dt)
-		var users_int := maxi(1, int(roundf(cur_users)))
+		# Kunden kommen nach und nach: Jeder Dienst startet mit wenigen Nutzern und wächst je nach Ruf.
+		var online := powered and networked and active_servers > 0
+		var users_int := 0
+		for svc in services:
+			users_int += _update_service_users(svc as Dictionary, sat, online, dt, time_wave)
+		users_int = maxi(1, users_int)
+		_sync_rack_rental_fields(r)
 		r["active_users"] = users_int
+		# Ressourcenbedarf und Preis pro Nutzer: Mittel aller Dienste, gewichtet nach Nutzerzahl.
+		prof = _blend_service_profiles(services)
 
 		# Calculate live per-resource utilization % so player can self-assess RAM/CPU/GPU/Storage/Router!
 		var ram_total := maxf(0.5, float(hw["ram_gb"]))
@@ -2513,6 +2564,8 @@ func _update_rack_rentals_and_support(dt: float) -> void:
 			income = float(users_int) * float(prof["pay_per_user"]) * sat_mult * revenue_bonus_mult
 		r["rental_income"] = income
 		total_rent += income
+		# Zufriedene Kunden empfehlen dich weiter, unzufriedene schaden dem Ruf.
+		rep_delta += (sat - 60.0) / 100.0 * 0.05 * dt * sqrt(float(services.size()))
 
 		# Auto-generate specific Customer Support Ticket on persistent bottleneck!
 		if bottleneck != "ok" and not _has_open_ticket_for_rack(rid):
@@ -2535,10 +2588,22 @@ func _update_rack_rentals_and_support(dt: float) -> void:
 			r["active_users"] = 0
 			r["satisfaction"] = 100.0
 			r["rental_income"] = 0.0
+			services.clear()
+			reputation = maxf(0.0, reputation - 8.0)
 			_clear_tickets_for_rack(rid)
 			tickets_dirty = true
 			post_event_f("❌ %s hat %s gekündigt (dauerhafte Überlastung)! Hardware aufrüsten & neu vermieten.", [cname, rid.to_upper()], "alert")
 			_rpc_play_sfx.rpc("alarm")
+
+	reputation = clampf(reputation + rep_delta, 0.0, 100.0)
+	var rep_tier := get_reputation_tier()
+	if rep_tier != _last_rep_tier:
+		if _last_rep_tier >= 0:
+			if rep_tier > _last_rep_tier:
+				post_event_f("⭐ Dein Ruf steigt: %s! Neue Kunden kommen schneller und zahlreicher.", [get_reputation_label()], "good")
+			else:
+				post_event_f("📉 Dein Ruf sinkt: %s. Es kommen weniger neue Kunden.", [get_reputation_label()], "warn")
+		_last_rep_tier = rep_tier
 
 	total_rental_income_per_cycle = total_rent
 
@@ -2573,6 +2638,145 @@ func _update_rack_rentals_and_support(dt: float) -> void:
 		_broadcast_tickets()
 	if call_dirty:
 		_broadcast_call()
+
+
+## Aktive Dienste eines Racks. Ungültige Einträge (unbekannte Dienste, "none") werden entfernt.
+func _get_rack_services(r: Dictionary) -> Array:
+	if not (r.get("services") is Array):
+		r["services"] = []
+	var arr: Array = r["services"]
+	for i in range(arr.size() - 1, -1, -1):
+		var e: Variant = arr[i]
+		if not (e is Dictionary):
+			arr.remove_at(i)
+			continue
+		var t := str((e as Dictionary).get("type", ""))
+		if t == "none" or not HardwareCatalog.RENTAL_PROFILES.has(t):
+			arr.remove_at(i)
+	return arr
+
+
+func _find_service(services: Array, service_type: String) -> int:
+	for i in range(services.size()):
+		if str((services[i] as Dictionary).get("type", "")) == service_type:
+			return i
+	return -1
+
+
+## Hält die alten Einzelfelder (rental_type, rental_customer) passend zur Dienstliste.
+## Tickets, Anrufe, Terminal und Rack-Schild lesen weiter diese Felder.
+func _sync_rack_rental_fields(r: Dictionary) -> void:
+	var services: Array = r.get("services", [])
+	if services.is_empty():
+		r["rental_type"] = "none"
+		r["rental_customer"] = ""
+		r["active_users"] = 0
+		r["rental_income"] = 0.0
+		r["satisfaction"] = 100.0
+		r["grace_timer"] = 0.0
+		return
+	var first: Dictionary = services[0]
+	r["rental_type"] = str(first.get("type", "none"))
+	var cname := str(first.get("customer", ""))
+	if services.size() > 1:
+		cname += " +%d" % (services.size() - 1)
+	r["rental_customer"] = cname
+	var total := 0
+	for s in services:
+		total += int(roundf(float((s as Dictionary).get("users", 0.0))))
+	r["active_users"] = total
+
+
+func get_reputation_factor() -> float:
+	return clampf(reputation / 100.0, 0.0, 1.0)
+
+
+func get_reputation_tier() -> int:
+	var tier := 0
+	for th in REPUTATION_THRESHOLDS:
+		if reputation >= th:
+			tier += 1
+	return tier
+
+
+func get_reputation_label() -> String:
+	return REPUTATION_LABELS[get_reputation_tier()]
+
+
+## Höchstzahl an Nutzern, die ein Dienst beim aktuellen Ruf anlockt.
+func get_service_user_cap(service_type: String) -> int:
+	if not HardwareCatalog.RENTAL_PROFILES.has(service_type):
+		return 0
+	var p: Dictionary = HardwareCatalog.RENTAL_PROFILES[service_type]
+	var base := float(p.get("base_users", 0))
+	var cap := float(p.get("max_users", 0)) * (0.12 + 0.88 * get_reputation_factor())
+	return int(roundf(maxf(base * 0.5, cap)))
+
+
+## Startnutzer eines neuen Dienstes: bei schlechtem Ruf nur eine Handvoll.
+func _start_users_for(service_type: String) -> float:
+	var p: Dictionary = HardwareCatalog.RENTAL_PROFILES[service_type]
+	return maxf(1.0, roundf(float(p.get("base_users", 1)) * (0.15 + 0.35 * get_reputation_factor())))
+
+
+## Nutzerzahl eines Dienstes fortschreiben. Gibt die gerundete Nutzerzahl zurück.
+func _update_service_users(svc: Dictionary, sat: float, online: bool, dt: float, time_wave: float) -> int:
+	var st := str(svc.get("type", ""))
+	if not HardwareCatalog.RENTAL_PROFILES.has(st):
+		return 0
+	var p: Dictionary = HardwareCatalog.RENTAL_PROFILES[st]
+	var base := float(p.get("base_users", 1))
+	var cap := float(get_service_user_cap(st))
+	var prev := float(svc.get("users", base))
+	var cur := prev
+	if not online:
+		cur = maxf(base * 0.2, cur - 4.5 * dt)
+	elif sat >= 72.0:
+		if cur < cap:
+			var growth := float(p.get("growth_rate", 1.0)) * time_wave * (0.35 + 0.65 * get_reputation_factor())
+			cur = minf(cap, cur + growth * dt * 0.36)
+		else:
+			# Ruf gesunken: überzählige Kunden wandern langsam ab.
+			cur = maxf(cap, cur - 1.0 * dt)
+	elif sat < 45.0:
+		cur = maxf(base * 0.25, cur - 2.2 * dt)
+	svc["users"] = cur
+	if dt > 0.0:
+		var per_min := (cur - prev) / dt * 60.0
+		svc["trend"] = lerpf(float(svc.get("trend", 0.0)), per_min, clampf(dt * 0.5, 0.0, 1.0))
+	return maxi(0, int(roundf(cur)))
+
+
+## Ein gemeinsames Profil für alle Dienste eines Racks, gewichtet nach Nutzerzahl.
+func _blend_service_profiles(services: Array) -> Dictionary:
+	var first_type := str((services[0] as Dictionary).get("type", ""))
+	var out: Dictionary = (HardwareCatalog.RENTAL_PROFILES[first_type] as Dictionary).duplicate(true)
+	if services.size() == 1:
+		return out
+	var sums := {}
+	for k in _BLEND_KEYS:
+		sums[k] = 0.0
+	var total_w := 0.0
+	var base_sum := 0.0
+	var max_sum := 0.0
+	var growth_sum := 0.0
+	for s in services:
+		var sd: Dictionary = s
+		var p: Dictionary = HardwareCatalog.RENTAL_PROFILES[str(sd["type"])]
+		var w := maxf(1.0, float(sd.get("users", 1.0)))
+		total_w += w
+		for k in _BLEND_KEYS:
+			var fallback := 0.5 if k == "mbps_per_user" else 0.0
+			sums[k] = float(sums[k]) + w * float(p.get(k, fallback))
+		base_sum += float(p.get("base_users", 0))
+		max_sum += float(p.get("max_users", 0))
+		growth_sum += float(p.get("growth_rate", 0.0))
+	for k in _BLEND_KEYS:
+		out[k] = float(sums[k]) / total_w
+	out["base_users"] = int(base_sum)
+	out["max_users"] = int(max_sum)
+	out["growth_rate"] = growth_sum
+	return out
 
 
 func _has_open_ticket_for_rack(rack_id: String) -> bool:
@@ -3732,33 +3936,45 @@ func _rpc_req_set_rack_rental(rack_id: String, rental_type: String) -> void:
 	if not racks.has(rack_id) or not HardwareCatalog.RENTAL_PROFILES.has(rental_type):
 		return
 	var r: Dictionary = racks[rack_id]
-	var prev_type := str(r.get("rental_type", "none"))
-	if prev_type == rental_type:
-		return
+	var services := _get_rack_services(r)
+	var pname := str(NetworkManager.get_player_name(peer_id))
 
-	r["rental_type"] = rental_type
+	# "none" beendet alle Dienste. Jeder andere Dienst wird an- oder ausgeschaltet,
+	# so kann ein Rack mehrere Dienste gleichzeitig vermieten.
+	if rental_type == "none":
+		if services.is_empty():
+			return
+		services.clear()
+		post_event_f("%s beendete alle Vermietungen von %s.", [pname, rack_id.to_upper()], "info")
+	else:
+		var prof: Dictionary = HardwareCatalog.RENTAL_PROFILES[rental_type]
+		var idx := _find_service(services, rental_type)
+		if idx >= 0:
+			var gone: Dictionary = services[idx]
+			services.remove_at(idx)
+			post_event_f("%s beendete %s (%s) auf %s.", [pname, str(prof["short"]), str(gone.get("customer", "")), rack_id.to_upper()], "info")
+		else:
+			if services.size() >= MAX_SERVICES_PER_RACK:
+				_rpc_play_sfx.rpc_id(peer_id, "error")
+				post_event_f("%s hat schon %d Dienste. Beende erst einen, bevor du einen neuen startest.", [rack_id.to_upper(), MAX_SERVICES_PER_RACK], "warn")
+				return
+			var cname := HardwareCatalog.pick_customer_name(rental_type, _next_entity_num + racks.size() + day_number + services.size())
+			var start_users := _start_users_for(rental_type)
+			services.append({"type": rental_type, "customer": cname, "users": start_users, "trend": 0.0})
+			if services.size() == 1:
+				r["satisfaction"] = 95.0
+				r["grace_timer"] = 18.0
+			else:
+				r["grace_timer"] = maxf(float(r.get("grace_timer", 0.0)), 10.0)
+			post_event_f("🤝 %s vermietet %s als %s an %s (%d Start-User, Ruf: %s)!", [
+				pname, rack_id.to_upper(), str(prof["short"]), cname, int(start_users), get_reputation_label()
+			], "good")
+
+	_sync_rack_rental_fields(r)
 	_clear_tickets_for_rack(rack_id)
 	if not active_call.is_empty() and str(active_call.get("rack_id", "")) == rack_id:
 		active_call.clear()
 		_broadcast_call()
-
-	if rental_type == "none":
-		r["rental_customer"] = ""
-		r["active_users"] = 0
-		r["satisfaction"] = 100.0
-		r["rental_income"] = 0.0
-		r["grace_timer"] = 0.0
-		post_event_f("%s beendete Vermietung von %s.", [NetworkManager.get_player_name(peer_id), rack_id.to_upper()], "info")
-	else:
-		var prof: Dictionary = HardwareCatalog.RENTAL_PROFILES[rental_type]
-		var cname := HardwareCatalog.pick_customer_name(rental_type, _next_entity_num + racks.size() + day_number)
-		r["rental_customer"] = cname
-		r["active_users"] = int(prof["base_users"])
-		r["satisfaction"] = 95.0
-		r["grace_timer"] = 18.0
-		post_event_f("🤝 %s vermietet %s als %s an %s (%d Start-User)!", [
-			NetworkManager.get_player_name(peer_id), rack_id.to_upper(), str(prof["short"]), cname, int(prof["base_users"])
-		], "good")
 	_rpc_play_sfx.rpc("cash")
 	_broadcast_racks()
 	_broadcast_tickets()
@@ -4656,6 +4872,7 @@ func _broadcast_sim_tick() -> void:
 			"satisfaction": float(rk.get("satisfaction", 100.0)),
 			"rental_income": float(rk.get("rental_income", 0.0)),
 			"metrics": (rk.get("metrics", {}) as Dictionary).duplicate(true),
+			"services": (rk.get("services", []) as Array).duplicate(true),
 		}
 	var cooler_pwr := {}
 	for cid in coolers.keys():
@@ -4696,6 +4913,7 @@ func _broadcast_sim_tick() -> void:
 		"revenue_bonus_mult": revenue_bonus_mult,
 		"ai_revenue_per_sec": ai_revenue_per_sec,
 		"total_rental_income_per_cycle": total_rental_income_per_cycle,
+		"reputation": reputation,
 		"total_ram_gb": total_ram_gb,
 		"total_cpu_score": total_cpu_score,
 		"total_gpu_score": total_gpu_score,
@@ -4747,6 +4965,7 @@ func _rpc_sync_sim_tick(packet: Dictionary) -> void:
 		revenue_bonus_mult = float(packet["revenue_bonus_mult"])
 		ai_revenue_per_sec = float(packet["ai_revenue_per_sec"])
 		total_rental_income_per_cycle = float(packet.get("total_rental_income_per_cycle", 0.0))
+		reputation = clampf(float(packet.get("reputation", reputation)), 0.0, 100.0)
 		total_ram_gb = int(packet.get("total_ram_gb", 0))
 		total_cpu_score = int(packet.get("total_cpu_score", 0))
 		total_gpu_score = int(packet.get("total_gpu_score", 0))
@@ -4768,6 +4987,7 @@ func _rpc_sync_sim_tick(packet: Dictionary) -> void:
 				racks[rid]["satisfaction"] = float(rt.get("satisfaction", 100.0))
 				racks[rid]["rental_income"] = float(rt.get("rental_income", 0.0))
 				racks[rid]["metrics"] = (rt.get("metrics", {}) as Dictionary).duplicate(true)
+				racks[rid]["services"] = (rt.get("services", []) as Array).duplicate(true)
 		var cpwr: Dictionary = packet["cooler_pwr"]
 		for cid in cpwr.keys():
 			if coolers.has(cid):
