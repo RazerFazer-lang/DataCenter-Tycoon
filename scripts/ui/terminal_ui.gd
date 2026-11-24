@@ -968,6 +968,7 @@ func _render_shop_app() -> void:
 		{"id": "chassis", "label": "Racks & Chassis"},
 		{"id": "kits", "label": "Reparatur-Kits"},
 		{"id": "infra", "label": "Klima & USV"},
+		{"id": "deals", "label": "Gebrauchtmarkt"},
 		{"id": "warehouse", "label": tr("Lager (%d)") % GameState.get_total_inventory_parts()},
 	]
 	for t in tabs:
@@ -1083,6 +1084,60 @@ func _render_shop_app() -> void:
 		_add_fuse_shop_card(left_list)
 		_add_shop_section(left_list, tr("Netzwerk-Zubehör"), tr("Mehr Netzwerkdosen am Router."))
 		_add_net_hub_card(left_list)
+	elif _shop_tab == "deals":
+		_add_shop_section(left_list, tr("Gebrauchtmarkt & Firmenauflösungen (Tag %d)") % GameState.day_number, tr("Täglich wechselnde B-Ware mit 35–45 % Rabatt! Nur einmal pro Angebot verfügbar."))
+		if GameState.daily_deals.is_empty():
+			var empty_l := Label.new()
+			empty_l.text = tr("Heute sind noch keine Angebote eingetroffen.")
+			empty_l.modulate = Color(0.35, 0.38, 0.44)
+			left_list.add_child(empty_l)
+		else:
+			for d_v in GameState.daily_deals:
+				var deal: Dictionary = d_v
+				var did := str(deal.get("deal_id", ""))
+				var sold := bool(deal.get("sold", false))
+				var price := int(deal.get("price", 0))
+				var orig := int(deal.get("orig_price", price))
+				var disc := int(deal.get("discount_pct", 35))
+				var card := _make_light_card(
+					Color(0.94, 0.95, 0.96) if sold else Color(1.0, 0.99, 0.95),
+					Color(0.76, 0.78, 0.82) if sold else Color(0.88, 0.66, 0.22),
+					6, 12, 9
+				)
+				left_list.add_child(card)
+				var h := HBoxContainer.new()
+				h.add_theme_constant_override("separation", 12)
+				card.add_child(h)
+				var info_v := VBoxContainer.new()
+				info_v.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+				info_v.add_theme_constant_override("separation", 2)
+				h.add_child(info_v)
+				var t_lbl := Label.new()
+				t_lbl.text = "%s   [-%d%%]" % [str(deal.get("name", "B-Ware")), disc]
+				t_lbl.add_theme_font_size_override("font_size", 13)
+				t_lbl.modulate = Color(0.45, 0.48, 0.52) if sold else Color(0.12, 0.14, 0.18)
+				info_v.add_child(t_lbl)
+				var s_lbl := Label.new()
+				s_lbl.text = tr("Anbieter: %s  •  Neupreis: $%d") % [str(deal.get("seller", "")), orig]
+				s_lbl.add_theme_font_size_override("font_size", 11)
+				s_lbl.modulate = Color(0.36, 0.40, 0.46)
+				info_v.add_child(s_lbl)
+				var bbtn := Button.new()
+				bbtn.text = tr("VERKAUFT") if sold else tr("Kaufen ($%d)") % price
+				bbtn.disabled = sold or GameState.money < float(price)
+				bbtn.custom_minimum_size = Vector2(132, 32)
+				_style_win_btn(
+					bbtn,
+					Color(0.78, 0.80, 0.84) if bbtn.disabled else Color(0.16, 0.56, 0.30),
+					Color(0.65, 0.68, 0.72) if bbtn.disabled else Color(0.12, 0.44, 0.22),
+					Color(0.36, 0.38, 0.42) if bbtn.disabled else Color.WHITE
+				)
+				var cap_did := did
+				bbtn.pressed.connect(func():
+					GameState.request_buy_daily_deal(cap_did)
+					_refresh_all()
+				)
+				h.add_child(bbtn)
 		_add_shop_section(left_list, tr("Transport"), tr("Hilfsmittel zum Bewegen von Hardware."))
 		_populate_physical_shop_list(left_list, ["cart"])
 	elif _shop_tab == "warehouse":
@@ -1430,9 +1485,10 @@ func _render_support_hub_app() -> void:
 	sub_bar.add_child(srow)
 
 	var stabs: Array = [
-{"id": "tickets", "label": tr("Tickets & Vermietung (%d)") % GameState.get_open_ticket_count()},
-{"id": "contracts", "label": tr("Großkunden-Verträge (%d/4)") % GameState.get_active_contract_count()},
-{"id": "ai", "label": tr("AI-Cluster & Firewall") + (" (DDoS!)" if GameState.ddos_active else "")},
+		{"id": "tickets", "label": tr("Tickets & Vermietung (%d)") % GameState.get_open_ticket_count()},
+		{"id": "contracts", "label": tr("Großkunden-Verträge (%d/4)") % GameState.get_active_contract_count()},
+		{"id": "career", "label": tr("Karriere & Team (%d/%d)") % [GameState.career_completed.size(), GameState.CAREER_MILESTONES.size()]},
+		{"id": "ai", "label": tr("AI-Cluster & Firewall") + (" (DDoS!)" if GameState.ddos_active else "")},
 	]
 	for t in stabs:
 		var td: Dictionary = t
@@ -1467,8 +1523,76 @@ func _render_support_hub_app() -> void:
 		_render_support_tickets_subtab(content)
 	elif _support_tab == "contracts":
 		_render_contracts_subtab(content)
+	elif _support_tab == "career":
+		_render_career_subtab(content)
 	else:
 		_render_ai_firewall_subtab(content)
+
+
+func _render_career_subtab(content: VBoxContainer) -> void:
+	# 1. Aktiver Co-op Team-Auftrag + Betriebs-Boni (Airflow, Kabelmanagement, Wetter)
+	var team_card := _make_light_card(Color(0.94, 0.97, 1.0), Color(0.24, 0.56, 0.86), 6, 12, 10)
+	content.add_child(team_card)
+	var tv := VBoxContainer.new()
+	tv.add_theme_constant_override("separation", 5)
+	team_card.add_child(tv)
+
+	var o := GameState.active_team_order
+	var ot := Label.new()
+	if not o.is_empty():
+		var done := bool(o.get("done", false))
+		var prog := float(o.get("progress", 0.0))
+		var targ := maxf(1.0, float(o.get("target", 1.0)))
+		ot.text = ("%s  —  %s  (Prämie: +$%d)" % [
+			str(o.get("title", "")),
+			tr("ABGESCHLOSSEN!") if done else ("%d / %d" % [int(prog), int(targ)]),
+			int(o.get("reward", 0))
+		])
+		ot.modulate = Color(0.12, 0.48, 0.22) if done else Color(0.10, 0.24, 0.46)
+	else:
+		ot.text = tr("Kein aktiver Team-Auftrag.")
+		ot.modulate = Color(0.32, 0.36, 0.42)
+	ot.add_theme_font_size_override("font_size", 13)
+	tv.add_child(ot)
+
+	var bonus_lbl := Label.new()
+	bonus_lbl.text = tr("Wetter: %s  •  Kaltgang-Airflow: +%d%% Kühlung  •  Kabelmanagement: +%d%% Ruf-/Umsatz-Bonus") % [
+		GameState.get_weather_label(),
+		int(roundf(GameState.airflow_bonus * 100.0)),
+		int(roundf(GameState.cable_mgmt_bonus * 100.0)),
+	]
+	bonus_lbl.add_theme_font_size_override("font_size", 11.5)
+	bonus_lbl.modulate = Color(0.24, 0.32, 0.44)
+	tv.add_child(bonus_lbl)
+
+	# 2. Karriere-Meilensteine (bodenständige Großkunden-Stufen)
+	for m_v in GameState.CAREER_MILESTONES:
+		var m: Dictionary = m_v
+		var done := GameState.career_completed.has(str(m["id"]))
+		var mc := _make_light_card(
+			Color(0.92, 0.98, 0.93) if done else Color(0.98, 0.98, 0.99),
+			Color(0.28, 0.68, 0.38) if done else Color(0.78, 0.81, 0.86),
+			6, 12, 9
+		)
+		content.add_child(mc)
+		var mv := VBoxContainer.new()
+		mv.add_theme_constant_override("separation", 2)
+		mc.add_child(mv)
+		var head := Label.new()
+		head.text = "%s %s — %s  (Prämie: +$%d)" % [
+			"✓" if done else "○",
+			str(m["title"]),
+			str(m["client"]),
+			int(m["reward"]),
+		]
+		head.add_theme_font_size_override("font_size", 13)
+		head.modulate = Color(0.12, 0.46, 0.22) if done else Color(0.12, 0.15, 0.20)
+		mv.add_child(head)
+		var dl := Label.new()
+		dl.text = str(m["desc"])
+		dl.add_theme_font_size_override("font_size", 11.5)
+		dl.modulate = Color(0.32, 0.36, 0.42)
+		mv.add_child(dl)
 
 
 func _render_support_tickets_subtab(content: VBoxContainer) -> void:

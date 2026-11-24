@@ -296,6 +296,8 @@ func _process(delta: float) -> void:
 				bmc_mat.emission_energy_multiplier = 0.02
 				post_lbl.visible = false
 			elif temp >= 68.0:
+				# Sichtbare Rauch-Vorwarnung bei kritischer Hitze BEVOR der Server brennt!
+				smoke_fx.emitting = (SettingsManager.graphics_quality >= 1)
 				var warn_p := 0.75 + 0.45 * sin(_anim_time * 8.0 + float(i))
 				led_mat.emission = Color(0.96, 0.62, 0.10)
 				led_mat.emission_energy_multiplier = warn_p

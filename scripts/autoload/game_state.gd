@@ -28,9 +28,71 @@ signal cart_changed
 signal shelf_changed
 signal workbench_changed
 signal host_permissions_changed
+signal world_ping_received(peer_id: int, world_pos: Vector3, kind: String, label: String)
+signal player_emote_received(peer_id: int, emote_id: String)
+signal daily_deals_changed
 
 ## Wenn aktiv, darf nur der Host (peer 1) Racks/Geräte verkaufen, Kredite aufnehmen, Mitarbeiter entlassen & Hallen ausbauen.
 var host_only_destructive: bool = false
+
+## Meilensteine A–D: Wetter, Kalt-/Warmgang-Airflow, Kabelmanagement, Karriere, Gebrauchtmarkt & Team-Aufträge
+var weather_state: String = "clear" # "clear" | "cloudy" | "rain" | "storm" | "heatwave"
+var _weather_timer: float = 95.0
+var airflow_bonus: float = 0.0 # 0.0..0.30 (+30% Kühlleistung & geringerer Klima-Strom)
+var cable_mgmt_bonus: float = 0.0 # 0.0..0.12 (+12% Umsatz-/Ruf-Bonus für saubere Kabelführung)
+var daily_deals: Array = []
+var career_completed: Array = []
+var active_team_order: Dictionary = {}
+
+const CAREER_MILESTONES := [
+	{
+		"id": "career_handwerk",
+		"title": "Handwerk & Lokal-Webhosting",
+		"client": "Keller & Söhne Handwerksverbund",
+		"desc": "Betreibe mind. 1 Rack mit 15 CU Rechenleistung.",
+		"req_racks": 1, "req_cu": 15, "req_room": 0, "req_ups": false, "req_rep": 0.0, "req_ai": 0,
+		"reward": 1200, "rep_bonus": 4.0,
+	},
+	{
+		"id": "career_esports",
+		"title": "Regionaler Gameserver-Host",
+		"client": "Nordliga eSports e.V.",
+		"desc": "Betreibe mind. 2 Racks mit 45 CU bei stabiler Kühlung (< 65 °C).",
+		"req_racks": 2, "req_cu": 45, "req_room": 0, "req_ups": false, "req_rep": 50.0, "req_ai": 0,
+		"reward": 4500, "rep_bonus": 6.0,
+	},
+	{
+		"id": "career_erp",
+		"title": "Mittelstands-ERP & Cloud",
+		"client": "Bergmann Maschinenbau GmbH",
+		"desc": "Betreibe mind. 4 Racks mit 110 CU und mindestens 1 angeschlossener USV.",
+		"req_racks": 4, "req_cu": 110, "req_room": 1, "req_ups": true, "req_rep": 60.0, "req_ai": 0,
+		"reward": 12500, "rep_bonus": 8.0,
+	},
+	{
+		"id": "career_bank",
+		"title": "Hochverfügbarkeit (99,9 % SLA)",
+		"client": "Hanseatische Privatbank AG",
+		"desc": "Betreibe mind. 6 Racks mit 240 CU, USV & Kunden-Ruf ≥ 75.",
+		"req_racks": 6, "req_cu": 240, "req_room": 1, "req_ups": true, "req_rep": 75.0, "req_ai": 0,
+		"reward": 28000, "rep_bonus": 10.0,
+	},
+	{
+		"id": "career_research",
+		"title": "KI- & Forschungs-Rechenknoten",
+		"client": "Norddeutscher Forschungsverbund",
+		"desc": "Halle C aktiv, mind. 9 Racks, 420 CU & KI-Plattform Stufe 2+.",
+		"req_racks": 9, "req_cu": 420, "req_room": 2, "req_ups": true, "req_rep": 80.0, "req_ai": 2,
+		"reward": 65000, "rep_bonus": 12.0,
+	},
+]
+
+const USED_SELLERS: Array[String] = [
+	"Insolvenzmasse Bürotechnik Nord",
+	"Leasing-Rückläufer RZ Süd",
+	"Gebrauchtposten IT-Systemhaus",
+	"Behörden-Ausmusterung",
+]
 
 const MAX_SHARED_PANELS := 512
 ## Vom Server geführter Zustand aller öffenbaren Abdeckungen: "<entity_id>|<panel_id>" -> true (nur offene).
@@ -1434,6 +1496,11 @@ func initialize_new_world(save_id: String = "mein_datacenter", save_name: String
 
 	# v1.0 Clean Empty Garage Start + Starter-Reparatur-Kits ordentlich im Lagerregal.
 	_ensure_starter_shelf_kits()
+	weather_state = "clear"
+	_weather_timer = 105.0
+	career_completed.clear()
+	_generate_daily_deals()
+	_roll_team_order()
 	_recalculate_networks_and_metrics()
 	world_snapshot_loaded.emit()
 	state_updated.emit()
@@ -1556,6 +1623,12 @@ func clear_local_state() -> void:
 	pending_build_orders.clear()
 	storage_shelf_slots.clear()
 	workbench_state.clear()
+	weather_state = "clear"
+	airflow_bonus = 0.0
+	cable_mgmt_bonus = 0.0
+	daily_deals.clear()
+	career_completed.clear()
+	active_team_order.clear()
 	breaker_fuses = _make_fuse_slots("ok")
 	fuse_stock = 0
 	power_fuse_stock = 0
@@ -1786,6 +1859,12 @@ func build_snapshot() -> Dictionary:
 		"workbench_state": workbench_state.duplicate(true),
 		"pending_build_orders": pending_build_orders.duplicate(true),
 		"host_only_destructive": host_only_destructive,
+		"weather_state": weather_state,
+		"airflow_bonus": airflow_bonus,
+		"cable_mgmt_bonus": cable_mgmt_bonus,
+		"daily_deals": daily_deals.duplicate(true),
+		"career_completed": career_completed.duplicate(),
+		"active_team_order": active_team_order.duplicate(true),
 	}
 
 
@@ -1884,7 +1963,18 @@ func _apply_snapshot(snap: Dictionary) -> void:
 	van_cargo_count = int(snap.get("van_cargo_count", 0))
 	van_delivery_tier = clampi(int(snap.get("van_delivery_tier", 1)), 1, 3)
 	host_only_destructive = bool(snap.get("host_only_destructive", false))
+	weather_state = str(snap.get("weather_state", "clear"))
+	airflow_bonus = clampf(float(snap.get("airflow_bonus", 0.0)), 0.0, 0.35)
+	cable_mgmt_bonus = clampf(float(snap.get("cable_mgmt_bonus", 0.0)), 0.0, 0.15)
+	daily_deals = (snap.get("daily_deals", []) as Array).duplicate(true) if snap.get("daily_deals", []) is Array else []
+	if daily_deals.is_empty() and multiplayer.is_server():
+		_generate_daily_deals()
+	career_completed = (snap.get("career_completed", []) as Array).duplicate() if snap.get("career_completed", []) is Array else []
+	active_team_order = (snap.get("active_team_order", {}) as Dictionary).duplicate(true) if snap.get("active_team_order", {}) is Dictionary else {}
+	if active_team_order.is_empty() and multiplayer.is_server():
+		_roll_team_order()
 	host_permissions_changed.emit()
+	daily_deals_changed.emit()
 	pending_delivery_count = int(snap.get("pending_delivery_count", 0))
 	# Ältere Spielstände haben diese Felder nicht. Die übrigen Schritte leitet die Checkliste aus Racks/Kisten ab.
 	checklist_opened_pc = bool(snap.get("checklist_opened_pc", false))
@@ -2933,6 +3023,8 @@ func _run_simulation_step(dt: float) -> void:
 		post_event_f("⚡ Strompreis für Tag %d: $%.2f pro kWh.", [day_number, electricity_rate], "info")
 		_advance_random_contracts()
 		_check_company_milestones()
+		_generate_daily_deals()
+		_roll_team_order()
 		if bill > 0:
 			# Die Stromrechnung wird nicht mehr sofort abgebucht. FinanceManager stellt daraus
 			# eine Rechnung mit Fälligkeit aus, die in der Rechnungen-App bezahlt wird.
@@ -2942,7 +3034,10 @@ func _run_simulation_step(dt: float) -> void:
 		else:
 			post_event_f("☀ Tag %d beginnt – keine Stromkosten angefallen.", [day_number], "info")
 
-	_tick_grid_outage(dt)
+	_tick_grid_outage(dt * (2.2 if weather_state == "storm" else 1.0))
+	_tick_weather(dt)
+	_check_career_milestones()
+	_tick_team_order(dt)
 
 	# 1. UPS Charging & Emergency Backup Discharging
 	var ups_dirty := false
@@ -3056,12 +3151,14 @@ func _run_simulation_step(dt: float) -> void:
 		elif bool(cooler["powered"]):
 			heat_pump_capacity += absf(float(ITEM_CATALOG[ctype]["heat"]))
 	# Die Kälte der Außengeräte kommt nur über ein Goldis Innengerät in den Raum.
+	# Kaltgang/Warmgang-Airflow steigert die reale Kühlleistung um bis zu +30 %!
 	if indoor_units > 0:
-		total_cooling += heat_pump_capacity
+		total_cooling += heat_pump_capacity * (1.0 + airflow_bonus)
 
-	# Slight natural night cooling (-3°C at night)
+	# Slight natural night cooling (-3°C at night) + dynamisches Wetter (Hitzewelle / Regen)!
 	var night_bonus := -3.0 if (time_of_day < 0.22 or time_of_day > 0.80) else 0.0
-	var target_room := clampf(22.0 + night_bonus + total_heat_gen - total_cooling, 15.0, 96.0)
+	var weather_temp_delta := 8.5 if weather_state == "heatwave" else (-2.5 if (weather_state == "rain" or weather_state == "storm") else 0.0)
+	var target_room := clampf(22.0 + night_bonus + weather_temp_delta + total_heat_gen - total_cooling, 15.0, 96.0)
 	room_temp = move_toward(room_temp, target_room, dt * 2.0)
 
 	# 4. Hardware Faults & Fires (modulated by NVMe/PSU/Cooling fault_mult!)
@@ -3875,10 +3972,15 @@ func _recalculate_networks_and_metrics() -> void:
 			elif st == "burning":
 				watts += int(stats["watts"])
 
+	# Kaltgang-/Warmgang-Airflow & Kabelmanagement-Bonus live berechnen
+	_recompute_layout_bonuses()
+
+	var heatwave_cooler_mult := 1.22 if weather_state == "heatwave" else 1.0
+	var airflow_watt_save := 1.0 - airflow_bonus * 0.45
 	for cid in coolers.keys():
 		if bool(coolers[cid]["powered"]):
 			var ctype := str(coolers[cid].get("cooler_type", "cooler"))
-			watts += int(ITEM_CATALOG[ctype]["watts"])
+			watts += int(roundf(float(ITEM_CATALOG[ctype]["watts"]) * heatwave_cooler_mult * airflow_watt_save))
 
 	# Charging UPS draws 120W while below 100%
 	if breaker_on:
@@ -3905,7 +4007,7 @@ func _recalculate_networks_and_metrics() -> void:
 	raw_compute = compute
 	total_compute = mini(compute, max_bandwidth_cu)
 	used_compute = req_compute
-	revenue_bonus_mult = 1.0 + minf(bonus_sum, 0.80)
+	revenue_bonus_mult = 1.0 + minf(bonus_sum + cable_mgmt_bonus, 0.92)
 
 
 # ==============================================================================
@@ -6342,6 +6444,11 @@ func _broadcast_sim_tick() -> void:
 		"rack_temps": rack_temps,
 		"cooler_pwr": cooler_pwr,
 		"ups_sync": ups_sync,
+		"weather_state": weather_state,
+		"airflow_bonus": airflow_bonus,
+		"cable_mgmt_bonus": cable_mgmt_bonus,
+		"career_completed": career_completed,
+		"active_team_order": active_team_order,
 	}
 	_rpc_sync_sim_tick.rpc(packet)
 
@@ -6393,6 +6500,13 @@ func _rpc_sync_sim_tick(packet: Dictionary) -> void:
 		max_bandwidth_mbps = float(packet.get("max_bandwidth_mbps", 50.0))
 		next_payout_in = float(packet["next_payout_in"])
 		contracts = packet["contracts"].duplicate(true)
+		weather_state = str(packet.get("weather_state", weather_state))
+		airflow_bonus = float(packet.get("airflow_bonus", airflow_bonus))
+		cable_mgmt_bonus = float(packet.get("cable_mgmt_bonus", cable_mgmt_bonus))
+		if packet.has("career_completed") and packet["career_completed"] is Array:
+			career_completed = (packet["career_completed"] as Array).duplicate()
+		if packet.has("active_team_order") and packet["active_team_order"] is Dictionary:
+			active_team_order = (packet["active_team_order"] as Dictionary).duplicate(true)
 		var rtemps: Dictionary = packet["rack_temps"]
 		for rid in rtemps.keys():
 			if racks.has(rid):
@@ -7001,3 +7115,382 @@ func _broadcast_workbench() -> void:
 func _rpc_sync_workbench(data: Dictionary) -> void:
 	workbench_state = data.duplicate(true)
 	workbench_changed.emit()
+
+
+# ==============================================================================
+# MEILENSTEINE A–D: WETTER, AIRFLOW, KABELMANAGEMENT, KARRIERE, GEBRAUCHTMARKT,
+# TEAM-AUFTRÄGE, 3D-PING & EMOTES
+# ==============================================================================
+
+func get_weather_label() -> String:
+	match weather_state:
+		"cloudy":
+			return tr("Bewölkt")
+		"rain":
+			return tr("Regen")
+		"storm":
+			return tr("Gewitter")
+		"heatwave":
+			return tr("Hitzewelle")
+		_:
+			return tr("Sonnig")
+
+
+func _tick_weather(dt: float) -> void:
+	_weather_timer -= dt
+	if _weather_timer > 0.0:
+		return
+	_weather_timer = randf_range(85.0, 145.0)
+	var roll := randf()
+	var next_w := "clear"
+	if roll < 0.36:
+		next_w = "clear"
+	elif roll < 0.60:
+		next_w = "cloudy"
+	elif roll < 0.78:
+		next_w = "rain"
+	elif roll < 0.90 and day_number >= 2:
+		next_w = "storm"
+	elif day_number >= 2:
+		next_w = "heatwave"
+	if next_w == weather_state:
+		return
+	weather_state = next_w
+	match weather_state:
+		"rain":
+			post_event("🌧 Regen zieht auf (-2,5 °C natürliche Außenkühlung).", "info")
+		"storm":
+			post_event("⛈ GEWITTER! Erhöhtes Risiko für Netzschwankungen – USV bereithalten!", "warn")
+		"heatwave":
+			post_event("☀ HITZEWELLE (+8,5 °C)! Klimaanlagen ziehen +22% Strom – Sicherungen & Temperaturen im Blick behalten!", "warn")
+		"clear":
+			post_event("🌤 Das Wetter klart wieder auf.", "info")
+
+
+## Berechnet Kaltgang-/Warmgang-Airflow (bis +30 % Kühlleistung & weniger Klima-Strom)
+## sowie den Kabelmanagement-Bonus (bis +12 % Umsatz-/Ruf-Bonus bei sauberer, kurzer Verkabelung).
+func _recompute_layout_bonuses() -> void:
+	var rids: Array = racks.keys()
+	if rids.size() < 2:
+		airflow_bonus = 0.08 if rids.size() == 1 else 0.0
+	else:
+		var good_pairs := 0
+		var bad_pairs := 0
+		for i in range(rids.size()):
+			var ra: Dictionary = racks[rids[i]]
+			var pa: Vector3 = ra.get("pos", Vector3.ZERO) as Vector3
+			var ya: float = float(ra.get("rot_y", 0.0))
+			var fwd_a := Vector2(sin(ya), cos(ya)).normalized()
+			for j in range(i + 1, rids.size()):
+				var rb: Dictionary = racks[rids[j]]
+				var pb: Vector3 = rb.get("pos", Vector3.ZERO) as Vector3
+				var yb: float = float(rb.get("rot_y", 0.0))
+				var fwd_b := Vector2(sin(yb), cos(yb)).normalized()
+				var d2 := Vector2(pb.x - pa.x, pb.z - pa.z)
+				var dist := d2.length()
+				if dist < 0.55 or dist > 3.5:
+					continue
+				var dir_ab := d2 / dist
+				var f_dot := fwd_a.dot(fwd_b)
+				# Kaltgang: zwei Racks stehen sich Front-an-Front gegenüber (1.1..3.4m)
+				if fwd_a.dot(dir_ab) > 0.65 and fwd_b.dot(-dir_ab) > 0.65 and dist >= 1.05:
+					good_pairs += 2
+				# Saubere parallele Reihe nebeneinander (gleiche Ausrichtung, 0.8..1.35m Abstand)
+				elif f_dot > 0.90 and absf(fwd_a.dot(dir_ab)) < 0.35 and dist <= 1.45:
+					good_pairs += 1
+				# Ungünstig: Abluft direkt in den Ansaugbereich des nächsten Racks (< 1.5m)
+				elif f_dot > 0.85 and absf(fwd_a.dot(dir_ab)) > 0.72 and dist < 1.55:
+					bad_pairs += 1
+		var net_score := maxi(0, good_pairs - bad_pairs)
+		airflow_bonus = clampf(float(net_score) * 0.06, 0.0, 0.30)
+
+	# Kabelmanagement-Bonus: kurze, ordentliche Kabelwege ohne wildes Kreuz-und-Quer
+	if cables.is_empty():
+		cable_mgmt_bonus = 0.0
+	else:
+		var tidy := 0
+		var total_c := 0
+		for cid in cables.keys():
+			var c: Dictionary = cables[cid]
+			var pa := _approx_endpoint_pos(str(c.get("from_id", "")))
+			var pb := _approx_endpoint_pos(str(c.get("to_id", "")))
+			if pa == Vector3.ZERO and pb == Vector3.ZERO:
+				continue
+			total_c += 1
+			var d := pa.distance_to(pb)
+			if d <= 6.8:
+				tidy += 1
+		cable_mgmt_bonus = clampf((float(tidy) / float(maxi(1, total_c))) * 0.12, 0.0, 0.12)
+
+
+func _approx_endpoint_pos(eid: String) -> Vector3:
+	if racks.has(eid):
+		return racks[eid].get("pos", Vector3.ZERO) as Vector3
+	if coolers.has(eid):
+		return coolers[eid].get("pos", Vector3.ZERO) as Vector3
+	if ups_units.has(eid):
+		return ups_units[eid].get("pos", Vector3.ZERO) as Vector3
+	if eid == WALL_BREAKER_ID:
+		return Vector3(-4.5, 1.5, -4.3)
+	if eid == WALL_ROUTER_ID:
+		return Vector3(0.4, 1.8, -4.3)
+	if eid == HALL_C_BREAKER_ID:
+		return Vector3(21.0, 1.5, -4.3)
+	if eid == HALL_C_ROUTER_ID:
+		return Vector3(21.0, 1.8, -2.5)
+	return Vector3.ZERO
+
+
+# --- Gebrauchtmarkt / Tages-Deals (B-Ware mit 35–45% Rabatt) ---
+
+func _generate_daily_deals() -> void:
+	if not multiplayer.is_server():
+		return
+	daily_deals.clear()
+	var pool_items: Array[String] = ["rack", "web_server", "game_server", "storage_server", "ups", "cooler"]
+	if get_company_level() >= 2:
+		pool_items.append("rack_pro")
+		pool_items.append("cloud_server")
+	if get_company_level() >= 3:
+		pool_items.append("ai_server")
+	pool_items.shuffle()
+	var count := mini(3, pool_items.size())
+	for i in range(count):
+		var itype := pool_items[i]
+		if not ITEM_CATALOG.has(itype):
+			continue
+		var meta: Dictionary = ITEM_CATALOG[itype]
+		var orig := int(meta["price"])
+		var disc_pct := randi_range(35, 45)
+		var deal_price := maxi(50, int(roundf(float(orig) * (1.0 - float(disc_pct) / 100.0))))
+		daily_deals.append({
+			"deal_id": "deal_d%d_%d" % [day_number, i],
+			"item_type": itype,
+			"name": str(meta["name"]) + " (B-Ware)",
+			"seller": USED_SELLERS[(day_number + i) % USED_SELLERS.size()],
+			"orig_price": orig,
+			"price": deal_price,
+			"discount_pct": disc_pct,
+			"sold": false,
+		})
+	_rpc_sync_daily_deals.rpc(daily_deals.duplicate(true))
+
+
+@rpc("authority", "call_local", "reliable")
+func _rpc_sync_daily_deals(deals: Array) -> void:
+	daily_deals = deals.duplicate(true)
+	daily_deals_changed.emit()
+
+
+func request_buy_daily_deal(deal_id: String) -> void:
+	_rpc_req_buy_daily_deal.rpc_id(1, deal_id)
+
+
+@rpc("any_peer", "call_local", "reliable")
+func _rpc_req_buy_daily_deal(deal_id: String) -> void:
+	if not multiplayer.is_server():
+		return
+	var peer_id := _get_sender_id()
+	if not SecurityGuard.check_rate_limit(peer_id, "buy", 8, 5.0):
+		return
+	if get_delivery_zone_free_slots() < 1:
+		_rpc_play_sfx.rpc_id(peer_id, "error")
+		post_event("Lieferzone voll! Erst Pakete aus der Einfahrt räumen.", "warn")
+		return
+	var found_idx := -1
+	for i in range(daily_deals.size()):
+		if str(daily_deals[i].get("deal_id", "")) == deal_id:
+			found_idx = i
+			break
+	if found_idx < 0 or bool(daily_deals[found_idx].get("sold", false)):
+		_rpc_play_sfx.rpc_id(peer_id, "error")
+		return
+	var deal: Dictionary = daily_deals[found_idx]
+	var price := float(deal["price"])
+	if money < price:
+		_rpc_play_sfx.rpc_id(peer_id, "error")
+		return
+	var item_type := str(deal["item_type"])
+	if not ITEM_CATALOG.has(item_type):
+		return
+	money -= price
+	deal["sold"] = true
+	if van_phase == "arriving" or van_phase == "unloading":
+		van_cargo.append(item_type)
+		if van_phase == "arriving":
+			van_delivery_tier = maxi(van_delivery_tier, compute_delivery_tier(van_cargo))
+	else:
+		pending_delivery_items.append(item_type)
+		if van_phase == "idle":
+			van_cargo = _pack_van_cargo(pending_delivery_items)
+			pending_delivery_items.clear()
+			van_delivery_tier = compute_delivery_tier(van_cargo)
+			van_phase = "arriving"
+			van_phase_time = 0.0
+			_van_unload_accum = 0.0
+			_reset_van_trip()
+	_rpc_sync_daily_deals.rpc(daily_deals.duplicate(true))
+	_broadcast_van_state()
+	_broadcast_sim_tick()
+	_rpc_play_sfx.rpc("cash")
+	post_event_f("%s schnappte sich %s für $%d (-%d%%) aus dem Gebrauchtmarkt!", [
+		NetworkManager.get_player_name(peer_id), str(deal["name"]), int(price), int(deal["discount_pct"])
+	], "good")
+
+
+# --- Karriere-Meilensteine (bodenständige Großkunden-Ziele) ---
+
+func _check_career_milestones() -> void:
+	if not multiplayer.is_server():
+		return
+	var has_ups := false
+	for u in ups_units.values():
+		if bool((u as Dictionary).get("connected", false)):
+			has_ups = true
+			break
+	for m_v in CAREER_MILESTONES:
+		var m: Dictionary = m_v
+		var mid := str(m["id"])
+		if career_completed.has(mid):
+			continue
+		if racks.size() < int(m["req_racks"]):
+			continue
+		if total_compute < int(m["req_cu"]):
+			continue
+		if room_level < int(m["req_room"]):
+			continue
+		if bool(m["req_ups"]) and not has_ups:
+			continue
+		if reputation < float(m["req_rep"]):
+			continue
+		if ai_platform_level < int(m["req_ai"]):
+			continue
+		if mid == "career_esports" and room_temp >= 65.0:
+			continue
+		career_completed.append(mid)
+		var reward := float(m["reward"])
+		money += reward
+		reputation = clampf(reputation + float(m["rep_bonus"]), 0.0, 100.0)
+		_rpc_play_sfx.rpc("upgrade")
+		post_event_f("🏆 KARRIERE-MEILENSTEIN: '%s' (%s) erreicht! Prämie: +$%d & +%.0f Ruf!", [
+			str(m["title"]), str(m["client"]), int(reward), float(m["rep_bonus"])
+		], "good")
+
+
+# --- Co-op Team-Aufträge (zeitbasierte Bonusziele) ---
+
+func _roll_team_order() -> void:
+	if not multiplayer.is_server():
+		return
+	var active_slots := 0
+	for rk in racks.values():
+		for sl in (rk as Dictionary).get("slots", []):
+			if not str((sl as Dictionary).get("item_type", "")).is_empty():
+				active_slots += 1
+	var pick := day_number % 3
+	if pick == 0:
+		active_team_order = {
+			"kind": "uptime_streak",
+			"title": "Team-Auftrag: 90 Sek. störungsfreier Betrieb",
+			"progress": 0.0,
+			"target": 90.0,
+			"reward": 850 + day_number * 220,
+			"done": false,
+		}
+	elif pick == 1:
+		var goal_slots := maxi(2, active_slots + 2)
+		active_team_order = {
+			"kind": "expand_slots",
+			"title": "Team-Auftrag: %d aktive Server-Einschübe betreiben" % goal_slots,
+			"progress": float(active_slots),
+			"target": float(goal_slots),
+			"reward": 1100 + day_number * 260,
+			"done": false,
+		}
+	else:
+		active_team_order = {
+			"kind": "cool_ops",
+			"title": "Team-Auftrag: 75 Sek. unter 50 °C Raumtemperatur",
+			"progress": 0.0,
+			"target": 75.0,
+			"reward": 950 + day_number * 240,
+			"done": false,
+		}
+
+
+func _tick_team_order(dt: float) -> void:
+	if not multiplayer.is_server() or active_team_order.is_empty() or bool(active_team_order.get("done", false)):
+		return
+	var kind := str(active_team_order.get("kind", ""))
+	var target := float(active_team_order.get("target", 90.0))
+	var prog := float(active_team_order.get("progress", 0.0))
+	if kind == "uptime_streak":
+		if (breaker_on or ups_backup_active) and not has_any_fire() and not ddos_active and racks.size() >= 1:
+			prog += dt
+	elif kind == "cool_ops":
+		if (breaker_on or ups_backup_active) and room_temp < 50.0 and racks.size() >= 1:
+			prog += dt
+	elif kind == "expand_slots":
+		var running := 0
+		for rk in racks.values():
+			if bool((rk as Dictionary).get("powered", false)):
+				for sl in (rk as Dictionary).get("slots", []):
+					if not str((sl as Dictionary).get("item_type", "")).is_empty() and str((sl as Dictionary).get("state", "")) == "ok":
+						running += 1
+		prog = float(running)
+	active_team_order["progress"] = minf(prog, target)
+	if prog >= target:
+		active_team_order["done"] = true
+		var rew := int(active_team_order.get("reward", 1000))
+		money += float(rew)
+		reputation = clampf(reputation + 2.5, 0.0, 100.0)
+		_rpc_play_sfx.rpc("cash")
+		post_event_f("🤝 %s abgeschlossen! Team-Bonus: +$%d!", [str(active_team_order["title"]), rew], "good")
+
+
+# --- 3D-Ping-System & Spieler-Emotes (Co-op) ---
+
+func request_world_ping(world_pos: Vector3, kind: String = "look", label: String = "Schau her!") -> void:
+	_rpc_req_world_ping.rpc_id(1, world_pos, kind, label)
+
+
+@rpc("any_peer", "call_local", "reliable")
+func _rpc_req_world_ping(world_pos: Vector3, kind: String, label: String) -> void:
+	if not multiplayer.is_server():
+		return
+	if not SecurityGuard.is_finite_vec3(world_pos):
+		return
+	var peer_id := _get_sender_id()
+	if not SecurityGuard.check_rate_limit(peer_id, "ping", 4, 5.0, false):
+		return
+	var safe_kind := kind.left(16)
+	var safe_label := SecurityGuard.sanitize_label(label, 28, "Schau her!")
+	_rpc_broadcast_world_ping.rpc(peer_id, world_pos, safe_kind, safe_label)
+
+
+@rpc("authority", "call_local", "reliable")
+func _rpc_broadcast_world_ping(peer_id: int, world_pos: Vector3, kind: String, label: String) -> void:
+	SfxManager.play("ping", -8.0, 1.08 if kind == "alert" else 1.0)
+	world_ping_received.emit(peer_id, world_pos, kind, label)
+
+
+func request_player_emote(emote_id: String) -> void:
+	_rpc_req_player_emote.rpc_id(1, emote_id)
+
+
+@rpc("any_peer", "call_local", "reliable")
+func _rpc_req_player_emote(emote_id: String) -> void:
+	if not multiplayer.is_server():
+		return
+	var peer_id := _get_sender_id()
+	if not SecurityGuard.check_rate_limit(peer_id, "emote", 3, 4.0, false):
+		return
+	if emote_id != "wave" and emote_id != "thumbs_up":
+		return
+	_rpc_broadcast_player_emote.rpc(peer_id, emote_id)
+
+
+@rpc("authority", "call_local", "reliable")
+func _rpc_broadcast_player_emote(peer_id: int, emote_id: String) -> void:
+	SfxManager.play("emote", -10.0, 1.05 if emote_id == "thumbs_up" else 0.96)
+	player_emote_received.emit(peer_id, emote_id)

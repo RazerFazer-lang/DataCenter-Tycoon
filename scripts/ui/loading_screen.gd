@@ -25,10 +25,11 @@ const STAGES: Array[String] = [
 ]
 
 const TIP_INTERVAL := 4.5
-const FADE_IN_TIME := 0.3
-const FADE_OUT_TIME := 0.45
+const FADE_IN_TIME := 0.35
+const FADE_OUT_TIME := 0.65
 const SPIN_SPEED := 5.5
 ## Spielbild als Hintergrund. Fehlt es, bleibt der gezeichnete Serverraum-Gang.
+const KEYART_PATH := "res://assets/branding/title_keyart.png"
 const BG_PATH := "res://assets/loading/loading_bg.png"
 
 var _aisle: RackAisle
@@ -162,6 +163,10 @@ func _process(delta: float) -> void:
 		return
 	if _aisle.visible:
 		_aisle.tick(delta)
+	if _bg != null:
+		_bg.pivot_offset = _bg.size * 0.5
+		var z := 1.03 + clampf(_elapsed / maxf(_duration, 0.5), 0.0, 1.0) * 0.05
+		_bg.scale = Vector2(z, z)
 	_spin_angle = wrapf(_spin_angle + delta * SPIN_SPEED, 0.0, TAU)
 	_spinner.queue_redraw()
 	if _fading_out:
@@ -241,7 +246,9 @@ func _build_ui() -> void:
 	add_child(_aisle)
 
 	var bg_tex: Texture2D = null
-	if ResourceLoader.exists(BG_PATH):
+	if ResourceLoader.exists(KEYART_PATH):
+		bg_tex = load(KEYART_PATH) as Texture2D
+	elif ResourceLoader.exists(BG_PATH):
 		bg_tex = load(BG_PATH) as Texture2D
 	if bg_tex != null:
 		_bg = TextureRect.new()
@@ -308,7 +315,7 @@ func _build_ui() -> void:
 	top.add_child(top_spacer)
 
 	var edition := Label.new()
-	edition.text = "CO-OP EDITION  •  v%s" % UIStyle.game_version()
+	edition.text = "VERION-DIGITAL  •  CO-OP EDITION  •  v%s" % UIStyle.game_version()
 	edition.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	UIStyle.style_label(edition, 12, UIStyle.COL_TEXT_SUB)
 	top.add_child(edition)
@@ -337,7 +344,7 @@ func _build_ui() -> void:
 	_subtitle_lbl.text = "LADE RECHENZENTRUM…"
 	_subtitle_lbl.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
 	_subtitle_lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	UIStyle.style_label(_subtitle_lbl, 40, Color(0.96, 0.965, 0.97), display_font, true)
+	UIStyle.style_label(_subtitle_lbl, 30, Color(0.96, 0.965, 0.97), display_font, true)
 	head_v.add_child(_subtitle_lbl)
 
 	var accent_line := ColorRect.new()

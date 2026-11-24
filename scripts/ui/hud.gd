@@ -236,7 +236,7 @@ func _process(delta: float) -> void:
 			_is_night = night
 			_set_icon(_clock_icon, "moon" if night else "sun", Color(0.70, 0.76, 0.92) if night else UIStyle.COL_GOLD_TEXT)
 		_clock_lbl.text = GameState.get_time_string()
-		_day_lbl.text = tr("TAG %d") % GameState.day_number
+		_day_lbl.text = (tr("TAG %d") % GameState.day_number) + "  •  " + GameState.get_weather_label()
 
 	_refresh_player_hud(delta)
 	_refresh_slot_bar()

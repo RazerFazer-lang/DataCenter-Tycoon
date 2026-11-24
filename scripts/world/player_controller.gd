@@ -80,7 +80,10 @@ var _skel_angles: Dictionary = {"head": 0.0, "leg_l": 0.0, "leg_r": 0.0, "knee_l
 # Held visual (shown in first-person corner OR in remote avatar's hands)
 var _held_root: Node3D
 var _held_item_holder: Node3D
-## Ich-Perspektive: Rechte & linke realistische 3D-Hand (nur lokaler Spieler, sonst null).
+## Ich-Perspektive: Geriggte Ego-Arme (fp_arms.glb) mit AnimationPlayer + Fallback-Hände.
+var _fp_arms: Node3D
+var _fp_arms_anim: AnimationPlayer
+var _fp_arms_current_anim: String = ""
 var _fp_hand: Node3D
 var _fp_hand_left: Node3D
 const FP_HAND_ITEM_POS := Vector3(0.0, -0.09, 0.02)
@@ -97,6 +100,10 @@ var _foam_balls: Array[MeshInstance3D] = []
 var _vm_sway: Vector2 = Vector2.ZERO
 var _vm_equip: float = 0.0
 var _vm_land_dip: float = 0.0
+var _cam_weight_dip: float = 0.0
+var _emote_badge: Label3D
+var _emote_timer: float = 0.0
+var _emote_id: String = ""
 var _was_on_floor: bool = true
 var _vm_last_state_key: String = ""
 
@@ -196,10 +203,12 @@ func _ready() -> void:
 		_camera = Camera3D.new()
 		_camera.fov = SettingsManager.fov
 		_camera.near = 0.06
-		_camera.far = 120.0
+		_camera.far = 260.0
 		_head_pivot.add_child(_camera)
 		_camera.current = true
 		SettingsManager.settings_changed.connect(_on_settings_changed)
+	GameState.player_emote_received.connect(_on_player_emote_received)
+	if is_local:
 
 		_ray = RayCast3D.new()
 		_ray.target_position = Vector3(0.0, 0.0, -INTERACT_RANGE)
@@ -346,6 +355,15 @@ func _unhandled_input(event: InputEvent) -> void:
 	elif event.is_action_pressed("secondary_action"):
 		if _ui_unlock_cooldown <= 0.0 and Input.mouse_mode == Input.MOUSE_MODE_CAPTURED:
 			_handle_secondary_action()
+	elif event.is_action_pressed("world_ping"):
+		if _ui_unlock_cooldown <= 0.0 and Input.mouse_mode == Input.MOUSE_MODE_CAPTURED:
+			_handle_world_ping()
+	elif event.is_action_pressed("emote_wave"):
+		if _ui_unlock_cooldown <= 0.0 and Input.mouse_mode == Input.MOUSE_MODE_CAPTURED:
+			GameState.request_player_emote("wave")
+	elif event.is_action_pressed("emote_thumbs"):
+		if _ui_unlock_cooldown <= 0.0 and Input.mouse_mode == Input.MOUSE_MODE_CAPTURED:
+			GameState.request_player_emote("thumbs_up")
 
 
 ## Kabeltyp in einem Slot ("" | "power" | "network"). Der aktive Slot liest das laufende Kabel.
@@ -442,6 +460,17 @@ func _physics_process(delta: float) -> void:
 		_ui_unlock_cooldown = maxf(0.0, _ui_unlock_cooldown - delta)
 	if relocating_rack_id != "" and not GameState.racks.has(relocating_rack_id):
 		relocating_rack_id = ""
+	if _emote_timer > 0.0:
+		_emote_timer = maxf(0.0, _emote_timer - delta)
+		if _emote_badge != null:
+			_emote_badge.position.y = 2.28 + sin(_anim_time * 5.0) * 0.03
+		if not is_local and _right_arm != null:
+			if _emote_id == "wave":
+				_right_arm.rotation_degrees = Vector3(-135.0, 0.0, 20.0 + sin(_anim_time * 12.0) * 28.0)
+			else:
+				_right_arm.rotation_degrees = Vector3(-95.0, 0.0, 12.0)
+		if _emote_timer <= 0.0 and _emote_badge != null:
+			_emote_badge.visible = false
 	_update_held_visuals()
 
 	if not is_local:
@@ -506,12 +535,13 @@ func _physics_process(delta: float) -> void:
 		var cpos := _compute_pushed_cart_pos()
 		_world.update_local_pushed_cart(str(pushed_cart["id"]), cpos, rotation.y)
 
-	# Subtle first-person walk bob + realistic concrete/floor footsteps
+	# Subtle first-person walk bob + realistic concrete/floor footsteps + heavy placement weight dip
+	_cam_weight_dip = lerpf(_cam_weight_dip, 0.0, clampf(delta * 9.5, 0.0, 1.0))
 	var flat_speed := Vector2(velocity.x, velocity.z).length()
 	if not is_seated_at_pc and _stand_blend_timer <= 0.0:
 		if is_on_floor() and flat_speed > 0.6 and not ui_locked:
 			_walk_cycle += delta * (7.5 + flat_speed * 0.7)
-			_head_pivot.position.y = lerpf(_head_pivot.position.y, _head_y() + sin(_walk_cycle) * 0.030, clampf(delta * 12.0, 0.0, 1.0))
+			_head_pivot.position.y = lerpf(_head_pivot.position.y, _head_y() + sin(_walk_cycle) * 0.030 - _cam_weight_dip, clampf(delta * 12.0, 0.0, 1.0))
 			var step_interval := 0.34 if flat_speed > 5.8 else 0.48
 			_footstep_accum += delta
 			if _footstep_accum >= step_interval:
@@ -519,7 +549,7 @@ func _physics_process(delta: float) -> void:
 				SfxManager.play_footstep(flat_speed > 5.8)
 		else:
 			_footstep_accum = 0.25
-			_head_pivot.position.y = lerpf(_head_pivot.position.y, _head_y(), clampf(delta * 10.0, 0.0, 1.0))
+			_head_pivot.position.y = lerpf(_head_pivot.position.y, _head_y() - _cam_weight_dip, clampf(delta * 10.0, 0.0, 1.0))
 
 	if not ui_locked:
 		_update_viewmodel_motion(delta, flat_speed)
@@ -792,12 +822,14 @@ func _handle_drop() -> void:
 					dist = clampf(hd - 0.50, 0.36, 1.05)
 			drop_pos = global_position + forward * dist
 			drop_pos.y = 0.0
+		_cam_weight_dip = maxf(_cam_weight_dip, 0.042)
 		GameState.request_drop_crate(drop_pos)
 
 
 func _try_confirm_placement() -> void:
 	if relocating_rack_id != "":
 		if _ghost_root != null and _ghost_root.visible and _ghost_valid:
+			_cam_weight_dip = maxf(_cam_weight_dip, 0.068)
 			GameState.request_relocate_rack(relocating_rack_id, _ghost_pos, _ghost_rot_y)
 			relocating_rack_id = ""
 		else:
@@ -809,9 +841,64 @@ func _try_confirm_placement() -> void:
 		var cat_type := str(GameState.ITEM_CATALOG[item_type]["category"])
 		if cat_type == "placeable" and _ghost_root != null and _ghost_root.visible and not _ghost_is_drop_preview:
 			if _ghost_valid:
+				_cam_weight_dip = maxf(_cam_weight_dip, 0.065)
 				GameState.request_place_held_structure(_ghost_pos, _ghost_rot_y)
 			else:
 				SfxManager.play("error")
+
+
+func _handle_world_ping() -> void:
+	if _camera == null:
+		return
+	var origin := _camera.global_position
+	var fwd := -_camera.global_transform.basis.z
+	var space := get_world_3d().direct_space_state
+	var q := PhysicsRayQueryParameters3D.create(origin, origin + fwd * 18.0, 1 | 4)
+	q.collide_with_areas = true
+	q.collide_with_bodies = true
+	q.exclude = [get_rid()]
+	var hit := space.intersect_ray(q)
+	if hit.is_empty():
+		return
+	var pos: Vector3 = hit["position"]
+	var col_obj: Object = hit.get("collider")
+	var kind := "look"
+	var label := tr("Schau her!")
+	if col_obj is Node and (col_obj as Node).has_meta("interact_type"):
+		var itype := str((col_obj as Node).get_meta("interact_type"))
+		var eid := str((col_obj as Node).get_meta("entity_id", ""))
+		if itype == "rack_slot" or itype == "rack_power" or itype == "rack_net":
+			if GameState.racks.has(eid):
+				var rk: Dictionary = GameState.racks[eid]
+				if GameState._rack_has_fire(rk):
+					kind = "alert"
+					label = tr("Brand löschen!")
+				elif not bool(rk.get("powered", false)):
+					kind = "cable"
+					label = tr("Hier fehlt Strom!")
+				elif not bool(rk.get("networked", false)):
+					kind = "cable"
+					label = tr("Hier fehlt LAN!")
+				else:
+					label = GameState.get_rack_display_name(eid)
+		elif itype == "crate":
+			label = tr("Paket abholen")
+		elif itype == "breaker":
+			kind = "alert"
+			label = tr("Sicherung prüfen!")
+	GameState.request_world_ping(pos, kind, label)
+
+
+func _on_player_emote_received(sender_peer: int, emote_id: String) -> void:
+	if sender_peer != peer_id:
+		return
+	_emote_id = emote_id
+	_emote_timer = 2.6
+	if _emote_badge != null:
+		_emote_badge.text = "👋 " + tr("Hallo!") if emote_id == "wave" else "👍 " + tr("Top!")
+		_emote_badge.visible = not is_local
+	if is_local:
+		GameState.post_event_f("%s: %s", [player_name, "👋 Winkt!" if emote_id == "wave" else "👍 Daumen hoch!"], "info")
 
 
 func _handle_primary_interact() -> void:
@@ -1752,8 +1839,19 @@ func _update_held_visuals() -> void:
 	var has_cable := not str(cable_active_type).is_empty()
 
 	_held_extinguisher.visible = held_ext
-	if _fp_hand != null:
-		var show_any := held_ext or not held_crate.is_empty() or has_cable
+	var show_any := held_ext or not held_crate.is_empty() or has_cable
+	if _fp_arms != null:
+		_fp_arms.visible = show_any
+		if held_ext:
+			_play_fp_arms_anim("extinguisher_spray" if _is_spraying_local else "extinguisher_idle", 0.12)
+		elif not held_crate.is_empty():
+			var itype := str(held_crate["item_type"])
+			var pcount := maxi(1, int(held_crate.get("pack_count", 1)))
+			var two_handed := _is_two_handed_item(itype, pcount)
+			_play_fp_arms_anim("hold_box_twohand" if two_handed else "hold_item_onehand", 0.14)
+		elif has_cable:
+			_play_fp_arms_anim("hold_cable", 0.14)
+	elif _fp_hand != null:
 		_fp_hand.visible = show_any
 		if held_ext:
 			_fp_hand.position = FP_HAND_EXT_POS
@@ -1827,6 +1925,8 @@ func _update_foam_visuals(spraying: bool) -> void:
 	if _held_lever_pivot != null:
 		var lever_target := deg_to_rad(EXT_LEVER_PRESS_DEG) if spraying else 0.0
 		_held_lever_pivot.rotation.x = lerpf(_held_lever_pivot.rotation.x, lever_target, 0.35)
+	if is_local and _fp_arms != null and _held_extinguisher != null and _held_extinguisher.visible:
+		_play_fp_arms_anim("extinguisher_spray" if spraying else "extinguisher_idle", 0.08 if spraying else 0.14)
 	if _foam_root == null:
 		return
 	_foam_root.visible = spraying
@@ -1910,6 +2010,16 @@ func _add_nametag() -> void:
 	_nametag.position = Vector3(0.0, 2.04, 0.0)
 	_nametag.modulate = Color(0.95, 0.95, 0.95)
 	add_child(_nametag)
+
+	_emote_badge = Label3D.new()
+	_emote_badge.text = ""
+	_emote_badge.font_size = 34
+	_emote_badge.pixel_size = 0.0052
+	_emote_badge.billboard = BaseMaterial3D.BILLBOARD_ENABLED
+	_emote_badge.position = Vector3(0.0, 2.28, 0.0)
+	_emote_badge.modulate = Color(1.0, 0.88, 0.36)
+	_emote_badge.visible = false
+	add_child(_emote_badge)
 
 
 ## Lädt player_realistic.glb (Skeleton3D / Mixamo / MakeHuman) oder player.glb.
@@ -2003,9 +2113,24 @@ static func _tint_avatar_static(node: Node, tint_mats: Dictionary) -> void:
 		_tint_avatar_static(child, tint_mats)
 
 
-## Ich-Perspektive: Realistische rechte UND linke 3D-Hand (fp_hand.glb) im aktuellen Skin-Farbschema.
-## Zweihändig für Kartons, Server, Racks & Feuerlöscher; einhändig für Kits & Kabel!
+## Ich-Perspektive: Geriggte Ego-Arme (fp_arms.glb) im aktuellen Skin-Farbschema,
+## mit millimetergenauer Feuerlöscher-Griff- & Sprüh-Animation sowie Item-/Kabel-Posen.
 func _build_fp_hand() -> void:
+	var rigged := ModelLoader.instantiate_custom_model("fp_arms")
+	if rigged != null:
+		_fp_arms = rigged
+		_fp_arms.visible = false
+		_held_root.add_child(_fp_arms)
+		_fp_arms_anim = _find_anim_player(_fp_arms)
+		if _fp_arms_anim != null:
+			for aname in _fp_arms_anim.get_animation_list():
+				var anim := _fp_arms_anim.get_animation(aname)
+				if anim != null:
+					anim.loop_mode = Animation.LOOP_LINEAR
+		_disable_shadows_recursive(_fp_arms)
+		_refresh_fp_hand_skin()
+		return
+
 	_fp_hand = Node3D.new()
 	_fp_hand.visible = false
 	_fp_hand.position = FP_HAND_ITEM_POS
@@ -2027,8 +2152,33 @@ func _build_fp_hand() -> void:
 	_refresh_fp_hand_skin()
 
 
+func _find_anim_player(node: Node) -> AnimationPlayer:
+	if node is AnimationPlayer:
+		return node as AnimationPlayer
+	for c in node.get_children():
+		var found := _find_anim_player(c)
+		if found != null:
+			return found
+	return null
+
+
+func _disable_shadows_recursive(node: Node) -> void:
+	if node is GeometryInstance3D:
+		(node as GeometryInstance3D).cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	for c in node.get_children():
+		_disable_shadows_recursive(c)
+
+
+func _play_fp_arms_anim(anim_name: String, blend: float = 0.14) -> void:
+	if _fp_arms_anim == null or anim_name == _fp_arms_current_anim:
+		return
+	if _fp_arms_anim.has_animation(anim_name):
+		_fp_arms_anim.play(anim_name, blend)
+		_fp_arms_current_anim = anim_name
+
+
 func _refresh_fp_hand_skin() -> void:
-	if _fp_hand == null:
+	if _fp_arms == null and _fp_hand == null:
 		return
 	var c := SettingsManager.skin_colors(skin_data if not skin_data.is_empty() else SettingsManager.get_skin(), avatar_color)
 	var sleeve_col: Color = c["jacket"]
@@ -2039,7 +2189,10 @@ func _refresh_fp_hand_skin() -> void:
 		"DCT_FP_Sleeve": _mat(sleeve_col, 0.84, 0.0),
 		"DCT_FP_Cuff": _mat(cuff_col, 0.88, 0.0),
 	}
-	_tint_avatar_static(_fp_hand, tint_mats)
+	if _fp_arms != null:
+		_tint_avatar_static(_fp_arms, tint_mats)
+	if _fp_hand != null:
+		_tint_avatar_static(_fp_hand, tint_mats)
 	if _fp_hand_left != null:
 		_tint_avatar_static(_fp_hand_left, tint_mats)
 

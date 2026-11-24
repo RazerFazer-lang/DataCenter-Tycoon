@@ -8,15 +8,19 @@ const MIX_RATE := 44100
 # Erzeugte Klänge werden hier gespeichert, damit nur der erste Start rechnen muss (~870 ms gemessen).
 const SFX_CACHE_DIR := "user://sfx_cache"
 # Erhöhen, wenn sich ein Generator oder seine Parameter ändern, sonst bleiben die alten Klänge im Cache.
-const SFX_CACHE_VERSION := 5
+const SFX_CACHE_VERSION := 7
+const EXTERNAL_AUDIO_DIR := "res://assets/audio"
 
 var _sounds: Dictionary = {}
 var _loops: Dictionary = {}
 var _pool: Array[AudioStreamPlayer] = []
 var _pool_index: int = 0
 var _room_amb_player: AudioStreamPlayer
+var _rain_amb_player: AudioStreamPlayer
 var _overload_player: AudioStreamPlayer
 var _overload_stinger_accum: float = 0.0
+var _listener_outdoor: bool = false
+var _outdoor_blend: float = 0.0
 
 
 func _ready() -> void:
@@ -29,6 +33,7 @@ func _ready() -> void:
 	if not _load_sound_cache():
 		_generate_sounds()
 		_save_sound_cache()
+	_load_external_audio_samples()
 	_setup_room_ambience()
 
 
@@ -54,6 +59,10 @@ func _generate_sounds() -> void:
 	_sounds["van_horn"] = _gen_van_horn()
 	_sounds["van_door"] = _gen_sliding_door()
 	_sounds["cart_load"] = _gen_handling_thud(185.0, 0.10, false)
+	_sounds["spark"] = _gen_spark_crack()
+	_sounds["thunder"] = _gen_thunder_roll()
+	_sounds["ping"] = _gen_soft_chime([880.0, 1318.51], 0.04, 0.13)
+	_sounds["emote"] = _gen_soft_chime([523.25, 659.25], 0.045, 0.12)
 
 	# Support Desk, VoIP Phone & Clean System Chimes
 	_sounds["phone_ring"] = _gen_office_phone_ring()
@@ -88,16 +97,71 @@ func _generate_sounds() -> void:
 	_loops["van_engine"] = _gen_van_engine_loop(2.0)
 	_loops["cart_roll"] = _gen_cart_roll_loop(2.0)
 	_loops["extinguisher_spray"] = _gen_extinguisher_spray_loop(2.5)
+	_loops["rain_ambience"] = _gen_rain_loop(3.0)
 
 
 const FOOTSTEP_VARIANTS := 6
 ## Wie lange der Sprühton nach dem letzten keep_extinguisher_spraying()-Aufruf weiterläuft.
-const SPRAY_HOLD_TIME := 0.12
+## Großzügig genug, damit auch bei Mikrorucklern kein Hacken ("zz zzz zz") entsteht.
+const SPRAY_HOLD_TIME := 0.22
 
+var _footstep_count := FOOTSTEP_VARIANTS
 var _last_footstep := -1
 var _spray_player: AudioStreamPlayer
 var _spray_hold := 0.0
 var _spray_level := 0.0
+var _was_spraying := false
+
+
+## Lädt echte Audio-Aufnahmen (.ogg / .wav) aus res://assets/audio/ und überschreibt damit
+## die prozeduralen Fallbacks (Schritte auf Beton + Feuerlöscher Start/Loop/Stop).
+func _load_external_audio_samples() -> void:
+	var loaded_steps := 0
+	for i in range(12):
+		var step_stream := _load_audio_file("footstep_%d" % i)
+		if step_stream == null:
+			break
+		_sounds["footstep_%d" % i] = step_stream
+		loaded_steps += 1
+	if loaded_steps > 0:
+		_footstep_count = loaded_steps
+		_sounds["footstep"] = _sounds["footstep_0"]
+
+	var ext_start := _load_audio_file("extinguisher_start")
+	if ext_start != null:
+		_sounds["extinguisher_start"] = ext_start
+	var ext_stop := _load_audio_file("extinguisher_stop")
+	if ext_stop != null:
+		_sounds["extinguisher_stop"] = ext_stop
+	var ext_loop := _load_audio_file("extinguisher_loop")
+	if ext_loop != null:
+		if ext_loop is AudioStreamWAV:
+			var wav := ext_loop as AudioStreamWAV
+			# get_length() liefert auch bei QOA/IMA-ADPCM-Kompression immer die exakte echte Gesamtdauer!
+			var total_frames := int(roundf(wav.get_length() * float(maxi(1, wav.mix_rate))))
+			wav.loop_mode = AudioStreamWAV.LOOP_FORWARD
+			wav.loop_begin = 0
+			wav.loop_end = maxi(1, total_frames - 2)
+		elif ext_loop is AudioStreamOggVorbis:
+			(ext_loop as AudioStreamOggVorbis).loop = true
+		_loops["extinguisher_spray"] = ext_loop
+
+	var intro_studio := _load_audio_file("intro_studio_swell")
+	if intro_studio != null:
+		_sounds["intro_studio_swell"] = intro_studio
+	var intro_title := _load_audio_file("intro_title_hit")
+	if intro_title != null:
+		_sounds["intro_title_hit"] = intro_title
+
+
+func _load_audio_file(base_name: String) -> AudioStream:
+	for ext in [".wav", ".ogg"]:
+		var path := "%s/%s%s" % [EXTERNAL_AUDIO_DIR, base_name, ext]
+		if ResourceLoader.exists(path):
+			var res := ResourceLoader.load(path)
+			if res is AudioStream:
+				return res as AudioStream
+	return null
 
 
 func _setup_room_ambience() -> void:
@@ -112,9 +176,13 @@ func _setup_room_ambience() -> void:
 	_overload_player.volume_db = -80.0
 	add_child(_overload_player)
 	_spray_player = AudioStreamPlayer.new()
-	_spray_player.stream = _loops.get("extinguisher_spray") as AudioStreamWAV
+	_spray_player.stream = _loops.get("extinguisher_spray") as AudioStream
 	_spray_player.volume_db = -80.0
 	add_child(_spray_player)
+	_rain_amb_player = AudioStreamPlayer.new()
+	_rain_amb_player.stream = _loops.get("rain_ambience") as AudioStream
+	_rain_amb_player.volume_db = -80.0
+	add_child(_rain_amb_player)
 
 
 func _cache_index_path() -> String:
@@ -180,9 +248,15 @@ func _save_streams(source: Dictionary, kind: String) -> bool:
 	return true
 
 
+func set_listener_outdoor(outdoor: bool) -> void:
+	_listener_outdoor = outdoor
+
+
 func _process(delta: float) -> void:
+	_outdoor_blend = move_toward(_outdoor_blend, 1.0 if _listener_outdoor else 0.0, delta * 3.2)
 	_update_overload_hum(delta)
 	_update_extinguisher_spray(delta)
+	_update_rain_ambience()
 	if _room_amb_player == null:
 		return
 	var should_play := GameState.is_active and SettingsManager.get_effective_fan_gain() > 0.005
@@ -202,8 +276,31 @@ func _update_room_ambience_volume() -> void:
 	if not GameState.is_active or gain <= 0.005:
 		_room_amb_player.volume_db = -80.0
 	else:
-		# Ultra-gentle warm room tone (no harsh static hiss!)
-		_room_amb_player.volume_db = linear_to_db(gain) - 33.0
+		# Dynamische Raum-Akustik: leere Garage ist still, volles Rechenzentrum hat tiefes Rauschen; draußen gedämpft!
+		var rack_fill := clampf(float(GameState.racks.size()) / 8.0, 0.0, 1.0)
+		var power_mult := 1.0 if (GameState.breaker_on or GameState.ups_backup_active) else 0.15
+		var indoor_db := lerpf(-37.0, -25.0, rack_fill * power_mult)
+		var outdoor_muffle := _outdoor_blend * 9.5
+		_room_amb_player.volume_db = linear_to_db(gain) + indoor_db - outdoor_muffle
+		_room_amb_player.pitch_scale = lerpf(0.95, 1.06, rack_fill * power_mult)
+
+
+func _update_rain_ambience() -> void:
+	if _rain_amb_player == null or _rain_amb_player.stream == null:
+		return
+	var w: String = GameState.weather_state if GameState.is_active else "clear"
+	var raining := (w == "rain" or w == "storm")
+	var gain := SettingsManager.get_effective_fan_gain()
+	if not raining or gain <= 0.005:
+		if _rain_amb_player.playing:
+			_rain_amb_player.stop()
+		return
+	if not _rain_amb_player.playing:
+		_rain_amb_player.play()
+	var storm_boost := 3.5 if w == "storm" else 0.0
+	# Drinnen gedämpftes Regendach-Prasseln (-24 dB), draußen klarer Regen (-13.5 dB)!
+	var base_db := lerpf(-24.5, -13.5, _outdoor_blend) + storm_boost
+	_rain_amb_player.volume_db = linear_to_db(gain) + base_db
 
 
 ## Überlast-Kulisse: Während der Hauptschalter über der Leistungsgrenze läuft, wird das
@@ -250,13 +347,14 @@ func play_typing_key(volume_db: float = -10.5) -> void:
 
 ## Spielt eine zufällige Schritt-Variante, nie zweimal dieselbe hintereinander.
 func play_footstep(sprinting: bool = false) -> void:
-	var idx := randi() % FOOTSTEP_VARIANTS
-	if idx == _last_footstep:
-		idx = (idx + 1) % FOOTSTEP_VARIANTS
+	var count := maxi(1, _footstep_count)
+	var idx := randi() % count
+	if count > 1 and idx == _last_footstep:
+		idx = (idx + 1) % count
 	_last_footstep = idx
-	var vol := -8.2 if sprinting else -11.2
-	var pitch := randf_range(0.96, 1.09) if sprinting else randf_range(0.92, 1.05)
-	play("footstep_%d" % idx, vol + randf_range(-1.1, 1.1), pitch)
+	var vol := -9.5 if sprinting else -13.0
+	var pitch := randf_range(0.95, 1.09) if sprinting else randf_range(0.91, 1.05)
+	play("footstep_%d" % idx, vol + randf_range(-1.0, 1.0), pitch)
 
 
 ## Jeden Frame aufrufen, solange gesprüht wird. Bleibt der Aufruf aus, blendet der Ton kurz aus.
@@ -268,8 +366,16 @@ func _update_extinguisher_spray(delta: float) -> void:
 	if _spray_player == null or _spray_player.stream == null:
 		return
 	_spray_hold = maxf(_spray_hold - delta, 0.0)
-	var target := 1.0 if (_spray_hold > 0.0 and GameState.is_active) else 0.0
-	var rate := 16.0 if target > _spray_level else 7.5
+	var active := _spray_hold > 0.0 and GameState.is_active
+	var target := 1.0 if active else 0.0
+	if active and not _was_spraying:
+		play("extinguisher_start", -6.5, randf_range(0.97, 1.04))
+	elif not active and _was_spraying:
+		if _sounds.has("extinguisher_stop"):
+			play("extinguisher_stop", -7.0, randf_range(0.96, 1.04))
+	_was_spraying = active
+
+	var rate := 14.0 if target > _spray_level else 7.0
 	_spray_level = move_toward(_spray_level, target, delta * rate)
 	var gain := SettingsManager.get_effective_sfx_gain()
 	if _spray_level <= 0.001 or gain <= 0.005:
@@ -277,9 +383,8 @@ func _update_extinguisher_spray(delta: float) -> void:
 			_spray_player.stop()
 		return
 	if not _spray_player.playing:
-		play("extinguisher_start", -7.5, randf_range(0.96, 1.04))
-		_spray_player.play(randf_range(0.0, 1.8))
-	_spray_player.volume_db = linear_to_db(gain * _spray_level) - 8.5
+		_spray_player.play(randf_range(0.0, 2.2))
+	_spray_player.volume_db = linear_to_db(gain * _spray_level) - 6.5
 
 
 func get_loop_stream(loop_name: String) -> AudioStreamWAV:
@@ -1180,4 +1285,53 @@ func _gen_cart_roll_loop(duration: float) -> AudioStreamWAV:
 		var wheel_mod := 0.74 + 0.26 * sin(TAU * cm * t)
 		var clatter := sin(TAU * cc * t) * 0.045
 		samples[i] = clampf((noise[i] * 0.32 + clatter) * wheel_mod, -0.95, 0.95)
+	return _make_wav(samples, true)
+
+
+func _gen_spark_crack() -> AudioStreamWAV:
+	var duration := 0.32
+	var count := int(MIX_RATE * duration)
+	var samples := PackedFloat32Array()
+	samples.resize(count)
+	var lp := 0.0
+	for i in range(count):
+		var t := float(i) / float(MIX_RATE)
+		var env := exp(-t * 14.0)
+		var crackle := 1.0 if randf() > 0.42 else 0.15
+		var raw := randf_range(-1.0, 1.0)
+		lp = lerpf(lp, raw, 0.35)
+		var hi := raw - lp
+		var buzz := sin(TAU * 100.0 * t) * 0.25 + sin(TAU * 1850.0 * t) * 0.18
+		samples[i] = clampf((hi * 0.72 * crackle + buzz) * env, -0.95, 0.95)
+	return _make_wav(samples)
+
+
+func _gen_thunder_roll() -> AudioStreamWAV:
+	var duration := 2.6
+	var count := int(MIX_RATE * duration)
+	var samples := PackedFloat32Array()
+	samples.resize(count)
+	var lp1 := 0.0
+	var lp2 := 0.0
+	for i in range(count):
+		var t := float(i) / float(MIX_RATE)
+		var atk := clampf(t / 0.12, 0.0, 1.0)
+		var dec := exp(-t * 1.15)
+		var roll := 0.65 + 0.35 * sin(TAU * 2.2 * t + sin(TAU * 0.7 * t))
+		var r := randf_range(-1.0, 1.0)
+		lp1 = lerpf(lp1, r, 0.045)
+		lp2 = lerpf(lp2, lp1, 0.025)
+		var sub := sin(TAU * (46.0 - t * 6.0) * t) * 0.28
+		samples[i] = clampf((lp2 * 2.2 + sub) * atk * dec * roll, -0.95, 0.95)
+	return _make_wav(samples)
+
+
+func _gen_rain_loop(duration: float) -> AudioStreamWAV:
+	var count := int(MIX_RATE * duration)
+	var fade := int(MIX_RATE * 0.45)
+	var soft := _make_seamless_noise(count, fade, 0.22, 0.06, 0.55, 0.45)
+	var samples := PackedFloat32Array()
+	samples.resize(count)
+	for i in range(count):
+		samples[i] = clampf(soft[i] * 0.55, -0.95, 0.95)
 	return _make_wav(samples, true)

@@ -76,6 +76,14 @@ var _pc_audio: AudioStreamPlayer3D
 
 var _extinguisher_mesh_root: Node3D
 var _blink_time: float = 0.0
+var _emergency_lights_extra: Array[OmniLight3D] = []
+var _emergency_lamp_mats: Array[StandardMaterial3D] = []
+var _breaker_sparks: CPUParticles3D
+var _prev_breaker_on: bool = true
+var _company_sign_lbl: Label3D
+var _exterior_sign_lbl: Label3D
+var _live_kpi_lbl: Label3D
+var _kpi_refresh_accum: float = 0.0
 
 
 func _ready() -> void:
@@ -202,18 +210,47 @@ func _update_dynamic_visuals() -> void:
 	if _street_lamp_mat != null:
 		_street_lamp_mat.emission_energy_multiplier = 3.2 if is_night else 0.15
 
+	var is_blackout := not power_alive
+	var emer_col := Color(1.0, 0.20, 0.14)
+	var emer_energy := 0.0
+	if is_blackout:
+		emer_col = Color(1.0, 0.22, 0.12)
+		emer_energy = 1.65 + 0.55 * sin(_blink_time * 6.0)
+	elif on_ups:
+		emer_col = Color(1.0, 0.68, 0.18)
+		emer_energy = 1.05 + 0.35 * sin(_blink_time * 8.0)
+	elif GameState.is_active and GameState.has_any_fire():
+		emer_col = Color(1.0, 0.28, 0.12)
+		emer_energy = 1.35 + 0.65 * sin(_blink_time * 12.0)
+
 	if _emergency_light != null:
-		if not power_alive:
-			_emergency_light.light_color = Color(1.0, 0.20, 0.14)
-			_emergency_light.light_energy = 1.4 + 0.5 * sin(_blink_time * 6.0)
-		elif on_ups:
-			_emergency_light.light_color = Color(1.0, 0.68, 0.18)
-			_emergency_light.light_energy = 0.85 + 0.35 * sin(_blink_time * 8.0)
-		elif GameState.is_active and GameState.has_any_fire():
-			_emergency_light.light_color = Color(1.0, 0.28, 0.12)
-			_emergency_light.light_energy = 1.2 + 0.65 * sin(_blink_time * 12.0)
+		_emergency_light.light_color = emer_col
+		_emergency_light.light_energy = emer_energy
+	for ei in range(_emergency_lights_extra.size()):
+		var hall_ok := (ei == 0 and GameState.room_level >= 1) or (ei >= 1 and GameState.room_level >= 2)
+		_emergency_lights_extra[ei].light_color = emer_col
+		_emergency_lights_extra[ei].light_energy = emer_energy if hall_ok else 0.0
+	for emat in _emergency_lamp_mats:
+		if emer_energy > 0.05:
+			emat.emission = emer_col
+			emat.emission_energy_multiplier = 2.4 + 0.8 * sin(_blink_time * 7.0)
 		else:
-			_emergency_light.light_energy = 0.0
+			emat.emission = Color(0.16, 0.78, 0.34)
+			emat.emission_energy_multiplier = 0.65
+
+	# Funken-Ausstoß am Sicherungskasten, sobald der Strom plötzlich rausfliegt!
+	if GameState.is_active:
+		if _prev_breaker_on and not GameState.breaker_on and _breaker_sparks != null:
+			_breaker_sparks.restart()
+			_breaker_sparks.emitting = true
+			SfxManager.play("spark", -4.5, randf_range(0.92, 1.08))
+		_prev_breaker_on = GameState.breaker_on
+
+	# Live-Firmenschild & Kennzahlen-Whiteboard aktualisieren (alle 0.4 s)
+	_kpi_refresh_accum += get_process_delta_time()
+	if _kpi_refresh_accum >= 0.4:
+		_kpi_refresh_accum = 0.0
+		_refresh_company_decor()
 
 	# Update 3D Spatial Workstation PC & 50Hz Breaker Transformer Hum!
 	var amb_gain := SettingsManager.get_effective_fan_gain()
@@ -750,6 +787,10 @@ func _build_exterior_environment() -> void:
 	_exterior_lamp_light.omni_range = 10.5
 	add_child(_exterior_lamp_light)
 
+	# Außenwelt 2.0: 360°-Gewerbegebiet, Nachbarhallen, Trafo, KI-Verkehr, Regen & Gewitter
+	var district := ExteriorDistrict.new()
+	add_child(district)
+
 
 func _build_delivery_zone() -> void:
 	var yellow_mat := _mat(Color(0.95, 0.74, 0.12), 0.55, 0.05)
@@ -856,6 +897,56 @@ func _build_lighting() -> void:
 	_emergency_light.light_energy = 0.0
 	_emergency_light.omni_range = 13.0
 	add_child(_emergency_light)
+
+	# Notlicht-Wandleuchten (NOTAUSGANG / Sicherheitslicht) in Garage, Halle B & Halle C
+	var emer_spots: Array[Vector3] = [
+		Vector3(-4.0, 3.25, -4.42),
+		Vector3(9.0, 3.25, -4.42),
+		Vector3(17.5, 3.25, -4.42),
+	]
+	for idx in range(emer_spots.size()):
+		var ep := emer_spots[idx]
+		_add_box_visual(self, ep, Vector3(0.46, 0.20, 0.06), housing_mat)
+		var em := StandardMaterial3D.new()
+		em.albedo_color = Color(0.85, 0.95, 0.88)
+		em.emission_enabled = true
+		em.emission = Color(0.16, 0.78, 0.34)
+		em.emission_energy_multiplier = 0.65
+		_emergency_lamp_mats.append(em)
+		_add_box_visual(self, ep + Vector3(0.0, 0.0, 0.035), Vector3(0.38, 0.14, 0.015), em)
+		if idx > 0:
+			var el := OmniLight3D.new()
+			el.position = ep + Vector3(0.0, -0.15, 0.45)
+			el.light_color = Color(1.0, 0.22, 0.14)
+			el.light_energy = 0.0
+			el.omni_range = 12.0
+			add_child(el)
+			_emergency_lights_extra.append(el)
+
+	# Funken-Partikel am Sicherungskasten (feuert bei Sicherungsflug/Überlast!)
+	_breaker_sparks = CPUParticles3D.new()
+	_breaker_sparks.position = Vector3(-4.55, 1.52, -4.22)
+	_breaker_sparks.emitting = false
+	_breaker_sparks.one_shot = true
+	_breaker_sparks.explosiveness = 0.92
+	_breaker_sparks.amount = 28
+	_breaker_sparks.lifetime = 0.65
+	_breaker_sparks.direction = Vector3(0.25, 0.35, 1.0)
+	_breaker_sparks.spread = 58.0
+	_breaker_sparks.initial_velocity_min = 1.6
+	_breaker_sparks.initial_velocity_max = 4.2
+	_breaker_sparks.gravity = Vector3(0.0, -9.8, 0.0)
+	var sp_mesh := BoxMesh.new()
+	sp_mesh.size = Vector3(0.022, 0.022, 0.055)
+	var sp_mat := StandardMaterial3D.new()
+	sp_mat.albedo_color = Color(1.0, 0.88, 0.42)
+	sp_mat.emission_enabled = true
+	sp_mat.emission = Color(1.0, 0.78, 0.25)
+	sp_mat.emission_energy_multiplier = 4.5
+	sp_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	sp_mesh.material = sp_mat
+	_breaker_sparks.mesh = sp_mesh
+	add_child(_breaker_sparks)
 
 
 func _build_reflection_probes() -> void:
@@ -1946,22 +2037,98 @@ func _build_terminal_desk() -> void:
 
 
 func _build_wall_decor() -> void:
-	# Realistic Brushed Aluminum Company Sign Plaque with corner bolts (no neon!)
-	var plaque_mat := MatLib.make_brushed_metal(Color(0.24, 0.26, 0.29), 0.38, 0.65)
+	# 1. Dynamisches Firmen-Schild (gebürstetes Aluminium + eigener Firmenname innen & außen!)
+	var plaque_mat := MatLib.make_brushed_metal(Color(0.22, 0.24, 0.28), 0.38, 0.65)
 	var bolt_mat := MatLib.get_mat("galvanized_steel")
-	_add_box_visual(self, Vector3(3.0, 2.96, -4.45), Vector3(2.35, 0.46, 0.03), plaque_mat)
-	for bx in [-1.08, 1.08]:
-		for by in [-0.16, 0.16]:
-			_add_box_visual(self, Vector3(3.0 + float(bx), 2.96 + float(by), -4.43), Vector3(0.03, 0.03, 0.02), bolt_mat)
-	var brand := Label3D.new()
-	brand.text = "GARAGE DATACENTER OPS"
-	brand.font_size = 40
-	brand.pixel_size = 0.0048
-	brand.position = Vector3(3.0, 2.96, -4.42)
-	brand.modulate = Color(0.92, 0.93, 0.94)
-	add_child(brand)
-	# Das Whiteboard mit der statischen Betriebs-Checkliste wurde entfernt.
-	# Die Aufgaben zeigt jetzt die Live-Checkliste im HUD.
+	var dark_trim := _mat(Color(0.11, 0.13, 0.16), 0.45, 0.4)
+	_add_box_visual(self, Vector3(3.0, 2.98, -4.45), Vector3(2.55, 0.48, 0.03), plaque_mat)
+	for bx in [-1.18, 1.18]:
+		for by in [-0.17, 0.17]:
+			_add_box_visual(self, Vector3(3.0 + float(bx), 2.98 + float(by), -4.43), Vector3(0.03, 0.03, 0.02), bolt_mat)
+	_company_sign_lbl = Label3D.new()
+	_company_sign_lbl.text = "MEIN DATACENTER"
+	_company_sign_lbl.font_size = 38
+	_company_sign_lbl.pixel_size = 0.0046
+	_company_sign_lbl.outline_size = 0
+	_company_sign_lbl.position = Vector3(3.0, 2.98, -4.42)
+	_company_sign_lbl.modulate = Color(0.95, 0.96, 0.98)
+	add_child(_company_sign_lbl)
+
+	# Außen-Firmenschild über dem Garagentor!
+	_add_box_visual(self, Vector3(0.0, 3.55, 4.82), Vector3(3.6, 0.46, 0.06), dark_trim)
+	_exterior_sign_lbl = Label3D.new()
+	_exterior_sign_lbl.text = "MEIN DATACENTER"
+	_exterior_sign_lbl.font_size = 42
+	_exterior_sign_lbl.pixel_size = 0.0052
+	_exterior_sign_lbl.outline_size = 0
+	_exterior_sign_lbl.position = Vector3(0.0, 3.55, 4.86)
+	_exterior_sign_lbl.modulate = Color(0.96, 0.78, 0.32)
+	add_child(_exterior_sign_lbl)
+
+	# 2. Live-Kennzahlen-Whiteboard an der Nordwand (rechts neben dem Router)
+	var wb_frame := _mat(Color(0.32, 0.35, 0.38), 0.45, 0.5)
+	var wb_board := _mat(Color(0.92, 0.94, 0.95), 0.25, 0.0)
+	_add_box_visual(self, Vector3(3.0, 1.92, -4.45), Vector3(1.86, 1.12, 0.04), wb_frame)
+	_add_box_visual(self, Vector3(3.0, 1.92, -4.425), Vector3(1.76, 1.02, 0.02), wb_board)
+	_add_box_visual(self, Vector3(3.0, 1.37, -4.38), Vector3(1.65, 0.035, 0.08), wb_frame) # Stiftablage
+	_live_kpi_lbl = Label3D.new()
+	_live_kpi_lbl.text = "BETRIEBS-BOARD\nLade Daten..."
+	_live_kpi_lbl.font_size = 24
+	_live_kpi_lbl.pixel_size = 0.0032
+	_live_kpi_lbl.outline_size = 0
+	_live_kpi_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
+	_live_kpi_lbl.vertical_alignment = VERTICAL_ALIGNMENT_TOP
+	_live_kpi_lbl.position = Vector3(2.22, 2.34, -4.405)
+	_live_kpi_lbl.modulate = Color(0.10, 0.14, 0.20)
+	add_child(_live_kpi_lbl)
+
+	# 3. Kleine Kaffeemaschine + Tasse auf Beistelltisch rechts neben dem PC-Schreibtisch!
+	var table_mat := MatLib.get_mat("wood_desk")
+	_add_box_visual(self, Vector3(2.95, 0.38, -3.95), Vector3(0.58, 0.76, 0.48), table_mat)
+	_add_box_visual(self, Vector3(2.86, 0.94, -3.98), Vector3(0.24, 0.36, 0.26), dark_trim)
+	_add_box_visual(self, Vector3(2.86, 0.80, -3.86), Vector3(0.18, 0.04, 0.14), bolt_mat)
+	var led_coffee := StandardMaterial3D.new()
+	led_coffee.albedo_color = Color(0.25, 0.92, 0.42)
+	led_coffee.emission_enabled = true
+	led_coffee.emission = Color(0.25, 0.95, 0.42)
+	led_coffee.emission_energy_multiplier = 1.6
+	_add_box_visual(self, Vector3(2.92, 1.04, -3.845), Vector3(0.03, 0.02, 0.01), led_coffee)
+	_add_cyl_visual(self, Vector3(3.08, 0.81, -3.88), 0.042, 0.038, 0.10, _mat(Color(0.94, 0.92, 0.88), 0.22, 0.0))
+
+	# 4. Verpackungs-Mülleimer neben der Werkbank
+	_add_box_visual(self, Vector3(-4.95, 0.34, 3.38), Vector3(0.46, 0.68, 0.46), _mat(Color(0.22, 0.25, 0.29), 0.62, 0.25))
+	_add_box_visual(self, Vector3(-4.95, 0.70, 3.38), Vector3(0.50, 0.06, 0.50), _mat(Color(0.14, 0.36, 0.20), 0.55, 0.10))
+
+	# 5. Industrielle Decken-Kabeltrassen (Gitterkanäle) quer durch alle Hallen!
+	var tray_mat := MatLib.make_brushed_metal(Color(0.48, 0.52, 0.56), 0.42, 0.78)
+	for tz in [-2.8, 0.6]:
+		_add_box_visual(self, Vector3(7.5, 3.42, float(tz)), Vector3(25.0, 0.04, 0.36), tray_mat)
+		for rx in range(-4, 21, 3):
+			_add_cyl_visual(self, Vector3(float(rx), 3.60, float(tz)), 0.015, 0.015, 0.36, tray_mat)
+
+
+func _refresh_company_decor() -> void:
+	var cname := GameState.current_save_name.strip_edges().to_upper()
+	if cname.is_empty():
+		cname = "MEIN DATACENTER"
+	if _company_sign_lbl != null:
+		_company_sign_lbl.text = cname.left(24)
+	if _exterior_sign_lbl != null:
+		_exterior_sign_lbl.text = cname.left(24)
+	if _live_kpi_lbl != null and GameState.is_active:
+		var w_lbl: String = GameState.get_weather_label()
+		var af_pct := int(roundf(GameState.airflow_bonus * 100.0))
+		var cm_pct := int(roundf(GameState.cable_mgmt_bonus * 100.0))
+		_live_kpi_lbl.text = "LIVE-KENNZAHLEN  •  TAG %d\nKonto:   $%d\nLast:    %d / %d W\nTemp:    %.1f °C (%s)\nAirflow: +%d%% Kühlung\nKabel:   +%d%% Ruf-Bonus" % [
+			GameState.day_number,
+			int(roundf(GameState.money)),
+			GameState.total_watts,
+			GameState.max_watts,
+			GameState.room_temp,
+			w_lbl,
+			af_pct,
+			cm_pct,
+		]
 
 
 func _build_workshop_props() -> void:

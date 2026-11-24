@@ -11,6 +11,7 @@ extends Node
 
 const DedicatedServerScript := preload("res://scripts/server/dedicated_server.gd")
 
+var intro_splash: IntroSplash
 var loading_screen: LoadingScreen
 var workbench_ui: WorkbenchUI
 var _is_paused: bool = false
@@ -26,6 +27,10 @@ func _ready() -> void:
 	loading_screen = LoadingScreen.new()
 	$UI.add_child(loading_screen)
 	loading_screen.loading_finished.connect(_on_loading_finished)
+
+	intro_splash = IntroSplash.new()
+	$UI.add_child(intro_splash)
+	intro_splash.intro_fading_out.connect(_on_intro_fading_out)
 
 	workbench_ui = WorkbenchUI.new()
 	$UI.add_child(workbench_ui)
@@ -58,17 +63,22 @@ func _ready() -> void:
 	hud.resume_requested.connect(_resume_from_pause)
 	hud.leave_requested.connect(_leave_to_menu)
 
-	# Dedizierter Server: kein Ladebildschirm, kein Menü, die Welt startet sofort.
+	# Dedizierter Server: kein Intro, kein Ladebildschirm, kein Menü, die Welt startet sofort.
 	if DedicatedServerScript.is_requested():
 		_startup_done = true
+		intro_splash.visible = false
 		loading_screen.visible = false
 		var server := DedicatedServerScript.new()
 		server.name = "DedicatedServer"
 		add_child(server)
 		return
 
-	# Ablauf: Ladebildschirm, dann Hauptmenü, dann per Klick die Welt.
-	loading_screen.start_loading("STARTE RECHENZENTRUM…", 2.4)
+	# Ablauf: Verion-Digital Studio- & Titel-Intro -> nahtloser Ladebildschirm -> 3D-Hauptmenü.
+	intro_splash.start_intro()
+
+
+func _on_intro_fading_out() -> void:
+	loading_screen.start_loading("STARTE RECHENZENTRUM…", 1.95)
 
 
 func _apply_launcher_cli_args() -> void:
@@ -111,7 +121,7 @@ func _apply_launcher_cli_args() -> void:
 
 
 func _process(delta: float) -> void:
-	if main_menu.visible and menu_camera != null:
+	if (main_menu.visible or loading_screen.visible) and not NetworkManager.is_in_session and menu_camera != null:
 		# Smooth AAA cinematic glide framed so the Showcase Racks & Workstation shine in the open right viewport!
 		_menu_orbit_angle += delta * 0.13
 		var cam_pos := Vector3(

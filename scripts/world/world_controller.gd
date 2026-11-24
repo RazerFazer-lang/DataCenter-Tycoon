@@ -86,6 +86,7 @@ func _ready() -> void:
 	GameState.extinguisher_changed.connect(_sync_extinguisher)
 	GameState.room_level_changed.connect(_sync_room_level)
 	GameState.state_updated.connect(_on_state_updated)
+	GameState.world_ping_received.connect(_on_world_ping_received)
 
 	NetworkManager.player_joined.connect(_on_player_joined)
 	NetworkManager.player_left.connect(_on_player_left)
@@ -124,8 +125,82 @@ func _prewarm_shaders() -> void:
 	_sync_room_level()
 
 
-func _process(_delta: float) -> void:
+func _process(delta: float) -> void:
 	_update_day_night_atmosphere()
+	_update_world_pings(delta)
+
+
+var _active_pings: Array[Dictionary] = []
+
+
+func _on_world_ping_received(sender_peer: int, world_pos: Vector3, kind: String, label: String) -> void:
+	var col := NetworkManager.get_player_color(sender_peer)
+	if kind == "alert":
+		col = Color(1.0, 0.28, 0.18)
+	elif kind == "cable":
+		col = Color(0.28, 0.72, 1.0)
+	var marker := Node3D.new()
+	marker.position = world_pos + Vector3(0.0, 0.25, 0.0)
+	add_child(marker)
+
+	var ring_m := MeshInstance3D.new()
+	var tm := TorusMesh.new()
+	tm.inner_radius = 0.16
+	tm.outer_radius = 0.21
+	ring_m.mesh = tm
+	var rmat := StandardMaterial3D.new()
+	rmat.albedo_color = col
+	rmat.emission_enabled = true
+	rmat.emission = col
+	rmat.emission_energy_multiplier = 3.2
+	rmat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	ring_m.material_override = rmat
+	ring_m.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	marker.add_child(ring_m)
+
+	var beam_m := MeshInstance3D.new()
+	var cm := CylinderMesh.new()
+	cm.top_radius = 0.015
+	cm.bottom_radius = 0.025
+	cm.height = 1.6
+	beam_m.mesh = cm
+	var bmat := rmat.duplicate() as StandardMaterial3D
+	bmat.albedo_color = Color(col.r, col.g, col.b, 0.45)
+	bmat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	beam_m.material_override = bmat
+	beam_m.position = Vector3(0.0, 0.85, 0.0)
+	beam_m.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	marker.add_child(beam_m)
+
+	var lbl := Label3D.new()
+	lbl.text = "%s: %s" % [NetworkManager.get_player_name(sender_peer), label]
+	lbl.font_size = 34
+	lbl.pixel_size = 0.0052
+	lbl.billboard = BaseMaterial3D.BILLBOARD_ENABLED
+	lbl.no_depth_test = true
+	lbl.position = Vector3(0.0, 1.75, 0.0)
+	lbl.modulate = col.lerp(Color.WHITE, 0.35)
+	marker.add_child(lbl)
+
+	_active_pings.append({"node": marker, "ring": ring_m, "time": 0.0, "ttl": 6.5})
+
+
+func _update_world_pings(delta: float) -> void:
+	for i in range(_active_pings.size() - 1, -1, -1):
+		var p: Dictionary = _active_pings[i]
+		p["time"] = float(p["time"]) + delta
+		var t: float = float(p["time"])
+		var ttl: float = float(p["ttl"])
+		var nd: Node3D = p["node"]
+		if not is_instance_valid(nd) or t >= ttl:
+			if is_instance_valid(nd):
+				nd.queue_free()
+			_active_pings.remove_at(i)
+			continue
+		var ring: Node3D = p["ring"]
+		var s := 0.85 + 0.35 * absf(sin(t * 4.5))
+		ring.scale = Vector3(s, 1.0, s)
+		nd.position.y += sin(t * 3.0) * 0.0008
 
 
 func _apply_graphics_quality() -> void:
@@ -245,11 +320,28 @@ func _update_day_night_atmosphere() -> void:
 	if elev >= -0.05:
 		var noon_col := Color(1.0, 0.97, 0.92)
 		var sunset_col := Color(1.0, 0.54, 0.24)
+		var w: String = GameState.weather_state if GameState.is_active else "clear"
+		var w_sun_mult := 1.0
+		if w == "cloudy":
+			w_sun_mult = 0.62
+		elif w == "rain":
+			w_sun_mult = 0.42
+			noon_col = Color(0.76, 0.82, 0.90)
+		elif w == "storm":
+			w_sun_mult = 0.24
+			noon_col = Color(0.58, 0.66, 0.78)
+		elif w == "heatwave":
+			w_sun_mult = 1.22
+			noon_col = Color(1.0, 0.92, 0.78)
 		_sun_light.light_color = noon_col.lerp(sunset_col, sunset_factor * 0.88)
-		_sun_light.light_energy = lerpf(0.24, 1.6, day_factor)
+		_sun_light.light_energy = lerpf(0.24, 1.6, day_factor) * w_sun_mult
 	else:
 		_sun_light.light_color = Color(0.42, 0.62, 0.98)
 		_sun_light.light_energy = 0.28
+
+	# Dynamische Innen-/Außen-Raumakustik je nach Spielerposition (Tor bei Z = 4.65)
+	if local_player != null and is_instance_valid(local_player):
+		SfxManager.set_listener_outdoor(local_player.position.z > 4.65)
 
 	var sky_sh := MatLib.get_sky_shader_material()
 	if sky_sh != null:

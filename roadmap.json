@@ -1,5 +1,5 @@
 {
-  "updated": "2026-11-23",
+  "updated": "2026-11-24",
   "columns": [
     {
       "id": "planned",
@@ -7,7 +7,7 @@
       "items": [
         {
           "tag": "infrastruktur",
-          "version": "v2.2",
+          "version": "v2.3",
           "title": "Halle D, zweite Etage & Glasfaser-Backbone",
           "desc": "Noch größere mehrstöckige Rechenzentren mit Glasfaser-Trunks, Core-Switches und echtem BGP-Routing."
         },
@@ -19,7 +19,7 @@
         },
         {
           "tag": "coop",
-          "version": "v2.3",
+          "version": "v2.4",
           "title": "Dedizierter Co-op-Server & Lobby-Browser",
           "desc": "24/7-Dedicated-Server-Modus und öffentlicher bzw. passwortgeschützter Lobby-Browser direkt im Spiel & Launcher."
         }
@@ -31,9 +31,9 @@
       "items": [
         {
           "tag": "gameplay",
-          "version": "v2.2",
-          "title": "Erweiterte Strom-, USV- & Wasserkühlungs-Mechaniken",
-          "desc": "Realistische Kühlkreisläufe, Notstrom-Tests, Lastspitzen, Blackout-Events und Redundanz-Schaltungen (N+1)."
+          "version": "v2.3",
+          "title": "USV-Notstromaggregate, Wasserkühlung & N+1-Redundanz",
+          "desc": "Diesel-Notstromaggregate, flüssigkeitsgekühlte Rack-Kreisläufe, Lastspitzen-Tests und echte N+1-Umschaltungen."
         }
       ]
     },
@@ -43,15 +43,27 @@
       "items": [
         {
           "tag": "neu",
+          "version": "v2.2",
+          "title": "Außenwelt 2.0, Wetter, Karriere, Gebrauchtmarkt & Co-op Pings",
+          "desc": "360°-Gewerbegebiet mit Verkehr & Nachbarhallen, Regen/Gewitter/Hitzewelle, 5 Karriere-Meilensteine, Gebrauchtmarkt (B-Ware), Kalt-/Warmgang-Airflow, Firmen-Whiteboard, 3D-Pings, Team-Aufträge & Emotes."
+        },
+        {
+          "tag": "3d",
+          "version": "v2.2",
+          "title": "Geriggte Ego-Arme, Verion-Digital Branding & Echt-Audio",
+          "desc": "38-Bone-Ego-Arme mit 5 Animationen, KI-freies Verion-Digital Studio-Intro & Blender-3D-Key-Art, CC0-Beton-Schritte und flüssiger 5s-Feuerlöscher-Sound."
+        },
+        {
+          "tag": "neu",
           "version": "v2.1",
           "title": "3-Stufen-Lieferflotte, 6er-Mengen-Kisten & AAA-Handling",
           "desc": "7,5t-Kastenwagen (2 Mitarbeiter + Rampe), 18t-Schwerlast-LKW (3 Logistiker + Ladebordwand), 6er-Mengen-Kisten, 16-Plätze-Lieferlimit, Pro-Reparatur-Kits, AAA-3D-Hände & Hologramm-Platzierung."
         },
         {
           "tag": "launcher",
-          "version": "v2.1",
-          "title": "Launcher v2.1: Reparatur, Roadmap, Saves, Mods & Co-op-Favoriten",
-          "desc": "Spiel-Reparatur mit Config-/Cache-Auswahl, Auto-Backups vor Updates, Drag-&-Drop-Skin-Manager, Diagnose-ZIP & Spielzeit-Zähler."
+          "version": "v2.2",
+          "title": "Launcher v2.2: Verion-Digital Design, Reparatur, Roadmap & Auto-Updater",
+          "desc": "Neues KI-freies Blender-3D-Key-Art & Vektor-Icon, 1-Klick-Self-Updater, Spiel-Reparatur, Auto-Backups, Skin-Manager & Diagnose-ZIP."
         },
         {
           "tag": "neu",

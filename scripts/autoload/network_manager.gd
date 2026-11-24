@@ -138,6 +138,10 @@ func _setup_input_actions() -> void:
 	_add_key_action("open_chat", [KEY_T])
 	_add_key_action("toggle_perf", [KEY_F3])
 	_add_key_action("punch", [KEY_V])
+	_add_key_action("world_ping", [KEY_G])
+	_add_mouse_action("world_ping", MOUSE_BUTTON_MIDDLE)
+	_add_key_action("emote_wave", [KEY_B])
+	_add_key_action("emote_thumbs", [KEY_N])
 	_add_mouse_action("primary_action", MOUSE_BUTTON_LEFT)
 	_add_mouse_action("secondary_action", MOUSE_BUTTON_RIGHT)
 

@@ -1,9 +1,24 @@
 {
-  "version": "2.1.0",
-  "launcher_version": "2.1.0",
-  "codename": "v2.1.0 AAA-Handling, 3-Stufen-Lieferflotte & Mengen-Kisten",
-  "release_date": "2026-11-23",
+  "version": "2.2.0",
+  "launcher_version": "2.2.0",
+  "codename": "v2.2.0 Außenwelt 2.0, Wetter, Karriere, Gebrauchtmarkt, Co-op Pings & Verion-Digital Branding",
+  "release_date": "2026-11-24",
   "changelog": [
+    {
+      "version": "v2.2.0",
+      "date": "2026-11-24",
+      "title": "Mega-Update 2.2: Außenwelt 2.0, Dynamisches Wetter, Karriere, Gebrauchtmarkt, Co-op Pings/Emotes, Ego-Arme & Verion-Digital Branding",
+      "items": [
+        "[NEU] Außenwelt 2.0 (Gewerbegebiet Techpark Ring 4): Komplettes 360°-Industriegebiet ohne Leere am Horizont — mit Nachbarhallen (Nordkraft Logistik, Rhein-Tech Systems), Umspannwerk, Container-Hof, Solar-Carport, Mobilfunkmast, Gehwegen, 8 Nacht-Straßenlaternen und lebendigem KI-Straßenverkehr.",
+        "[NEU] Dynamisches Wettersystem: Sonnig, Bewölkt, Regen (3D-Regenpartikel & Regen-Ambience), Gewitter (echte Lichtblitze, Donner & erhöhtes Stromausfall-Risiko) sowie Hitzewelle (+8,5 °C & höhere Kühllast).",
+        "[NEU] Realistisches Karriere- & Meilenstein-System (5 Stufen von der Startup-Garage bis zum Enterprise-Rechenzentrum) plus neuer Gebrauchtmarkt (täglich wechselnde B-Ware-Hardware mit 35–45 % Rabatt im CloudParts.de-Shop).",
+        "[NEU] Co-op 3D-Ping-System ([Mittlere Maustaste] / [G] setzt pulsierende 3D-Wegpunkte an Racks, Feuer, Werkbank & Sicherungskasten), zeitbegrenzte Team-Aufträge mit Ruf-/Geld-Boni sowie Spieler-Emotes ([B] Winken, [N] Daumen hoch).",
+        "[NEU] Kaltgang-/Warmgang-Airflow-System (bis +30 % Kühlungs- & Stromspar-Bonus bei optimaler Rack-Ausrichtung), Kabelmanagement-Bonus (bis +12 % Ruf/Einnahmen) sowie dynamische Firmen-Deko (Firmenschild innen & außen, Live-Kennzahlen-Whiteboard, Kaffeemaschine & Decken-Kabeltrassen).",
+        "[NEU] Geriggte 3D-Ego-Arme (38 Bones, 5 Animationen) mit präzisem Griff & Sprüh-Animation für Feuerlöscher, Kisten, Kits & Kabel, plus echtes Notlicht in allen Hallen, Sicherungs-Funkenregen, Rauch-Vorwarnung ab 68 °C und dynamische Innen-/Außen-Raumakustik.",
+        "[BRANDING] 100 % KI-freies Verion-Digital Studio-Branding: Godot-Startlogo vollständig entfernt, neuer minimalistischer Vektor-Boot-Splash & Studio-Intro, echtes Blender-3D-Key-Art aus den Ingame-Servern und neues scharfes Vektor-App-Icon in Spiel & Launcher.",
+        "[AUDIO] Echte CC0-Beton-Schrittgeräusche (5 Varianten) und komplett überarbeiteter, durchgehend flüssiger 5-Sekunden-Feuerlöscher-Sound ohne Ruckeln."
+      ]
+    },
     {
       "version": "v2.1.0",
       "date": "2026-11-23",

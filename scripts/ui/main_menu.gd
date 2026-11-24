@@ -809,7 +809,7 @@ func _build_footer() -> Control:
 	footer.add_child(spacer)
 
 	var ver_lbl := Label.new()
-	ver_lbl.text = "v%s  •  LIVE-3D-SHOWCASE" % UIStyle.game_version()
+	ver_lbl.text = "VERION-DIGITAL  •  v%s  •  LIVE-3D-SHOWCASE" % UIStyle.game_version()
 	ver_lbl.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	UIStyle.style_label(ver_lbl, 11, Color(UIStyle.COL_TEXT_MAIN, 0.6))
 	footer.add_child(ver_lbl)
