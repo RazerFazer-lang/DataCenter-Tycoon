@@ -11,6 +11,8 @@ const NAV_HOVER_SHIFT := 8.0
 var _nav_buttons: Dictionary = {}
 var _nav_titles: Dictionary = {}
 var _pages: Dictionary = {}
+var _content_card: PanelContainer
+var _skin_editor_panel: SkinEditorPanel
 var _active_page: String = "new_game"
 
 var _status_lbl: Label
@@ -243,6 +245,10 @@ func _switch_page(page_id: String, animate: bool = true) -> void:
 		_rebuild_recent_ips()
 	elif page_id == "settings":
 		_sync_from_settings()
+	if _skin_editor_panel != null:
+		_skin_editor_panel.set_preview_active(page_id == "skin_editor")
+	if _content_card != null:
+		_content_card.custom_minimum_size.x = 760.0 if page_id == "skin_editor" else 520.0
 
 
 func _parse_port(text: String) -> int:
@@ -648,6 +654,7 @@ func _build_ui() -> void:
 
 	var content_card := _make_card_panel(Color(0.07, 0.074, 0.082, 0.90), UIStyle.COL_BORDER, 22, 18)
 	content_card.custom_minimum_size = Vector2(520, 0)
+	_content_card = content_card
 	body.add_child(content_card)
 
 	var content_wrap := VBoxContainer.new()
@@ -661,6 +668,8 @@ func _build_ui() -> void:
 	_pages["new_game"] = _build_new_game_page()
 	_pages["load_game"] = _build_load_game_page()
 	_pages["join_game"] = _build_join_game_page()
+	_skin_editor_panel = SkinEditorPanel.new()
+	_pages["skin_editor"] = _skin_editor_panel
 	_pages["settings"] = _build_settings_page()
 	for p in _pages.values():
 		stack.add_child(p as Control)
@@ -767,6 +776,7 @@ func _build_nav_column() -> Control:
 	_add_nav_button(nav_v, "new_game", "NEUES SPIEL", "Eigenes Rechenzentrum hosten")
 	_add_nav_button(nav_v, "load_game", "SPIELSTAND LADEN", "Gespeicherte Welt fortsetzen")
 	_add_nav_button(nav_v, "join_game", "CO-OP BEITRETEN", "Per IP mit Freunden spielen")
+	_add_nav_button(nav_v, "skin_editor", "SKIN-EDITOR", "3D-Charakter, Kleidung & Accessoires")
 	_add_nav_button(nav_v, "settings", "EINSTELLUNGEN", "Grafik, Audio und Steuerung")
 
 	var spacer := Control.new()

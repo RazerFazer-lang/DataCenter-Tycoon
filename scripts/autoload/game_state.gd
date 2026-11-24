@@ -24,6 +24,13 @@ signal inventory_changed
 signal fuses_changed
 ## Türen, Seitenwände und Antenne (Racks, Sicherungskasten, Router) wurden geöffnet/geschlossen.
 signal panel_states_changed
+signal cart_changed
+signal shelf_changed
+signal workbench_changed
+signal host_permissions_changed
+
+## Wenn aktiv, darf nur der Host (peer 1) Racks/Geräte verkaufen, Kredite aufnehmen, Mitarbeiter entlassen & Hallen ausbauen.
+var host_only_destructive: bool = false
 
 const MAX_SHARED_PANELS := 512
 ## Vom Server geführter Zustand aller öffenbaren Abdeckungen: "<entity_id>|<panel_id>" -> true (nur offene).
@@ -75,8 +82,38 @@ const SELL_REFUND_RATIO := 0.70
 const CART_MAX_ITEMS := 4
 const VAN_ARRIVE_DURATION := 4.4
 const VAN_DEPART_DURATION := 4.4
-# Abladen in Fahrten: Der Fahrer trägt 1 Karton von Hand oder bis zu 4 auf der Sackkarre.
-const VAN_TRIP_MAX_CRATES := 4
+# Mengen-Kisten & Lieferzonen-Limit (v2.1):
+const BULK_PACK_MAX := 6
+const DELIVERY_ZONE_MAX_CRATES := 16
+# 3 Liefer-Kategorien: Stufe 1 (Sprinter, 1 Fahrer), Stufe 2 (Kastenwagen 7,5t, 2 Mitarbeiter), Stufe 3 (LKW 18t, 3 Mitarbeiter)
+const DELIVERY_TIER_META := {
+	1: {
+		"name": "Express-Sprinter",
+		"staff": 1,
+		"max_per_trip": 4,
+		"speed_mult": 1.0,
+		"method": "Sackkarre (1 Fahrer)",
+		"icon": "🚐",
+	},
+	2: {
+		"name": "Kastenwagen 7,5t",
+		"staff": 2,
+		"max_per_trip": 6,
+		"speed_mult": 1.30,
+		"method": "Ausklapp-Rampe & 2 Sackkarren (2 Mitarbeiter)",
+		"icon": "🚚",
+	},
+	3: {
+		"name": "Schwerlast-LKW 18t",
+		"staff": 3,
+		"max_per_trip": 9,
+		"speed_mult": 1.55,
+		"method": "Hydraulik-Ladebordwand & 3 Logistiker",
+		"icon": "🚛",
+	},
+}
+# Abladen in Fahrten: Der Fahrer trägt 1 Karton von Hand oder bis zu 4/6/9 auf Sackkarren/Hubwagen.
+const VAN_TRIP_MAX_CRATES := 9
 const VAN_DRIVER_EXIT_TIME := 2.2 # Fahrertür auf, aussteigen, zur Schiebetür gehen
 const VAN_DRIVER_ENTER_TIME := 2.8 # Sackkarre verstauen bzw. Schiebetür zu, zur Fahrertür gehen, einsteigen
 const VAN_LOAD_TIME_PER_CRATE := 1.2
@@ -345,7 +382,126 @@ const ITEM_CATALOG := {
 		"color": Color(0.22, 0.56, 0.92),
 		"desc": "Transportiert bis zu 4 Kartons gleichzeitig durch alle Hallen!",
 	},
+	"kit_cpu": {
+		"name": "CPU-Reparatur-Kit",
+		"category": "repair_kit",
+		"kit_cat": "cpu",
+		"short_label": "CPU-KIT",
+		"price": 65,
+		"watts": 0,
+		"compute": 0,
+		"heat": 0.0,
+		"color": Color(0.22, 0.74, 0.97),
+		"desc": "Ersatz-CPU-Modul, Wärmeleitpaste & ESD-Werkzeug für die Werkbank.",
+	},
+	"kit_ram": {
+		"name": "RAM-Reparatur-Kit",
+		"category": "repair_kit",
+		"kit_cat": "ram",
+		"short_label": "RAM-KIT",
+		"price": 55,
+		"watts": 0,
+		"compute": 0,
+		"heat": 0.0,
+		"color": Color(0.20, 0.83, 0.60),
+		"desc": "Ersatz-ECC-DIMM-Riegel & Kontaktspray für die Werkbank.",
+	},
+	"kit_gpu": {
+		"name": "GPU-Reparatur-Kit",
+		"category": "repair_kit",
+		"kit_cat": "gpu",
+		"short_label": "GPU-KIT",
+		"price": 110,
+		"watts": 0,
+		"compute": 0,
+		"heat": 0.0,
+		"color": Color(0.65, 0.55, 0.98),
+		"desc": "GPU-Ersatzmodul, Wärmeleitpads & 8-Pin-Stecker für die Werkbank.",
+	},
+	"kit_storage": {
+		"name": "SSD-Reparatur-Kit",
+		"category": "repair_kit",
+		"kit_cat": "storage",
+		"short_label": "SSD-KIT",
+		"price": 45,
+		"watts": 0,
+		"compute": 0,
+		"heat": 0.0,
+		"color": Color(0.98, 0.75, 0.14),
+		"desc": "M.2-NVMe-Ersatzmodul & M2-Befestigungsschraube für die Werkbank.",
+	},
+	"kit_cooling": {
+		"name": "Kühlungs-Reparatur-Kit",
+		"category": "repair_kit",
+		"kit_cat": "cooling",
+		"short_label": "COOL-KIT",
+		"price": 40,
+		"watts": 0,
+		"compute": 0,
+		"heat": 0.0,
+		"color": Color(0.38, 0.65, 0.98),
+		"desc": "92mm-Hot-Swap-Lüftermodul & PWM-Kabel für die Werkbank.",
+	},
+	"kit_psu": {
+		"name": "Netzteil-Reparatur-Kit",
+		"category": "repair_kit",
+		"kit_cat": "psu",
+		"short_label": "PSU-KIT",
+		"price": 75,
+		"watts": 0,
+		"compute": 0,
+		"heat": 0.0,
+		"color": Color(0.98, 0.45, 0.09),
+		"desc": "Server-Netzteil-Ersatzmodul & 24-Pin/8-Pin-Kabelsatz.",
+	},
+	"kit_mainboard": {
+		"name": "Mainboard-Reparatur-Kit",
+		"category": "repair_kit",
+		"kit_cat": "mainboard",
+		"short_label": "MB-KIT",
+		"price": 125,
+		"watts": 0,
+		"compute": 0,
+		"heat": 0.0,
+		"color": Color(0.96, 0.25, 0.37),
+		"desc": "Ersatz-Platine, Kondensatoren & Abstandshalter für die Werkbank.",
+	},
+	"kit_bundle_all": {
+		"name": "Werkstatt-Komplett-Bundle (7 Kits)",
+		"category": "repair_bundle",
+		"short_label": "7x KITS",
+		"price": 420,
+		"watts": 0,
+		"compute": 0,
+		"heat": 0.0,
+		"color": Color(0.95, 0.68, 0.14),
+		"desc": "Enthält je 1 Reparatur-Kit für alle 7 Kategorien (18 % günstiger!).",
+	},
+	"slot_build_box": {
+		"name": "Server-Bausatz",
+		"category": "workshop_box",
+		"price": 0,
+		"watts": 0,
+		"compute": 0,
+		"heat": 0.0,
+		"color": Color(0.72, 0.56, 0.38),
+		"desc": "Gelieferter Server-Bausatz — an der Werkbank zusammenbauen.",
+	},
+	"server_tray": {
+		"name": "Server-Schlitten",
+		"category": "server_tray",
+		"price": 0,
+		"watts": 0,
+		"compute": 0,
+		"heat": 0.0,
+		"color": Color(0.32, 0.68, 0.92),
+		"desc": "Ausgebautes oder fertig montiertes Server-Chassis.",
+	},
 }
+
+const REPAIR_KIT_ORDER: Array[String] = [
+	"kit_cpu", "kit_ram", "kit_gpu", "kit_storage", "kit_cooling", "kit_psu", "kit_mainboard",
+]
 
 const COMPONENT_ORDER := ["cpu", "gpu", "ram", "storage", "cooling", "psu"]
 
@@ -487,7 +643,7 @@ const COMPANY_VALUE_MILESTONES := [
 ## Anteil des Kaufpreises, mit dem verbaute Hardware in den Firmenwert eingeht.
 const COMPANY_HARDWARE_VALUE_FACTOR := 0.6
 ## Firmenstufen: Mindest-Firmenwert für Stufe 1 bis 5. Die Stufe schaltet Bauteile und Mainboards frei.
-const COMPANY_LEVEL_THRESHOLDS := [0, 3000, 8000, 20000, 50000]
+const COMPANY_LEVEL_THRESHOLDS := [0, 24000, 72000, 180000, 400000]
 ## Benötigte Firmenstufe je Mainboard-Kategorie.
 const MAINBOARD_CATEGORY_LEVEL := {"entry": 1, "server": 2, "storage": 3, "gpu": 4}
 ## Support-SLA: Sekunden, bis ein unbeantwortetes Ticket eskaliert, je Priorität.
@@ -589,6 +745,15 @@ var crates: Dictionary = {}
 var cables: Dictionary = {}
 var contracts: Dictionary = {}
 var parts_inventory: Dictionary = {} # part_id -> int count in player's warehouse!
+## Gemeinsamer Warenkorb für PC-Shop & Rack-Konfigurator (lokal pro Spieler).
+var shopping_cart: Array = []
+## Offene Bausatz-Bestellungen, die gerade im Sprinter liegen (order_id -> build_data).
+var pending_build_orders: Dictionary = {}
+## Freie Stellplätze im 3D-Lagerregal: "shelf_0:0" .. "shelf_0:11" -> crate_data Dictionary.
+const STORAGE_SHELF_SLOTS := 12
+var storage_shelf_slots: Dictionary = {}
+## Aktiver Zustand der IT-Werkbank (leer oder build_box / assembly / repair / ready_tray).
+var workbench_state: Dictionary = {}
 var support_tickets: Dictionary = {}
 var active_call: Dictionary = {}
 var total_rental_income_per_cycle: float = 0.0
@@ -617,6 +782,7 @@ var van_cargo: Array = []
 var van_phase: String = "idle"
 var van_phase_time: float = 0.0
 var van_cargo_count: int = 0
+var van_delivery_tier: int = 1
 var _van_empty_accum: float = 0.0
 var pending_delivery_count: int = 0
 
@@ -706,6 +872,7 @@ func _update_delivery_van(delta: float) -> void:
 			if not pending_delivery_items.is_empty():
 				van_cargo = _pack_van_cargo(pending_delivery_items)
 				pending_delivery_items.clear()
+				van_delivery_tier = compute_delivery_tier(van_cargo)
 				van_phase = "arriving"
 				van_phase_time = 0.0
 				_reset_van_trip()
@@ -719,7 +886,10 @@ func _update_delivery_van(delta: float) -> void:
 				van_trip_done = 0
 				_rpc_play_sfx.rpc("van_horn")
 				_rpc_play_sfx.rpc("van_door")
-				post_event_f("🚚 Cloud Express ist angekommen (%d Pakete werden abgeladen)!", [van_trip_total], "good")
+				var tmeta: Dictionary = DELIVERY_TIER_META.get(van_delivery_tier, DELIVERY_TIER_META[1])
+				post_event_f("%s %s ist angekommen (%d Pakete · %s)!", [
+					str(tmeta["icon"]), str(tmeta["name"]), van_trip_total, str(tmeta["method"])
+				], "good")
 				_begin_van_trip_step("exit", VAN_DRIVER_EXIT_TIME)
 		"unloading":
 			van_phase_time += delta
@@ -733,6 +903,16 @@ func _update_delivery_van(delta: float) -> void:
 				_broadcast_van_state()
 
 
+func _tier_speed_mult() -> float:
+	var tmeta: Dictionary = DELIVERY_TIER_META.get(van_delivery_tier, DELIVERY_TIER_META[1])
+	return maxf(1.0, float(tmeta.get("speed_mult", 1.0)))
+
+
+func _tier_max_per_trip() -> int:
+	var tmeta: Dictionary = DELIVERY_TIER_META.get(van_delivery_tier, DELIVERY_TIER_META[1])
+	return clampi(int(tmeta.get("max_per_trip", 4)), 1, VAN_TRIP_MAX_CRATES)
+
+
 ## Schrittfolge pro Lieferung: exit, dann je Fahrt load → walk_in → drop → walk_back, zuletzt enter.
 func _update_van_trip() -> void:
 	match van_trip_phase:
@@ -744,9 +924,10 @@ func _update_van_trip() -> void:
 				_begin_van_trip_step("walk_in", _van_trip_walk_time())
 		"walk_in":
 			if van_trip_time >= van_trip_duration:
-				var drop_t := VAN_DROP_TIME_HAND
+				var spd := _tier_speed_mult()
+				var drop_t := VAN_DROP_TIME_HAND / spd
 				if van_trip_kind == "truck":
-					drop_t = VAN_TRUCK_TILT_TIME + float(_van_trip_items.size()) * VAN_DROP_TIME_PER_CRATE_TRUCK
+					drop_t = (VAN_TRUCK_TILT_TIME + float(_van_trip_items.size()) * VAN_DROP_TIME_PER_CRATE_TRUCK) / spd
 				_begin_van_trip_step("drop", drop_t)
 		"drop":
 			_drop_due_van_trip_items()
@@ -777,12 +958,13 @@ func _start_next_van_trip() -> void:
 	van_trip_count = _van_trip_items.size()
 	van_trip_dropped = 0
 	var is_cart := str(_van_trip_items[0]) == "cart"
-	van_trip_kind = "hand" if van_trip_count == 1 and not is_cart else "truck"
+	van_trip_kind = "hand" if van_trip_count == 1 and not is_cart and van_delivery_tier == 1 else "truck"
 	var stand_offset := VAN_DROP_STAND_OFFSET_TRUCK if van_trip_kind == "truck" else VAN_DROP_STAND_OFFSET
 	van_trip_target = _van_trip_stand_pos(_van_trip_items, stand_offset)
-	var load_t := float(van_trip_count) * VAN_LOAD_TIME_PER_CRATE
+	var spd := _tier_speed_mult()
+	var load_t := (float(van_trip_count) * VAN_LOAD_TIME_PER_CRATE) / spd
 	if van_trip_kind == "truck":
-		load_t += VAN_TRUCK_FETCH_TIME
+		load_t += VAN_TRUCK_FETCH_TIME / spd
 	_begin_van_trip_step("load", load_t)
 
 
@@ -791,7 +973,8 @@ func _take_van_trip_items() -> Array:
 	var items: Array = [van_cargo.pop_front()]
 	if str(items[0]) == "cart":
 		return items
-	while not van_cargo.is_empty() and items.size() < VAN_TRIP_MAX_CRATES and str(van_cargo[0]) != "cart":
+	var limit := _tier_max_per_trip()
+	while not van_cargo.is_empty() and items.size() < limit and str(van_cargo[0]) != "cart":
 		items.append(van_cargo.pop_front())
 	return items
 
@@ -800,10 +983,11 @@ func _take_van_trip_items() -> Array:
 func _drop_due_van_trip_items() -> void:
 	var n := _van_trip_items.size()
 	var due := 0
+	var spd := _tier_speed_mult()
 	if van_trip_time >= van_trip_duration:
 		due = n
 	elif van_trip_kind == "truck":
-		due = clampi(floori((van_trip_time - VAN_TRUCK_TILT_TIME) / VAN_DROP_TIME_PER_CRATE_TRUCK), 0, n)
+		due = clampi(floori((van_trip_time - VAN_TRUCK_TILT_TIME / spd) / (VAN_DROP_TIME_PER_CRATE_TRUCK / spd)), 0, n)
 	if due <= van_trip_dropped:
 		return
 	while van_trip_dropped < due:
@@ -859,24 +1043,161 @@ func _reset_van_trip() -> void:
 	_van_trip_items.clear()
 
 
-## Fasst bestellte Bauteile ("part:...") und Zubehör ("acc:...") zu einem Sammelpaket zusammen,
-## das als erstes ausgeliefert wird. Zubehör bleibt mit Präfix "acc:" im Paket.
-func _pack_van_cargo(items: Array) -> Array:
+## Welche Artikel bei Mehrfachbestellung automatisch in Mengen-Kisten (bis 6 Stück/Kiste) gebündelt werden.
+func is_bulk_packable(item_type: String) -> bool:
+	if is_repair_kit(item_type):
+		return true
+	return item_type == "web_server" or item_type == "storage_server" or item_type == "gpu_server" or item_type == "net_switch" or item_type == INDOOR_UNIT_TYPE
+
+
+func is_heavy_delivery_item(item_type: String) -> bool:
+	var base := item_type
+	if base.begins_with("bulk:"):
+		var parts := base.split(":")
+		if parts.size() >= 2:
+			base = parts[1]
+	return base == "rack" or base == "rack_pro" or base == "cooler" or base == "chiller" or base == "ups" or base == "cart"
+
+
+## Berechnet die Liefer-Kategorie (1 = Sprinter, 2 = Kastenwagen 7,5t, 3 = Schwerlast-LKW 18t).
+func compute_delivery_tier(packed_cargo: Array) -> int:
+	var total := 0
+	var heavy := 0
+	for entry in packed_cargo:
+		var s := str(entry)
+		if s == VAN_PARCEL_ITEM:
+			total += 1
+			continue
+		total += 1
+		if is_heavy_delivery_item(s):
+			heavy += 1
+	if total >= 10 or heavy >= 4:
+		return 3
+	if total >= 5 or heavy >= 2:
+		return 2
+	return 1
+
+
+## Fasst Bauteile/Zubehör ins Sammelpaket UND bündelt gleiche Mengen-Artikel (Kits, Module) in bis zu 6er-Kisten.
+func _pack_items_preview(items: Array, out_parcels: Array = []) -> Array:
 	var physical: Array = []
-	_van_parcel_parts.clear()
+	var bulk_counts: Dictionary = {}
+	var bulk_order: Array[String] = []
+	var has_parcel := false
 	for entry in items:
 		var s := str(entry)
 		if s.begins_with("part:"):
-			_van_parcel_parts.append(s.substr(5))
+			has_parcel = true
+			out_parcels.append(s.substr(5))
 		elif s.begins_with("acc:"):
-			_van_parcel_parts.append(s)
+			has_parcel = true
+			out_parcels.append(s)
 		elif s == VAN_PARCEL_ITEM:
-			continue # alter Spielstand: Platzhalter ohne Inhalt
+			continue
+		elif s.begins_with("bulk:"):
+			physical.append(s)
+		elif is_bulk_packable(s):
+			if not bulk_counts.has(s):
+				bulk_counts[s] = 0
+				bulk_order.append(s)
+			bulk_counts[s] = int(bulk_counts[s]) + 1
 		else:
 			physical.append(s)
-	if not _van_parcel_parts.is_empty():
+	for btype in bulk_order:
+		var rem := int(bulk_counts[btype])
+		while rem > 0:
+			var chunk := mini(rem, BULK_PACK_MAX)
+			if chunk > 1:
+				physical.append("bulk:%s:%d" % [btype, chunk])
+			else:
+				physical.append(btype)
+			rem -= chunk
+	if has_parcel:
 		physical.push_front(VAN_PARCEL_ITEM)
 	return physical
+
+
+func _pack_van_cargo(items: Array) -> Array:
+	_van_parcel_parts.clear()
+	return _pack_items_preview(items, _van_parcel_parts)
+
+
+func is_pos_in_delivery_zone(pos: Vector3) -> bool:
+	return pos.z >= 4.4 and pos.z <= 9.2 and absf(pos.x) <= 3.4
+
+
+func get_delivery_zone_ground_crates() -> int:
+	var n := 0
+	for c in crates.values():
+		var cd: Dictionary = c as Dictionary
+		if int(cd.get("held_by", 0)) == 0 and is_pos_in_delivery_zone(cd.get("pos", Vector3.ZERO) as Vector3):
+			n += 1
+	for ct in carts.values():
+		var ctd: Dictionary = ct as Dictionary
+		if int(ctd.get("pushed_by", 0)) == 0 and is_pos_in_delivery_zone(ctd.get("pos", Vector3.ZERO) as Vector3):
+			n += 1
+	return n
+
+
+func get_incoming_delivery_crates() -> int:
+	if multiplayer.is_server():
+		var n := 0
+		for e in van_cargo:
+			if str(e) != VAN_PARCEL_ITEM:
+				n += 1
+		for e in _van_trip_items:
+			if str(e) != VAN_PARCEL_ITEM:
+				n += 1
+		n -= mini(van_trip_dropped, _van_trip_items.size())
+		var pend_packed := _pack_items_preview(pending_delivery_items)
+		for e in pend_packed:
+			if str(e) != VAN_PARCEL_ITEM:
+				n += 1
+		return maxi(0, n)
+	return maxi(0, van_cargo_count + pending_delivery_count)
+
+
+func get_delivery_zone_used_slots() -> int:
+	return get_delivery_zone_ground_crates() + get_incoming_delivery_crates()
+
+
+func get_delivery_zone_free_slots() -> int:
+	return maxi(0, DELIVERY_ZONE_MAX_CRATES - get_delivery_zone_used_slots())
+
+
+## Berechnet für den Warenkorb: {"crates": physische Kisten, "tier": 1..3, "packed": Array}.
+func preview_cart_delivery(entries: Array) -> Dictionary:
+	var raw_items: Array = []
+	for raw in entries:
+		var e: Dictionary = raw
+		var kind := str(e.get("kind", "item"))
+		var qty := clampi(int(e.get("qty", 1)), 1, 24)
+		if kind == "item":
+			var itype := str(e.get("id", ""))
+			if itype == "kit_bundle_all":
+				for _q in range(qty):
+					for kid in REPAIR_KIT_ORDER:
+						raw_items.append(kid)
+			elif ITEM_CATALOG.has(itype):
+				for _q in range(qty):
+					raw_items.append(itype)
+		elif kind == "slot_build":
+			raw_items.append("slot_build_box")
+		elif kind == "part":
+			raw_items.append("part:" + str(e.get("id", "")))
+		elif kind == "acc":
+			raw_items.append("acc:" + str(e.get("id", "")))
+	var packed := _pack_items_preview(raw_items)
+	var physical_crates := 0
+	for p in packed:
+		if str(p) != VAN_PARCEL_ITEM:
+			physical_crates += 1
+	return {
+		"crates": physical_crates,
+		"total_packages": packed.size(),
+		"tier": compute_delivery_tier(packed),
+		"packed": packed,
+	}
 
 
 func _deliver_parts_parcel() -> void:
@@ -940,9 +1261,31 @@ func _cart_drop_pos(cart_count: int) -> Vector3:
 
 
 func _delivery_slot_pos(index: int) -> Vector3:
-	var col := index % 4
-	var row := (index / 4) % 3
-	return Vector3(-1.35 + float(col) * 0.9, 0.0, 5.6 + float(row) * 0.9)
+	# 4x4 Raster = 16 saubere Stellplätze innerhalb der gelben Lieferzonen-Markierung
+	var idx := index % DELIVERY_ZONE_MAX_CRATES
+	var col := idx % 4
+	var row := idx / 4
+	return Vector3(-1.35 + float(col) * 0.90, 0.0, 5.45 + float(row) * 0.78)
+
+
+func _find_free_delivery_slot_pos() -> Vector3:
+	for offset in range(DELIVERY_ZONE_MAX_CRATES):
+		var slot_idx := (_delivery_slot_cursor + offset) % DELIVERY_ZONE_MAX_CRATES
+		var cand := _delivery_slot_pos(slot_idx)
+		var occupied := false
+		for c in crates.values():
+			var cd: Dictionary = c as Dictionary
+			if int(cd.get("held_by", 0)) == 0:
+				var cp: Vector3 = cd.get("pos", Vector3.ZERO) as Vector3
+				if Vector2(cp.x - cand.x, cp.z - cand.z).length() < 0.48:
+					occupied = true
+					break
+		if not occupied:
+			_delivery_slot_cursor = (slot_idx + 1) % DELIVERY_ZONE_MAX_CRATES
+			return cand
+	var fallback := _delivery_slot_pos(_delivery_slot_cursor)
+	_delivery_slot_cursor = (_delivery_slot_cursor + 1) % DELIVERY_ZONE_MAX_CRATES
+	return fallback
 
 
 func _deliver_item_to_zone(item_type: String) -> void:
@@ -958,15 +1301,35 @@ func _deliver_item_to_zone(item_type: String) -> void:
 		}
 		_broadcast_carts()
 		_rpc_play_sfx.rpc("place")
+	elif item_type.begins_with("build:"):
+		var oid := item_type.substr(6)
+		var bdata: Dictionary = pending_build_orders.get(oid, {}).duplicate(true)
+		pending_build_orders.erase(oid)
+		var cid := _spawn_crate_internal("slot_build_box")
+		var rlabel := str(bdata.get("rack_label", "Rack"))
+		var sidx := int(bdata.get("slot_idx", 0))
+		crates[cid]["label"] = "%s · Slot %d" % [rlabel, sidx + 1]
+		crates[cid]["build_data"] = bdata
+		_broadcast_crates()
+		_rpc_play_sfx.rpc("drop")
+		post_event_f("📦 Bausatz-Karton geliefert: %s — an der Werkbank [E] zusammenbauen!", [crates[cid]["label"]], "good")
+	elif item_type.begins_with("bulk:"):
+		var parts := item_type.split(":")
+		var base_type := parts[1] if parts.size() >= 2 else item_type
+		var pcount := clampi(int(parts[2]) if parts.size() >= 3 else 1, 1, BULK_PACK_MAX)
+		_spawn_crate_internal(base_type, pcount)
+		_broadcast_crates()
+		_rpc_play_sfx.rpc("drop")
 	else:
-		_spawn_crate_internal(item_type)
+		_spawn_crate_internal(item_type, 1)
 		_broadcast_crates()
 		_rpc_play_sfx.rpc("drop")
 
 
 func _broadcast_van_state() -> void:
 	van_cargo_count = van_cargo.size()
-	pending_delivery_count = pending_delivery_items.size()
+	var pend_packed := _pack_items_preview(pending_delivery_items)
+	pending_delivery_count = pend_packed.size()
 	var trip := {
 		"phase": van_trip_phase,
 		"t": van_trip_time,
@@ -978,6 +1341,7 @@ func _broadcast_van_state() -> void:
 		"dropped": van_trip_dropped,
 		"done": van_trip_done,
 		"total": van_trip_total,
+		"tier": van_delivery_tier,
 	}
 	_rpc_sync_van_state.rpc(van_phase, van_phase_time, van_cargo_count, pending_delivery_count, trip)
 
@@ -1000,6 +1364,7 @@ func _rpc_sync_van_state(phase: String, phase_t: float, cargo_n: int, pending_n:
 		van_trip_dropped = clampi(int(trip.get("dropped", 0)), 0, VAN_TRIP_MAX_CRATES)
 		van_trip_done = maxi(int(trip.get("done", 0)), 0)
 		van_trip_total = maxi(int(trip.get("total", 0)), 0)
+		van_delivery_tier = clampi(int(trip.get("tier", 1)), 1, 3)
 	van_updated.emit()
 
 
@@ -1067,8 +1432,8 @@ func initialize_new_world(save_id: String = "mein_datacenter", save_name: String
 		contracts[cid] = entry
 	_fill_random_contract_offers()
 
-	# v1.0 Clean Empty Garage Start: no racks, no servers, no crates!
-	# Player buys their very first Rack & Hardware from the Windows PC!
+	# v1.0 Clean Empty Garage Start + Starter-Reparatur-Kits ordentlich im Lagerregal.
+	_ensure_starter_shelf_kits()
 	_recalculate_networks_and_metrics()
 	world_snapshot_loaded.emit()
 	state_updated.emit()
@@ -1187,6 +1552,10 @@ func clear_local_state() -> void:
 	cables.clear()
 	contracts.clear()
 	parts_inventory.clear()
+	shopping_cart.clear()
+	pending_build_orders.clear()
+	storage_shelf_slots.clear()
+	workbench_state.clear()
 	breaker_fuses = _make_fuse_slots("ok")
 	fuse_stock = 0
 	power_fuse_stock = 0
@@ -1227,6 +1596,15 @@ func _alloc_id(prefix: String) -> String:
 	var id := "%s_%d" % [prefix, _next_entity_num]
 	_next_entity_num += 1
 	return id
+
+
+## Vergibt für Racks immer die niedrigste freie Nummer ab 1 (rack_1, rack_2, ...),
+## unabhängig davon, wie viele Kisten/Kabel vorher erzeugt wurden.
+func _alloc_rack_id() -> String:
+	var n := 1
+	while racks.has("rack_%d" % n):
+		n += 1
+	return "rack_%d" % n
 
 
 ## Ohne diese Bauteile läuft ein Server nicht. Eine Grafikkarte ist optional.
@@ -1323,15 +1701,15 @@ func _ensure_loaded_compat() -> void:
 			c["cooler_type"] = "cooler"
 
 
-func _spawn_crate_internal(item_type: String) -> String:
+func _spawn_crate_internal(item_type: String, pack_count: int = 1) -> String:
 	var cid := _alloc_id("crate")
-	var pos := _delivery_slot_pos(_delivery_slot_cursor)
-	_delivery_slot_cursor += 1
+	var pos := _find_free_delivery_slot_pos()
 	crates[cid] = {
 		"id": cid,
 		"item_type": item_type,
 		"pos": pos,
 		"held_by": 0,
+		"pack_count": maxi(1, pack_count),
 	}
 	return cid
 
@@ -1399,10 +1777,15 @@ func build_snapshot() -> Dictionary:
 		"van_phase": van_phase,
 		"van_phase_time": van_phase_time,
 		"van_cargo_count": van_cargo.size(),
+		"van_delivery_tier": van_delivery_tier,
 		"pending_delivery_count": pending_delivery_items.size(),
 		"checklist_opened_pc": checklist_opened_pc,
 		"checklist_ordered_anything": checklist_ordered_anything,
 		"open_panels": shared_open_panels.duplicate(),
+		"storage_shelf_slots": storage_shelf_slots.duplicate(true),
+		"workbench_state": workbench_state.duplicate(true),
+		"pending_build_orders": pending_build_orders.duplicate(true),
+		"host_only_destructive": host_only_destructive,
 	}
 
 
@@ -1487,9 +1870,21 @@ func _apply_snapshot(snap: Dictionary) -> void:
 	extinguisher_held_slot = clampi(int(snap.get("extinguisher_held_slot", 1)), 1, SLOT_COUNT)
 	shared_open_panels = _sanitize_open_panels(snap.get("open_panels", {}))
 	panel_states_changed.emit()
+	if snap.has("storage_shelf_slots") and snap["storage_shelf_slots"] is Dictionary:
+		storage_shelf_slots = (snap["storage_shelf_slots"] as Dictionary).duplicate(true)
+	else:
+		storage_shelf_slots.clear()
+		_ensure_starter_shelf_kits()
+	workbench_state = (snap.get("workbench_state", {}) as Dictionary).duplicate(true) if snap.get("workbench_state", {}) is Dictionary else {}
+	pending_build_orders = (snap.get("pending_build_orders", {}) as Dictionary).duplicate(true) if snap.get("pending_build_orders", {}) is Dictionary else {}
+	shelf_changed.emit()
+	workbench_changed.emit()
 	van_phase = str(snap.get("van_phase", "idle"))
 	van_phase_time = float(snap.get("van_phase_time", 0.0))
 	van_cargo_count = int(snap.get("van_cargo_count", 0))
+	van_delivery_tier = clampi(int(snap.get("van_delivery_tier", 1)), 1, 3)
+	host_only_destructive = bool(snap.get("host_only_destructive", false))
+	host_permissions_changed.emit()
 	pending_delivery_count = int(snap.get("pending_delivery_count", 0))
 	# Ältere Spielstände haben diese Felder nicht. Die übrigen Schritte leitet die Checkliste aus Racks/Kisten ab.
 	checklist_opened_pc = bool(snap.get("checklist_opened_pc", false))
@@ -1886,7 +2281,7 @@ func _trigger_water_leak() -> void:
 		hit.append(str(ok_idx[j] + 1))
 
 	money = maxf(0.0, money - WATER_LEAK_COST)
-	post_event_f("WASSERSCHADEN über %s! Slot %s ausgefallen, Trocknung kostet $%d. Mit [E] reparieren.", [
+	post_event_f("WASSERSCHADEN über %s! Slot %s ausgefallen, Trocknung kostet $%d. Reparatur über die 3D-Vorschau im Rack-Menü.", [
 		get_rack_display_name(target), ", ".join(hit), int(WATER_LEAK_COST)
 	], "alert")
 	_rpc_play_sfx.rpc("alarm")
@@ -2698,7 +3093,7 @@ func _run_simulation_step(dt: float) -> void:
 					slot["faulty_part"] = ""
 					slot["diagnosed"] = false
 					racks_dirty = true
-					post_event_f("Überhitzung: %s Slot %d abgestürzt! Mit [E] reparieren.", [get_rack_display_name(rid), i + 1], "warn")
+					post_event_f("Überhitzung: %s Slot %d abgestürzt! Reparatur über die 3D-Vorschau im Rack-Menü.", [get_rack_display_name(rid), i + 1], "warn")
 					_rpc_play_sfx.rpc("alarm")
 				elif bool(rack["networked"]) and randf() < 0.0012 * fmult:
 					slot["state"] = "crashed"
@@ -3772,7 +4167,7 @@ func _pick_faulty_part(slot: Dictionary) -> String:
 	if get_chassis_visual(str(slot.get("item_type", ""))) == "net_switch":
 		return ""
 	var comps: Dictionary = slot.get("components", {}) as Dictionary
-	var cands: Array[String] = []
+	var cands: Array[String] = ["mainboard"]
 	for cat_v in COMPONENT_ORDER:
 		var cat := str(cat_v)
 		# Dieselbe Regel wie beim Modellaufbau, damit der Defekt immer sichtbar ist.
@@ -3797,7 +4192,7 @@ func _rpc_req_diagnose_slot(rack_id: String, slot_idx: int) -> void:
 	if not is_slot_awaiting_diagnosis(slot):
 		return
 	slot["diagnosed"] = true
-	post_event_f("%s hat den Defekt gefunden: %s in %s Slot %d. Jetzt mit [E] reparieren.", [
+	post_event_f("%s hat den Defekt gefunden: %s in %s Slot %d. Jetzt das Teil in der 3D-Vorschau anklicken, um es zu reparieren.", [
 		NetworkManager.get_player_name(peer_id), get_component_label(str(slot["faulty_part"])),
 		get_rack_display_name(rack_id), slot_idx + 1
 	], "good")
@@ -3872,12 +4267,50 @@ func _disconnect_all_cables_of(entity_id: String) -> void:
 		cables.erase(cid)
 
 
+func set_host_only_destructive(enabled: bool) -> void:
+	if not multiplayer.is_server():
+		return
+	if host_only_destructive == enabled:
+		return
+	host_only_destructive = enabled
+	_rpc_sync_host_permissions.rpc(enabled)
+	post_event(
+		"Host-Schutz aktiviert: Nur der Host darf verkaufen, Kredite aufnehmen & ausbauen."
+		if enabled else
+		"Host-Schutz deaktiviert: Alle Mitspieler dürfen verkaufen & ausbauen.",
+		"info"
+	)
+
+
+@rpc("authority", "call_local", "reliable")
+func _rpc_sync_host_permissions(enabled: bool) -> void:
+	host_only_destructive = enabled
+	host_permissions_changed.emit()
+
+
+func is_destructive_action_allowed(peer_id: int) -> bool:
+	return not host_only_destructive or peer_id <= 1
+
+
+func _deny_destructive_action(peer_id: int, action_label: String) -> void:
+	_rpc_play_sfx.rpc_id(peer_id, "error")
+	post_event_f("Nur der Host darf %s (Host-Schutz aktiv).", [action_label], "warn")
+
+
 @rpc("any_peer", "call_local", "reliable")
 func _rpc_req_buy_item(item_type: String) -> void:
 	if not multiplayer.is_server():
 		return
 	var peer_id := _get_sender_id()
+	if not SecurityGuard.check_rate_limit(peer_id, "buy", 10, 5.0):
+		return
 	if not ITEM_CATALOG.has(item_type):
+		return
+	if get_delivery_zone_free_slots() < 1:
+		_rpc_play_sfx.rpc_id(peer_id, "error")
+		post_event_f("🚫 Lieferzone voll (%d/%d Plätze)! Erst Pakete aus der Einfahrt räumen.", [
+			get_delivery_zone_used_slots(), DELIVERY_ZONE_MAX_CRATES
+		], "warn")
 		return
 	var price := float(ITEM_CATALOG[item_type]["price"])
 	if money < price:
@@ -3885,23 +4318,28 @@ func _rpc_req_buy_item(item_type: String) -> void:
 		return
 	money -= price
 
-	# Add to Delivery Van! If van is currently approaching, toss right into its cargo hold.
+	# Add to Delivery Vehicle! If vehicle is currently approaching, toss right into its cargo hold.
 	if van_phase == "arriving" or van_phase == "unloading":
 		van_cargo.append(item_type)
+		if van_phase == "arriving":
+			van_delivery_tier = maxi(van_delivery_tier, compute_delivery_tier(van_cargo))
 	else:
 		pending_delivery_items.append(item_type)
 		if van_phase == "idle":
-			van_cargo = pending_delivery_items.duplicate()
+			van_cargo = _pack_van_cargo(pending_delivery_items)
 			pending_delivery_items.clear()
+			van_delivery_tier = compute_delivery_tier(van_cargo)
 			van_phase = "arriving"
 			van_phase_time = 0.0
 			_van_unload_accum = 0.0
+			_reset_van_trip()
 
 	_broadcast_van_state()
 	_broadcast_sim_tick()
 	_rpc_play_sfx.rpc("cash")
-	post_event_f("%s bestellte %s — 🚚 Cloud Express liefert gleich!", [
-		NetworkManager.get_player_name(peer_id), ITEM_CATALOG[item_type]["name"]
+	var tmeta: Dictionary = DELIVERY_TIER_META.get(van_delivery_tier, DELIVERY_TIER_META[1])
+	post_event_f("%s bestellte %s — %s %s liefert gleich!", [
+		NetworkManager.get_player_name(peer_id), ITEM_CATALOG[item_type]["name"], str(tmeta["icon"]), str(tmeta["name"])
 	], "good")
 
 
@@ -3926,6 +4364,8 @@ func _rpc_req_pickup_crate(crate_id: String) -> void:
 func _rpc_req_drop_crate(drop_pos: Vector3) -> void:
 	if not multiplayer.is_server():
 		return
+	if not SecurityGuard.is_finite_vec3(drop_pos):
+		return
 	var peer_id := _get_sender_id()
 	var held := get_player_held_crate(peer_id)
 	if held.is_empty():
@@ -3933,15 +4373,45 @@ func _rpc_req_drop_crate(drop_pos: Vector3) -> void:
 	var cid := str(held["id"])
 	var max_x := 5.0 if room_level == 0 else (11.8 if room_level == 1 else 20.8)
 	var clamped := Vector3(clampf(drop_pos.x, -5.0, max_x), 0.0, clampf(drop_pos.z, -4.0, 8.8))
+	# Verhindert, dass abgelegte Items in einem Server-Rack oder Gerät verschwinden!
+	clamped = _push_drop_outside_obstacles(clamped, max_x)
 	crates[cid]["held_by"] = 0
 	crates[cid]["pos"] = clamped
 	_broadcast_crates()
 	_rpc_play_sfx.rpc_id(peer_id, "drop")
 
 
+func _push_drop_outside_obstacles(pos: Vector3, max_x: float) -> Vector3:
+	var out := pos
+	var obstacles: Array[Vector3] = []
+	for rk in racks.values():
+		obstacles.append((rk as Dictionary).get("pos", Vector3.ZERO) as Vector3)
+	for cl in coolers.values():
+		obstacles.append((cl as Dictionary).get("pos", Vector3.ZERO) as Vector3)
+	for up in ups_units.values():
+		obstacles.append((up as Dictionary).get("pos", Vector3.ZERO) as Vector3)
+	for _pass in range(2):
+		for ob in obstacles:
+			var dx := out.x - ob.x
+			var dz := out.z - ob.z
+			var dist := Vector2(dx, dz).length()
+			var min_r := 0.78
+			if dist < min_r:
+				var dir := Vector2(dx, dz)
+				if dir.length_squared() < 0.0004:
+					dir = Vector2(0.0, 1.0)
+				else:
+					dir = dir.normalized()
+				out.x = clampf(ob.x + dir.x * min_r, -5.0, max_x)
+				out.z = clampf(ob.z + dir.y * min_r, -4.0, 8.8)
+	return out
+
+
 @rpc("any_peer", "call_local", "reliable")
 func _rpc_req_place_held_structure(pos: Vector3, rot_y: float) -> void:
 	if not multiplayer.is_server():
+		return
+	if not SecurityGuard.is_finite_vec3(pos) or not SecurityGuard.is_finite_float(rot_y):
 		return
 	var peer_id := _get_sender_id()
 	var held := get_player_held_crate(peer_id)
@@ -3961,9 +4431,14 @@ func _rpc_req_place_held_structure(pos: Vector3, rot_y: float) -> void:
 		_rpc_play_sfx.rpc_id(peer_id, "error")
 		return
 
-	crates.erase(str(held["id"]))
+	var held_cid := str(held["id"])
+	var pcount := maxi(1, int(crates[held_cid].get("pack_count", 1)))
+	if pcount > 1:
+		crates[held_cid]["pack_count"] = pcount - 1
+	else:
+		crates.erase(held_cid)
 	if item_type == "rack" or item_type == "rack_pro":
-		var rid := _alloc_id("rack")
+		var rid := _alloc_rack_id()
 		racks[rid] = _make_rack_data(rid, item_type, snapped, rot_y)
 		_recalculate_networks_and_metrics()
 		_broadcast_racks()
@@ -4006,6 +4481,8 @@ func _rpc_req_place_held_structure(pos: Vector3, rot_y: float) -> void:
 func _rpc_req_relocate_rack(rack_id: String, pos: Vector3, rot_y: float) -> void:
 	if not multiplayer.is_server():
 		return
+	if not SecurityGuard.is_finite_vec3(pos) or not SecurityGuard.is_finite_float(rot_y):
+		return
 	var peer_id := _get_sender_id()
 	if not racks.has(rack_id):
 		return
@@ -4032,6 +4509,11 @@ func _rpc_req_sell_rack(rack_id: String) -> void:
 	if not multiplayer.is_server():
 		return
 	var peer_id := _get_sender_id()
+	if not SecurityGuard.check_rate_limit(peer_id, "sell", 6, 5.0):
+		return
+	if not is_destructive_action_allowed(peer_id):
+		_deny_destructive_action(peer_id, "Racks verkaufen")
+		return
 	if not racks.has(rack_id):
 		return
 	var refund := get_rack_sell_value(rack_id)
@@ -4042,6 +4524,12 @@ func _rpc_req_sell_rack(rack_id: String) -> void:
 		_broadcast_call()
 	var sold_name := get_rack_display_name(rack_id)
 	racks.erase(rack_id)
+	# Offene Türen/Schächte dieses Racks aufräumen, damit ein neues Rack mit derselben ID sauber startet.
+	var prefix := rack_id + "|"
+	for pkey in shared_open_panels.keys():
+		if str(pkey).begins_with(prefix):
+			shared_open_panels.erase(pkey)
+			_rpc_sync_panel.rpc(str(pkey), false)
 	money += float(refund)
 	_recalculate_networks_and_metrics()
 	_broadcast_cables()
@@ -4049,6 +4537,7 @@ func _rpc_req_sell_rack(rack_id: String) -> void:
 	_broadcast_tickets()
 	_broadcast_coolers()
 	_broadcast_ups()
+	_broadcast_crates()
 	_broadcast_sim_tick()
 	_rpc_play_sfx.rpc("sell")
 	post_event_f("%s verkaufte %s für +$%d.", [NetworkManager.get_player_name(peer_id), sold_name, refund], "good")
@@ -4091,6 +4580,11 @@ func _rpc_req_sell_device(kind: String, entity_id: String) -> void:
 	if not multiplayer.is_server():
 		return
 	var peer_id := _get_sender_id()
+	if not SecurityGuard.check_rate_limit(peer_id, "sell", 6, 5.0):
+		return
+	if not is_destructive_action_allowed(peer_id):
+		_deny_destructive_action(peer_id, "Geräte verkaufen")
+		return
 	var refund := get_device_sell_value(kind, entity_id)
 	if refund <= 0:
 		return
@@ -4135,7 +4629,12 @@ func _rpc_req_install_module(rack_id: String, slot_idx: int) -> void:
 		_rpc_play_sfx.rpc_id(peer_id, "error")
 		return
 
-	crates.erase(str(held["id"]))
+	var held_mod_cid := str(held["id"])
+	var mod_pcount := maxi(1, int(crates[held_mod_cid].get("pack_count", 1)))
+	if mod_pcount > 1:
+		crates[held_mod_cid]["pack_count"] = mod_pcount - 1
+	else:
+		crates.erase(held_mod_cid)
 	slots[slot_idx] = {
 		"item_type": item_type,
 		"state": "ok",
@@ -4163,6 +4662,8 @@ func _rpc_req_remove_module(rack_id: String, slot_idx: int) -> void:
 	var peer_id := _get_sender_id()
 	if is_player_holding_anything(peer_id) or not racks.has(rack_id):
 		_rpc_play_sfx.rpc_id(peer_id, "error")
+		if is_player_holding_anything(peer_id):
+			post_event("Hände voll! Erst Item mit [Q] ablegen oder freien Slot (1–4) wählen.", "warn")
 		return
 	var slots: Array = racks[rack_id]["slots"]
 	if slot_idx < 0 or slot_idx >= slots.size():
@@ -4187,6 +4688,11 @@ func _rpc_req_sell_slot_module(rack_id: String, slot_idx: int) -> void:
 	if not multiplayer.is_server():
 		return
 	var peer_id := _get_sender_id()
+	if not SecurityGuard.check_rate_limit(peer_id, "sell", 8, 5.0):
+		return
+	if not is_destructive_action_allowed(peer_id):
+		_deny_destructive_action(peer_id, "Server-Module verkaufen")
+		return
 	if not racks.has(rack_id):
 		return
 	var slots: Array = racks[rack_id]["slots"]
@@ -4355,23 +4861,51 @@ func _rpc_req_buy_install_module(rack_id: String, slot_idx: int, item_type: Stri
 
 @rpc("any_peer", "call_local", "reliable")
 func _rpc_req_checkout_cart(entries: Array) -> void:
-	if not multiplayer.is_server() or entries.is_empty():
+	if not multiplayer.is_server() or entries.is_empty() or entries.size() > 40:
 		return
 	var peer_id := _get_sender_id()
+	if not SecurityGuard.check_rate_limit(peer_id, "checkout", 6, 5.0):
+		return
 	var total_cost := 0.0
 	var queue_items: Array = []
 
 	for raw in entries:
+		if not (raw is Dictionary):
+			continue
 		var e: Dictionary = raw
 		var kind := str(e.get("kind", "item")) # "item" | "part"
-		var qty := clampi(int(e.get("qty", 1)), 1, 20)
+		var qty := clampi(int(e.get("qty", 1)), 1, 24)
 		if kind == "item":
 			var itype := str(e.get("id", ""))
 			if not ITEM_CATALOG.has(itype) or not is_item_unlocked(itype):
 				continue
 			total_cost += float(ITEM_CATALOG[itype]["price"]) * float(qty)
-			for _q in range(qty):
-				queue_items.append(itype)
+			if itype == "kit_bundle_all":
+				for _q in range(qty):
+					for kid in REPAIR_KIT_ORDER:
+						queue_items.append(kid)
+			else:
+				for _q in range(qty):
+					queue_items.append(itype)
+		elif kind == "slot_build":
+			var mb_id := str(e.get("mainboard_id", ""))
+			var comps_d: Dictionary = e.get("components", {}) as Dictionary
+			var bprice := calculate_slot_build_price(mb_id, comps_d)
+			if bprice <= 0 or not ITEM_CATALOG.has(mb_id):
+				continue
+			total_cost += float(bprice)
+			var oid := _alloc_id("build")
+			var rid := str(e.get("rack_id", ""))
+			var sidx := maxi(0, int(e.get("slot_idx", 0)))
+			var rlbl := str(e.get("rack_label", get_rack_display_name(rid) if not rid.is_empty() else "Rack"))
+			pending_build_orders[oid] = {
+				"rack_id": rid,
+				"slot_idx": sidx,
+				"rack_label": rlbl,
+				"mainboard_id": mb_id,
+				"components": comps_d.duplicate(true),
+			}
+			queue_items.append("build:" + oid)
 		elif kind == "part":
 			var cat := str(e.get("cat", ""))
 			var pid := str(e.get("id", ""))
@@ -4402,27 +4936,53 @@ func _rpc_req_checkout_cart(entries: Array) -> void:
 		_rpc_play_sfx.rpc_id(peer_id, "error")
 		return
 
+	# Lieferflächen-Limit (max. DELIVERY_ZONE_MAX_CRATES physische Kisten inkl. laufender Lieferungen)
+	var packed_preview := _pack_items_preview(queue_items)
+	var needed_slots := 0
+	for pe in packed_preview:
+		if str(pe) != VAN_PARCEL_ITEM:
+			needed_slots += 1
+	var free_slots := get_delivery_zone_free_slots()
+	if needed_slots > free_slots:
+		# Angelegte build_orders wieder aufräumen, da Bestellung abgebrochen wurde
+		for qi in queue_items:
+			var qstr := str(qi)
+			if qstr.begins_with("build:"):
+				pending_build_orders.erase(qstr.substr(6))
+		_rpc_play_sfx.rpc_id(peer_id, "error")
+		post_event_f("🚫 Lieferzone zu voll (%d frei, %d Kisten benötigt)! Erst Pakete aus der Einfahrt holen.", [
+			free_slots, needed_slots
+		], "warn")
+		return
+
 	money -= total_cost
 	if not checklist_ordered_anything:
 		checklist_ordered_anything = true
 		_broadcast_checklist()
-	for qi in queue_items:
-		var qs := str(qi)
-		if van_phase != "arriving":
-			pending_delivery_items.append(qs)
-		elif qs.begins_with("part:") or qs.begins_with("acc:"):
-			# Bauteile und Zubehör gehören ins Sammelpaket, nicht als eigene Kiste in den Laderaum.
-			_van_parcel_parts.append(qs.substr(5) if qs.begins_with("part:") else qs)
-			if not van_cargo.has(VAN_PARCEL_ITEM):
-				van_cargo.push_front(VAN_PARCEL_ITEM)
-		else:
-			van_cargo.append(qs)
+	var added_parcels: Array = []
+	var packed_now := _pack_items_preview(queue_items, added_parcels)
+	var order_tier := compute_delivery_tier(packed_now)
+	if van_phase == "arriving":
+		for ap in added_parcels:
+			_van_parcel_parts.append(str(ap))
+		if not added_parcels.is_empty() and not van_cargo.has(VAN_PARCEL_ITEM):
+			van_cargo.push_front(VAN_PARCEL_ITEM)
+		for pn in packed_now:
+			if str(pn) != VAN_PARCEL_ITEM:
+				van_cargo.append(str(pn))
+		van_delivery_tier = maxi(van_delivery_tier, compute_delivery_tier(van_cargo))
+		order_tier = van_delivery_tier
+	else:
+		for qi in queue_items:
+			pending_delivery_items.append(str(qi))
 
 	_broadcast_van_state()
 	_broadcast_sim_tick()
 	_rpc_play_sfx.rpc("cash")
-	post_event_f("🛒 %s bestellte %d Artikel ($%.0f) — Cloud Express Sprinter ist unterwegs!", [
-		NetworkManager.get_player_name(peer_id), queue_items.size(), total_cost
+	var tmeta: Dictionary = DELIVERY_TIER_META.get(order_tier, DELIVERY_TIER_META[1])
+	post_event_f("🛒 %s bestellte %d Artikel → %d Pakete ($%.0f) — %s %s ist unterwegs!", [
+		NetworkManager.get_player_name(peer_id), queue_items.size(), packed_now.size(), total_cost,
+		str(tmeta["icon"]), str(tmeta["name"])
 	], "good")
 
 
@@ -4454,8 +5014,7 @@ func _rpc_req_sell_inventory_part(part_id: String) -> void:
 const RACK_NAME_MAX_LEN := 24
 
 
-## Anzeigename eines Racks: eigener Name oder „Rack N“.
-## Die interne ID (z. B. rack_2) wird nur in Debug-Builds angehängt.
+## Anzeigename eines Racks: eigener Name oder „Rack N“ (ohne interne Debug-IDs).
 func get_rack_display_name(rack_id: String) -> String:
 	var shown := ""
 	if racks.has(rack_id):
@@ -4463,8 +5022,6 @@ func get_rack_display_name(rack_id: String) -> String:
 	if shown.is_empty():
 		var num := rack_id.get_slice("_", rack_id.get_slice_count("_") - 1)
 		shown = ("Rack %s" % num) if num.is_valid_int() else rack_id
-	if OS.is_debug_build():
-		shown += " [%s]" % rack_id
 	return shown
 
 
@@ -4484,8 +5041,14 @@ func _rpc_req_rename_rack(rack_id: String, new_name: String) -> void:
 	if not racks.has(rack_id):
 		return
 	var peer_id := _get_sender_id()
+	if not SecurityGuard.check_rate_limit(peer_id, "rename", 6, 10.0):
+		return
 	var r: Dictionary = racks[rack_id]
-	var clean := _sanitize_rack_name(new_name.left(RACK_NAME_MAX_LEN * 4))
+	var filtered := SecurityGuard.sanitize_label(new_name, RACK_NAME_MAX_LEN, "")
+	if not new_name.strip_edges().is_empty() and filtered.is_empty():
+		_rpc_play_sfx.rpc_id(peer_id, "error")
+		return
+	var clean := _sanitize_rack_name(filtered.left(RACK_NAME_MAX_LEN * 4))
 	if clean == str(r.get("custom_name", "")):
 		return
 	var old_name := get_rack_display_name(rack_id)
@@ -4995,7 +5558,11 @@ func _rpc_sync_extinguisher_slot(slot: int) -> void:
 func _rpc_req_extinguish_slot(rack_id: String, slot_idx: int, amount: float) -> void:
 	if not multiplayer.is_server():
 		return
+	if not SecurityGuard.is_finite_float(amount):
+		return
 	var peer_id := _get_sender_id()
+	if not SecurityGuard.check_rate_limit(peer_id, "extinguish", 25, 2.0):
+		return
 	if not is_player_holding_extinguisher(peer_id) or not racks.has(rack_id):
 		return
 	var slots: Array = racks[rack_id]["slots"]
@@ -5022,7 +5589,11 @@ func _rpc_req_extinguish_slot(rack_id: String, slot_idx: int, amount: float) -> 
 func _rpc_req_repair_slot(rack_id: String, slot_idx: int, amount: float) -> void:
 	if not multiplayer.is_server():
 		return
+	if not SecurityGuard.is_finite_float(amount):
+		return
 	var peer_id := _get_sender_id()
+	if not SecurityGuard.check_rate_limit(peer_id, "repair", 25, 2.0):
+		return
 	if not racks.has(rack_id):
 		return
 	var slots: Array = racks[rack_id]["slots"]
@@ -5166,6 +5737,11 @@ func _rpc_req_expand_room() -> void:
 	if not multiplayer.is_server():
 		return
 	var peer_id := _get_sender_id()
+	if not SecurityGuard.check_rate_limit(peer_id, "expand", 4, 5.0):
+		return
+	if not is_destructive_action_allowed(peer_id):
+		_deny_destructive_action(peer_id, "die Halle ausbauen")
+		return
 	if room_level >= 2:
 		return
 	var cost := float(HALL_B_COST if room_level == 0 else HALL_C_COST)
@@ -5236,6 +5812,8 @@ func _rpc_req_grab_cart(cart_id: String) -> void:
 @rpc("any_peer", "call_local", "reliable")
 func _rpc_req_release_cart(pos: Vector3, rot_y: float) -> void:
 	if not multiplayer.is_server():
+		return
+	if not SecurityGuard.is_finite_vec3(pos) or not SecurityGuard.is_finite_float(rot_y):
 		return
 	var peer_id := _get_sender_id()
 	var cart := get_player_pushed_cart(peer_id)
@@ -5312,7 +5890,7 @@ func _rpc_req_unload_cart_to_hands(cart_id: String) -> void:
 		return
 	var item_type := str(items.pop_back())
 	var crate_id := _alloc_id("crate")
-	crates[crate_id] = {"id": crate_id, "item_type": item_type, "pos": Vector3.ZERO, "held_by": peer_id}
+	crates[crate_id] = {"id": crate_id, "item_type": item_type, "pos": Vector3.ZERO, "held_by": peer_id, "held_slot": get_active_slot(peer_id)}
 	_broadcast_carts()
 	_broadcast_crates()
 	_rpc_play_sfx.rpc_id(peer_id, "pickup")
@@ -5662,7 +6240,7 @@ func _install_power_fuse(peer_id: int) -> void:
 	power_fuse_stock = 0
 	power_tier += 1
 	var cid := _alloc_id("crate")
-	crates[cid] = {"id": cid, "item_type": OLD_FUSE_ITEM, "pos": Vector3.ZERO, "held_by": peer_id}
+	crates[cid] = {"id": cid, "item_type": OLD_FUSE_ITEM, "pos": Vector3.ZERO, "held_by": peer_id, "held_slot": get_active_slot(peer_id)}
 	_recalculate_networks_and_metrics()
 	_broadcast_fuses()
 	_broadcast_crates()
@@ -5840,3 +6418,586 @@ func _rpc_sync_sim_tick(packet: Dictionary) -> void:
 				ups_units[uid]["charge"] = float(usync[uid]["charge"])
 				ups_units[uid]["discharging"] = bool(usync[uid]["discharging"])
 	state_updated.emit()
+
+
+# ==============================================================================
+# WERKSTATT-, LAGERREGAL-, SCHACHT- & WARENKORB-SYSTEM (v1.1 Overhaul)
+# ==============================================================================
+
+func is_repair_kit(item_type: String) -> bool:
+	return ITEM_CATALOG.has(item_type) and str(ITEM_CATALOG[item_type].get("category", "")) == "repair_kit"
+
+
+func get_repair_kit_cat(item_type: String) -> String:
+	if not is_repair_kit(item_type):
+		return ""
+	return str(ITEM_CATALOG[item_type].get("kit_cat", ""))
+
+
+func get_repair_kit_id_for_cat(cat: String) -> String:
+	for kid in REPAIR_KIT_ORDER:
+		if str(ITEM_CATALOG[kid].get("kit_cat", "")) == cat:
+			return kid
+	return ""
+
+
+func get_crate_display_label(crate: Dictionary) -> String:
+	var pcount := maxi(1, int(crate.get("pack_count", 1)))
+	var suffix := (" (%d×)" % pcount) if pcount > 1 else ""
+	var custom_lbl := str(crate.get("label", ""))
+	if not custom_lbl.is_empty():
+		return custom_lbl + suffix
+	var itype := str(crate.get("item_type", ""))
+	if itype == "server_tray":
+		var td: Dictionary = crate.get("tray_data", {}) as Dictionary
+		var mb_id := str(td.get("mainboard_id", ""))
+		var mb_name := str(ITEM_CATALOG.get(mb_id, {}).get("name", "Server"))
+		var st := str(td.get("state", "ok"))
+		if st == "crashed":
+			return "%s (DEFEKT)" % mb_name
+		return "%s (BEREIT)" % mb_name
+	if ITEM_CATALOG.has(itype):
+		var short_l := str(ITEM_CATALOG[itype].get("short_label", ""))
+		if not short_l.is_empty():
+			return short_l + suffix
+		return str(ITEM_CATALOG[itype]["name"]) + suffix
+	return itype + suffix
+
+
+func calculate_slot_build_price(mainboard_id: String, comps: Dictionary) -> int:
+	if not ITEM_CATALOG.has(mainboard_id):
+		return 0
+	var total := int(ITEM_CATALOG[mainboard_id].get("price", 0))
+	for cat_v in COMPONENT_ORDER:
+		var cat := str(cat_v)
+		var pid := str(comps.get(cat, ""))
+		if pid.is_empty():
+			continue
+		var pd := HardwareCatalog.get_part(cat, pid)
+		if not pd.is_empty():
+			total += maxi(0, int(pd.get("cost", 0)))
+	return total
+
+
+func _ensure_starter_shelf_kits() -> void:
+	if not storage_shelf_slots.is_empty():
+		return
+	var starters: Array[String] = ["kit_ram", "kit_cpu", "kit_cooling", "kit_psu"]
+	for i in range(starters.size()):
+		var kid := starters[i]
+		storage_shelf_slots["shelf_0:%d" % i] = {
+			"id": _alloc_id("crate"),
+			"item_type": kid,
+			"label": str(ITEM_CATALOG[kid].get("short_label", kid)),
+			"pos": Vector3.ZERO,
+			"held_by": 0,
+		}
+
+
+## --- Gemeinsamer Warenkorb (Rack-Konfigurator + PC-Shop) ---
+
+func cart_add_entry(kind: String, id: String, cat: String, display_name: String, price: int, amount: int = 1) -> void:
+	var add_n := maxi(1, amount)
+	var key := "%s:%s" % [kind, id]
+	for item in shopping_cart:
+		if str(item.get("key", "")) == key:
+			item["qty"] = mini(int(item.get("qty", 1)) + add_n, 24)
+			cart_changed.emit()
+			return
+	shopping_cart.append({
+		"key": key,
+		"kind": kind,
+		"id": id,
+		"cat": cat,
+		"name": display_name,
+		"price": price,
+		"qty": mini(add_n, 24),
+	})
+	cart_changed.emit()
+
+
+func cart_add_slot_build(rack_id: String, slot_idx: int, mainboard_id: String, comps: Dictionary) -> bool:
+	if not ITEM_CATALOG.has(mainboard_id):
+		return false
+	var rlabel := get_rack_display_name(rack_id)
+	var key := "slot_build:%s:%d" % [rack_id, slot_idx]
+	var price := calculate_slot_build_price(mainboard_id, comps)
+	var mb_name := str(ITEM_CATALOG[mainboard_id]["name"])
+	var entry := {
+		"key": key,
+		"kind": "slot_build",
+		"id": mainboard_id,
+		"cat": "slot_build",
+		"rack_id": rack_id,
+		"slot_idx": slot_idx,
+		"rack_label": rlabel,
+		"mainboard_id": mainboard_id,
+		"components": comps.duplicate(true),
+		"name": "%s · Slot %d (%s)" % [rlabel, slot_idx + 1, mb_name],
+		"price": price,
+		"qty": 1,
+	}
+	for i in range(shopping_cart.size()):
+		if str(shopping_cart[i].get("key", "")) == key:
+			shopping_cart[i] = entry
+			cart_changed.emit()
+			return true
+	shopping_cart.append(entry)
+	cart_changed.emit()
+	return true
+
+
+func cart_remove_entry(key: String) -> void:
+	for i in range(shopping_cart.size() - 1, -1, -1):
+		if str(shopping_cart[i].get("key", "")) == key:
+			shopping_cart.remove_at(i)
+			cart_changed.emit()
+			return
+
+
+func cart_change_qty(key: String, delta: int) -> void:
+	for i in range(shopping_cart.size() - 1, -1, -1):
+		if str(shopping_cart[i].get("key", "")) == key:
+			if str(shopping_cart[i].get("kind", "")) == "slot_build":
+				if delta < 0:
+					shopping_cart.remove_at(i)
+					cart_changed.emit()
+				return
+			var nq := int(shopping_cart[i].get("qty", 1)) + delta
+			if nq <= 0:
+				shopping_cart.remove_at(i)
+			else:
+				shopping_cart[i]["qty"] = mini(nq, 24)
+			cart_changed.emit()
+			return
+
+
+func cart_clear() -> void:
+	shopping_cart.clear()
+	cart_changed.emit()
+
+
+func get_cart_count() -> int:
+	var n := 0
+	for item in shopping_cart:
+		n += int(item.get("qty", 1))
+	return n
+
+
+func get_cart_total() -> int:
+	var t := 0
+	for item in shopping_cart:
+		t += int(item.get("price", 0)) * int(item.get("qty", 1))
+	return t
+
+
+## --- Ausfahrbare Rack-Schächte (Teleskopschienen) ---
+
+func is_slot_extended(rack_id: String, slot_idx: int) -> bool:
+	return is_shared_panel_open(rack_id, "slot_%d" % slot_idx)
+
+
+func request_toggle_slot_extended(rack_id: String, slot_idx: int) -> void:
+	request_toggle_panel(rack_id, "slot_%d" % slot_idx)
+
+
+## --- Server-Schlitten aus ausgefahrenem Schacht ziehen & einsetzen ---
+
+func request_pull_server_tray(rack_id: String, slot_idx: int) -> void:
+	_rpc_req_pull_server_tray.rpc_id(1, rack_id, slot_idx)
+
+
+func request_insert_server_tray(rack_id: String, slot_idx: int) -> void:
+	_rpc_req_insert_server_tray.rpc_id(1, rack_id, slot_idx)
+
+
+@rpc("any_peer", "call_local", "reliable")
+func _rpc_req_pull_server_tray(rack_id: String, slot_idx: int) -> void:
+	if not multiplayer.is_server():
+		return
+	var peer_id := _get_sender_id()
+	if is_player_holding_anything(peer_id) or not racks.has(rack_id):
+		_rpc_play_sfx.rpc_id(peer_id, "error")
+		if is_player_holding_anything(peer_id):
+			post_event("Hände voll! Erst Item mit [Q] ablegen oder freien Slot (1–4) wählen.", "warn")
+		return
+	var slots: Array = racks[rack_id]["slots"]
+	if slot_idx < 0 or slot_idx >= slots.size():
+		return
+	var slot: Dictionary = slots[slot_idx]
+	var itype := str(slot.get("item_type", ""))
+	if itype == "" or str(slot.get("state", "")) == "burning":
+		_rpc_play_sfx.rpc_id(peer_id, "error")
+		return
+	var rlabel := get_rack_display_name(rack_id)
+	var st := str(slot.get("state", "ok"))
+	var cid := _alloc_id("crate")
+	crates[cid] = {
+		"id": cid,
+		"item_type": "server_tray",
+		"pos": Vector3.ZERO,
+		"held_by": peer_id,
+		"held_slot": get_active_slot(peer_id),
+		"label": "%s · Slot %d (%s)" % [rlabel, slot_idx + 1, "DEFEKT" if st == "crashed" else "OK"],
+		"tray_data": {
+			"mainboard_id": itype,
+			"components": (slot.get("components", {}) as Dictionary).duplicate(true),
+			"state": st,
+			"faulty_part": str(slot.get("faulty_part", "")),
+			"diagnosed": bool(slot.get("diagnosed", false)),
+			"source_rack_id": rack_id,
+			"source_slot_idx": slot_idx,
+		},
+	}
+	slots[slot_idx] = _make_empty_slot()
+	_recalculate_networks_and_metrics()
+	_broadcast_racks()
+	_broadcast_crates()
+	_broadcast_sim_tick()
+	_rpc_play_sfx.rpc_id(peer_id, "pickup")
+	post_event_f("🔧 %s hat den Server-Schlitten aus %s · Slot %d herausgezogen.", [
+		NetworkManager.get_player_name(peer_id), rlabel, slot_idx + 1
+	], "info")
+
+
+@rpc("any_peer", "call_local", "reliable")
+func _rpc_req_insert_server_tray(rack_id: String, slot_idx: int) -> void:
+	if not multiplayer.is_server():
+		return
+	var peer_id := _get_sender_id()
+	var held := get_player_held_crate(peer_id)
+	if held.is_empty() or str(held.get("item_type", "")) != "server_tray":
+		_rpc_play_sfx.rpc_id(peer_id, "error")
+		return
+	if not racks.has(rack_id):
+		return
+	var slots: Array = racks[rack_id]["slots"]
+	if slot_idx < 0 or slot_idx >= slots.size():
+		return
+	if str(slots[slot_idx].get("item_type", "")) != "":
+		_rpc_play_sfx.rpc_id(peer_id, "error")
+		return
+	var td: Dictionary = held.get("tray_data", {}) as Dictionary
+	var mb_id := str(td.get("mainboard_id", "web_server"))
+	if not ITEM_CATALOG.has(mb_id):
+		mb_id = "web_server"
+	var st := str(td.get("state", "ok"))
+	slots[slot_idx] = {
+		"item_type": mb_id,
+		"state": st,
+		"faulty_part": str(td.get("faulty_part", "")) if st == "crashed" else "",
+		"diagnosed": bool(td.get("diagnosed", false)) if st == "crashed" else false,
+		"repair_progress": 0.0,
+		"fire_level": 0.0,
+		"components": (td.get("components", _default_components(mb_id)) as Dictionary).duplicate(true),
+	}
+	crates.erase(str(held["id"]))
+	_recalculate_networks_and_metrics()
+	_broadcast_crates()
+	_broadcast_racks()
+	_broadcast_sim_tick()
+	_rpc_play_sfx.rpc("snap")
+	post_event_f("✅ %s hat den Server in %s · Slot %d eingesetzt!", [
+		NetworkManager.get_player_name(peer_id), get_rack_display_name(rack_id), slot_idx + 1
+	], "good")
+
+
+## --- Funktionales 3D-Lagerregal ---
+
+func request_shelf_interact(shelf_id: String, slot_idx: int) -> void:
+	_rpc_req_shelf_interact.rpc_id(1, shelf_id, slot_idx)
+
+
+@rpc("any_peer", "call_local", "reliable")
+func _rpc_req_shelf_interact(shelf_id: String, slot_idx: int) -> void:
+	if not multiplayer.is_server():
+		return
+	if slot_idx < 0 or slot_idx >= STORAGE_SHELF_SLOTS:
+		return
+	var peer_id := _get_sender_id()
+	var key := "%s:%d" % [shelf_id, slot_idx]
+	var held := get_player_held_crate(peer_id)
+	if not held.is_empty():
+		if storage_shelf_slots.has(key):
+			_rpc_play_sfx.rpc_id(peer_id, "error")
+			return
+		var stored := held.duplicate(true)
+		stored["held_by"] = 0
+		stored["pos"] = Vector3.ZERO
+		crates.erase(str(held["id"]))
+		storage_shelf_slots[key] = stored
+		_broadcast_crates()
+		_broadcast_shelf()
+		_rpc_play_sfx.rpc_id(peer_id, "place")
+	else:
+		if not storage_shelf_slots.has(key) or is_player_holding_anything(peer_id):
+			return
+		var taken: Dictionary = (storage_shelf_slots[key] as Dictionary).duplicate(true)
+		storage_shelf_slots.erase(key)
+		var cid := str(taken.get("id", ""))
+		if cid.is_empty() or crates.has(cid):
+			cid = _alloc_id("crate")
+			taken["id"] = cid
+		taken["held_by"] = peer_id
+		taken["held_slot"] = get_active_slot(peer_id)
+		crates[cid] = taken
+		_broadcast_crates()
+		_broadcast_shelf()
+		_rpc_play_sfx.rpc_id(peer_id, "pickup")
+
+
+func _broadcast_shelf() -> void:
+	if not multiplayer.is_server():
+		return
+	_rpc_sync_shelf.rpc(storage_shelf_slots.duplicate(true))
+
+
+@rpc("authority", "call_local", "reliable")
+func _rpc_sync_shelf(data: Dictionary) -> void:
+	storage_shelf_slots = data.duplicate(true)
+	shelf_changed.emit()
+
+
+## Zählt verfügbare Reparatur-Kits für eine Kategorie (Hand + Lagerregal + Boden, inkl. Mengen-Kisten!).
+func count_repair_kits(cat: String) -> int:
+	var kid := get_repair_kit_id_for_cat(cat)
+	if kid.is_empty():
+		return 0
+	var total := 0
+	for c in crates.values():
+		var cd := c as Dictionary
+		if str(cd.get("item_type", "")) == kid:
+			total += maxi(1, int(cd.get("pack_count", 1)))
+	for s in storage_shelf_slots.values():
+		var sd := s as Dictionary
+		if str(sd.get("item_type", "")) == kid:
+			total += maxi(1, int(sd.get("pack_count", 1)))
+	return total
+
+
+func _consume_repair_kit_server(peer_id: int, cat: String) -> bool:
+	var kid := get_repair_kit_id_for_cat(cat)
+	if kid.is_empty():
+		return false
+	# 1. Zuerst in der Hand des Spielers prüfen (Mengen-Kiste zieht nur 1 Stück ab!)
+	var held := get_player_held_crate(peer_id)
+	if not held.is_empty() and str(held.get("item_type", "")) == kid:
+		var hcid := str(held["id"])
+		var hp := maxi(1, int(crates[hcid].get("pack_count", 1)))
+		if hp > 1:
+			crates[hcid]["pack_count"] = hp - 1
+		else:
+			crates.erase(hcid)
+		_broadcast_crates()
+		return true
+	# 2. Danach im Lagerregal
+	for key in storage_shelf_slots.keys():
+		var sd: Dictionary = storage_shelf_slots[key] as Dictionary
+		if str(sd.get("item_type", "")) == kid:
+			var sp := maxi(1, int(sd.get("pack_count", 1)))
+			if sp > 1:
+				sd["pack_count"] = sp - 1
+			else:
+				storage_shelf_slots.erase(key)
+			_broadcast_shelf()
+			return true
+	# 3. Zuletzt freiliegende Kit-Koffer / Mengen-Kisten am Boden
+	for cid in crates.keys():
+		var c: Dictionary = crates[cid]
+		if int(c.get("held_by", 0)) == 0 and str(c.get("item_type", "")) == kid:
+			var gp := maxi(1, int(c.get("pack_count", 1)))
+			if gp > 1:
+				c["pack_count"] = gp - 1
+			else:
+				crates.erase(cid)
+			_broadcast_crates()
+			return true
+	return false
+
+
+## --- Interaktive 3D-Werkbank (Zusammenbau & Reparatur) ---
+
+func request_workbench_place() -> void:
+	_rpc_req_workbench_place.rpc_id(1)
+
+
+func request_workbench_unpack() -> void:
+	_rpc_req_workbench_unpack.rpc_id(1)
+
+
+func request_workbench_pickup() -> void:
+	_rpc_req_workbench_pickup.rpc_id(1)
+
+
+func request_workbench_complete_assembly() -> void:
+	_rpc_req_workbench_complete_assembly.rpc_id(1)
+
+
+func request_workbench_complete_repair(cat: String) -> void:
+	_rpc_req_workbench_complete_repair.rpc_id(1, cat)
+
+
+@rpc("any_peer", "call_local", "reliable")
+func _rpc_req_workbench_place() -> void:
+	if not multiplayer.is_server():
+		return
+	var peer_id := _get_sender_id()
+	if not workbench_state.is_empty():
+		_rpc_play_sfx.rpc_id(peer_id, "error")
+		return
+	var held := get_player_held_crate(peer_id)
+	if held.is_empty():
+		return
+	var itype := str(held.get("item_type", ""))
+	if itype == "slot_build_box":
+		var bd: Dictionary = (held.get("build_data", {}) as Dictionary).duplicate(true)
+		workbench_state = {
+			"mode": "build_box",
+			"label": str(held.get("label", "Server-Bausatz")),
+			"rack_id": str(bd.get("rack_id", "")),
+			"slot_idx": int(bd.get("slot_idx", 0)),
+			"rack_label": str(bd.get("rack_label", "Rack")),
+			"mainboard_id": str(bd.get("mainboard_id", "web_server")),
+			"components": (bd.get("components", {}) as Dictionary).duplicate(true),
+		}
+		crates.erase(str(held["id"]))
+		_broadcast_crates()
+		_broadcast_workbench()
+		_rpc_play_sfx.rpc_id(peer_id, "place")
+	elif itype == "server_tray":
+		var td: Dictionary = (held.get("tray_data", {}) as Dictionary).duplicate(true)
+		var is_crashed := str(td.get("state", "ok")) == "crashed"
+		workbench_state = {
+			"mode": "repair" if is_crashed else "ready_tray",
+			"label": str(held.get("label", "Server-Schlitten")),
+			"rack_id": str(td.get("source_rack_id", "")),
+			"slot_idx": int(td.get("source_slot_idx", 0)),
+			"mainboard_id": str(td.get("mainboard_id", "web_server")),
+			"components": (td.get("components", {}) as Dictionary).duplicate(true),
+			"state": str(td.get("state", "ok")),
+			"faulty_part": str(td.get("faulty_part", "")),
+			"diagnosed": bool(td.get("diagnosed", false)),
+		}
+		crates.erase(str(held["id"]))
+		_broadcast_crates()
+		_broadcast_workbench()
+		_rpc_play_sfx.rpc_id(peer_id, "place")
+	else:
+		_rpc_play_sfx.rpc_id(peer_id, "error")
+
+
+@rpc("any_peer", "call_local", "reliable")
+func _rpc_req_workbench_unpack() -> void:
+	if not multiplayer.is_server():
+		return
+	if str(workbench_state.get("mode", "")) != "build_box":
+		return
+	workbench_state["mode"] = "assembly"
+	_broadcast_workbench()
+	_rpc_play_sfx.rpc("pickup")
+
+
+@rpc("any_peer", "call_local", "reliable")
+func _rpc_req_workbench_complete_assembly() -> void:
+	if not multiplayer.is_server():
+		return
+	if str(workbench_state.get("mode", "")) != "assembly":
+		return
+	var peer_id := _get_sender_id()
+	workbench_state["mode"] = "ready_tray"
+	workbench_state["state"] = "ok"
+	workbench_state["faulty_part"] = ""
+	workbench_state["diagnosed"] = false
+	_broadcast_workbench()
+	_rpc_play_sfx.rpc("snap")
+	post_event_f("🛠️ %s hat %s fertig zusammengebaut! Jetzt ins ausgefahrene Rack einsetzen.", [
+		NetworkManager.get_player_name(peer_id), str(workbench_state.get("label", "Server"))
+	], "good")
+
+
+@rpc("any_peer", "call_local", "reliable")
+func _rpc_req_workbench_complete_repair(cat: String) -> void:
+	if not multiplayer.is_server():
+		return
+	var peer_id := _get_sender_id()
+	if str(workbench_state.get("mode", "")) != "repair":
+		return
+	var target_cat := str(workbench_state.get("faulty_part", ""))
+	if target_cat.is_empty():
+		target_cat = cat if not cat.is_empty() else "mainboard"
+	if not _consume_repair_kit_server(peer_id, target_cat):
+		_rpc_play_sfx.rpc_id(peer_id, "error")
+		return
+	workbench_state["mode"] = "ready_tray"
+	workbench_state["state"] = "ok"
+	workbench_state["faulty_part"] = ""
+	workbench_state["diagnosed"] = false
+	_broadcast_workbench()
+	_rpc_play_sfx.rpc("snap")
+	post_event_f("✅ %s hat %s an der Werkbank repariert! Jetzt zurück ins Rack schieben.", [
+		NetworkManager.get_player_name(peer_id), str(workbench_state.get("label", "Server"))
+	], "good")
+
+
+@rpc("any_peer", "call_local", "reliable")
+func _rpc_req_workbench_pickup() -> void:
+	if not multiplayer.is_server():
+		return
+	var peer_id := _get_sender_id()
+	if workbench_state.is_empty() or is_player_holding_anything(peer_id):
+		_rpc_play_sfx.rpc_id(peer_id, "error")
+		return
+	var mode := str(workbench_state.get("mode", ""))
+	var cid := _alloc_id("crate")
+	if mode == "build_box":
+		crates[cid] = {
+			"id": cid,
+			"item_type": "slot_build_box",
+			"pos": Vector3.ZERO,
+			"held_by": peer_id,
+			"held_slot": get_active_slot(peer_id),
+			"label": str(workbench_state.get("label", "Server-Bausatz")),
+			"build_data": {
+				"rack_id": str(workbench_state.get("rack_id", "")),
+				"slot_idx": int(workbench_state.get("slot_idx", 0)),
+				"rack_label": str(workbench_state.get("rack_label", "Rack")),
+				"mainboard_id": str(workbench_state.get("mainboard_id", "web_server")),
+				"components": (workbench_state.get("components", {}) as Dictionary).duplicate(true),
+			},
+		}
+	else:
+		var st := str(workbench_state.get("state", "ok"))
+		var rlbl := str(workbench_state.get("label", "Server"))
+		crates[cid] = {
+			"id": cid,
+			"item_type": "server_tray",
+			"pos": Vector3.ZERO,
+			"held_by": peer_id,
+			"held_slot": get_active_slot(peer_id),
+			"label": rlbl,
+			"tray_data": {
+				"mainboard_id": str(workbench_state.get("mainboard_id", "web_server")),
+				"components": (workbench_state.get("components", {}) as Dictionary).duplicate(true),
+				"state": st,
+				"faulty_part": str(workbench_state.get("faulty_part", "")),
+				"diagnosed": bool(workbench_state.get("diagnosed", false)),
+				"source_rack_id": str(workbench_state.get("rack_id", "")),
+				"source_slot_idx": int(workbench_state.get("slot_idx", 0)),
+			},
+		}
+	workbench_state.clear()
+	_broadcast_workbench()
+	_broadcast_crates()
+	_rpc_play_sfx.rpc_id(peer_id, "pickup")
+
+
+func _broadcast_workbench() -> void:
+	if not multiplayer.is_server():
+		return
+	_rpc_sync_workbench.rpc(workbench_state.duplicate(true))
+
+
+@rpc("authority", "call_local", "reliable")
+func _rpc_sync_workbench(data: Dictionary) -> void:
+	workbench_state = data.duplicate(true)
+	workbench_changed.emit()

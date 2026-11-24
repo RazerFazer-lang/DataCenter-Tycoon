@@ -1,78 +1,98 @@
 {
-  "version": "1.0.5",
-  "codename": "v1.0.5 Halle-C-Modell",
-  "release_date": "2026-11-22",
+  "version": "2.1.0",
+  "launcher_version": "2.1.0",
+  "codename": "v2.1.0 AAA-Handling, 3-Stufen-Lieferflotte & Mengen-Kisten",
+  "release_date": "2026-11-23",
   "changelog": [
     {
+      "version": "v2.1.0",
+      "date": "2026-11-23",
+      "title": "Mega-Update 2.1: 3-Stufen-Lieferflotte, 6er-Mengen-Kisten, AAA-Halte-/Platzier-System & 6+ Gameplay-Fixes",
+      "items": [
+        "[NEU] 3 Liefer-Kategorien mit wachsender Flotte & Personal: Stufe 1 Express-Sprinter (1 Fahrer, kleine Bestellungen), Stufe 2 7,5t-Kastenwagen (2 Mitarbeiter + Ausklapp-Rampe & parallele Sackkarren) und Stufe 3 18t-Schwerlast-LKW (3 Logistiker + Hydraulik-Ladebordwand & 6 Räder).",
+        "[NEU] Mengen-Kisten (bis 6× pro Box): Mehrfach bestellte Reparatur-Kits und Module werden automatisch in robuste 6er-Mengen-Kisten gepackt, im PC-Shop per 1-Klick „+ 6er-Kiste“ bestellbar, im Lagerregal stapelbar und einzeln verbrauchbar.",
+        "[NEU] Lieferflächen-Limit (16 Plätze): Die Einfahrt hat eine feste Stellplatz-Kapazität inkl. Live-Anzeige über dem Tor und im PC-Warenkorb, damit Bestellungen nicht unendlich übereinander landen.",
+        "[NEU] Triple-A Halte- & Platzier-System: Realistische 3D-Ego-Hände (zweihändig für Kisten/Server/Racks, einhändig für Kits/Kabel) mit Maus-Trägheit & Lauf-Bob sowie echtem 3D-Fresnel-/Scanline-Hologramm (Mausrad/[R] drehen, Linksklick/[E] platzieren, [Q] präziser Boden-Ablegering).",
+        "[3D] Komplett neu modellierte Pro-Reparatur-Kits (Pelican/iFixit-Hartschale mit Sichtfenster, Werkzeug-Innenleben, Gummibumpern & Edelstahl-Verschlüssen), neue 6er-Mengen-Kiste, neuer 7,5t-Kastenwagen und 18t-Schwerlast-LKW.",
+        "[VERBESSERUNG] Rack-Slot-Interaktion überarbeitet (kein Vertippen mehr): Ausgefahrene Server-Schlitten haben jetzt eine Voll-Chassis-Hitbox, einen farbcodierten 3D-Hover-Rahmen, [Rechtsklick] zum Schacht-Fahren ohne Fallenlassen und [F] direkt fürs Rack-Menü.",
+        "[VERBESSERUNG] Lagerregal komplett überarbeitet: Blockierende Wand entfernt, großzügige vordere Fach-Hitboxen sowie leuchtender 3D-Hover-Rahmen + Hologramm-Vorschau beim Ein- & Auslagern.",
+        "[AUDIO] Realistische Schrittgeräusche (6 Beton-Varianten mit Raumreflexion) und überarbeiteter Feuerlöscher-Sound (Ventil-Zischen, Druckrauschen & Nachklang).",
+        "[FIX] Gehaltene Items verschwinden beim Entfernen/Verkaufen von Racks oder beim Ablegen vor einem Rack nicht mehr (sicherer Hindernis-Abstand, geschützte Hotbar-Slots & UI-Klicksperre).",
+        "[FIX] Rack-Kabel laufen sauber hinten heraus statt ins Rack hinein; neu gekaufte Racks nummerieren ab Rack 1; äußere Blindplatten/Steckdosen am Sicherungskasten entfernt; Sitz- & Trage-Posen von Spieler und Lieferpersonal anatomisch korrigiert."
+      ]
+    },
+    {
+      "version": "v2.0.0",
+      "date": "2026-11-23",
+      "title": "Mega-Update 2.0: Werkbank & Reparatur-Overhaul, realistische Mixamo-Charaktere, 3D-Skin-Editor & Launcher v2.0",
+      "items": [
+        "[NEU] Komplett überarbeitetes Reparatur- & Zusammenbau-System: Defekte Server-Schlitten am ausgefahrenen Rack-Schacht herausziehen, an der neuen IT-Werkbank mit Reparatur-Kits (RAM-Clips umklappen, Kühler lösen, CPU/GPU/Netzteil tauschen) reparieren und wieder einschieben.",
+        "[NEU] Neues funktionelles Werkstatt-Lagerregal: Gelieferte Bausatz-Kartons und Reparatur-Kits lassen sich sichtbar in 9 Regalfächern einlagern.",
+        "[NEU] Interaktiver 3D-Skin-Editor im Hauptmenü mit 360°-Live-Vorschau für Kleidung, Haut, Haare, Schuhe, Kopfbedeckung und Brillen.",
+        "[3D] Echte realistische Skeleton3D-Charaktere (Mixamo / MakeHuman) für Spieler und Lieferfahrer inkl. automatischer T-Pose-Korrektur, matter Stoff-PBR-Materialien und Live-Skin-Umfärbung.",
+        "[3D] Neuer 2K-PBR Cloud-Express-Lieferwagen, neue IT-Werkbank, 8 kaputte Hardware-3D-Modelle (inkl. Rauch-/Funken-VFX) und überarbeitetes Rack mit 3 rückseitigen Anschlüssen & Teleskopschächten.",
+        "[FIX] 3D-Hover-Picking in der Server-Vorschau behoben: Jedes Bauteil (RAM, CPU, GPU, SSD, Netzteil, Lüfter) wird wieder exakt erkannt statt überall „Mainboard“ anzuzeigen.",
+        "[FIX] Rack-Fronttür öffnet jetzt korrekt nach außen/vorne; Interaktion einheitlich auf [E] (Öffnen & Schließen) ohne Doppelbelegung auf [F]; schwebende gelbe Rack-Texte und [rack_2]-Suffix entfernt.",
+        "[LAUNCHER] Launcher v2.0.0: Neues App-Icon & 16:9-Key-Art, automatische Erkennung neuer Launcher-Versionen mit 1-Klick-Self-Updater sowie farbige Changelog-Tags & Filter-Chips."
+      ]
+    },
+    {
       "version": "v1.0.5",
+      "date": "2026-11-22",
       "title": "Halle-C-Sicherungskasten als 3D-Modell",
       "items": [
-        "Der Sicherungskasten in Halle C ist als eigenes 3D-Modell mit 14 Steckdosen und Abdeckungen gebaut. Gehäuse und Abdeckungen haben die Farben des Spiels.",
-        "Enthält alle Neuerungen aus v1.0.4."
+        "[3D] Der Sicherungskasten in Halle C ist als eigenes 3D-Modell mit 14 Steckdosen und Abdeckungen gebaut. Gehäuse und Abdeckungen haben die Farben des Spiels."
       ]
     },
     {
       "version": "v1.0.4",
-      "title": "Kabel-Overhaul, mehr Vermietungsdienste, Steckdosen in Halle C und aufgeräumtes Lager",
+      "date": "2026-11-21",
+      "title": "Kabel-Overhaul, 26 Vermietungsdienste, Steckdosen in Halle C & aufgeräumtes Lager",
       "items": [
-        "Kabel laufen rechtwinklig über den Boden, Strom- und Datenkabel auf getrennten Spuren, mit Kabelschellen und neuen Steckern (Kaltgeräte und RJ45).",
-        "Das Kabel in der Hand hängt wie ein echtes Seil und rastet am Port ein: grün heißt frei, rot heißt voll oder schon verbunden. Bei einem vollen Port bleibt das Kabel in der Hand.",
-        "Rechtsklick auf einen Port zieht ein Kabel ab und gibt dir das freie Ende zum Umstecken in die Hand.",
-        "Der Sicherungskasten in Halle C hat 14 einzelne Steckdosen. Gesperrte sind grau abgedeckt, und jedes Kabel steckt in einer eigenen Buchse.",
-        "Das Teile-Lager im Shop nutzt dieselben Karten wie der restliche Shop und ist nach Kategorien sortiert.",
-        "Vermietung: 26 statt 6 Dienste in 5 Kategorien, zum Beispiel E-Mail, VPS, CDN, Cloud-Gaming, Archiv und Medizin-Daten. Ein Rack kann mehrere Dienste gleichzeitig vermieten.",
-        "Der Ruf deiner Firma bestimmt, wie viele Kunden ein Dienst anlockt und wie schnell sie kommen.",
-        "Neue Mainboards kommen ohne Bauteile. Leere Steckplätze sind im offenen Server leer, und der Rack-Inspektor zeigt fehlende Pflichtteile an.",
-        "Enthält alle Neuerungen aus v1.0.3."
+        "[VERBESSERUNG] Kabel laufen rechtwinklig über den Boden, Strom- und Datenkabel auf getrennten Spuren, mit Kabelschellen und neuen Steckern (Kaltgeräte und RJ45).",
+        "[NEU] Das Kabel in der Hand hängt wie ein echtes Seil und rastet am Port ein (grün = frei, rot = voll/verbunden). Rechtsklick zieht Kabel zum Umstecken wieder ab.",
+        "[NEU] Vermietung: 26 statt 6 Dienste in 5 Kategorien (E-Mail, VPS, CDN, Cloud-Gaming, Archiv, Medizin-Daten). Ein Rack kann mehrere Dienste gleichzeitig vermieten.",
+        "[BALANCE] Der Ruf deiner Firma bestimmt, wie viele Kunden ein Dienst anlockt und wie schnell neue Anfragen eintreffen.",
+        "[VERBESSERUNG] Neue Mainboards kommen ohne Bauteile; leere Steckplätze sind im offenen Server sichtbar und fehlende Pflichtteile werden im Rack-Inspektor markiert.",
+        "[VERBESSERUNG] Der Sicherungskasten in Halle C hat 14 einzelne Steckdosen; das Teile-Lager im Shop ist nach Kategorien sortiert."
       ]
     },
     {
       "version": "v1.0.3",
-      "title": "Mitspieler sind für den Host wieder sichtbar",
+      "date": "2026-11-20",
+      "title": "Co-op Sichtbarkeit für den Host repariert",
       "items": [
-        "Wer ein Rechenzentrum startet, sieht jetzt alle Mitspieler. Vorher sahen nur die beigetretenen Spieler den Host, der Host aber niemanden.",
-        "Positionen von Mitspielern gehen beim Host nicht mehr verloren, auch wenn die Figur noch nicht angelegt war.",
-        "Enthält alle Neuerungen aus v1.0.2."
+        "[FIX] Wer ein Rechenzentrum hostet, sieht jetzt alle Mitspieler zuverlässig. Vorher sahen nur beigetretene Spieler den Host.",
+        "[FIX] Positionen von Mitspielern gehen beim Host nicht mehr verloren, auch wenn die Figur beim Beitritt noch nicht angelegt war."
       ]
     },
     {
       "version": "v1.0.2",
-      "title": "Blender-Modelle auch in der Spielversion",
+      "date": "2026-11-19",
+      "title": "Blender-Modelle auch im Standalone-Build",
       "items": [
-        "Der Sicherungskasten hat jetzt auch in der heruntergeladenen Version die Tür. Vorher erschien dort der alte Kasten ohne Tür.",
-        "Alle eigenen 3D-Modelle (Router, Sicherungen, Feuerlöscher und weitere) werden in der Spielversion genauso geladen wie beim Entwickeln.",
-        "Enthält alle Neuerungen aus v1.0.1."
+        "[FIX] Der Sicherungskasten hat jetzt auch in der exportierten Spielversion seine Tür.",
+        "[FIX] Alle eigenen 3D-Modelle (Router, Sicherungen, Feuerlöscher und weitere) werden im Export genauso geladen wie im Editor."
       ]
     },
     {
       "version": "v1.0.1",
+      "date": "2026-11-18",
       "title": "Neues Co-op-Spielermodell",
       "items": [
-        "Mitspieler erscheinen im Multiplayer als richtiger Techniker mit Arbeitsjacke, Reflexstreifen, Rucksack, Kappe, Schutzbrille und Stiefeln statt als Box-Figur.",
-        "Die Jacke und die Kappe haben die Farbe des jeweiligen Spielers. Laufen, Sitzen am PC, Tippen und Tragen sind wie bisher animiert.",
-        "Enthält alle Neuerungen aus v1.0.0."
+        "[3D] Mitspieler erscheinen im Multiplayer als Techniker mit Arbeitsjacke, Reflexstreifen, Rucksack, Kappe, Schutzbrille und Stiefeln.",
+        "[VERBESSERUNG] Jacke und Kappe übernehmen die Spielerfarbe; Laufen, Sitzen am PC, Tippen und Tragen sind animiert."
       ]
     },
     {
       "version": "v1.0.0",
-      "title": "Mega-Release v1.0: Einheitlicher AAA-Look, Warenkorb & Teile-Lager, 66 Hardware-Teile (DDR2–DDR5) & Live-Support",
+      "date": "2026-11-15",
+      "title": "Mega-Release v1.0: AAA-Look, Warenkorb & 66 Hardware-Teile (DDR2–DDR5)",
       "items": [
-        "Klarer Hardware-Kreislauf (PC-Shop + Warenkorb → Teile-Lager → Rack-Bau): Im Windows-PC-Shop bestellst du Racks, leere 1U/2U/4U Server-Chassis & 66 Einzelteile (DDR2–DDR5 RAM, CPUs, GPUs, HDD/SSD/NVMe, Kühlung, Netzteile 350–2400W) gesammelt über einen echten Warenkorb — der neue Cloud Express Sprinter liefert alles auf einmal!",
-        "Aufgeräumtes 3-Tab Rack-Overlay im einheitlichen Hauptmenü-Look (Schiefergrau & Gold): [Übersicht & Vermietung] | [Hardware-Bau aus dem Lager mit DDR2–DDR5 Filtern & Balken] | [Große 360° 3D-Vorschau]!",
-        "Keine künstlichen „CU“ mehr — 100% echte Werte überall: RAM in GB, Speicher in TB, Internet in Mbit/s & Gbit/s, Strom in Watt & kWh!",
-        "Aufgeräumter 4-App Windows-PC: [🛒 Shop + Warenkorb & Lager], [🎧 Support & Kunden (Tickets, Live-Anrufe, Großkunden-Verträge, AI & Firewall)], [🏗 Gebäude & Router] und [📊 Monitor].",
-        "Minimalistisches Ultra-Clean-HUD (oben nur Geld, Watt, Temp & Uhrzeit) + abhakbare 5-Schritte Start-Checkliste für die leere Start-Garage ($1.800), die nach Abschluss automatisch verschwindet!",
-        "Rack-Vermietung & Selbsteinschätzung (Webhosting, Game-Server, Cloud-Storage, Video-Streaming, Datenbank, KI) mit dynamisch wachsenden Usern, Live-Auslastungsbalken, Support-Tickets & VoIP-Kundenanrufen!",
-        "PC-Sitz- & Tastatur-Tipp-Animation (im Co-op für Freunde sitzend & tippend sichtbar) + echte mechanische Tastatur-, Telefon- & Stuhl-Sounds.",
-        "Neuer realistischer Sprinter-Lieferwagen („Cloud Express“) mit sichtbarem Cockpit, Außenspiegeln, EU-Kennzeichen, 5-Speichen-Felgen, Schiebetür-Schiene & Warnblinkern.",
-        "Überarbeitetes AAA-Hauptmenü mit offenem 3D-Rechenzentrum + animierter Loadingscreen + komplett knackfreie 44,1-kHz-Audio-Engine + reine 1-Hand-Steuerung ohne Chat."
-      ]
-    },
-    {
-      "version": "v0.5.0",
-      "title": "Forward+ HD Engine & Eigener Standalone-Launcher",
-      "items": [
-        "Godot 4 Forward+ Upgrade + eigener nativer Windows-Launcher (DataCenterLauncher.exe) mit GitHub-Download & Auto-Updater"
+        "[NEU] Kompletter Hardware-Kreislauf (PC-Shop + Warenkorb → Teile-Lager → Rack-Bau) mit 66 Einzelteilen (DDR2–DDR5 RAM, CPUs, GPUs, HDD/SSD/NVMe, Kühlung, Netzteile 350–2400W).",
+        "[VERBESSERUNG] Einheitliches 3-Tab Rack-Overlay (Schiefergrau & Gold), 4-App Windows-PC und minimalistisches Ultra-Clean-HUD mit 5-Schritte-Start-Checkliste.",
+        "[BALANCE] 100 % echte Hardware-Werte überall: RAM in GB, Speicher in TB, Internet in Mbit/s & Gbit/s, Strom in Watt & kWh.",
+        "[LAUNCHER] Eigener nativer Windows-Launcher (DataCenterLauncher.exe) mit GitHub-Download & Auto-Updater."
       ]
     }
   ]

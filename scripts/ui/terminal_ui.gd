@@ -134,6 +134,8 @@ func _ready() -> void:
 	GameState.inventory_changed.connect(_refresh_all)
 	GameState.fuses_changed.connect(_refresh_all)
 	GameState.accessories_changed.connect(_refresh_all)
+	GameState.cart_changed.connect(_refresh_all)
+	GameState.shelf_changed.connect(_refresh_all)
 	GameState.tickets_changed.connect(_refresh_all)
 	GameState.call_changed.connect(_refresh_call_popup)
 	FinanceManager.finance_changed.connect(_on_finance_changed)
@@ -662,65 +664,56 @@ func _refresh_call_popup() -> void:
 
 
 # ==============================================================================
-# SHOPPING CART HELPERS
+# SHOPPING CART HELPERS (geteilt über GameState.shopping_cart mit Rack-Konfigurator)
 # ==============================================================================
-func _cart_add(kind: String, id: String, cat: String, display_name: String, price: int) -> void:
-	var key := "%s:%s" % [kind, id]
-	for item in _cart:
-		var d: Dictionary = item
-		if str(d["key"]) == key:
-			d["qty"] = mini(20, int(d["qty"]) + 1)
-			SfxManager.play_typing_key(-11.0)
-			_manual_typing_pulse = 0.25
-			_refresh_all()
-			return
-	_cart.append({"key": key, "kind": kind, "id": id, "cat": cat, "name": display_name, "price": price, "qty": 1})
+func _cart_add(kind: String, id: String, cat: String, display_name: String, price: int, amount: int = 1) -> void:
+	GameState.cart_add_entry(kind, id, cat, display_name, price, amount)
 	SfxManager.play_typing_key(-11.0)
 	_manual_typing_pulse = 0.25
 	_refresh_all()
 
 
 func _cart_delta(key: String, delta_n: int) -> void:
-	for i in range(_cart.size()):
-		var d: Dictionary = _cart[i]
-		if str(d["key"]) == key:
-			var nq := int(d["qty"]) + delta_n
-			if nq <= 0:
-				_cart.remove_at(i)
-			else:
-				d["qty"] = mini(20, nq)
-			SfxManager.play("click", -12.0, 0.95)
-			_refresh_all()
-			return
+	GameState.cart_change_qty(key, delta_n)
+	SfxManager.play("click", -12.0, 0.95)
+	_refresh_all()
 
 
 func _get_cart_total() -> int:
-	var sum := 0
-	for item in _cart:
-		var d: Dictionary = item
-		sum += int(d["price"]) * int(d["qty"])
-	return sum
+	return GameState.get_cart_total()
 
 
 func _get_cart_item_count() -> int:
-	var n := 0
-	for item in _cart:
-		n += int((item as Dictionary)["qty"])
-	return n
+	return GameState.get_cart_count()
 
 
 func _checkout_cart() -> void:
-	if _cart.is_empty():
+	if GameState.shopping_cart.is_empty():
 		return
 	var total := _get_cart_total()
 	if GameState.money < float(total):
 		SfxManager.play("error", -8.0)
 		return
+	var preview := GameState.preview_cart_delivery(GameState.shopping_cart)
+	if int(preview["crates"]) > GameState.get_delivery_zone_free_slots():
+		SfxManager.play("error", -8.0)
+		return
 	var payload: Array = []
-	for item in _cart:
+	for item in GameState.shopping_cart:
 		var d: Dictionary = item
-		payload.append({"kind": str(d["kind"]), "id": str(d["id"]), "cat": str(d["cat"]), "qty": int(d["qty"])})
-	_cart.clear()
+		if str(d.get("kind", "")) == "slot_build":
+			payload.append({
+				"kind": "slot_build",
+				"rack_id": str(d.get("rack_id", "")),
+				"slot_idx": int(d.get("slot_idx", 0)),
+				"rack_label": str(d.get("rack_label", "Rack")),
+				"mainboard_id": str(d.get("mainboard_id", "")),
+				"components": (d.get("components", {}) as Dictionary).duplicate(true),
+				"qty": 1,
+			})
+		else:
+			payload.append({"kind": str(d["kind"]), "id": str(d["id"]), "cat": str(d["cat"]), "qty": int(d["qty"])})
+	GameState.cart_clear()
 	SfxManager.play_typing_key(-9.0)
 	GameState.request_checkout_cart(payload)
 	_refresh_all()
@@ -944,6 +937,19 @@ func _add_shop_item_card(list: VBoxContainer, opts: Dictionary) -> void:
 			on_buy.call()
 	)
 	buy_col.add_child(btn)
+	var on_buy_bulk: Callable = opts.get("on_buy_bulk", Callable())
+	if on_buy_bulk.is_valid():
+		var bbulk := Button.new()
+		bbulk.text = str(opts.get("bulk_text", tr("+ 6er-Kiste")))
+		bbulk.custom_minimum_size = Vector2(140, 26)
+		bbulk.disabled = is_disabled
+		bbulk.add_theme_font_size_override("font_size", 11)
+		_style_win_btn(bbulk, Color(0.14, 0.56, 0.36), Color(0.10, 0.44, 0.28), Color.WHITE)
+		bbulk.pressed.connect(func():
+			if on_buy_bulk.is_valid():
+				on_buy_bulk.call()
+		)
+		buy_col.add_child(bbulk)
 
 
 func _render_shop_app() -> void:
@@ -960,6 +966,7 @@ func _render_shop_app() -> void:
 
 	var tabs: Array = [
 		{"id": "chassis", "label": "Racks & Chassis"},
+		{"id": "kits", "label": "Reparatur-Kits"},
 		{"id": "infra", "label": "Klima & USV"},
 		{"id": "warehouse", "label": tr("Lager (%d)") % GameState.get_total_inventory_parts()},
 	]
@@ -1046,6 +1053,27 @@ func _render_shop_app() -> void:
 		_populate_physical_shop_list(left_list, ["rack", "rack_pro"])
 		_add_shop_section(left_list, tr("Netzwerk"), tr("Switches für mehr Netzwerk-Ports im Rack."))
 		_populate_physical_shop_list(left_list, ["net_switch"])
+	elif _shop_tab == "kits":
+		_add_shop_section(left_list, tr("Werkstatt-Spar-Bundle"), tr("Alle 7 Reparatur-Kits im Paket — Lieferung per Sprinter zum Einlagern im Regal."))
+		_populate_physical_shop_list(left_list, ["kit_bundle_all"])
+		_add_shop_section(left_list, tr("Einzelne Reparatur-Kits"), tr("Für Reparaturen an der 3D-Werkbank. Mehrere Kits gleicher Art kommen automatisch in platzsparenden 6er-Mengen-Kisten!"))
+		for kid in GameState.REPAIR_KIT_ORDER:
+			var kd: Dictionary = GameState.ITEM_CATALOG[kid]
+			var kcat := str(kd.get("kit_cat", ""))
+			var stock_n := GameState.count_repair_kits(kcat)
+			var cap_kid := str(kid)
+			var cap_kname := str(kd["name"])
+			var cap_kprice := int(kd["price"])
+			_add_shop_item_card(left_list, {
+				"title": cap_kname,
+				"desc": str(kd["desc"]),
+				"info": tr("Vorrat im Lager/Halle: %d Stück") % stock_n,
+				"color": kd["color"],
+				"price": cap_kprice,
+				"on_buy": func(): _cart_add("item", cap_kid, "repair_kit", cap_kname, cap_kprice, 1),
+				"on_buy_bulk": func(): _cart_add("item", cap_kid, "repair_kit", cap_kname, cap_kprice, GameState.BULK_PACK_MAX),
+				"bulk_text": tr("+ %der-Kiste ($%d)") % [GameState.BULK_PACK_MAX, cap_kprice * GameState.BULK_PACK_MAX],
+			})
 	elif _shop_tab == "infra":
 		_add_shop_section(left_list, tr("Kühlung"), tr("Hält die Raumtemperatur unter Kontrolle."))
 		_populate_physical_shop_list(left_list, ["cooler", "chiller", "indoor_unit"])
@@ -1086,33 +1114,46 @@ func _render_shop_app() -> void:
 	clist.add_theme_constant_override("separation", 5)
 	cscroll.add_child(clist)
 
-	if _cart.is_empty():
+	if GameState.shopping_cart.is_empty():
 		var ce := Label.new()
-		ce.text = tr("Dein Warenkorb ist leer.") + "\n\n" + tr("Sammle links Racks, Server-Chassis und Einzelteile (CPUs, DDR2–DDR5 RAM, GPUs…) und bestelle alles gemeinsam per Sprinter!")
+		ce.text = tr("Dein Warenkorb ist leer.") + "\n\n" + tr("Sammle links Racks & Reparatur-Kits oder konfiguriere am Rack einen Slot für den Warenkorb — alles kommt per Sprinter!")
 		ce.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 		ce.add_theme_font_size_override("font_size", 11.5)
 		ce.modulate = Color(0.42, 0.46, 0.54)
 		clist.add_child(ce)
 	else:
-		for item in _cart:
+		for item in GameState.shopping_cart:
 			var d: Dictionary = item
-			var row_c := _make_light_card(Color.WHITE, Color(0.84, 0.87, 0.91), 5, 8, 5)
+			var is_build := str(d.get("kind", "")) == "slot_build"
+			var row_c := _make_light_card(Color(0.95, 0.98, 1.0) if is_build else Color.WHITE, Color(0.45, 0.68, 0.92) if is_build else Color(0.84, 0.87, 0.91), 5, 8, 5)
 			clist.add_child(row_c)
 			var rv := VBoxContainer.new()
 			rv.add_theme_constant_override("separation", 3)
 			row_c.add_child(rv)
 			var nl := Label.new()
-			nl.text = tr(str(d["name"]))
+			nl.text = ("📦 " if is_build else "") + tr(str(d["name"]))
 			nl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 			nl.add_theme_font_size_override("font_size", 11.5)
-			nl.modulate = Color(0.12, 0.14, 0.18)
+			nl.modulate = Color(0.08, 0.24, 0.48) if is_build else Color(0.12, 0.14, 0.18)
 			rv.add_child(nl)
+			if is_build:
+				var sub_b := Label.new()
+				sub_b.text = tr("Bausatz-Karton → an der Werkbank zusammenbauen")
+				sub_b.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+				sub_b.add_theme_font_size_override("font_size", 10)
+				sub_b.modulate = Color(0.32, 0.44, 0.58)
+				rv.add_child(sub_b)
 
 			var brow := HBoxContainer.new()
 			brow.add_theme_constant_override("separation", 4)
 			rv.add_child(brow)
+			var qty_n := int(d["qty"])
+			var bulk_hint := ""
+			if str(d.get("kind", "")) == "item" and GameState.is_bulk_packable(str(d.get("id", ""))) and qty_n > 1:
+				var boxes := ceili(float(qty_n) / float(GameState.BULK_PACK_MAX))
+				bulk_hint = " (%d %s)" % [boxes, tr("Kiste") if boxes == 1 else tr("Kisten")]
 			var pl := Label.new()
-			pl.text = "%d×  •  $%d" % [int(d["qty"]), int(d["price"]) * int(d["qty"])]
+			pl.text = "%d×%s  •  $%d" % [qty_n, bulk_hint, int(d["price"]) * qty_n]
 			pl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 			pl.add_theme_font_size_override("font_size", 11)
 			pl.modulate = Color(0.16, 0.46, 0.26)
@@ -1120,20 +1161,78 @@ func _render_shop_app() -> void:
 
 			var cap_k := str(d["key"])
 			var bm := Button.new()
-			bm.text = "−"
+			bm.text = "✕" if is_build else "−"
 			bm.custom_minimum_size = Vector2(24, 22)
 			_style_win_btn(bm, Color(0.92, 0.93, 0.95), Color(0.76, 0.79, 0.84), Color(0.20, 0.22, 0.26))
 			bm.pressed.connect(func(): _cart_delta(cap_k, -1))
 			brow.add_child(bm)
 
-			var bp := Button.new()
-			bp.text = "+"
-			bp.custom_minimum_size = Vector2(24, 22)
-			_style_win_btn(bp, Color(0.92, 0.93, 0.95), Color(0.76, 0.79, 0.84), Color(0.20, 0.22, 0.26))
-			bp.pressed.connect(func(): _cart_delta(cap_k, 1))
-			brow.add_child(bp)
+			if not is_build:
+				var bp := Button.new()
+				bp.text = "+"
+				bp.custom_minimum_size = Vector2(24, 22)
+				_style_win_btn(bp, Color(0.92, 0.93, 0.95), Color(0.76, 0.79, 0.84), Color(0.20, 0.22, 0.26))
+				bp.pressed.connect(func(): _cart_delta(cap_k, 1))
+				brow.add_child(bp)
 
 	cv.add_child(HSeparator.new())
+	# Live-Anzeige für Liefer-Kategorie (Stufe 1/2/3) & Lieferflächen-Limit (max. 16 Plätze)
+	var delivery_preview := GameState.preview_cart_delivery(GameState.shopping_cart)
+	var cart_crates := int(delivery_preview["crates"])
+	var cart_tier := int(delivery_preview["tier"])
+	var used_zone := GameState.get_delivery_zone_used_slots()
+	var max_zone := GameState.DELIVERY_ZONE_MAX_CRATES
+	var over_limit := (used_zone + cart_crates) > max_zone
+
+	if not GameState.shopping_cart.is_empty():
+		var tmeta: Dictionary = GameState.DELIVERY_TIER_META.get(cart_tier, GameState.DELIVERY_TIER_META[1])
+		var tier_bg := Color(0.92, 0.96, 1.0) if cart_tier == 1 else (Color(1.0, 0.96, 0.88) if cart_tier == 2 else Color(0.96, 0.92, 1.0))
+		var tier_bd := Color(0.36, 0.64, 0.92) if cart_tier == 1 else (Color(0.88, 0.56, 0.14) if cart_tier == 2 else Color(0.58, 0.34, 0.88))
+		var tier_card := _make_light_card(tier_bg, tier_bd, 6, 8, 6)
+		cv.add_child(tier_card)
+		var tv := VBoxContainer.new()
+		tv.add_theme_constant_override("separation", 2)
+		tier_card.add_child(tv)
+		var tl1 := Label.new()
+		tl1.text = "%s Stufe %d: %s" % [str(tmeta["icon"]), cart_tier, str(tmeta["name"])]
+		tl1.add_theme_font_size_override("font_size", 12)
+		tl1.modulate = Color(0.10, 0.22, 0.42)
+		tv.add_child(tl1)
+		var tl2 := Label.new()
+		tl2.text = "%s · %d %s" % [str(tmeta["method"]), int(delivery_preview["total_packages"]), tr("Paket") if int(delivery_preview["total_packages"]) == 1 else tr("Pakete")]
+		tl2.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		tl2.add_theme_font_size_override("font_size", 10.5)
+		tl2.modulate = Color(0.28, 0.34, 0.44)
+		tv.add_child(tl2)
+
+	var zone_box := VBoxContainer.new()
+	zone_box.add_theme_constant_override("separation", 3)
+	cv.add_child(zone_box)
+	var zone_lbl := Label.new()
+	if cart_crates > 0:
+		zone_lbl.text = tr("Lieferfläche: %d + %d / %d Plätze") % [used_zone, cart_crates, max_zone]
+	else:
+		zone_lbl.text = tr("Lieferfläche: %d / %d Plätze belegt") % [used_zone, max_zone]
+	zone_lbl.add_theme_font_size_override("font_size", 11)
+	zone_lbl.modulate = Color(0.80, 0.14, 0.12) if over_limit else (Color(0.76, 0.48, 0.06) if used_zone + cart_crates >= max_zone - 3 else Color(0.22, 0.44, 0.28))
+	zone_box.add_child(zone_lbl)
+
+	var zpb := ProgressBar.new()
+	zpb.show_percentage = false
+	zpb.min_value = 0.0
+	zpb.max_value = float(max_zone)
+	zpb.value = minf(float(used_zone + cart_crates), float(max_zone))
+	zpb.custom_minimum_size = Vector2(0, 7)
+	var zbg := StyleBoxFlat.new()
+	zbg.bg_color = Color(0.86, 0.88, 0.92)
+	zbg.set_corner_radius_all(3)
+	var zfill := StyleBoxFlat.new()
+	zfill.bg_color = Color(0.86, 0.20, 0.18) if over_limit else (Color(0.92, 0.62, 0.12) if used_zone + cart_crates >= max_zone - 3 else Color(0.18, 0.68, 0.40))
+	zfill.set_corner_radius_all(3)
+	zpb.add_theme_stylebox_override("background", zbg)
+	zpb.add_theme_stylebox_override("fill", zfill)
+	zone_box.add_child(zpb)
+
 	var tot := _get_cart_total()
 	var tot_lbl := Label.new()
 	tot_lbl.text = tr("Gesamtsumme:  $%d") % tot
@@ -1142,9 +1241,14 @@ func _render_shop_app() -> void:
 	cv.add_child(tot_lbl)
 
 	var order_btn := Button.new()
-	order_btn.text = (" " + tr("Alles bestellen ($%d)") % tot) if not _cart.is_empty() else tr("Warenkorb leer")
+	if GameState.shopping_cart.is_empty():
+		order_btn.text = tr("Warenkorb leer")
+	elif over_limit:
+		order_btn.text = tr("Lieferfläche voll! (%d/%d)") % [used_zone + cart_crates, max_zone]
+	else:
+		order_btn.text = " " + tr("Alles bestellen ($%d)") % tot
 	order_btn.custom_minimum_size = Vector2(0, 40)
-	order_btn.disabled = _cart.is_empty() or GameState.money < float(tot)
+	order_btn.disabled = GameState.shopping_cart.is_empty() or GameState.money < float(tot) or over_limit
 	_style_win_btn(
 		order_btn,
 		Color(0.10, 0.48, 0.84) if not order_btn.disabled else Color(0.84, 0.86, 0.89),
@@ -1154,14 +1258,14 @@ func _render_shop_app() -> void:
 	order_btn.pressed.connect(_checkout_cart)
 	cv.add_child(order_btn)
 
-	if not _cart.is_empty():
+	if not GameState.shopping_cart.is_empty():
 		var clr_btn := Button.new()
 		clr_btn.text = "Warenkorb leeren"
 		clr_btn.custom_minimum_size = Vector2(0, 26)
 		clr_btn.add_theme_font_size_override("font_size", 11)
 		_style_win_btn(clr_btn, Color(0.92, 0.93, 0.95), Color(0.78, 0.81, 0.86), Color(0.26, 0.28, 0.34))
 		clr_btn.pressed.connect(func():
-			_cart.clear()
+			GameState.cart_clear()
 			_refresh_all()
 		)
 		cv.add_child(clr_btn)
@@ -1175,13 +1279,17 @@ func _populate_physical_shop_list(parent: VBoxContainer, keys: Array) -> void:
 		var cat: Dictionary = GameState.ITEM_CATALOG[cap_it]
 		var cap_n := str(cat["name"])
 		var cap_p := int(cat["price"])
-		_add_shop_item_card(parent, {
+		var card_opts := {
 			"title": tr(cap_n),
 			"desc": tr(str(cat.get("desc", ""))),
 			"color": cat.get("color", Color(0.46, 0.50, 0.56)),
 			"price": cap_p,
-			"on_buy": func(): _cart_add("item", cap_it, "", cap_n, cap_p),
-		})
+			"on_buy": func(): _cart_add("item", cap_it, "", cap_n, cap_p, 1),
+		}
+		if GameState.is_bulk_packable(cap_it):
+			card_opts["on_buy_bulk"] = func(): _cart_add("item", cap_it, "", cap_n, cap_p, GameState.BULK_PACK_MAX)
+			card_opts["bulk_text"] = tr("+ %der-Kiste ($%d)") % [GameState.BULK_PACK_MAX, cap_p * GameState.BULK_PACK_MAX]
+		_add_shop_item_card(parent, card_opts)
 
 
 func _populate_parts_shop_list(parent: VBoxContainer, cat: String) -> void:
@@ -1919,9 +2027,9 @@ func _rack_fault_lines(r: Dictionary) -> PackedStringArray:
 			if GameState.is_slot_awaiting_diagnosis(sl):
 				out.append(tr("Störung – Ursache unbekannt, am Rack nachsehen"))
 			elif str(sl.get("faulty_part", "")) != "":
-				out.append(tr("Slot %d: %s defekt – Reparatur [E] am Rack") % [si + 1, GameState.get_component_label(str(sl["faulty_part"]))])
+				out.append(tr("Slot %d: %s defekt – in der 3D-Vorschau am Rack reparieren") % [si + 1, GameState.get_component_label(str(sl["faulty_part"]))])
 			else:
-				out.append(tr("Slot %d ausgefallen – Reparatur [E] am Rack") % (si + 1))
+				out.append(tr("Slot %d ausgefallen – in der 3D-Vorschau am Rack reparieren") % (si + 1))
 	return out
 
 
@@ -2031,9 +2139,9 @@ func _open_rack_detail_overlay(rack_id: String) -> void:
 			if GameState.is_slot_awaiting_diagnosis(sl):
 				status_txt = tr("ausgefallen – Ursache unbekannt, am Rack in der 3D-Vorschau nachsehen")
 			elif str(sl.get("faulty_part", "")) != "":
-				status_txt = tr("%s defekt – Reparatur [E] am Rack") % GameState.get_component_label(str(sl["faulty_part"]))
+				status_txt = tr("%s defekt – in der 3D-Vorschau am Rack reparieren") % GameState.get_component_label(str(sl["faulty_part"]))
 			else:
-				status_txt = tr("ausgefallen – Reparatur [E] am Rack")
+				status_txt = tr("ausgefallen – in der 3D-Vorschau am Rack reparieren")
 		elif st != "ok":
 			status_txt = st
 			status_col = Color(0.45, 0.48, 0.52)

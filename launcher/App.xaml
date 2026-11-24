@@ -12,8 +12,37 @@
         <SolidColorBrush x:Key="AccentGreen" Color="#24D87A"/>
         <SolidColorBrush x:Key="AccentAmber" Color="#FFB830"/>
         <SolidColorBrush x:Key="AccentRed" Color="#F24B4B"/>
+        <SolidColorBrush x:Key="AccentPurple" Color="#B388FF"/>
+        <SolidColorBrush x:Key="AccentBlue" Color="#4DA3FF"/>
         <SolidColorBrush x:Key="TextMain" Color="#EDF4FC"/>
         <SolidColorBrush x:Key="TextMuted" Color="#8CA2BC"/>
+
+        <Style x:Key="FilterChipButton" TargetType="Button">
+            <Setter Property="Background" Value="#141E2E"/>
+            <Setter Property="Foreground" Value="{StaticResource TextMuted}"/>
+            <Setter Property="BorderBrush" Value="#25364C"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="Padding" Value="11,5"/>
+            <Setter Property="FontSize" Value="12"/>
+            <Setter Property="FontWeight" Value="SemiBold"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="Margin" Value="0,0,6,6"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="Bd" Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="{TemplateBinding BorderThickness}" CornerRadius="14" Padding="{TemplateBinding Padding}">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Bd" Property="Background" Value="#1E2D45"/>
+                                <Setter Property="Foreground" Value="{StaticResource TextMain}"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
 
         <Style TargetType="TextBox">
             <Setter Property="Background" Value="{StaticResource BgInput}"/>

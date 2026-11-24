@@ -13,8 +13,15 @@ const END_X := 32.0
 const DeliveryDriverScript := preload("res://scripts/world/delivery_driver.gd")
 const HandTruckScript := preload("res://scripts/world/hand_truck.gd")
 
+var _vehicle_root: Node3D
+var _active_tier: int = 0
+var _wheel_radius: float = 0.40
 var _wheels: Array[Node3D] = []
 var _side_door: Node3D
+var _side_door_base_pos: Vector3 = Vector3(-0.08, 1.32, -1.05)
+var _side_ramp: Node3D
+var _tail_lift: Node3D
+var _tail_lift_base_y: float = 1.04
 var _beacon_mat: StandardMaterial3D
 var _hazard_mat: StandardMaterial3D
 var _brake_mat: StandardMaterial3D
@@ -23,7 +30,9 @@ var _cargo_light: OmniLight3D
 var _cargo_boxes: Array[MeshInstance3D] = []
 var _engine_audio: AudioStreamPlayer3D
 var _driver: DeliveryDriverScript
+var _drivers: Array = []
 var _hand_truck: HandTruckScript
+var _hand_trucks: Array = []
 var _cab_door: Node3D
 var _cab_door_recess: MeshInstance3D
 var _cab_door_t: float = 0.0
@@ -37,8 +46,61 @@ var _blink_t: float = 0.0
 func _ready() -> void:
 	position = Vector3(START_X, 0.0, LANE_Z)
 	visible = false
-	_build_van_geometry()
+	_vehicle_root = Node3D.new()
+	add_child(_vehicle_root)
+	_switch_vehicle_tier(1)
 	_setup_audio()
+
+
+func _clear_vehicle_root() -> void:
+	_wheels.clear()
+	_cargo_boxes.clear()
+	_drivers.clear()
+	_hand_trucks.clear()
+	_driver = null
+	_hand_truck = null
+	_side_door = null
+	_side_ramp = null
+	_tail_lift = null
+	_cab_door = null
+	_cab_door_recess = null
+	_headlight_glow = null
+	_cargo_light = null
+	_beacon_mat = null
+	_hazard_mat = null
+	_brake_mat = null
+	if _vehicle_root != null:
+		for c in _vehicle_root.get_children():
+			c.queue_free()
+
+
+func _switch_vehicle_tier(tier: int) -> void:
+	var t := clampi(tier, 1, 3)
+	if t == _active_tier and _vehicle_root != null and _vehicle_root.get_child_count() > 0:
+		return
+	_active_tier = t
+	_clear_vehicle_root()
+	_door_open_t = 0.0
+	_cab_door_t = 0.0
+
+	var model_id := "delivery_van"
+	_wheel_radius = 0.40
+	var staff_n := 1
+	if t == 2:
+		model_id = "delivery_truck_medium"
+		_wheel_radius = 0.46
+		staff_n = 2
+	elif t == 3:
+		model_id = "delivery_truck_heavy"
+		_wheel_radius = 0.52
+		staff_n = 3
+
+	var custom_m := ModelLoader.instantiate_custom_model(model_id)
+	if custom_m != null:
+		_vehicle_root.add_child(custom_m)
+		_bind_custom_fleet_model(custom_m, t, staff_n)
+	else:
+		_build_van_geometry()
 
 
 func _setup_audio() -> void:
@@ -63,13 +125,19 @@ func _process(delta: float) -> void:
 		_door_open_t = 0.0
 		_unload_t = 0.0
 		_cab_door_t = 0.0
-		if _driver != null:
-			_driver.reset_to_seat()
+		for dr in _drivers:
+			(dr as DeliveryDriverScript).reset_to_seat()
 		if _engine_audio != null and _engine_audio.playing:
 			_engine_audio.stop()
 		return
 
+	# Fahrzeugmodell (Stufe 1 Sprinter / Stufe 2 Kastenwagen 7,5t / Stufe 3 Schwerlast-LKW 18t) dynamisch umschalten!
+	var want_tier := clampi(GameState.van_delivery_tier, 1, 3)
+	if want_tier != _active_tier:
+		_switch_vehicle_tier(want_tier)
+
 	visible = true
+	var lane_z := LANE_Z + (0.28 if _active_tier == 2 else (0.58 if _active_tier == 3 else 0.0))
 	var target_x := STOP_X
 	var target_door := 0.0
 
@@ -90,38 +158,62 @@ func _process(delta: float) -> void:
 
 	var dx := target_x - _prev_x
 	_prev_x = target_x
-	position = Vector3(target_x, 0.0, LANE_Z)
+	position = Vector3(target_x, 0.0, lane_z)
 
-	# Spin all 4 wheels proportional to distance traveled (+X direction -> roll around -Z)
-	var wheel_spin := -dx / 0.40
+	# Alle Raeder (4 bzw. 6 beim Schwerlast-LKW) passend zum Radradius drehen
+	var wheel_spin := -dx / maxf(_wheel_radius, 0.25)
 	for w in _wheels:
 		w.rotation.z += wheel_spin
 
-	# Realistic Sprinter sliding door motion: pops slightly outward first, then glides back on track
-	_door_open_t = lerpf(_door_open_t, target_door, clampf(delta * 5.5, 0.0, 1.0))
+	# Fahrzeugspezifische Entlade-Mechanik:
+	# - Stufe 1 (Sprinter): seitliche Schiebetuer
+	# - Stufe 2 (7,5t Kastenwagen): Seiten-Rolltuer + ausklappbare Alu-Laderampe!
+	# - Stufe 3 (18t Schwerlast-LKW): breite Rolltuer + absenkbare Hydraulik-Ladebordwand!
+	_door_open_t = lerpf(_door_open_t, target_door, clampf(delta * 5.0, 0.0, 1.0))
 	if _side_door != null:
-		var pop_out := clampf(_door_open_t * 4.5, 0.0, 1.0)
-		var slide_u := clampf((_door_open_t - 0.14) / 0.86, 0.0, 1.0)
-		_side_door.position.z = lerpf(-1.05, -1.13, pop_out)
-		_side_door.position.x = lerpf(-0.08, -1.62, slide_u)
+		if _active_tier == 1:
+			var pop_out := clampf(_door_open_t * 4.5, 0.0, 1.0)
+			var slide_u := clampf((_door_open_t - 0.14) / 0.86, 0.0, 1.0)
+			_side_door.position.z = lerpf(-1.05, -1.13, pop_out)
+			_side_door.position.x = lerpf(-0.08, -1.62, slide_u)
+		else:
+			# Rolltuer gleitet glatt nach oben in den Dachkasten
+			var open_u := clampf(_door_open_t * 1.25, 0.0, 1.0)
+			_side_door.position.y = _side_door_base_pos.y + open_u * (1.05 if _active_tier == 2 else 1.15)
+			_side_door.scale.y = maxf(0.05, 1.0 - open_u * 0.92)
+			_side_door.visible = open_u < 0.98
 
-	# Kartons im Laderaum: Restladung plus die Kartons der laufenden Fahrt, die der Fahrer noch nicht genommen hat
+	if _side_ramp != null:
+		# Ausklappbare Alu-Rampe (Stufe 2): klappt sanft nach aussen (-Z) auf die Fahrbahn!
+		var ramp_u := smoothstep(0.0, 1.0, clampf((_door_open_t - 0.12) / 0.88, 0.0, 1.0))
+		_side_ramp.rotation_degrees.x = lerpf(0.0, -118.0, ramp_u)
+
+	if _tail_lift != null:
+		# Hydraulik-Ladebordwand (Stufe 3): klappt aus der Senkrechten flach und faehrt hydraulisch auf Bodenniveau ab!
+		var fold_u := smoothstep(0.0, 1.0, clampf(_door_open_t / 0.45, 0.0, 1.0))
+		var lower_u := smoothstep(0.0, 1.0, clampf((_door_open_t - 0.40) / 0.60, 0.0, 1.0))
+		_tail_lift.rotation_degrees.x = lerpf(90.0, 0.0, fold_u)
+		_tail_lift.position.y = lerpf(_tail_lift_base_y, 0.09, lower_u)
+
+	# Kartons im Laderaum: Restladung plus die Kartons der laufenden Fahrt, die noch nicht entnommen wurden
 	var rem := GameState.van_cargo_count
 	if _driver != null and phase == "unloading":
 		rem += _driver.get_trip_crates_in_van()
 	for i in range(_cargo_boxes.size()):
 		_cargo_boxes[i].visible = (i < rem)
 
-	# Fahrer steigt beim Abladen aus und wieder ein, die Fahrertür folgt ihm
+	# Team aus 1 / 2 / 3 Mitarbeitern animieren
 	if phase == "unloading":
 		_unload_t += delta
 	else:
 		_unload_t = 0.0
+	for dr in _drivers:
+		(dr as DeliveryDriverScript).update_driver(delta, phase, _unload_t, rem)
 	if _driver != null:
-		_driver.update_driver(delta, phase, _unload_t, rem)
 		_cab_door_t = lerpf(_cab_door_t, _driver.get_cab_door_target(), clampf(delta * 6.0, 0.0, 1.0))
 	if _cab_door != null:
 		_cab_door.rotation_degrees.y = -68.0 * _cab_door_t
+	if _cab_door_recess != null:
 		_cab_door_recess.visible = _cab_door_t > 0.04
 
 	# Cargo bay interior light turns on automatically while door is open
@@ -159,14 +251,17 @@ func _process(delta: float) -> void:
 				_engine_audio.play()
 			var speed := absf(dx) / maxf(delta, 0.001)
 			var vol_lin := clampf((0.24 + clampf(speed / 12.0, 0.0, 0.48)) * gain, 0.02, 1.0)
-			_engine_audio.volume_db = linear_to_db(vol_lin) - 7.5
-			_engine_audio.pitch_scale = clampf(0.84 + speed * 0.042, 0.82, 1.44)
+			var tier_vol_boost := 0.0 if _active_tier == 1 else (2.2 if _active_tier == 2 else 4.0)
+			var tier_pitch_scale := 1.0 if _active_tier == 1 else (0.82 if _active_tier == 2 else 0.66)
+			_engine_audio.volume_db = linear_to_db(vol_lin) - 7.5 + tier_vol_boost
+			_engine_audio.pitch_scale = clampf((0.84 + speed * 0.042) * tier_pitch_scale, 0.52, 1.44)
 
 
 func _build_van_geometry() -> void:
 	var custom_m := ModelLoader.instantiate_custom_model("delivery_van")
 	if custom_m != null:
-		add_child(custom_m)
+		_vehicle_root.add_child(custom_m)
+		_bind_custom_fleet_model(custom_m, 1, 1)
 		return
 
 	# Clean automotive & logistics fleet materials (clearcoat white paint + navy/amber livery)
@@ -290,11 +385,13 @@ func _build_van_geometry() -> void:
 	# Aufschwingende Fahrertür (Garagenseite) + Fahrer am Lenkrad
 	_build_driver_door(body_white, fleet_navy, fleet_amber, trim_plastic, glass_mat)
 	_hand_truck = HandTruckScript.new()
-	add_child(_hand_truck)
+	_vehicle_root.add_child(_hand_truck)
+	_hand_trucks.append(_hand_truck)
 	_driver = DeliveryDriverScript.new()
-	add_child(_driver)
+	_vehicle_root.add_child(_driver)
 	_driver.set_hand_truck(_hand_truck)
-	_driver.reset_to_seat()
+	_driver.configure_worker(0, 1)
+	_drivers.append(_driver)
 
 	# ==========================================================================
 	# 3. HIGH-ROOF CARGO BOX (-X) WITH PLYWOOD INTERIOR & SPLIT REAR DOORS
@@ -536,3 +633,89 @@ func _paint_mat(col: Color, rough: float, metal: float) -> StandardMaterial3D:
 	m.clearcoat = 0.65
 	m.clearcoat_roughness = 0.14
 	return m
+
+
+func _bind_custom_fleet_model(root: Node3D, tier: int, staff_n: int) -> void:
+	for wn in ["Wheel_FL", "Wheel_FR", "Wheel_ML", "Wheel_MR", "Wheel_RL", "Wheel_RR"]:
+		var w := root.find_child(wn, true, false) as Node3D
+		if w != null:
+			_wheels.append(w)
+	_side_door = root.find_child("Side_Door", true, false) as Node3D
+	if _side_door != null:
+		_side_door_base_pos = _side_door.position
+	_side_ramp = root.find_child("Side_Ramp", true, false) as Node3D
+	_tail_lift = root.find_child("Tail_Lift", true, false) as Node3D
+	if _tail_lift != null:
+		_tail_lift_base_y = _tail_lift.position.y
+		_tail_lift.rotation_degrees.x = 90.0
+	_cab_door = root.find_child("Cab_Door_L", true, false) as Node3D
+
+	# Live-Materialien (Rundumleuchte, Warnblinker, Bremslicht) vom Blender-Modell uebernehmen
+	_beacon_mat = _extract_live_mat(root, "Van_BeaconMat", Color(0.98, 0.62, 0.10))
+	_hazard_mat = _extract_live_mat(root, "Van_HazardMat", Color(0.96, 0.54, 0.08))
+	_brake_mat = _extract_live_mat(root, "Van_BrakeMat", Color(0.82, 0.10, 0.08))
+
+	var hl_x := 3.6 if tier == 1 else (4.2 if tier == 2 else 5.2)
+	_headlight_glow = OmniLight3D.new()
+	_headlight_glow.position = Vector3(hl_x, 1.0, 0.0)
+	_headlight_glow.light_color = Color(1.0, 0.96, 0.88)
+	_headlight_glow.omni_range = 12.0 + float(tier) * 2.0
+	_headlight_glow.light_energy = 0.45
+	_vehicle_root.add_child(_headlight_glow)
+
+	_cargo_light = OmniLight3D.new()
+	_cargo_light.position = Vector3(-0.20, 2.28 + float(tier - 1) * 0.45, -0.10)
+	_cargo_light.light_color = Color(1.0, 0.96, 0.88)
+	_cargo_light.omni_range = 5.2
+	_cargo_light.light_energy = 0.0
+	_vehicle_root.add_child(_cargo_light)
+
+	# Sichtbare Frachtpakete im Laderaum (6 im Sprinter, 10 im 7,5t Kastenwagen, 14 im 18t LKW)
+	var c_mat := MatLib.get_mat("cardboard")
+	var box_count := 6 if tier == 1 else (10 if tier == 2 else 14)
+	var floor_y := 0.86 if tier == 1 else (1.06 if tier == 2 else 1.32)
+	var cols := 3 if tier == 1 else (5 if tier == 2 else 7)
+	var start_x := -0.56 if tier == 1 else (-1.35 if tier == 2 else -2.10)
+	for i in range(box_count):
+		var col := i % cols
+		var row := i / cols
+		var box := _add_box(_vehicle_root, Vector3(start_x + float(col) * 0.58, floor_y + float(row) * 0.46, -0.04), Vector3(0.46, 0.40, 0.46), c_mat)
+		_cargo_boxes.append(box)
+
+	# Personal-Team erstellen (Stufe 1: 1 Fahrer, Stufe 2: 2 Mitarbeiter, Stufe 3: 3 Logistiker!)
+	for r in range(staff_n):
+		var ht: HandTruckScript = HandTruckScript.new()
+		_vehicle_root.add_child(ht)
+		_hand_trucks.append(ht)
+		var dr: DeliveryDriverScript = DeliveryDriverScript.new()
+		_vehicle_root.add_child(dr)
+		dr.set_hand_truck(ht)
+		dr.configure_worker(r, tier)
+		_drivers.append(dr)
+		if r == 0:
+			_driver = dr
+			_hand_truck = ht
+
+
+func _extract_live_mat(root: Node, mat_name: String, fallback_col: Color) -> StandardMaterial3D:
+	var found: StandardMaterial3D = null
+	var stack: Array[Node] = [root]
+	while not stack.is_empty():
+		var n: Node = stack.pop_back()
+		if n is MeshInstance3D:
+			var mi := n as MeshInstance3D
+			if mi.mesh != null:
+				for s in range(mi.mesh.get_surface_count()):
+					var sm := mi.mesh.surface_get_material(s)
+					if sm is StandardMaterial3D and sm.resource_name == mat_name:
+						if found == null:
+							found = (sm as StandardMaterial3D).duplicate() as StandardMaterial3D
+							found.emission_enabled = true
+						mi.set_surface_override_material(s, found)
+		for c in n.get_children():
+			stack.append(c)
+	if found == null:
+		found = _mat(fallback_col, 0.2, 0.0)
+		found.emission_enabled = true
+		found.emission = fallback_col
+	return found

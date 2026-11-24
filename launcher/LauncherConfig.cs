@@ -1,11 +1,27 @@
 using System.IO;
+using System.Reflection;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 
 namespace DataCenterLauncher;
 
+public sealed class FavoriteServer
+{
+    public string Name { get; set; } = "Freunde-Server";
+    public string Ip { get; set; } = "127.0.0.1";
+    public int Port { get; set; } = 7777;
+}
+
 public sealed class LauncherConfig
 {
+    public static string CurrentLauncherVersion
+    {
+        get
+        {
+            var v = Assembly.GetExecutingAssembly().GetName().Version;
+            return v != null ? $"{v.Major}.{v.Minor}.{Math.Max(v.Build, 0)}" : "2.1.0";
+        }
+    }
     /// <summary>
     /// Optional baked-in GitHub repo ("owner/repo") or manifest URL for friends.
     /// Can also be overridden by placing a 1-line "release_repo.txt" next to DataCenterLauncher.exe
@@ -19,6 +35,8 @@ public sealed class LauncherConfig
     public string WorldName { get; set; } = "Garage Cloud GmbH";
     public int GraphicsQuality { get; set; } = 2;
     public int LaunchModeIndex { get; set; } = 0; // 0=Menu, 1=Host, 2=Join, 3=LoadSave
+    public long TotalPlayTimeSeconds { get; set; } = 0;
+    public List<FavoriteServer> FavoriteServers { get; set; } = new();
 
     // Standalone Game Install (for Friends & Players — no Godot needed!)
     public string InstallDir { get; set; } = "";
@@ -43,6 +61,17 @@ public sealed class LauncherConfig
 
     public static string DefaultInstallDir =>
         Path.Combine(AppDataDir, "game");
+
+    public static string BackupsDir =>
+        Path.Combine(AppDataDir, "backups");
+
+    public string FormatPlayTime()
+    {
+        var ts = TimeSpan.FromSeconds(Math.Max(0, TotalPlayTimeSeconds));
+        if (ts.TotalMinutes < 1) return "0 Min.";
+        if (ts.TotalHours < 1) return $"{(int)ts.TotalMinutes} Min.";
+        return $"{(int)ts.TotalHours} Std. {ts.Minutes} Min.";
+    }
 
     public static LauncherConfig Load()
     {

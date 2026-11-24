@@ -46,6 +46,18 @@ const PART_MODEL_DCX_MATS := {
 	"DCX_handle_green": [Color(0.24, 0.56, 0.34), 0.42, 0.30],
 }
 
+## Nichtmetallische Blender-Materialien (Gummi, Schichtstoff, Griffe, LEDs):
+## [Farbe, Rauheit, Leuchtkraft, Körnung]. Dieselben Farben wie MATS in build_hardware_parts.py.
+const PART_MODEL_PLAIN_MATS := {
+	"DCX_rubber_black": [Color(0.035, 0.035, 0.04), 0.92, 0.0, 0.0],
+	"DCX_laminate": [Color(0.58, 0.58, 0.56), 0.62, 0.0, 0.07],
+	"DCX_edge_band": [Color(0.20, 0.20, 0.21), 0.45, 0.0, 0.0],
+	"DCX_grip_red": [Color(0.62, 0.08, 0.07), 0.35, 0.0, 0.0],
+	"DCX_cord": [Color(0.06, 0.07, 0.07), 0.40, 0.0, 0.0],
+	"DCX_led_green": [Color(0.25, 1.0, 0.45), 0.30, 2.2, 0.0],
+	"DCX_led_blue": [Color(0.30, 0.55, 1.0), 0.30, 1.6, 0.0],
+}
+
 static var _part_mat_cache: Dictionary = {}
 
 
@@ -92,11 +104,51 @@ static func _part_material(mat_name: String) -> Material:
 	elif PART_MODEL_DCX_MATS.has(mat_name):
 		var p: Array = PART_MODEL_DCX_MATS[mat_name]
 		mat = MatLib.make_brushed_metal(p[0] as Color, float(p[1]), float(p[2]))
+	elif PART_MODEL_PLAIN_MATS.has(mat_name):
+		mat = _make_plain_material(PART_MODEL_PLAIN_MATS[mat_name] as Array)
 	_part_mat_cache[mat_name] = mat
 	return mat
 
 
-static func build_open_server_chassis(item_type: String, components: Dictionary, out_fans: Array = []) -> Node3D:
+## Kunststoff, Gummi und Schichtstoff ohne Bürststruktur; LEDs leuchten, Körnung > 0 gibt eine feine Musterung.
+static func _make_plain_material(p: Array) -> StandardMaterial3D:
+	var m := StandardMaterial3D.new()
+	var col := p[0] as Color
+	m.albedo_color = col
+	m.roughness = float(p[1])
+	m.metallic = 0.0
+	var glow := float(p[2])
+	if glow > 0.0:
+		m.emission_enabled = true
+		m.emission = col
+		m.emission_energy_multiplier = glow
+	var grain := float(p[3])
+	if grain > 0.0:
+		var noise := FastNoiseLite.new()
+		noise.noise_type = FastNoiseLite.TYPE_SIMPLEX_SMOOTH
+		noise.frequency = 0.08
+		noise.fractal_octaves = 3
+		var ramp := Gradient.new()
+		ramp.set_color(0, Color(1.0 - grain, 1.0 - grain, 1.0 - grain))
+		ramp.set_color(1, Color(1.0, 1.0, 1.0))
+		var tex := NoiseTexture2D.new()
+		tex.width = 256
+		tex.height = 256
+		tex.seamless = true
+		tex.noise = noise
+		tex.color_ramp = ramp
+		m.albedo_texture = tex
+		m.uv1_triplanar = true
+		m.uv1_scale = Vector3(4.0, 4.0, 4.0)
+	return m
+
+
+## Werkbank mit ESD-Matte für die 3D-Vorschau; null, wenn das Modell fehlt.
+static func build_preview_workbench() -> Node3D:
+	return _load_part_model("prop_workbench")
+
+
+static func build_open_server_chassis(item_type: String, components: Dictionary, out_fans: Array = [], broken_cat: String = "") -> Node3D:
 	# Mainboards nutzen das passende 1U/2U/4U-Gehäuse.
 	item_type = GameState.get_chassis_visual(item_type)
 	var root := Node3D.new()
@@ -109,19 +161,23 @@ static func build_open_server_chassis(item_type: String, components: Dictionary,
 	var ic := MatLib.get_mat("ic_chip")
 	var alu_fin := MatLib.get_mat("heatsink_aluminum")
 
-	# 1. Realistic 19-inch Galvanized Steel Open-Top 1U/2U Chassis Tray (W=0.76, D=0.72, H=0.14)
-	_box(root, Vector3(0.0, 0.008, 0.0), Vector3(0.74, 0.016, 0.72), steel)
-	# Side & rear sheet-metal walls
-	_box(root, Vector3(-0.365, 0.072, 0.0), Vector3(0.014, 0.128, 0.72), steel)
-	_box(root, Vector3(0.365, 0.072, 0.0), Vector3(0.014, 0.128, 0.72), steel)
-	_box(root, Vector3(0.0, 0.072, -0.355), Vector3(0.74, 0.128, 0.014), steel)
-	# Front rack-mount ears with mounting screw holes
-	for sx in [-0.39, 0.39]:
-		_box(root, Vector3(float(sx), 0.072, 0.352), Vector3(0.042, 0.128, 0.016), dark_steel)
-		_box(root, Vector3(float(sx) * 1.03, 0.072, 0.376), Vector3(0.018, 0.09, 0.036), steel)
-
-	# Front Drive Bay Cage / Faceplate
-	_box(root, Vector3(0.0, 0.072, 0.305), Vector3(0.71, 0.124, 0.11), dark_steel)
+	# 1. Blechwanne, Rack-Ohren und Laufwerkskäfig aus Blender (tools/blender/build_hardware_parts.py).
+	var shell_id := "part_chassis_switch" if item_type == "net_switch" else ("part_chassis_8bay" if item_type == "storage_server" else "part_chassis_4bay")
+	var shell := _load_part_model(shell_id)
+	if shell != null:
+		root.add_child(shell)
+	else:
+		_box(root, Vector3(0.0, 0.008, 0.0), Vector3(0.74, 0.016, 0.72), steel)
+		# Side & rear sheet-metal walls
+		_box(root, Vector3(-0.365, 0.072, 0.0), Vector3(0.014, 0.128, 0.72), steel)
+		_box(root, Vector3(0.365, 0.072, 0.0), Vector3(0.014, 0.128, 0.72), steel)
+		_box(root, Vector3(0.0, 0.072, -0.355), Vector3(0.74, 0.128, 0.014), steel)
+		# Front rack-mount ears with mounting screw holes
+		for sx in [-0.39, 0.39]:
+			_box(root, Vector3(float(sx), 0.072, 0.352), Vector3(0.042, 0.128, 0.016), dark_steel)
+			_box(root, Vector3(float(sx) * 1.03, 0.072, 0.376), Vector3(0.018, 0.09, 0.036), steel)
+		# Front Drive Bay Cage / Faceplate
+		_box(root, Vector3(0.0, 0.072, 0.305), Vector3(0.71, 0.124, 0.11), dark_steel)
 	if item_type == "net_switch":
 		# 24-Port Managed Ethernet Switch PCB & Front RJ45 Shielded Cages
 		_box(root, Vector3(0.0, 0.022, -0.04), Vector3(0.66, 0.012, 0.50), MatLib.get_mat("pcb_green"))
@@ -140,9 +196,17 @@ static func build_open_server_chassis(item_type: String, components: Dictionary,
 	var bay_step := 0.078 if bay_count == 8 else 0.165
 	var start_x := -0.275 if bay_count == 8 else -0.245
 	var stor_lvl := get_visual_tier(components, "storage")
+	var caddy_prefix := "part_caddy_sff" if bay_count == 8 else "part_caddy_lff"
 	for b in range(bay_count):
 		var bx := start_x + float(b) * bay_step
 		var populated := (b < 2 + stor_lvl * 2) or (item_type == "storage_server")
+		if shell != null:
+			# Blender-Schlitten passen nur in den Blender-Käfig; ohne ihn bleibt der Code-Aufbau.
+			var caddy := _load_part_model(caddy_prefix if populated else caddy_prefix + "_blank")
+			if caddy != null:
+				caddy.position = Vector3(bx, 0.072, 0.362)
+				root.add_child(caddy)
+				continue
 		_box(root, Vector3(bx, 0.072, 0.362), Vector3(bay_w, 0.092, 0.018), plastic)
 		if populated:
 			# Silver metal drive pull latch + small amber/green release button
@@ -156,7 +220,10 @@ static func build_open_server_chassis(item_type: String, components: Dictionary,
 	mb.set_meta("part_cat", "mainboard")
 	mb.set_meta("part_base", true)
 	root.add_child(mb)
-	var mb_model := _load_part_model("part_mainboard_ai" if item_type == "gpu_server" else "part_mainboard")
+	var mb_id := "part_mainboard_ai" if item_type == "gpu_server" else "part_mainboard"
+	if broken_cat == "mainboard":
+		mb_id += "_broken"
+	var mb_model := _load_part_model(mb_id)
 	if mb_model != null:
 		mb.add_child(mb_model)
 	else:
@@ -164,50 +231,51 @@ static func build_open_server_chassis(item_type: String, components: Dictionary,
 
 	# 3. REAL 3D CPU + LGA Socket + Upgraded Cooler (at center-left of motherboard)
 	# Leere Steckplätze bleiben leer: nur eingebaute Teile werden gezeigt.
-	if has_part(components, "cpu"):
+	if has_part(components, "cpu") or broken_cat == "cpu":
 		var cpu_lvl := get_visual_tier(components, "cpu")
-		var cpu_node := build_cpu_assembly(cpu_lvl)
-		cpu_node.position = Vector3(-0.07, 0.008, -0.01)
+		var cpu_node := build_cpu_assembly(cpu_lvl, broken_cat == "cpu")
+		# Der Sockel beginnt bei y = 0 und sitzt damit direkt auf der Platine (Oberseite 0.006).
+		cpu_node.position = Vector3(-0.07, 0.006, -0.01)
 		cpu_node.set_meta("part_cat", "cpu")
 		mb.add_child(cpu_node)
 
 	# 4. REAL 3D RAM DIMM Bank (right beside CPU!)
-	if has_part(components, "ram"):
+	if has_part(components, "ram") or broken_cat == "ram":
 		var ram_lvl := get_visual_tier(components, "ram")
-		var ram_node := build_ram_bank(ram_lvl)
+		var ram_node := build_ram_bank(ram_lvl, broken_cat == "ram")
 		ram_node.position = Vector3(0.09, 0.008, -0.03)
 		ram_node.set_meta("part_cat", "ram")
 		mb.add_child(ram_node)
 
 	# 5. REAL 3D GPU (Grafikkarte) in PCIe x16 Slot (left side of motherboard)
-	if has_part(components, "gpu") or item_type == "gpu_server":
+	if has_part(components, "gpu") or item_type == "gpu_server" or broken_cat == "gpu":
 		var gpu_lvl := get_visual_tier(components, "gpu")
 		if item_type == "gpu_server" and gpu_lvl == 0:
 			gpu_lvl = 1 # GPU-AI server always has at least a visible GPU installed!
-		var gpu_node := build_gpu_card(gpu_lvl, out_fans)
+		var gpu_node := build_gpu_card(gpu_lvl, out_fans, broken_cat == "gpu")
 		gpu_node.position = Vector3(-0.21, 0.008, 0.05)
 		gpu_node.set_meta("part_cat", "gpu")
 		mb.add_child(gpu_node)
 
 	# 6. REAL 3D M.2 NVMe SSDs mounted directly on the Motherboard
-	if has_part(components, "storage"):
-		var nvme_node := build_storage_module(stor_lvl)
+	if has_part(components, "storage") or broken_cat == "storage":
+		var nvme_node := build_storage_module(stor_lvl, broken_cat == "storage")
 		nvme_node.position = Vector3(0.04, 0.008, 0.14)
 		nvme_node.set_meta("part_cat", "storage")
 		mb.add_child(nvme_node)
 
 	# 7. REAL 3D Server Cooling Fan Wall (between drives & motherboard!)
-	if has_part(components, "cooling"):
+	if has_part(components, "cooling") or broken_cat == "cooling":
 		var cool_lvl := get_visual_tier(components, "cooling")
-		var fan_wall := build_cooling_wall(cool_lvl, out_fans)
+		var fan_wall := build_cooling_wall(cool_lvl, out_fans, broken_cat == "cooling")
 		fan_wall.position = Vector3(-0.02, 0.018, 0.21)
 		fan_wall.set_meta("part_cat", "cooling")
 		root.add_child(fan_wall)
 
 	# 8. REAL 3D Server PSU Unit (rear-right bay inside chassis!)
-	if has_part(components, "psu"):
+	if has_part(components, "psu") or broken_cat == "psu":
 		var psu_lvl := get_visual_tier(components, "psu")
-		var psu_node := build_psu_unit(psu_lvl)
+		var psu_node := build_psu_unit(psu_lvl, broken_cat == "psu")
 		psu_node.position = Vector3(0.285, 0.018, -0.17)
 		psu_node.set_meta("part_cat", "psu")
 		root.add_child(psu_node)
@@ -217,7 +285,8 @@ static func build_open_server_chassis(item_type: String, components: Dictionary,
 
 ## Mainboard aus Codeteilen, falls part_mainboard.glb fehlt.
 static func _build_mainboard_fallback(mb: Node3D, pcb: StandardMaterial3D, steel: StandardMaterial3D, alu_fin: StandardMaterial3D, dark_steel: StandardMaterial3D, plastic: StandardMaterial3D, gold: StandardMaterial3D) -> void:
-	_box(mb, Vector3.ZERO, Vector3(0.58, 0.012, 0.48), pcb)
+	# Gleiche Platinengröße wie part_mainboard.glb: rechts bleibt Platz für das Netzteil.
+	_box(mb, Vector3(-0.02, 0.0, 0.0), Vector3(0.54, 0.012, 0.48), pcb)
 	# Rear I/O metallic port blocks (2x Gigabit RJ45, 4x USB, VGA)
 	for io_i in range(4):
 		_box(mb, Vector3(-0.22 + float(io_i) * 0.065, 0.028, -0.22), Vector3(0.044, 0.042, 0.048), steel)
@@ -238,8 +307,8 @@ static func _build_mainboard_fallback(mb: Node3D, pcb: StandardMaterial3D, steel
 		_box(mb, Vector3(0.24, 0.016, 0.12 + float(s_i) * 0.024), Vector3(0.036, 0.016, 0.016), plastic)
 
 
-static func build_cpu_assembly(tier: int) -> Node3D:
-	var model := _load_part_model("part_cpu_t%d" % clampi(tier, 0, 3))
+static func build_cpu_assembly(tier: int, broken: bool = false) -> Node3D:
+	var model := _load_part_model("part_cpu_broken" if broken else ("part_cpu_t%d" % clampi(tier, 0, 3)))
 	if model != null:
 		return model
 	var root := Node3D.new()
@@ -308,8 +377,8 @@ static func build_cpu_assembly(tier: int) -> Node3D:
 	return root
 
 
-static func build_gpu_card(tier: int, out_fans: Array = []) -> Node3D:
-	var model := _load_part_model("part_gpu_t%d" % clampi(tier, 0, 3), out_fans)
+static func build_gpu_card(tier: int, out_fans: Array = [], broken: bool = false) -> Node3D:
+	var model := _load_part_model("part_gpu_broken" if broken else ("part_gpu_t%d" % clampi(tier, 0, 3)), out_fans)
 	if model != null:
 		return model
 	var root := Node3D.new()
@@ -422,8 +491,8 @@ static func build_gpu_card(tier: int, out_fans: Array = []) -> Node3D:
 	return root
 
 
-static func build_ram_bank(tier: int) -> Node3D:
-	var model := _load_part_model("part_ram_t%d" % clampi(tier, 0, 3))
+static func build_ram_bank(tier: int, broken: bool = false) -> Node3D:
+	var model := _load_part_model("part_ram_broken" if broken else ("part_ram_t%d" % clampi(tier, 0, 3)))
 	if model != null:
 		return model
 	var root := Node3D.new()
@@ -486,8 +555,8 @@ static func build_ram_bank(tier: int) -> Node3D:
 	return root
 
 
-static func build_storage_module(tier: int) -> Node3D:
-	var model := _load_part_model("part_storage_t%d" % clampi(tier, 0, 3))
+static func build_storage_module(tier: int, broken: bool = false) -> Node3D:
+	var model := _load_part_model("part_storage_broken" if broken else ("part_storage_t%d" % clampi(tier, 0, 3)))
 	if model != null:
 		return model
 	var root := Node3D.new()
@@ -527,8 +596,8 @@ static func build_storage_module(tier: int) -> Node3D:
 	return root
 
 
-static func build_cooling_wall(tier: int, out_fans: Array = []) -> Node3D:
-	var model := _load_part_model("part_cooling_t%d" % clampi(tier, 0, 3), out_fans)
+static func build_cooling_wall(tier: int, out_fans: Array = [], broken: bool = false) -> Node3D:
+	var model := _load_part_model("part_cooling_broken" if broken else ("part_cooling_t%d" % clampi(tier, 0, 3)), out_fans)
 	if model != null:
 		return model
 	var root := Node3D.new()
@@ -589,8 +658,8 @@ static func build_cooling_wall(tier: int, out_fans: Array = []) -> Node3D:
 	return root
 
 
-static func build_psu_unit(tier: int) -> Node3D:
-	var model := _load_part_model("part_psu_t%d" % clampi(tier, 0, 3))
+static func build_psu_unit(tier: int, broken: bool = false) -> Node3D:
+	var model := _load_part_model("part_psu_broken" if broken else ("part_psu_t%d" % clampi(tier, 0, 3)))
 	if model != null:
 		return model
 	var root := Node3D.new()

@@ -13,16 +13,40 @@ public partial class MainWindow : Window
 {
     private readonly LauncherConfig _config;
     private UpdateCheckResult? _lastUpdateResult;
+    private LauncherUpdateCheckResult? _lastLauncherUpdateResult;
+    private bool _launcherBannerDismissed;
+    private string _activeTagFilter = "all";
     private CancellationTokenSource? _downloadCts;
     private bool _isBusy;
+    private bool _isGameRunning;
     private string _lastBuiltZipPath = "";
+
+    private sealed record TagMeta(string Key, string Label, Color Bg, Color Border, Color Fg);
+
+    private static readonly TagMeta[] TagDefs =
+    [
+        new("neu", "NEU", Color.FromRgb(15, 56, 40), Color.FromRgb(36, 216, 122), Color.FromRgb(64, 240, 150)),
+        new("fix", "BUGFIX", Color.FromRgb(62, 20, 24), Color.FromRgb(242, 95, 92), Color.FromRgb(255, 138, 134)),
+        new("verbesserung", "VERBESSERUNG", Color.FromRgb(16, 45, 66), Color.FromRgb(46, 216, 255), Color.FromRgb(106, 228, 255)),
+        new("3d", "3D / GRAFIK", Color.FromRgb(42, 26, 68), Color.FromRgb(179, 136, 255), Color.FromRgb(204, 174, 255)),
+        new("balance", "BALANCE", Color.FromRgb(58, 42, 14), Color.FromRgb(255, 184, 48), Color.FromRgb(255, 210, 108)),
+        new("launcher", "LAUNCHER", Color.FromRgb(18, 38, 70), Color.FromRgb(77, 163, 255), Color.FromRgb(130, 192, 255)),
+        new("gameplay", "GAMEPLAY", Color.FromRgb(18, 54, 48), Color.FromRgb(42, 214, 172), Color.FromRgb(110, 242, 208)),
+        new("infrastruktur", "INFRASTRUKTUR", Color.FromRgb(24, 44, 72), Color.FromRgb(66, 168, 255), Color.FromRgb(138, 202, 255)),
+        new("coop", "CO-OP", Color.FromRgb(48, 30, 68), Color.FromRgb(198, 124, 255), Color.FromRgb(222, 176, 255)),
+        new("ki", "KI / PERSONAL", Color.FromRgb(60, 44, 18), Color.FromRgb(255, 196, 66), Color.FromRgb(255, 220, 130)),
+    ];
 
     public MainWindow()
     {
         InitializeComponent();
         _config = LauncherConfig.Load();
+        TopBarHint.Text = $"Launcher v{LauncherConfig.CurrentLauncherVersion}";
+        LauncherVerStatText.Text = $"v{LauncherConfig.CurrentLauncherVersion}";
+        LauncherUpdateStatusText.Text = $"Installiert: v{LauncherConfig.CurrentLauncherVersion} • Wird beim Start automatisch geprüft.";
         PopulateUIFromConfig();
         LoadPatchnotes();
+        RefreshFavoriteServers();
         RefreshLauncherState();
         SetActiveNav(NavPlayBtn, PagePlay);
     }
@@ -158,10 +182,88 @@ public partial class MainWindow : Window
                     : $"Download-Quelle: {_config.UpdateManifestUrl}");
         }
 
-        DualTestBtn.IsEnabled = !_isBusy && (installed || _config.CanDevLaunch);
-        MainActionBtn.IsEnabled = !_isBusy;
-        DevPlayBtn.IsEnabled = !_isBusy && _config.CanDevLaunch;
-        InstallUpdateBtn.IsEnabled = !_isBusy && _lastUpdateResult is { Success: true } && !string.IsNullOrWhiteSpace(_lastUpdateResult.DownloadUrl);
+        HeroPlayTimeText.Text = $"⏱ Spielzeit: {_config.FormatPlayTime()}";
+
+        if (_isGameRunning)
+        {
+            SidebarStatusDot.Fill = (Brush)FindResource("AccentGreen");
+            SidebarStatusTitle.Text = "Spiel läuft…";
+            SidebarStatusDetail.Text = $"Spielzeit: {_config.FormatPlayTime()}";
+            MainActionBtn.Style = (Style)FindResource("SecondaryButton");
+            MainActionBtn.Content = "🟢  SPIEL LÄUFT…";
+            MainActionBtn.IsEnabled = false;
+        }
+        else
+        {
+            MainActionBtn.IsEnabled = !_isBusy;
+        }
+
+        DualTestBtn.IsEnabled = !_isBusy && !_isGameRunning && (installed || _config.CanDevLaunch);
+        DevPlayBtn.IsEnabled = !_isBusy && !_isGameRunning && _config.CanDevLaunch;
+
+        // Update-Button NUR aktivieren, wenn noch nicht installiert ODER tatsächlich ein Update vorliegt!
+        bool hasDlUrl = _lastUpdateResult is { Success: true } && !string.IsNullOrWhiteSpace(_lastUpdateResult.DownloadUrl);
+        if (!installed)
+        {
+            InstallUpdateBtn.Content = "⬇ Spiel herunterladen";
+            InstallUpdateBtn.IsEnabled = !_isBusy && !_isGameRunning && hasDlUrl;
+        }
+        else if (updateAvailable && _lastUpdateResult != null)
+        {
+            InstallUpdateBtn.Content = $"⬇ Update auf v{_lastUpdateResult.LatestVersion} installieren";
+            InstallUpdateBtn.IsEnabled = !_isBusy && !_isGameRunning && hasDlUrl;
+        }
+        else
+        {
+            InstallUpdateBtn.Content = $"✓ Spiel ist aktuell (v{_config.InstalledGameVersion})";
+            InstallUpdateBtn.IsEnabled = false;
+        }
+
+        RepairGameBtn.IsEnabled = !_isBusy && !_isGameRunning && installed;
+        RefreshLauncherUpdateUI();
+    }
+
+    private void RefreshLauncherUpdateUI()
+    {
+        var cur = LauncherConfig.CurrentLauncherVersion;
+        if (_lastLauncherUpdateResult is { Success: true, UpdateAvailable: true } lu && !string.IsNullOrWhiteSpace(lu.DownloadUrl))
+        {
+            TopBarHint.Text = $"Launcher v{cur} → v{lu.LatestVersion}";
+            TopBarHint.Foreground = (Brush)FindResource("AccentAmber");
+            TopLauncherVerDot.Fill = (Brush)FindResource("AccentAmber");
+            TopLauncherVerPill.BorderBrush = (Brush)FindResource("AccentAmber");
+
+            LauncherVerStatText.Text = $"v{cur} → v{lu.LatestVersion}";
+            LauncherVerStatText.Foreground = (Brush)FindResource("AccentAmber");
+            double mb = lu.AssetSizeBytes > 0 ? lu.AssetSizeBytes / 1048576.0 : 0;
+            string sizeInfo = mb > 0 ? $" ({mb:F1} MB)" : "";
+            LauncherBannerTitle.Text = $"🚀 Neue Launcher-Version v{lu.LatestVersion} verfügbar!{sizeInfo}";
+            LauncherBannerSub.Text = $"Aktuell installiert: v{cur} — ein Klick aktualisiert den Launcher und startet ihn neu.";
+            LauncherUpdateStatusText.Text = $"🎉 Neue Launcher-Version v{lu.LatestVersion} verfügbar (aktuell v{cur}){sizeInfo}.";
+            LauncherUpdateCard.BorderBrush = (Brush)FindResource("AccentAmber");
+            UpdatesPageLauncherBtn.Visibility = Visibility.Visible;
+            UpdatesPageLauncherBtn.IsEnabled = !_isBusy;
+            ApplyLauncherUpdateBtn.IsEnabled = !_isBusy;
+            LauncherUpdateBanner.Visibility = _launcherBannerDismissed ? Visibility.Collapsed : Visibility.Visible;
+        }
+        else
+        {
+            TopBarHint.Text = $"Launcher v{cur}";
+            TopBarHint.Foreground = (Brush)FindResource("TextMuted");
+            TopLauncherVerDot.Fill = (Brush)FindResource("AccentGreen");
+            TopLauncherVerPill.BorderBrush = new SolidColorBrush(Color.FromRgb(42, 64, 92));
+
+            LauncherVerStatText.Text = $"v{cur}";
+            LauncherVerStatText.Foreground = (Brush)FindResource("TextMain");
+            LauncherUpdateCard.BorderBrush = (Brush)FindResource("BorderSubtle");
+            UpdatesPageLauncherBtn.Visibility = Visibility.Collapsed;
+            LauncherUpdateBanner.Visibility = Visibility.Collapsed;
+
+            if (_lastLauncherUpdateResult is { Success: true })
+                LauncherUpdateStatusText.Text = $"✅ Launcher ist auf dem neuesten Stand (v{cur}).";
+            else if (_lastLauncherUpdateResult is { Success: false } errLu && !string.IsNullOrWhiteSpace(errLu.ErrorMessage))
+                LauncherUpdateStatusText.Text = errLu.ErrorMessage;
+        }
     }
 
     private void SetBusy(bool busy, bool showHomeProgress = false, bool cancellable = false)
@@ -173,6 +275,7 @@ public partial class MainWindow : Window
         HeroCheckUpdatesBtn.IsEnabled = !busy;
         InstallLocalZipBtn.IsEnabled = !busy;
         BuildReleaseZipBtn.IsEnabled = !busy;
+        BuildLauncherReleaseBtn.IsEnabled = !busy;
         InstallBuiltZipBtn.IsEnabled = !busy;
         RefreshLauncherState();
     }
@@ -196,11 +299,16 @@ public partial class MainWindow : Window
         HeroCheckUpdatesBtn.IsEnabled = false;
         HeroStateBadge.Text = "🔄 SUCHE NACH UPDATES...";
         RemoteVerText.Text = "Lädt...";
-        UpdateStatusText.Text = $"Prüfe Releases von {_config.UpdateManifestUrl}...";
+        UpdateStatusText.Text = $"Prüfe Spiel- & Launcher-Releases von {_config.UpdateManifestUrl}...";
         RemoteNotesCard.Visibility = Visibility.Collapsed;
 
-        var res = await UpdateService.CheckForUpdateAsync(_config.UpdateManifestUrl, _config.InstalledGameVersion);
+        var gameTask = UpdateService.CheckForUpdateAsync(_config.UpdateManifestUrl, _config.InstalledGameVersion);
+        var launcherTask = UpdateService.CheckForLauncherUpdateAsync(_config.UpdateManifestUrl, LauncherConfig.CurrentLauncherVersion);
+        await Task.WhenAll(gameTask, launcherTask);
+
+        var res = await gameTask;
         _lastUpdateResult = res;
+        _lastLauncherUpdateResult = await launcherTask;
 
         CheckUpdateBtn.IsEnabled = true;
         HeroCheckUpdatesBtn.IsEnabled = true;
@@ -216,7 +324,7 @@ public partial class MainWindow : Window
         RemoteVerText.Text = $"v{res.LatestVersion}";
         if (!string.IsNullOrWhiteSpace(res.Notes))
         {
-            RemoteNotesText.Text = res.Notes;
+            PopulateRemoteNotes(res.Notes);
             RemoteNotesCard.Visibility = Visibility.Visible;
         }
 
@@ -240,7 +348,7 @@ public partial class MainWindow : Window
         RefreshLauncherState();
     }
 
-    private async Task StartDownloadOrUpdateAsync()
+    private async Task StartDownloadOrUpdateAsync(bool forceRepair = false)
     {
         SyncConfigFromUI();
 
@@ -276,6 +384,12 @@ public partial class MainWindow : Window
                 MessageBoxButton.OK,
                 MessageBoxImage.Warning);
             return;
+        }
+
+        // Automatisches Spielstand-Backup vor jedem Update!
+        if (_config.IsGameInstalled && !forceRepair)
+        {
+            UpdateService.CreateSavesBackup("pre_update");
         }
 
         _downloadCts?.Cancel();
@@ -370,7 +484,7 @@ public partial class MainWindow : Window
 
     // --- LAUNCH LOGIC ---
 
-    private bool LaunchInstalledGame(IEnumerable<string> userArgs, out string error)
+    private bool LaunchInstalledGame(IEnumerable<string> userArgs, out string error, bool trackSession = false)
     {
         error = "";
         var exe = _config.GetInstalledGameExe();
@@ -390,7 +504,11 @@ public partial class MainWindow : Window
             };
             foreach (var arg in userArgs)
                 psi.ArgumentList.Add(arg);
-            Process.Start(psi);
+            var proc = Process.Start(psi);
+            if (trackSession && proc != null)
+            {
+                _ = TrackGameProcessAsync(proc);
+            }
             return true;
         }
         catch (Exception ex)
@@ -398,6 +516,35 @@ public partial class MainWindow : Window
             error = $"Spielstart fehlgeschlagen: {ex.Message}";
             return false;
         }
+    }
+
+    private async Task TrackGameProcessAsync(Process proc)
+    {
+        _isGameRunning = true;
+        RefreshLauncherState();
+        WindowState = WindowState.Minimized;
+        var sw = Stopwatch.StartNew();
+
+        try
+        {
+            await proc.WaitForExitAsync();
+        }
+        catch { }
+
+        sw.Stop();
+        _config.TotalPlayTimeSeconds += (long)sw.Elapsed.TotalSeconds;
+        _config.Save();
+        _isGameRunning = false;
+
+        Dispatcher.Invoke(() =>
+        {
+            if (WindowState == WindowState.Minimized)
+                WindowState = WindowState.Normal;
+            Activate();
+            RefreshLauncherState();
+            LaunchStatusTitle.Text = $"Sitzung beendet ({(int)sw.Elapsed.TotalMinutes} Min.)";
+            LaunchStatusSub.Text = $"Gesamtspielzeit: {_config.FormatPlayTime()}";
+        });
     }
 
     private bool LaunchGodotDev(IEnumerable<string> userArgs, out string error)
@@ -466,11 +613,11 @@ public partial class MainWindow : Window
             return;
         }
 
-        // 3. Installed & Ready -> Play! (startet im Hauptmenü)
+        // 3. Installed & Ready -> Play! (startet im Hauptmenü, minimiert Launcher & zählt Spielzeit)
         var args = BuildUserArgsFromUI();
-        if (LaunchInstalledGame(args, out var err))
+        if (LaunchInstalledGame(args, out var err, trackSession: true))
         {
-            LaunchStatusTitle.Text = "Spiel gestartet! 🚀";
+            LaunchStatusTitle.Text = "Spiel läuft… 🟢";
             LaunchStatusSub.Text = $"Standalone-Build • Grafik-Stufe {_config.GraphicsQuality}";
         }
         else
@@ -549,9 +696,100 @@ public partial class MainWindow : Window
 
     private void CancelDownloadBtn_Click(object sender, RoutedEventArgs e) => _downloadCts?.Cancel();
 
+    private void DismissLauncherBannerBtn_Click(object sender, RoutedEventArgs e)
+    {
+        _launcherBannerDismissed = true;
+        LauncherUpdateBanner.Visibility = Visibility.Collapsed;
+    }
+
+    private async void ApplyLauncherUpdateBtn_Click(object sender, RoutedEventArgs e)
+    {
+        if (_isBusy || _lastLauncherUpdateResult == null || string.IsNullOrWhiteSpace(_lastLauncherUpdateResult.DownloadUrl))
+            return;
+
+        _downloadCts?.Cancel();
+        _downloadCts = new CancellationTokenSource();
+        SetBusy(true, showHomeProgress: false, cancellable: false);
+        LauncherUpdateBanner.Visibility = Visibility.Visible;
+        LauncherUpdateProgressBar.Visibility = Visibility.Visible;
+        LauncherUpdateProgressBar.Value = 5;
+
+        var progress = new Progress<(double Percent, string Status)>(p =>
+        {
+            LauncherUpdateProgressBar.Value = p.Percent;
+            LauncherBannerSub.Text = p.Status;
+            LauncherUpdateStatusText.Text = p.Status;
+        });
+
+        var (ok, msg) = await UpdateService.DownloadAndApplyLauncherUpdateAsync(
+            _lastLauncherUpdateResult.DownloadUrl,
+            progress,
+            _downloadCts.Token);
+
+        if (ok)
+        {
+            Application.Current.Shutdown();
+            return;
+        }
+
+        LauncherUpdateProgressBar.Visibility = Visibility.Collapsed;
+        LauncherBannerSub.Text = msg;
+        LauncherUpdateStatusText.Text = msg;
+        SetBusy(false);
+        MessageBox.Show(msg, "Launcher-Update", MessageBoxButton.OK, MessageBoxImage.Warning);
+    }
+
+    private async void BuildLauncherReleaseBtn_Click(object sender, RoutedEventArgs e)
+    {
+        if (_isBusy) return;
+        SyncConfigFromUI();
+
+        SetBusy(true, showHomeProgress: false, cancellable: false);
+        DevBuildProgressBar.Visibility = Visibility.Visible;
+        DevBuildProgressBar.Value = 8;
+
+        var progress = new Progress<(double Percent, string Status)>(p =>
+        {
+            DevBuildProgressBar.Value = p.Percent;
+            DevBuildStatusText.Text = p.Status;
+        });
+
+        var (ok, msg, _) = await UpdateService.BuildLauncherReleaseAsync(
+            _config.ProjectDir,
+            LauncherConfig.CurrentLauncherVersion,
+            progress);
+
+        DevBuildStatusText.Text = msg;
+        SetBusy(false);
+        DevBuildProgressBar.Visibility = Visibility.Collapsed;
+
+        MessageBox.Show(
+            ok
+                ? $"{msg}\n\nTipp für Auto-Updates: Lade diese .zip auf GitHub Releases hoch (z. B. mit Tag „launcher-v{LauncherConfig.CurrentLauncherVersion}“ oder direkt als Asset im Spiel-Release). Alle Launcher erkennen das Update automatisch!"
+                : msg,
+            ok ? "Launcher-Release erstellt" : "Build-Fehler",
+            MessageBoxButton.OK,
+            ok ? MessageBoxImage.Information : MessageBoxImage.Warning);
+    }
+
     private async void CheckUpdateBtn_Click(object sender, RoutedEventArgs e) => await RunUpdateCheckAsync(silentIfNoUrl: false);
 
     private async void InstallUpdateBtn_Click(object sender, RoutedEventArgs e) => await StartDownloadOrUpdateAsync();
+
+    private async void RepairGameBtn_Click(object sender, RoutedEventArgs e)
+    {
+        if (_isBusy || _isGameRunning) return;
+
+        var dlg = new RepairDialog { Owner = this };
+        if (dlg.ShowDialog() != true) return;
+
+        if (!dlg.DeleteSaves)
+            UpdateService.CreateSavesBackup("pre_repair");
+
+        var cleanSummary = UpdateService.CleanUserDataForRepair(dlg.ResetConfigs, dlg.ClearShaderCache, dlg.DeleteSaves);
+        UpdateStatusText.Text = $"Reparatur vorbereitet ({cleanSummary}) — lade Spiel neu herunter…";
+        await StartDownloadOrUpdateAsync(forceRepair: true);
+    }
 
     private async void InstallLocalZipBtn_Click(object sender, RoutedEventArgs e) => await PickAndInstallLocalZipAsync();
 
@@ -677,28 +915,150 @@ public partial class MainWindow : Window
         DevBuildStatusText.Text = $"🎁 Freunde-Paket bereit in: {bundleDir}";
     }
 
-    // --- PATCHNOTES & NAVIGATION ---
+    // --- PATCHNOTES MIT FARBIGEN TAGS, FILTER-CHIPS & VORSCHAU ---
+
+    private sealed record ParsedChangeItem(string TagKey, string Text);
+    private sealed record ParsedRelease(string Version, string Date, string Title, List<ParsedChangeItem> Items);
+
+    private static TagMeta GetTagMeta(string key) =>
+        TagDefs.FirstOrDefault(t => t.Key.Equals(key, StringComparison.OrdinalIgnoreCase)) ?? TagDefs[2];
+
+    private static string NormalizeTagKey(string raw)
+    {
+        var k = raw.Trim().ToLowerInvariant();
+        return k switch
+        {
+            "neu" or "new" or "feature" or "feat" or "added" => "neu",
+            "fix" or "bugfix" or "bug" or "fixed" or "hotfix" => "fix",
+            "3d" or "grafik" or "graphics" or "visual" or "art" or "model" or "models" => "3d",
+            "balance" or "balancing" or "gameplay" or "economy" => "balance",
+            "launcher" or "updater" or "installer" => "launcher",
+            _ => "verbesserung"
+        };
+    }
+
+    private static ParsedChangeItem ParseChangeItemFromString(string rawText)
+    {
+        var text = rawText.Trim().TrimStart('-', '*', '•', ' ');
+        // Prüft auf Prefix wie "[FIX] ...", "[NEU] ...", "Bugfix: ..."
+        if (text.StartsWith('['))
+        {
+            var close = text.IndexOf(']');
+            if (close > 1 && close < 20)
+            {
+                var tag = NormalizeTagKey(text[1..close]);
+                return new ParsedChangeItem(tag, text[(close + 1)..].Trim());
+            }
+        }
+        var lower = text.ToLowerInvariant();
+        if (lower.Contains("behoben") || lower.Contains("fix") || lower.Contains("repariert") || lower.Contains("fehler") || lower.Contains("sichtbar") || lower.Contains("verloren"))
+            return new ParsedChangeItem("fix", text);
+        if (lower.Contains("launcher") || lower.Contains("updater"))
+            return new ParsedChangeItem("launcher", text);
+        if (lower.Contains("3d-modell") || lower.Contains("blender") || lower.Contains("mixamo") || lower.Contains("charakter") || lower.Contains("lieferwagen"))
+            return new ParsedChangeItem("3d", text);
+        if (lower.Contains("neu") || lower.Contains("erstmals") || lower.Contains("editor"))
+            return new ParsedChangeItem("neu", text);
+        return new ParsedChangeItem("verbesserung", text);
+    }
+
+    private UIElement CreateTaggedRow(ParsedChangeItem item, bool compact = false)
+    {
+        var meta = GetTagMeta(item.TagKey);
+        var row = new Grid { Margin = new Thickness(0, compact ? 2 : 3, 0, compact ? 4 : 5) };
+        row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(compact ? 84 : 108) });
+        row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+
+        var badge = new Border
+        {
+            Background = new SolidColorBrush(meta.Bg),
+            BorderBrush = new SolidColorBrush(meta.Border),
+            BorderThickness = new Thickness(1),
+            CornerRadius = new CornerRadius(5),
+            Padding = new Thickness(compact ? 6 : 8, 2, compact ? 6 : 8, 2),
+            HorizontalAlignment = HorizontalAlignment.Left,
+            VerticalAlignment = VerticalAlignment.Top,
+            Margin = new Thickness(0, 1, 8, 0),
+            Child = new TextBlock
+            {
+                Text = meta.Label,
+                Foreground = new SolidColorBrush(meta.Fg),
+                FontSize = compact ? 9.5 : 10.2,
+                FontWeight = FontWeights.Bold
+            }
+        };
+        Grid.SetColumn(badge, 0);
+        row.Children.Add(badge);
+
+        var tb = new TextBlock
+        {
+            Text = item.Text,
+            Foreground = new SolidColorBrush(Color.FromRgb(204, 220, 236)),
+            FontSize = compact ? 11.5 : 12.8,
+            TextWrapping = TextWrapping.Wrap,
+            TextTrimming = compact ? TextTrimming.CharacterEllipsis : TextTrimming.None,
+            MaxHeight = compact ? 36 : double.PositiveInfinity,
+            VerticalAlignment = VerticalAlignment.Center
+        };
+        Grid.SetColumn(tb, 1);
+        row.Children.Add(tb);
+
+        return row;
+    }
+
+    private void PopulateRemoteNotes(string rawNotes)
+    {
+        RemoteNotesPanel.Children.Clear();
+        var lines = rawNotes.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries);
+        foreach (var rawLine in lines)
+        {
+            var line = rawLine.Trim();
+            if (string.IsNullOrWhiteSpace(line)) continue;
+            if (line.StartsWith('#'))
+            {
+                RemoteNotesPanel.Children.Add(new TextBlock
+                {
+                    Text = line.TrimStart('#', ' '),
+                    Foreground = (Brush)FindResource("AccentCyan"),
+                    FontWeight = FontWeights.Bold,
+                    FontSize = 13,
+                    Margin = new Thickness(0, 6, 0, 4)
+                });
+                continue;
+            }
+            RemoteNotesPanel.Children.Add(CreateTaggedRow(ParseChangeItemFromString(line)));
+        }
+    }
 
     private void LoadPatchnotes()
     {
         PatchnotesPanel.Children.Clear();
+        NotesFilterPanel.Children.Clear();
+        HomeWhatsNewPanel.Children.Clear();
 
         string[] candidates =
         [
-            !string.IsNullOrWhiteSpace(_config.InstallDir) ? Path.Combine(_config.InstallDir, "version.json") : "",
             !string.IsNullOrWhiteSpace(_config.ProjectDir) ? Path.Combine(_config.ProjectDir, "version.json") : "",
+            !string.IsNullOrWhiteSpace(_config.InstallDir) ? Path.Combine(_config.InstallDir, "version.json") : "",
             Path.Combine(AppContext.BaseDirectory, "version.json")
         ];
 
         string? versionFile = candidates.FirstOrDefault(p => !string.IsNullOrWhiteSpace(p) && File.Exists(p));
         if (versionFile == null)
         {
-            PatchnotesPanel.Children.Add(new TextBlock
+            var emptyHint = new TextBlock
             {
                 Text = "Patchnotes erscheinen automatisch, sobald das Spiel heruntergeladen oder ein GitHub-Release geprüft wurde.",
                 Foreground = (Brush)FindResource("TextMuted"),
                 FontSize = 13,
                 TextWrapping = TextWrapping.Wrap
+            };
+            PatchnotesPanel.Children.Add(emptyHint);
+            HomeWhatsNewPanel.Children.Add(new TextBlock
+            {
+                Text = "Noch keine lokalen Patchnotes vorhanden.",
+                Foreground = (Brush)FindResource("TextMuted"),
+                FontSize = 11.5
             });
             return;
         }
@@ -707,72 +1067,167 @@ public partial class MainWindow : Window
         {
             using var doc = JsonDocument.Parse(File.ReadAllText(versionFile));
             var root = doc.RootElement;
-            var ver = root.TryGetProperty("version", out var vp) ? vp.GetString() : "0.5.0";
+            var ver = root.TryGetProperty("version", out var vp) ? vp.GetString() : "1.0.6";
             var code = root.TryGetProperty("codename", out var cp) ? cp.GetString() : "";
-            NotesHeaderTitle.Text = $"Version {ver} — {code}";
+            NotesHeaderTitle.Text = $"Spiel v{ver} — {code}  •  Launcher v{LauncherConfig.CurrentLauncherVersion}";
+            HomeWhatsNewHeader.Text = $"NEUESTES UPDATE  •  v{ver}";
+
+            var releases = new List<ParsedRelease>();
+            var tagCounts = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+            int totalItems = 0;
 
             if (root.TryGetProperty("changelog", out var cl) && cl.ValueKind == JsonValueKind.Array)
             {
                 foreach (var entry in cl.EnumerateArray())
                 {
-                    var card = new Border
-                    {
-                        Background = (Brush)FindResource("BgCard"),
-                        BorderBrush = (Brush)FindResource("BorderSubtle"),
-                        BorderThickness = new Thickness(1),
-                        CornerRadius = new CornerRadius(10),
-                        Padding = new Thickness(18, 14, 18, 14),
-                        Margin = new Thickness(0, 0, 0, 12)
-                    };
-
-                    var stack = new StackPanel();
-                    var header = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 0, 0, 8) };
                     var eVer = entry.TryGetProperty("version", out var ev) ? (ev.GetString() ?? "") : "";
+                    var eDate = entry.TryGetProperty("date", out var ed) ? (ed.GetString() ?? "") : "";
                     var eTitle = entry.TryGetProperty("title", out var et) ? (et.GetString() ?? "") : "";
-
-                    header.Children.Add(new Border
-                    {
-                        Background = new SolidColorBrush(Color.FromRgb(20, 48, 72)),
-                        BorderBrush = (Brush)FindResource("AccentCyan"),
-                        BorderThickness = new Thickness(1),
-                        CornerRadius = new CornerRadius(6),
-                        Padding = new Thickness(8, 2, 8, 2),
-                        Margin = new Thickness(0, 0, 10, 0),
-                        Child = new TextBlock { Text = eVer, Foreground = (Brush)FindResource("AccentCyan"), FontWeight = FontWeights.Bold, FontSize = 12 }
-                    });
-                    header.Children.Add(new TextBlock { Text = eTitle, Foreground = (Brush)FindResource("TextMain"), FontWeight = FontWeights.Bold, FontSize = 15, VerticalAlignment = VerticalAlignment.Center });
-                    stack.Children.Add(header);
+                    var parsedItems = new List<ParsedChangeItem>();
 
                     if (entry.TryGetProperty("items", out var items) && items.ValueKind == JsonValueKind.Array)
                     {
                         foreach (var item in items.EnumerateArray())
                         {
-                            stack.Children.Add(new TextBlock
+                            ParsedChangeItem parsed;
+                            if (item.ValueKind == JsonValueKind.Object)
                             {
-                                Text = $"•  {item.GetString()}",
-                                Foreground = new SolidColorBrush(Color.FromRgb(196, 214, 232)),
-                                FontSize = 12.8,
-                                TextWrapping = TextWrapping.Wrap,
-                                Margin = new Thickness(4, 2, 0, 3)
-                            });
+                                var tRaw = item.TryGetProperty("tag", out var tp) ? (tp.GetString() ?? "verbesserung") : "verbesserung";
+                                var txt = item.TryGetProperty("text", out var txp) ? (txp.GetString() ?? "") : "";
+                                parsed = new ParsedChangeItem(NormalizeTagKey(tRaw), txt);
+                            }
+                            else
+                            {
+                                parsed = ParseChangeItemFromString(item.GetString() ?? "");
+                            }
+
+                            if (!string.IsNullOrWhiteSpace(parsed.Text))
+                            {
+                                parsedItems.Add(parsed);
+                                totalItems++;
+                                tagCounts[parsed.TagKey] = tagCounts.GetValueOrDefault(parsed.TagKey) + 1;
+                            }
                         }
                     }
 
-                    card.Child = stack;
-                    PatchnotesPanel.Children.Add(card);
+                    releases.Add(new ParsedRelease(eVer, eDate, eTitle, parsedItems));
                 }
+            }
+
+            // Home "Neuestes Update" Vorschau (Top 3 Einträge)
+            if (releases.Count > 0)
+            {
+                foreach (var topItem in releases[0].Items.Take(3))
+                    HomeWhatsNewPanel.Children.Add(CreateTaggedRow(topItem, compact: true));
+            }
+
+            // Filter-Chips aufbauen
+            AddFilterChip("all", $"Alle ({totalItems})", Color.FromRgb(46, 216, 255));
+            foreach (var def in TagDefs)
+            {
+                int cnt = tagCounts.GetValueOrDefault(def.Key);
+                if (cnt > 0)
+                    AddFilterChip(def.Key, $"{def.Label} ({cnt})", def.Border);
+            }
+
+            // Version-Cards rendern (gefiltert nach _activeTagFilter)
+            foreach (var rel in releases)
+            {
+                var visibleItems = _activeTagFilter == "all"
+                    ? rel.Items
+                    : rel.Items.Where(i => i.TagKey.Equals(_activeTagFilter, StringComparison.OrdinalIgnoreCase)).ToList();
+
+                if (visibleItems.Count == 0) continue;
+
+                var card = new Border
+                {
+                    Background = (Brush)FindResource("BgCard"),
+                    BorderBrush = (Brush)FindResource("BorderSubtle"),
+                    BorderThickness = new Thickness(1),
+                    CornerRadius = new CornerRadius(10),
+                    Padding = new Thickness(18, 14, 18, 14),
+                    Margin = new Thickness(0, 0, 0, 12)
+                };
+
+                var stack = new StackPanel();
+                var header = new DockPanel { Margin = new Thickness(0, 0, 0, 10) };
+
+                if (!string.IsNullOrWhiteSpace(rel.Date))
+                {
+                    var dateLbl = new TextBlock
+                    {
+                        Text = rel.Date,
+                        Foreground = (Brush)FindResource("TextMuted"),
+                        FontSize = 11.5,
+                        VerticalAlignment = VerticalAlignment.Center
+                    };
+                    DockPanel.SetDock(dateLbl, Dock.Right);
+                    header.Children.Add(dateLbl);
+                }
+
+                var leftHeader = new StackPanel { Orientation = Orientation.Horizontal };
+                leftHeader.Children.Add(new Border
+                {
+                    Background = new SolidColorBrush(Color.FromRgb(20, 48, 72)),
+                    BorderBrush = (Brush)FindResource("AccentCyan"),
+                    BorderThickness = new Thickness(1),
+                    CornerRadius = new CornerRadius(6),
+                    Padding = new Thickness(9, 2, 9, 2),
+                    Margin = new Thickness(0, 0, 10, 0),
+                    Child = new TextBlock { Text = rel.Version, Foreground = (Brush)FindResource("AccentCyan"), FontWeight = FontWeights.Bold, FontSize = 12 }
+                });
+                leftHeader.Children.Add(new TextBlock
+                {
+                    Text = rel.Title,
+                    Foreground = (Brush)FindResource("TextMain"),
+                    FontWeight = FontWeights.Bold,
+                    FontSize = 14.5,
+                    TextWrapping = TextWrapping.Wrap,
+                    VerticalAlignment = VerticalAlignment.Center
+                });
+                header.Children.Add(leftHeader);
+                stack.Children.Add(header);
+
+                foreach (var item in visibleItems)
+                    stack.Children.Add(CreateTaggedRow(item));
+
+                card.Child = stack;
+                PatchnotesPanel.Children.Add(card);
             }
         }
         catch (Exception ex)
         {
-            PatchnotesPanel.Children.Add(new TextBlock { Text = $"Fehler: {ex.Message}", Foreground = (Brush)FindResource("AccentAmber") });
+            PatchnotesPanel.Children.Add(new TextBlock { Text = $"Fehler beim Laden der Patchnotes: {ex.Message}", Foreground = (Brush)FindResource("AccentAmber") });
         }
+    }
+
+    private void AddFilterChip(string filterKey, string label, Color accentColor)
+    {
+        bool active = _activeTagFilter.Equals(filterKey, StringComparison.OrdinalIgnoreCase);
+        var btn = new Button
+        {
+            Style = (Style)FindResource("FilterChipButton"),
+            Content = label,
+            Tag = filterKey
+        };
+        if (active)
+        {
+            btn.Background = new SolidColorBrush(Color.FromArgb(60, accentColor.R, accentColor.G, accentColor.B));
+            btn.BorderBrush = new SolidColorBrush(accentColor);
+            btn.Foreground = new SolidColorBrush(Colors.White);
+        }
+        btn.Click += (_, _) =>
+        {
+            _activeTagFilter = filterKey;
+            LoadPatchnotes();
+        };
+        NotesFilterPanel.Children.Add(btn);
     }
 
     private void SetActiveNav(Button activeBtn, UIElement activePage)
     {
-        Button[] navBtns = [NavPlayBtn, NavNotesBtn, NavUpdatesBtn, NavDevBtn, NavSettingsBtn];
-        UIElement[] pages = [PagePlay, PageNotes, PageUpdates, PageDev, PageSettings];
+        Button[] navBtns = [NavPlayBtn, NavNotesBtn, NavRoadmapBtn, NavUpdatesBtn, NavToolsBtn, NavDevBtn, NavSettingsBtn];
+        UIElement[] pages = [PagePlay, PageNotes, PageRoadmap, PageUpdates, PageTools, PageDev, PageSettings];
 
         foreach (var b in navBtns)
         {
@@ -787,11 +1242,508 @@ public partial class MainWindow : Window
         activePage.Visibility = Visibility.Visible;
     }
 
-    private void NavPlayBtn_Click(object sender, RoutedEventArgs e) { RefreshLauncherState(); SetActiveNav(NavPlayBtn, PagePlay); }
+    private void NavPlayBtn_Click(object sender, RoutedEventArgs e) { RefreshFavoriteServers(); RefreshLauncherState(); SetActiveNav(NavPlayBtn, PagePlay); }
     private void NavNotesBtn_Click(object sender, RoutedEventArgs e) { LoadPatchnotes(); SetActiveNav(NavNotesBtn, PageNotes); }
+    private async void NavRoadmapBtn_Click(object sender, RoutedEventArgs e) { SetActiveNav(NavRoadmapBtn, PageRoadmap); await LoadRoadmapAsync(); }
     private void NavUpdatesBtn_Click(object sender, RoutedEventArgs e) { RefreshLauncherState(); SetActiveNav(NavUpdatesBtn, PageUpdates); }
+    private void NavToolsBtn_Click(object sender, RoutedEventArgs e) { RefreshBackupsList(); RefreshCustomModelsList(); SetActiveNav(NavToolsBtn, PageTools); }
     private void NavDevBtn_Click(object sender, RoutedEventArgs e) => SetActiveNav(NavDevBtn, PageDev);
     private void NavSettingsBtn_Click(object sender, RoutedEventArgs e) => SetActiveNav(NavSettingsBtn, PageSettings);
+
+    // --- CO-OP FAVORITEN (SCHNELL-BEITRITT) ---
+
+    private void AddFavServerBtn_Click(object sender, RoutedEventArgs e)
+    {
+        AddFavServerRow.Visibility = AddFavServerRow.Visibility == Visibility.Visible ? Visibility.Collapsed : Visibility.Visible;
+    }
+
+    private void SaveFavServerBtn_Click(object sender, RoutedEventArgs e)
+    {
+        var name = string.IsNullOrWhiteSpace(NewFavNameBox.Text) ? "Co-op Server" : NewFavNameBox.Text.Trim();
+        var ip = string.IsNullOrWhiteSpace(NewFavIpBox.Text) ? "127.0.0.1" : NewFavIpBox.Text.Trim();
+        int port = int.TryParse(NewFavPortBox.Text.Trim(), out var p) ? Math.Clamp(p, 1, 65535) : 7777;
+        _config.FavoriteServers.Add(new FavoriteServer { Name = name, Ip = ip, Port = port });
+        _config.Save();
+        AddFavServerRow.Visibility = Visibility.Collapsed;
+        RefreshFavoriteServers();
+    }
+
+    private void RefreshFavoriteServers()
+    {
+        HomeFavServersPanel.Children.Clear();
+        if (_config.FavoriteServers.Count == 0)
+        {
+            HomeFavServersPanel.Children.Add(new TextBlock
+            {
+                Text = "Noch keine Server gespeichert — klicke auf „+ Server“ für 1-Klick-Co-op-Join.",
+                Foreground = (Brush)FindResource("TextMuted"),
+                FontSize = 11.2,
+                TextWrapping = TextWrapping.Wrap
+            });
+            return;
+        }
+
+        for (int i = 0; i < _config.FavoriteServers.Count; i++)
+        {
+            var srv = _config.FavoriteServers[i];
+            int idx = i;
+            var row = new Border
+            {
+                Background = new SolidColorBrush(Color.FromRgb(18, 26, 40)),
+                BorderBrush = (Brush)FindResource("BorderSubtle"),
+                BorderThickness = new Thickness(1),
+                CornerRadius = new CornerRadius(7),
+                Padding = new Thickness(10, 6, 8, 6),
+                Margin = new Thickness(0, 0, 0, 6)
+            };
+            var grid = new Grid();
+            grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+
+            var info = new StackPanel { VerticalAlignment = VerticalAlignment.Center };
+            info.Children.Add(new TextBlock { Text = srv.Name, Foreground = (Brush)FindResource("TextMain"), FontSize = 12, FontWeight = FontWeights.SemiBold });
+            info.Children.Add(new TextBlock { Text = $"{srv.Ip}:{srv.Port}", Foreground = (Brush)FindResource("TextMuted"), FontSize = 10.5 });
+            Grid.SetColumn(info, 0);
+            grid.Children.Add(info);
+
+            var btns = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
+            var joinBtn = new Button
+            {
+                Style = (Style)FindResource("PrimaryPlayButton"),
+                Content = "⚡ Join",
+                FontSize = 11,
+                Padding = new Thickness(10, 4, 10, 4),
+                Margin = new Thickness(0, 0, 6, 0)
+            };
+            joinBtn.Click += (_, _) => JoinFavoriteServer(srv);
+            btns.Children.Add(joinBtn);
+
+            var delBtn = new Button
+            {
+                Style = (Style)FindResource("SecondaryButton"),
+                Content = "✕",
+                FontSize = 10.5,
+                Padding = new Thickness(7, 4, 7, 4)
+            };
+            delBtn.Click += (_, _) =>
+            {
+                if (idx >= 0 && idx < _config.FavoriteServers.Count)
+                {
+                    _config.FavoriteServers.RemoveAt(idx);
+                    _config.Save();
+                    RefreshFavoriteServers();
+                }
+            };
+            btns.Children.Add(delBtn);
+
+            Grid.SetColumn(btns, 1);
+            grid.Children.Add(btns);
+            row.Child = grid;
+            HomeFavServersPanel.Children.Add(row);
+        }
+    }
+
+    private void JoinFavoriteServer(FavoriteServer srv)
+    {
+        if (_isBusy || _isGameRunning) return;
+        SyncConfigFromUI();
+        var args = new List<string>
+        {
+            $"--quality={_config.GraphicsQuality}",
+            $"--name={_config.PlayerName}",
+            $"--join={srv.Ip}",
+            $"--port={srv.Port}"
+        };
+
+        bool ok = _config.IsGameInstalled
+            ? LaunchInstalledGame(args, out var err, trackSession: true)
+            : LaunchGodotDev(args, out err);
+
+        if (ok)
+        {
+            LaunchStatusTitle.Text = $"Verbinde mit {srv.Name}… ⚡";
+            LaunchStatusSub.Text = $"{srv.Ip}:{srv.Port}";
+        }
+        else
+        {
+            MessageBox.Show(err, "Direkt-Beitritt fehlgeschlagen", MessageBoxButton.OK, MessageBoxImage.Warning);
+        }
+    }
+
+    // --- ROADMAP-BOARD ---
+
+    private async void RefreshRoadmapBtn_Click(object sender, RoutedEventArgs e) => await LoadRoadmapAsync();
+
+    private async Task LoadRoadmapAsync()
+    {
+        RoadmapColumnsGrid.Children.Clear();
+        RoadmapSubText.Text = "Lade Roadmap…";
+
+        string? localRoadmap = new[]
+        {
+            !string.IsNullOrWhiteSpace(_config.ProjectDir) ? Path.Combine(_config.ProjectDir, "roadmap.json") : "",
+            !string.IsNullOrWhiteSpace(_config.InstallDir) ? Path.Combine(_config.InstallDir, "roadmap.json") : "",
+            Path.Combine(AppContext.BaseDirectory, "roadmap.json")
+        }.FirstOrDefault(p => !string.IsNullOrWhiteSpace(p) && File.Exists(p));
+
+        var rawJson = await UpdateService.FetchRoadmapJsonAsync(_config.UpdateManifestUrl, localRoadmap);
+        if (string.IsNullOrWhiteSpace(rawJson))
+        {
+            RoadmapSubText.Text = "Roadmap konnte nicht geladen werden (offline und keine lokale roadmap.json gefunden).";
+            return;
+        }
+
+        try
+        {
+            using var doc = JsonDocument.Parse(rawJson);
+            var root = doc.RootElement;
+            var updated = root.TryGetProperty("updated", out var up) ? up.GetString() : "";
+            RoadmapSubText.Text = string.IsNullOrWhiteSpace(updated)
+                ? "Offizielle Entwicklungs-Roadmap für DataCenter Tycoon."
+                : $"Offizielle Entwicklungs-Roadmap • Stand: {updated}";
+
+            if (!root.TryGetProperty("columns", out var cols) || cols.ValueKind != JsonValueKind.Array)
+                return;
+
+            int colIdx = 0;
+            Color[] colAccents = [Color.FromRgb(77, 163, 255), Color.FromRgb(255, 184, 48), Color.FromRgb(36, 216, 122)];
+            string[] colIcons = ["📋", "⚙", "✅"];
+
+            foreach (var col in cols.EnumerateArray())
+            {
+                var cTitle = col.TryGetProperty("title", out var tp) ? (tp.GetString() ?? "") : "";
+                var accent = colAccents[colIdx % colAccents.Length];
+                var icon = colIcons[colIdx % colIcons.Length];
+
+                var colCard = new Border
+                {
+                    Background = new SolidColorBrush(Color.FromRgb(16, 23, 35)),
+                    BorderBrush = new SolidColorBrush(Color.FromArgb(120, accent.R, accent.G, accent.B)),
+                    BorderThickness = new Thickness(1),
+                    CornerRadius = new CornerRadius(11),
+                    Padding = new Thickness(14, 12, 14, 12),
+                    Margin = new Thickness(colIdx == 0 ? 0 : 6, 0, colIdx == 2 ? 0 : 6, 0)
+                };
+
+                var colGrid = new Grid();
+                colGrid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+                colGrid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
+
+                var colHeader = new TextBlock
+                {
+                    Text = $"{icon}  {cTitle.ToUpperInvariant()}",
+                    Foreground = new SolidColorBrush(accent),
+                    FontWeight = FontWeights.Bold,
+                    FontSize = 13,
+                    Margin = new Thickness(2, 0, 0, 10)
+                };
+                Grid.SetRow(colHeader, 0);
+                colGrid.Children.Add(colHeader);
+
+                var itemsStack = new StackPanel();
+                if (col.TryGetProperty("items", out var items) && items.ValueKind == JsonValueKind.Array)
+                {
+                    foreach (var it in items.EnumerateArray())
+                    {
+                        var iTag = it.TryGetProperty("tag", out var tg) ? (tg.GetString() ?? "gameplay") : "gameplay";
+                        var iVer = it.TryGetProperty("version", out var iv) ? (iv.GetString() ?? "") : "";
+                        var iTitle = it.TryGetProperty("title", out var itl) ? (itl.GetString() ?? "") : "";
+                        var iDesc = it.TryGetProperty("desc", out var idsc) ? (idsc.GetString() ?? "") : "";
+                        var meta = GetTagMeta(iTag);
+
+                        var itemCard = new Border
+                        {
+                            Background = (Brush)FindResource("BgCard"),
+                            BorderBrush = (Brush)FindResource("BorderSubtle"),
+                            BorderThickness = new Thickness(1),
+                            CornerRadius = new CornerRadius(9),
+                            Padding = new Thickness(12, 10, 12, 10),
+                            Margin = new Thickness(0, 0, 0, 9)
+                        };
+                        var st = new StackPanel();
+                        var topRow = new DockPanel { Margin = new Thickness(0, 0, 0, 6) };
+                        if (!string.IsNullOrWhiteSpace(iVer))
+                        {
+                            var verTb = new TextBlock { Text = iVer, Foreground = (Brush)FindResource("TextMuted"), FontSize = 11, FontWeight = FontWeights.Bold, VerticalAlignment = VerticalAlignment.Center };
+                            DockPanel.SetDock(verTb, Dock.Right);
+                            topRow.Children.Add(verTb);
+                        }
+                        topRow.Children.Add(new Border
+                        {
+                            Background = new SolidColorBrush(meta.Bg),
+                            BorderBrush = new SolidColorBrush(meta.Border),
+                            BorderThickness = new Thickness(1),
+                            CornerRadius = new CornerRadius(5),
+                            Padding = new Thickness(7, 2, 7, 2),
+                            HorizontalAlignment = HorizontalAlignment.Left,
+                            Child = new TextBlock { Text = meta.Label, Foreground = new SolidColorBrush(meta.Fg), FontSize = 9.5, FontWeight = FontWeights.Bold }
+                        });
+                        st.Children.Add(topRow);
+                        st.Children.Add(new TextBlock { Text = iTitle, Foreground = (Brush)FindResource("TextMain"), FontSize = 13, FontWeight = FontWeights.Bold, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 0, 4) });
+                        st.Children.Add(new TextBlock { Text = iDesc, Foreground = new SolidColorBrush(Color.FromRgb(166, 186, 208)), FontSize = 11.5, TextWrapping = TextWrapping.Wrap });
+                        itemCard.Child = st;
+                        itemsStack.Children.Add(itemCard);
+                    }
+                }
+
+                var sv = new ScrollViewer { VerticalScrollBarVisibility = ScrollBarVisibility.Auto, Content = itemsStack };
+                Grid.SetRow(sv, 1);
+                colGrid.Children.Add(sv);
+                colCard.Child = colGrid;
+                RoadmapColumnsGrid.Children.Add(colCard);
+                colIdx++;
+            }
+        }
+        catch (Exception ex)
+        {
+            RoadmapSubText.Text = $"Roadmap-Fehler: {ex.Message}";
+        }
+    }
+
+    // --- WERKZEUGE: SAVEGAME-MANAGER, CUSTOM-MODELLE (DRAG & DROP) & BUG-DIAGNOSE ---
+
+    private void ManualBackupBtn_Click(object sender, RoutedEventArgs e)
+    {
+        var (_, msg, _) = UpdateService.CreateSavesBackup("manual");
+        BackupStatusText.Text = msg;
+        RefreshBackupsList();
+    }
+
+    private void OpenBackupsBtn_Click(object sender, RoutedEventArgs e)
+    {
+        Directory.CreateDirectory(LauncherConfig.BackupsDir);
+        Process.Start(new ProcessStartInfo { FileName = LauncherConfig.BackupsDir, UseShellExecute = true });
+    }
+
+    private void RefreshBackupsList()
+    {
+        BackupsListPanel.Children.Clear();
+        Directory.CreateDirectory(LauncherConfig.BackupsDir);
+        var files = Directory.GetFiles(LauncherConfig.BackupsDir, "saves_*.zip")
+            .OrderByDescending(File.GetCreationTimeUtc)
+            .Take(8)
+            .ToList();
+
+        if (files.Count == 0)
+        {
+            BackupsListPanel.Children.Add(new TextBlock
+            {
+                Text = "Noch keine Backups angelegt. Klicke auf „💾 Jetzt sichern“ oder starte ein Update.",
+                Foreground = (Brush)FindResource("TextMuted"),
+                FontSize = 12
+            });
+            return;
+        }
+
+        foreach (var f in files)
+        {
+            var fi = new FileInfo(f);
+            var row = new Border
+            {
+                Background = new SolidColorBrush(Color.FromRgb(18, 26, 40)),
+                BorderBrush = (Brush)FindResource("BorderSubtle"),
+                BorderThickness = new Thickness(1),
+                CornerRadius = new CornerRadius(7),
+                Padding = new Thickness(12, 8, 10, 8),
+                Margin = new Thickness(0, 0, 0, 6)
+            };
+            var grid = new Grid();
+            grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+
+            var info = new StackPanel { VerticalAlignment = VerticalAlignment.Center };
+            info.Children.Add(new TextBlock { Text = fi.Name, Foreground = (Brush)FindResource("TextMain"), FontSize = 12.2, FontWeight = FontWeights.SemiBold });
+            info.Children.Add(new TextBlock { Text = $"{fi.CreationTime:dd.MM.yyyy HH:mm}  •  {fi.Length / 1024.0:F0} KB", Foreground = (Brush)FindResource("TextMuted"), FontSize = 11 });
+            Grid.SetColumn(info, 0);
+            grid.Children.Add(info);
+
+            var restoreBtn = new Button
+            {
+                Style = (Style)FindResource("SecondaryButton"),
+                Content = "↩ Wiederherstellen",
+                FontSize = 11.5,
+                Padding = new Thickness(10, 5, 10, 5)
+            };
+            restoreBtn.Click += (_, _) =>
+            {
+                if (MessageBox.Show($"Spielstände aus „{fi.Name}“ wiederherstellen?\n(Vorher wird automatisch ein Sicherheits-Backup deiner aktuellen Spielstände erstellt.)",
+                    "Backup wiederherstellen", MessageBoxButton.YesNo, MessageBoxImage.Question) == MessageBoxResult.Yes)
+                {
+                    var (_, msg) = UpdateService.RestoreSavesBackup(f);
+                    BackupStatusText.Text = msg;
+                    RefreshBackupsList();
+                }
+            };
+            Grid.SetColumn(restoreBtn, 1);
+            grid.Children.Add(restoreBtn);
+            row.Child = grid;
+            BackupsListPanel.Children.Add(row);
+        }
+    }
+
+    private string GetCustomModelsDir()
+    {
+        string dir = _config.IsGameInstalled
+            ? Path.Combine(_config.InstallDir, "custom_models")
+            : (_config.IsDeveloperEnvironment
+                ? Path.Combine(_config.ProjectDir, "assets", "models")
+                : Path.Combine(LauncherConfig.AppDataDir, "custom_models"));
+        Directory.CreateDirectory(dir);
+        return dir;
+    }
+
+    private void ModelDropZone_DragOver(object sender, DragEventArgs e)
+    {
+        e.Effects = e.Data.GetDataPresent(DataFormats.FileDrop) ? DragDropEffects.Copy : DragDropEffects.None;
+        e.Handled = true;
+    }
+
+    private void ModelDropZone_Drop(object sender, DragEventArgs e)
+    {
+        if (!e.Data.GetDataPresent(DataFormats.FileDrop)) return;
+        var files = (string[])e.Data.GetData(DataFormats.FileDrop);
+        ImportCustomModelFiles(files);
+    }
+
+    private void AddCustomModelBtn_Click(object sender, RoutedEventArgs e)
+    {
+        var dlg = new OpenFileDialog
+        {
+            Title = "Eigene 3D-Modelle (.glb) auswählen",
+            Filter = "glTF 2.0 Modell (*.glb)|*.glb",
+            Multiselect = true
+        };
+        if (dlg.ShowDialog() == true)
+            ImportCustomModelFiles(dlg.FileNames);
+    }
+
+    private void ImportCustomModelFiles(IEnumerable<string> paths)
+    {
+        var dir = GetCustomModelsDir();
+        int copied = 0;
+        foreach (var p in paths)
+        {
+            if (File.Exists(p) && p.EndsWith(".glb", StringComparison.OrdinalIgnoreCase))
+            {
+                File.Copy(p, Path.Combine(dir, Path.GetFileName(p)), overwrite: true);
+                copied++;
+            }
+        }
+        ModelsStatusText.Text = copied > 0
+            ? $"✅ {copied} .glb-Modell(e) nach {dir} kopiert!"
+            : "⚠ Bitte nur .glb-Dateien hineinziehen.";
+        RefreshCustomModelsList();
+    }
+
+    private void RefreshCustomModelsList()
+    {
+        CustomModelsListPanel.Children.Clear();
+        var dir = GetCustomModelsDir();
+        var files = Directory.GetFiles(dir, "*.glb")
+            .Concat(Directory.GetFiles(dir, "*.glb.disabled"))
+            .OrderBy(Path.GetFileName)
+            .ToList();
+
+        if (files.Count == 0)
+        {
+            CustomModelsListPanel.Children.Add(new TextBlock
+            {
+                Text = $"Noch keine eigenen .glb-Modelle in {dir}.",
+                Foreground = (Brush)FindResource("TextMuted"),
+                FontSize = 12
+            });
+            return;
+        }
+
+        foreach (var f in files)
+        {
+            bool enabled = f.EndsWith(".glb", StringComparison.OrdinalIgnoreCase);
+            var fi = new FileInfo(f);
+            var row = new Border
+            {
+                Background = new SolidColorBrush(Color.FromRgb(18, 26, 40)),
+                BorderBrush = enabled ? (Brush)FindResource("AccentGreen") : (Brush)FindResource("BorderSubtle"),
+                BorderThickness = new Thickness(1),
+                CornerRadius = new CornerRadius(7),
+                Padding = new Thickness(12, 7, 10, 7),
+                Margin = new Thickness(0, 0, 0, 6)
+            };
+            var grid = new Grid();
+            grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+
+            var displayName = fi.Name.Replace(".disabled", "", StringComparison.OrdinalIgnoreCase);
+            var info = new StackPanel { VerticalAlignment = VerticalAlignment.Center };
+            info.Children.Add(new TextBlock
+            {
+                Text = $"{(enabled ? "🟢" : "⚪")}  {displayName}",
+                Foreground = enabled ? (Brush)FindResource("TextMain") : (Brush)FindResource("TextMuted"),
+                FontSize = 12.2,
+                FontWeight = FontWeights.SemiBold
+            });
+            info.Children.Add(new TextBlock { Text = $"{fi.Length / 1048576.0:F1} MB  •  {(enabled ? "Aktiv" : "Deaktiviert")}", Foreground = (Brush)FindResource("TextMuted"), FontSize = 10.8 });
+            Grid.SetColumn(info, 0);
+            grid.Children.Add(info);
+
+            var btns = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
+            var toggleBtn = new Button
+            {
+                Style = (Style)FindResource("SecondaryButton"),
+                Content = enabled ? "Deaktivieren" : "Aktivieren",
+                FontSize = 11.2,
+                Padding = new Thickness(10, 4, 10, 4),
+                Margin = new Thickness(0, 0, 6, 0)
+            };
+            toggleBtn.Click += (_, _) =>
+            {
+                try
+                {
+                    var target = enabled ? f + ".disabled" : f[..^".disabled".Length];
+                    if (File.Exists(target)) File.Delete(target);
+                    File.Move(f, target);
+                    RefreshCustomModelsList();
+                }
+                catch (Exception ex) { ModelsStatusText.Text = $"Fehler: {ex.Message}"; }
+            };
+            btns.Children.Add(toggleBtn);
+
+            var delBtn = new Button
+            {
+                Style = (Style)FindResource("SecondaryButton"),
+                Content = "🗑",
+                FontSize = 11.2,
+                Padding = new Thickness(8, 4, 8, 4)
+            };
+            delBtn.Click += (_, _) =>
+            {
+                if (MessageBox.Show($"Modell „{displayName}“ wirklich löschen?", "Modell löschen", MessageBoxButton.YesNo, MessageBoxImage.Question) == MessageBoxResult.Yes)
+                {
+                    try { File.Delete(f); RefreshCustomModelsList(); } catch { }
+                }
+            };
+            btns.Children.Add(delBtn);
+
+            Grid.SetColumn(btns, 1);
+            grid.Children.Add(btns);
+            row.Child = grid;
+            CustomModelsListPanel.Children.Add(row);
+        }
+    }
+
+    private void ReportBugBtn_Click(object sender, RoutedEventArgs e)
+    {
+        var (ok, msg, zipPath) = UpdateService.CreateDiagnosticZip(_config);
+        DiagStatusText.Text = msg;
+        if (ok && File.Exists(zipPath))
+        {
+            Process.Start(new ProcessStartInfo { FileName = "explorer.exe", Arguments = $"/select,\"{zipPath}\"", UseShellExecute = true });
+        }
+        var repo = UpdateService.NormalizeGitHubRepo(_config.UpdateManifestUrl);
+        var issueUrl = string.IsNullOrWhiteSpace(repo)
+            ? "https://github.com/RazerFazer-lang/DataCenter-Tycoon/issues/new"
+            : $"https://github.com/{repo}/issues/new";
+        Process.Start(new ProcessStartInfo { FileName = issueUrl, UseShellExecute = true });
+    }
 
     private void BrowseInstallDir_Click(object sender, RoutedEventArgs e)
     {

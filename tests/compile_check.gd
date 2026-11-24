@@ -9,6 +9,9 @@ const SCRIPTS: Array[String] = [
 	"res://scripts/ui/pc_boot_screen.gd",
 	"res://scripts/world/pc_screen_mirror.gd",
 	"res://scripts/autoload/game_state.gd",
+	"res://scripts/autoload/security_guard.gd",
+	"res://scripts/autoload/save_manager.gd",
+	"res://scripts/autoload/finance_manager.gd",
 	"res://scripts/autoload/pc_screen_state.gd",
 	"res://scripts/world/garage_builder.gd",
 	"res://scripts/autoload/network_manager.gd",
@@ -21,6 +24,13 @@ const SCRIPTS: Array[String] = [
 	"res://scripts/autoload/stats_history.gd",
 	"res://scripts/ui/rack_inspector_ui.gd",
 	"res://scripts/world/rack_prop.gd",
+	"res://scripts/world/storage_shelf_prop.gd",
+	"res://scripts/world/workbench_prop.gd",
+	"res://scripts/ui/workbench_ui.gd",
+	"res://scripts/ui/skin_editor_panel.gd",
+	"res://scripts/world/delivery_van.gd",
+	"res://scripts/world/delivery_driver.gd",
+	"res://scripts/world/humanoid_rig_helper.gd",
 ]
 
 

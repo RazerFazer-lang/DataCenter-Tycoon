@@ -29,6 +29,8 @@ var _power_icon: Control
 var _temp_lbl: Label
 var _temp_bar: ProgressBar
 var _temp_icon: Control
+var _rep_lbl: Label
+var _rep_bar: ProgressBar
 var _clock_lbl: Label
 var _day_lbl: Label
 var _clock_icon: Control
@@ -148,6 +150,14 @@ func _ready() -> void:
 	NetworkManager.pings_updated.connect(_refresh_crew)
 	NetworkManager.pings_updated.connect(_update_pause_pings)
 	NetworkManager.players_changed.connect(func() -> void:
+		if _pause_overlay != null and _pause_overlay.visible:
+			_refresh_pause_players()
+	)
+	NetworkManager.ban_list_changed.connect(func() -> void:
+		if _pause_overlay != null and _pause_overlay.visible:
+			_refresh_pause_players()
+	)
+	GameState.host_permissions_changed.connect(func() -> void:
 		if _pause_overlay != null and _pause_overlay.visible:
 			_refresh_pause_players()
 	)
@@ -295,6 +305,9 @@ func _refresh_stats() -> void:
 	_temp_lbl.add_theme_color_override("font_color", t_col)
 	_set_bar_color(_temp_bar, UIStyle.COL_BLUE if not hot else t_col)
 	_set_icon(_temp_icon, "temp", UIStyle.COL_BLUE if not hot else t_col)
+
+	_rep_lbl.text = "%s • %s %d" % [GameState.get_reputation_label(), tr("Stufe"), GameState.get_company_level()]
+	_rep_bar.value = clampf(GameState.reputation, 0.0, 100.0)
 
 
 func _refresh_checklist() -> void:
@@ -672,6 +685,14 @@ func _build_stats_row() -> void:
 	_temp_bar = _make_mini_bar(UIStyle.COL_BLUE)
 	_temp_bar.custom_minimum_size = Vector2(110, 5)
 	tmp_v.add_child(_temp_bar)
+
+	var rep_v := _make_chip(row, "", "RUF")
+	_rep_lbl = Label.new()
+	_rep_lbl.text = tr("Unbekannt")
+	UIStyle.style_label(_rep_lbl, 14, UIStyle.COL_TEXT_MAIN, _display_font)
+	rep_v.add_child(_rep_lbl)
+	_rep_bar = _make_mini_bar(UIStyle.COL_ACCENT)
+	rep_v.add_child(_rep_bar)
 
 
 ## Status-Kachel: optionales Symbol links, rechts Beschriftung und Inhalt.
@@ -1173,9 +1194,7 @@ func _refresh_slot_bar() -> void:
 		if int(c.get("held_by", 0)) != pid:
 			continue
 		var s := clampi(int(c.get("held_slot", 1)), 1, GameState.SLOT_COUNT)
-		var item_type := str(c.get("item_type", ""))
-		var info: Dictionary = GameState.ITEM_CATALOG.get(item_type, {})
-		names[s - 1] = tr(str(info.get("name", item_type)))
+		names[s - 1] = GameState.get_crate_display_label(c)
 	if GameState.extinguisher_held_by == pid:
 		var es := clampi(GameState.extinguisher_held_slot, 1, GameState.SLOT_COUNT)
 		names[es - 1] = tr("Feuerlöscher")
@@ -1714,18 +1733,30 @@ func _refresh_pause_players() -> void:
 		child.queue_free()
 	_pause_ping_labels.clear()
 	var is_host := NetworkManager.is_in_session and multiplayer.is_server()
-	_pause_players_box.visible = is_host and NetworkManager.players.size() > 1
+	_pause_players_box.visible = is_host
 	if not _pause_players_box.visible:
 		return
 
-	_pause_players_box.add_child(_section_label(tr("MITSPIELER (HOST)")))
+	_pause_players_box.add_child(_section_label(tr("HOST-MODERATION & SCHUTZ")))
+
+	var lock_check := CheckButton.new()
+	lock_check.text = tr("Nur Host: Verkaufen, Kredite & Ausbau")
+	lock_check.button_pressed = GameState.host_only_destructive
+	lock_check.add_theme_font_size_override("font_size", 13)
+	lock_check.add_theme_color_override("font_color", Color(0.86, 0.87, 0.88))
+	lock_check.tooltip_text = tr("Verhindert, dass Mitspieler Racks/Geräte verkaufen, Kredite aufnehmen, Mitarbeiter entlassen oder Hallen ausbauen.")
+	lock_check.toggled.connect(func(on: bool) -> void:
+		GameState.set_host_only_destructive(on)
+	)
+	_pause_players_box.add_child(lock_check)
+
 	for pid in NetworkManager.players.keys():
 		var peer_id := int(pid)
 		if peer_id == 1:
 			continue
 		var info: Dictionary = NetworkManager.players[pid]
 		var row := HBoxContainer.new()
-		row.add_theme_constant_override("separation", 10)
+		row.add_theme_constant_override("separation", 8)
 		_pause_players_box.add_child(row)
 
 		var name_lbl := Label.new()
@@ -1737,7 +1768,7 @@ func _refresh_pause_players() -> void:
 		row.add_child(name_lbl)
 
 		var ping_lbl := Label.new()
-		ping_lbl.custom_minimum_size = Vector2(64, 0)
+		ping_lbl.custom_minimum_size = Vector2(56, 0)
 		ping_lbl.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 		ping_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
 		UIStyle.style_label(ping_lbl, 12, UIStyle.COL_TEXT_SUB)
@@ -1745,16 +1776,38 @@ func _refresh_pause_players() -> void:
 		_pause_ping_labels[peer_id] = ping_lbl
 
 		var kick_btn := Button.new()
-		kick_btn.text = "KICKEN"
-		kick_btn.custom_minimum_size = Vector2(96, 32)
-		UIStyle.style_button(kick_btn, Color(0.24, 0.11, 0.10), UIStyle.COL_RED)
+		kick_btn.text = "KICK"
+		kick_btn.custom_minimum_size = Vector2(68, 30)
+		UIStyle.style_button(kick_btn, Color(0.24, 0.16, 0.08), UIStyle.COL_AMBER)
 		kick_btn.pressed.connect(func() -> void:
 			kick_btn.disabled = true
 			NetworkManager.kick_player(peer_id)
 		)
 		row.add_child(kick_btn)
-	_update_pause_pings()
 
+		var ban_btn := Button.new()
+		ban_btn.text = "BANN"
+		ban_btn.custom_minimum_size = Vector2(68, 30)
+		UIStyle.style_button(ban_btn, Color(0.28, 0.09, 0.09), UIStyle.COL_RED)
+		ban_btn.pressed.connect(func() -> void:
+			ban_btn.disabled = true
+			kick_btn.disabled = true
+			NetworkManager.ban_player(peer_id)
+		)
+		row.add_child(ban_btn)
+
+	var ban_count := NetworkManager.get_ban_count()
+	if ban_count > 0:
+		var unban_btn := Button.new()
+		unban_btn.text = tr("Banns zurücksetzen (%d)") % ban_count
+		unban_btn.custom_minimum_size = Vector2(0, 30)
+		UIStyle.style_button(unban_btn, Color(0.14, 0.17, 0.20), UIStyle.COL_BORDER)
+		unban_btn.pressed.connect(func() -> void:
+			NetworkManager.clear_bans()
+			show_toast(tr("Sitzungs-Bannliste wurde geleert."), false)
+		)
+		_pause_players_box.add_child(unban_btn)
+	_update_pause_pings()
 
 func _update_pause_pings() -> void:
 	for peer_id in _pause_ping_labels.keys():

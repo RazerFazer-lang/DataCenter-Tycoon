@@ -88,6 +88,8 @@ var _smooth_target: float = 0.0
 var _smooth_pos: float = 0.0
 var _smooth_written: int = 0
 var _smooth_active: bool = false
+var _rental_scroll: ScrollContainer
+var _rental_scroll_v: float = 0.0
 var _mb_money_label: Label
 var _mb_afford_sig: int = -1
 const LIVE_REFRESH_MS := 1000
@@ -119,8 +121,17 @@ var _preview_part_nodes: Array = []
 var _preview_faulty_cat: String = ""
 var _preview_fault_mat: StandardMaterial3D
 var _preview_hover_lbl: Label
+var _tri_mesh_cache: Dictionary = {} # Mesh -> TriangleMesh fuer pixelgenaues Hover-Picking
 ## Verhindert, dass jede Mausbewegung über dem defekten Teil eine neue Diagnose-RPC schickt.
 var _diag_requested_key: String = ""
+## Mausweg in Pixeln seit dem Drücken in der 3D-Vorschau. Bis PREVIEW_CLICK_SLOP gilt es als Klick, sonst als Drehen.
+var _preview_click_travel: float = 0.0
+const PREVIEW_CLICK_SLOP := 6.0
+## Server-Konfigurator für freie Slots (-> Warenkorb -> Lieferung -> Werkbank).
+var _cfg_open: bool = false
+var _cfg_mb: String = ""
+var _cfg_comps: Dictionary = {}
+var _cfg_toast: String = ""
 
 
 func _ready() -> void:
@@ -134,6 +145,8 @@ func _ready() -> void:
 	GameState.ups_changed.connect(_queue_refresh)
 	GameState.carts_changed.connect(_queue_refresh)
 	GameState.inventory_changed.connect(_queue_refresh)
+	GameState.panel_states_changed.connect(_queue_refresh)
+	GameState.cart_changed.connect(_queue_refresh)
 	GameState.state_updated.connect(_on_state_updated)
 	get_viewport().size_changed.connect(_on_viewport_resized)
 
@@ -444,6 +457,7 @@ func _open_common() -> void:
 	_confirm_sell_module = false
 	_preview_sig = ""
 	_parts_scroll_v = 0
+	_rental_scroll_v = 0.0
 	_pointer_mode = false
 	_animate_next = true
 	_fit_card_size()
@@ -506,6 +520,9 @@ func _device_exists(kind: String) -> bool:
 
 ## Räumt den alten Aufbau ab. Die 3D-Vorschau wird vorher herausgelöst, damit sie nicht mit gelöscht wird.
 func _begin_render() -> void:
+	if is_instance_valid(_rental_scroll):
+		_rental_scroll_v = float(_rental_scroll.scroll_vertical)
+	_rental_scroll = null
 	if is_instance_valid(_parts_scroll):
 		_parts_scroll_v = roundi(_smooth_target) if _smooth_active else _parts_scroll.scroll_vertical
 	_parts_scroll = null
@@ -898,12 +915,16 @@ func _build_mainboard_picker(parent: VBoxContainer) -> void:
 			list.add_child(_make_mainboard_card(str(id)))
 
 
-## Übersicht für einen freien Einschub: kurze Anleitung und die Schaltfläche "Mainboard auswählen".
+## Übersicht für einen freien Einschub: Server-Konfigurator (-> Warenkorb -> Werkbank) + Schachtsteuerung.
 func _build_empty_slot_intro(parent: VBoxContainer) -> void:
 	var slots: Array = GameState.racks[_entity_id]["slots"]
 	var free_n := slots.size() - _count_used_slots(slots)
 	var all_ids := GameState.get_mainboards()
 	var from_price := 0 if all_ids.is_empty() else int(GameState.ITEM_CATALOG[all_ids[0]]["price"])
+
+	if _cfg_open:
+		_build_slot_configurator(parent, all_ids)
+		return
 
 	var head := PanelContainer.new()
 	head.add_theme_stylebox_override("panel", UIStyle.make_panel(UIStyle.COL_BG_CARD, UIStyle.COL_ACCENT, 10, 1, 22, 18))
@@ -920,9 +941,14 @@ func _build_empty_slot_intro(parent: VBoxContainer) -> void:
 	title_row.add_child(tl)
 	title_row.add_child(_make_chip(tr("%d / %d FREI") % [free_n, slots.size()], UIStyle.COL_GREEN))
 
-	var info := _make_label(tr("In diesen Einschub kommt ein Mainboard. Andere Einschübe wählst du links im Rack-Schrank per Klick."), 12, UIStyle.COL_TEXT_SUB)
+	var info := _make_label(tr("Konfiguriere einen Server für diesen Einschub, lege ihn in den Warenkorb und baue den gelieferten Bausatz an der Werkbank zusammen."), 12, UIStyle.COL_TEXT_SUB)
 	info.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	hv.add_child(info)
+
+	if not _cfg_toast.is_empty():
+		var toast_l := _make_label(_cfg_toast, 12, UIStyle.COL_GREEN, true)
+		toast_l.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		hv.add_child(toast_l)
 
 	var line := ColorRect.new()
 	line.custom_minimum_size = Vector2(0, 1)
@@ -931,9 +957,9 @@ func _build_empty_slot_intro(parent: VBoxContainer) -> void:
 	hv.add_child(line)
 
 	var steps := [
-		tr("Links im Rack-Schrank einen freien Einschub anklicken"),
-		tr("„Mainboard auswählen“ klicken und ein Mainboard kaufen, es wird sofort eingebaut"),
-		tr("Danach CPU, RAM, GPU, Speicher, Kühlung und Netzteil einzeln auswählen"),
+		tr("Server hier im Einschub konfigurieren & „In den Warenkorb“ legen"),
+		tr("Am PC-Shop bestellen → beschrifteter Bausatz-Karton wird per Sprinter geliefert"),
+		tr("An der Werkbank realistisch zusammenbauen & in den ausgefahrenen Schacht einsetzen"),
 	]
 	for i in range(steps.size()):
 		var sr := HBoxContainer.new()
@@ -947,20 +973,176 @@ func _build_empty_slot_intro(parent: VBoxContainer) -> void:
 		sl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		sr.add_child(sl)
 
-	var open_btn := _make_btn(tr("MAINBOARD AUSWÄHLEN"), "mb_open", Vector2(0, 58))
-	open_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	_style_btn(open_btn, COL_SELECT, UIStyle.COL_ACCENT)
+	var cfg_btn := _make_btn(tr("SERVER KONFIGURIEREN (→ WARENKORB)"), "cfg_open", Vector2(0, 56))
+	cfg_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_style_btn(cfg_btn, COL_SELECT, UIStyle.COL_ACCENT)
 	if _display_font != null:
-		open_btn.add_theme_font_override("font", _display_font)
-	open_btn.add_theme_font_size_override("font_size", 18)
-	open_btn.pressed.connect(func(): _open_mb_picker(""))
-	parent.add_child(open_btn)
+		cfg_btn.add_theme_font_override("font", _display_font)
+	cfg_btn.add_theme_font_size_override("font_size", 17)
+	cfg_btn.pressed.connect(func():
+		_open_slot_configurator(all_ids)
+	)
+	parent.add_child(cfg_btn)
 
-	var sub := _make_label(tr("%d Mainboards in %d Kategorien  •  ab $%d") % [
-		all_ids.size(), GameState.MAINBOARD_CATEGORIES.size(), from_price
-	], 12, UIStyle.COL_TEXT_SUB)
-	sub.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	parent.add_child(sub)
+	var row_actions := HBoxContainer.new()
+	row_actions.add_theme_constant_override("separation", 10)
+	parent.add_child(row_actions)
+
+	var is_ext := GameState.is_slot_extended(_entity_id, _selected_slot)
+	var ext_btn := _make_btn(tr("Schacht einfahren") if is_ext else tr("Schacht ausfahren (Teleskop)"), "slot_extend", Vector2(0, 40))
+	ext_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_style_btn(ext_btn, Color(0.14, 0.28, 0.38) if is_ext else UIStyle.COL_BG_CARD, UIStyle.COL_ACCENT)
+	ext_btn.pressed.connect(func():
+		GameState.request_toggle_slot_extended(_entity_id, _selected_slot)
+		SfxManager.play("click", -10.0, 1.05)
+	)
+	row_actions.add_child(ext_btn)
+
+	var open_btn := _make_btn(tr("Direkt-Mainboard (ab $%d)") % from_price, "mb_open", Vector2(0, 40))
+	open_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_style_btn(open_btn, UIStyle.COL_BG_CARD, UIStyle.COL_BORDER)
+	open_btn.pressed.connect(func(): _open_mb_picker(""))
+	row_actions.add_child(open_btn)
+
+
+func _open_slot_configurator(all_ids: Array) -> void:
+	_cfg_open = true
+	_cfg_toast = ""
+	if _cfg_mb.is_empty() or not GameState.ITEM_CATALOG.has(_cfg_mb):
+		_cfg_mb = str(all_ids[0]) if not all_ids.is_empty() else "web_server"
+	_ensure_cfg_defaults()
+	SfxManager.play("click", -12.0, 1.1)
+	_refresh()
+
+
+func _ensure_cfg_defaults() -> void:
+	for cat_v in GameState.COMPONENT_ORDER:
+		var cat := str(cat_v)
+		if cat == "gpu":
+			continue
+		var cur := str(_cfg_comps.get(cat, ""))
+		if cur.is_empty() or HardwareCatalog.get_part(cat, cur).is_empty():
+			var plist: Array = HardwareCatalog.PARTS.get(cat, [])
+			for p in plist:
+				var pd: Dictionary = p
+				if GameState.is_part_unlocked(pd):
+					_cfg_comps[cat] = str(pd["id"])
+					break
+
+
+func _build_slot_configurator(parent: VBoxContainer, all_ids: Array) -> void:
+	_ensure_cfg_defaults()
+	var head := PanelContainer.new()
+	head.add_theme_stylebox_override("panel", UIStyle.make_panel(UIStyle.COL_BG_CARD, UIStyle.COL_ACCENT, 8, 1, 14, 10))
+	parent.add_child(head)
+	var hv := VBoxContainer.new()
+	hv.add_theme_constant_override("separation", 6)
+	head.add_child(hv)
+
+	var hrow := HBoxContainer.new()
+	hrow.add_theme_constant_override("separation", 8)
+	hv.add_child(hrow)
+	var title := _make_label(tr("Konfigurator · %s · Slot %d") % [GameState.get_rack_display_name(_entity_id), _selected_slot + 1], 16, UIStyle.COL_TEXT_MAIN, true)
+	title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	hrow.add_child(title)
+	var back_b := _make_btn(tr("Zurück"), "cfg_back", Vector2(88, 28))
+	_style_btn(back_b, UIStyle.COL_BG_DARK, UIStyle.COL_BORDER)
+	back_b.pressed.connect(func():
+		_cfg_open = false
+		_refresh()
+	)
+	hrow.add_child(back_b)
+
+	var scroll := ScrollContainer.new()
+	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	parent.add_child(scroll)
+	var list := VBoxContainer.new()
+	list.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	list.add_theme_constant_override("separation", 6)
+	scroll.add_child(list)
+
+	# 1. Mainboard-Auswahl
+	var mb_row := HBoxContainer.new()
+	mb_row.add_theme_constant_override("separation", 8)
+	list.add_child(mb_row)
+	var mbl := _make_label(tr("Mainboard"), 13, UIStyle.COL_ACCENT, true)
+	mbl.custom_minimum_size = Vector2(126, 0)
+	mb_row.add_child(mbl)
+	var mb_opt := OptionButton.new()
+	mb_opt.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	var mb_sel_idx := 0
+	var unlocked_mbs: Array[String] = []
+	for mid_v in all_ids:
+		var mid := str(mid_v)
+		if GameState.is_item_unlocked(mid):
+			var md: Dictionary = GameState.ITEM_CATALOG[mid]
+			mb_opt.add_item("%s ($%d)" % [str(md["name"]), int(md["price"])])
+			if mid == _cfg_mb:
+				mb_sel_idx = unlocked_mbs.size()
+			unlocked_mbs.append(mid)
+	if not unlocked_mbs.is_empty():
+		mb_opt.select(mb_sel_idx)
+		_cfg_mb = unlocked_mbs[mb_sel_idx]
+	mb_opt.item_selected.connect(func(idx: int):
+		if idx >= 0 and idx < unlocked_mbs.size():
+			_cfg_mb = unlocked_mbs[idx]
+			_refresh()
+	)
+	mb_row.add_child(mb_opt)
+
+	# 2. Komponenten-Auswahl (CPU, RAM, GPU, Storage, Cooling, PSU)
+	for cat_v in GameState.COMPONENT_ORDER:
+		var cat := str(cat_v)
+		var crow := HBoxContainer.new()
+		crow.add_theme_constant_override("separation", 8)
+		list.add_child(crow)
+		var cl := _make_label(GameState.get_component_label(cat), 13, UIStyle.COL_TEXT_MAIN, true)
+		cl.custom_minimum_size = Vector2(126, 0)
+		crow.add_child(cl)
+		var opt := OptionButton.new()
+		opt.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		var ids: Array[String] = []
+		if cat == "gpu":
+			opt.add_item(tr("Keine GPU ($0)"))
+			ids.append("")
+		var plist: Array = HardwareCatalog.PARTS.get(cat, [])
+		var cur_pid := str(_cfg_comps.get(cat, ""))
+		var sel_i := 0
+		for p in plist:
+			var pd: Dictionary = p
+			if not GameState.is_part_unlocked(pd):
+				continue
+			var pid := str(pd["id"])
+			opt.add_item("%s ($%d)" % [str(pd["name"]), int(pd.get("cost", 0))])
+			if pid == cur_pid:
+				sel_i = ids.size()
+			ids.append(pid)
+		if not ids.is_empty():
+			opt.select(sel_i)
+			_cfg_comps[cat] = ids[sel_i]
+		var cap_cat := cat
+		opt.item_selected.connect(func(idx: int):
+			if idx >= 0 and idx < ids.size():
+				_cfg_comps[cap_cat] = ids[idx]
+				_refresh()
+		)
+		crow.add_child(opt)
+
+	var total_p := GameState.calculate_slot_build_price(_cfg_mb, _cfg_comps)
+	var add_btn := _make_btn(tr("IN DEN WARENKORB ($%d)") % total_p, "cfg_add_cart", Vector2(0, 48))
+	add_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_style_btn(add_btn, Color(0.14, 0.44, 0.24), UIStyle.COL_GREEN)
+	if _display_font != null:
+		add_btn.add_theme_font_override("font", _display_font)
+	add_btn.add_theme_font_size_override("font_size", 16)
+	add_btn.pressed.connect(func():
+		if GameState.cart_add_slot_build(_entity_id, _selected_slot, _cfg_mb, _cfg_comps):
+			SfxManager.play("click", -8.0, 1.2)
+			_cfg_open = false
+			_cfg_toast = tr("✓ In den Warenkorb gelegt (%s · Slot %d)! Bestelle am PC-Shop.") % [GameState.get_rack_display_name(_entity_id), _selected_slot + 1]
+			_refresh()
+	)
+	parent.add_child(add_btn)
 
 
 func _open_mb_picker(cid: String) -> void:
@@ -1123,14 +1305,7 @@ func _build_slot_detail(parent: VBoxContainer, slot: Dictionary, itype: String) 
 	else:
 		top.add_child(_make_chip(tr("ONLINE"), UIStyle.COL_GREEN))
 
-	if state == "crashed":
-		var awaiting_diag := GameState.is_slot_awaiting_diagnosis(slot)
-		var rep := _make_btn(tr("Erst Defekt finden") if awaiting_diag else tr("Reparieren"), "slot_repair", Vector2(150 if awaiting_diag else 120, 32))
-		_style_btn(rep, Color(0.18, 0.30, 0.18), UIStyle.COL_GREEN)
-		# Der Server lehnt Reparaturen vor der Diagnose ohnehin ab; der Button zeigt das nur an.
-		rep.disabled = awaiting_diag
-		rep.pressed.connect(func(): GameState.request_repair_slot(_entity_id, _selected_slot, 1.0))
-		top.add_child(rep)
+	# Reparieren geht nur über die 3D-Vorschau: Klick auf das defekte Bauteil.
 
 	var sv_amt := int(roundf(float(stats["total_value"]) * GameState.SELL_REFUND_RATIO))
 	var sell := _make_btn("", "slot_sell", Vector2(190, 32))
@@ -1167,6 +1342,32 @@ func _build_slot_detail(parent: VBoxContainer, slot: Dictionary, itype: String) 
 	hv.add_child(spec)
 	if overloaded:
 		hv.add_child(_make_label(tr("Netzteil zu schwach: %d W Bedarf, %d W maximal") % [int(stats["watts"]), int(stats["psu_max_watts"])], 12, UIStyle.COL_RED, true))
+
+	# Schacht-Steuerung & Herausziehen für Reparatur an der Werkbank
+	var tray_row := HBoxContainer.new()
+	tray_row.add_theme_constant_override("separation", 8)
+	hv.add_child(tray_row)
+	var is_ext := GameState.is_slot_extended(_entity_id, _selected_slot)
+	var ext_btn := _make_btn(tr("Schacht einfahren") if is_ext else tr("Schacht ausfahren"), "slot_ext_occ", Vector2(0, 32))
+	ext_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_style_btn(ext_btn, Color(0.14, 0.28, 0.38) if is_ext else UIStyle.COL_BG_DARK, UIStyle.COL_ACCENT)
+	ext_btn.pressed.connect(func():
+		GameState.request_toggle_slot_extended(_entity_id, _selected_slot)
+		SfxManager.play("click", -10.0, 1.05)
+	)
+	tray_row.add_child(ext_btn)
+
+	var pull_btn := _make_btn(tr("🔧 Server zur Werkbank ziehen") if state == "crashed" else tr("Server-Schlitten herausziehen"), "slot_pull_tray", Vector2(0, 32))
+	pull_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	pull_btn.disabled = (state == "burning") or GameState.is_player_holding_anything(multiplayer.get_unique_id())
+	_style_btn(pull_btn, Color(0.46, 0.22, 0.08) if state == "crashed" else UIStyle.COL_BG_DARK, UIStyle.COL_AMBER if state == "crashed" else UIStyle.COL_BORDER)
+	pull_btn.pressed.connect(func():
+		if not GameState.is_slot_extended(_entity_id, _selected_slot):
+			GameState.request_toggle_slot_extended(_entity_id, _selected_slot)
+		GameState.request_pull_server_tray(_entity_id, _selected_slot)
+		close_requested.emit()
+	)
+	tray_row.add_child(pull_btn)
 
 	parent.add_child(_section_label("KOMPONENTEN  ·  KATEGORIE WÄHLEN"))
 	var comps := HardwareCatalog.normalize_components(slot.get("components", {}) as Dictionary, itype)
@@ -1378,16 +1579,34 @@ func _make_part_row(pd: Dictionary, installed: bool, is_default: bool, stock: in
 
 func _build_side_column(side: VBoxContainer, slot: Dictionary, itype: String) -> void:
 	side.add_child(_section_label("3D-VORSCHAU"))
+	if itype == "" and _cfg_open and not _cfg_mb.is_empty():
+		_preview_frame.custom_minimum_size = Vector2(0, PREVIEW_H)
+		_preview_frame.size_flags_vertical = Control.SIZE_EXPAND_FILL
+		side.add_child(_preview_frame)
+		if _preview_fullscreen:
+			_move_preview_to_fullscreen()
+		_update_3d_preview(_cfg_mb, _cfg_comps, "", false, "")
+		var cfg_hint := Label.new()
+		cfg_hint.text = tr("Live-Vorschau deiner Konfiguration. Lege sie in den Warenkorb und baue sie an der Werkbank zusammen.")
+		cfg_hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		cfg_hint.add_theme_font_size_override("font_size", 11)
+		cfg_hint.add_theme_color_override("font_color", UIStyle.COL_TEXT_SUB)
+		side.add_child(cfg_hint)
+		return
 	if itype != "":
 		_preview_frame.custom_minimum_size = Vector2(0, PREVIEW_H)
 		_preview_frame.size_flags_vertical = Control.SIZE_EXPAND_FILL
 		side.add_child(_preview_frame)
 		if _preview_fullscreen:
 			_move_preview_to_fullscreen()
-		var faulty_cat := str(slot.get("faulty_part", "")) if str(slot.get("state", "")) == "crashed" else ""
-		# Vor der Diagnose bleibt das defekte Teil unmarkiert; der Hover erkennt es trotzdem.
+		var slot_state := str(slot.get("state", ""))
+		var faulty_cat := str(slot.get("faulty_part", "")) if slot_state == "crashed" else ""
+		var broken_visual_cat := faulty_cat
+		if broken_visual_cat == "" and (slot_state == "crashed" or slot_state == "burning"):
+			broken_visual_cat = "mainboard"
+		# Vor der Diagnose bleibt das rote Highlight aus, aber das Bauteil sieht im 3D-Menü sichtbar kaputt aus!
 		var reveal_fault := not GameState.is_slot_awaiting_diagnosis(slot)
-		_update_3d_preview(itype, slot.get("components", {}) as Dictionary, faulty_cat, reveal_fault)
+		_update_3d_preview(itype, slot.get("components", {}) as Dictionary, faulty_cat, reveal_fault, broken_visual_cat)
 		if GameState.is_slot_awaiting_diagnosis(slot):
 			var hint := Label.new()
 			hint.text = tr("Störung ohne bekannte Ursache: Fahre mit der Maus über die Bauteile, um das defekte Teil zu finden.")
@@ -1397,11 +1616,18 @@ func _build_side_column(side: VBoxContainer, slot: Dictionary, itype: String) ->
 			side.add_child(hint)
 		elif faulty_cat != "":
 			var found := Label.new()
-			found.text = tr("Defekt: %s – mit [E] am Rack reparieren.") % GameState.get_component_label(faulty_cat)
+			found.text = tr("Defekt: %s — ziehe den Server-Schlitten heraus und repariere ihn mit dem passenden Kit an der Werkbank!") % GameState.get_component_label(faulty_cat)
 			found.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 			found.add_theme_font_size_override("font_size", 12)
 			found.add_theme_color_override("font_color", UIStyle.COL_RED)
 			side.add_child(found)
+		elif str(slot.get("state", "")) == "crashed":
+			var crashed_l := Label.new()
+			crashed_l.text = tr("Ausgefallen: Klicke in der 3D-Vorschau auf ein Bauteil, um den Server zu reparieren.")
+			crashed_l.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+			crashed_l.add_theme_font_size_override("font_size", 12)
+			crashed_l.add_theme_color_override("font_color", UIStyle.COL_AMBER)
+			side.add_child(crashed_l)
 	else:
 		_update_3d_preview("", {})
 		var ph := PanelContainer.new()
@@ -1549,6 +1775,9 @@ func _render_rack_rental(rack: Dictionary, hw: Dictionary) -> void:
 	rscroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
 	rscroll.follow_focus = true
 	split.add_child(rscroll)
+	_rental_scroll = rscroll
+	if _rental_scroll_v > 0.0:
+		rscroll.set_deferred("scroll_vertical", roundi(_rental_scroll_v))
 	var rv := VBoxContainer.new()
 	rv.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	rv.add_theme_constant_override("separation", 8)
@@ -2341,7 +2570,7 @@ func _build_ui() -> void:
 	_status_panel.add_child(_status_lbl)
 
 	_close_btn = Button.new()
-	_close_btn.text = tr("SCHLIESSEN  [ESC]")
+	_close_btn.text = tr("SCHLIESSEN  [E / ESC]")
 	_close_btn.custom_minimum_size = Vector2(170, 36)
 	_close_btn.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	_close_btn.focus_mode = Control.FOCUS_ALL
@@ -2379,7 +2608,7 @@ func _build_ui() -> void:
 	var footer := HBoxContainer.new()
 	footer.add_theme_constant_override("separation", 12)
 	root_v.add_child(footer)
-	var hint := _make_label(tr("[E] Auswählen / Kaufen    •    Mit der Maus zeigen oder mit den Pfeiltasten wählen    •    [ESC] Schließen"), 11, UIStyle.COL_TEXT_SUB)
+	var hint := _make_label(tr("Mit der Maus auswählen    •    [E / ESC] Schließen"), 11, UIStyle.COL_TEXT_SUB)
 	hint.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	hint.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	hint.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
@@ -2422,29 +2651,63 @@ func _build_preview() -> void:
 
 	_preview_vp = SubViewport.new()
 	_preview_vp.own_world_3d = true
-	_preview_vp.msaa_3d = Viewport.MSAA_2X
+	_preview_vp.msaa_3d = Viewport.MSAA_4X
+	_preview_vp.positional_shadow_atlas_size = 2048
 	_preview_vp.render_target_update_mode = SubViewport.UPDATE_DISABLED
 	vp_container.add_child(_preview_vp)
+
+	# Studio-Himmel nur für Spiegelungen und Umgebungslicht; sichtbar bleibt die ruhige Hintergrundfarbe.
+	# Ohne Himmel spiegeln metallische Teile (Kühler, Heatspreader, Gehäuse) nichts und wirken flach grau.
+	var sky_mat := ProceduralSkyMaterial.new()
+	sky_mat.sky_top_color = Color(0.62, 0.68, 0.76)
+	sky_mat.sky_horizon_color = Color(0.86, 0.88, 0.91)
+	sky_mat.ground_horizon_color = Color(0.42, 0.44, 0.47)
+	sky_mat.ground_bottom_color = Color(0.12, 0.13, 0.15)
+	var sky := Sky.new()
+	sky.sky_material = sky_mat
 
 	var env := Environment.new()
 	env.background_mode = Environment.BG_COLOR
 	env.background_color = Color(0.10, 0.115, 0.138)
-	env.ambient_light_source = Environment.AMBIENT_SOURCE_COLOR
-	env.ambient_light_color = Color(0.74, 0.78, 0.84)
-	env.ambient_light_energy = 0.85
+	env.sky = sky
+	env.ambient_light_source = Environment.AMBIENT_SOURCE_SKY
+	env.ambient_light_energy = 0.55
+	env.reflected_light_source = Environment.REFLECTION_SOURCE_SKY
+	env.tonemap_mode = Environment.TONE_MAPPER_FILMIC
+	env.tonemap_exposure = 1.05
+	# Kontaktschatten zwischen dicht gesetzten Bauteilen (nur im Forward+-Renderer wirksam).
+	env.ssao_enabled = true
+	env.ssao_radius = 0.12
+	env.ssao_intensity = 1.6
 	var we := WorldEnvironment.new()
 	we.environment = env
 	_preview_vp.add_child(we)
 
 	var key_l := DirectionalLight3D.new()
-	key_l.rotation_degrees = Vector3(-48.0, 32.0, 0.0)
-	key_l.light_energy = 1.6
+	key_l.rotation_degrees = Vector3(-52.0, 32.0, 0.0)
+	key_l.light_energy = 1.25
+	key_l.light_color = Color(1.0, 0.97, 0.92)
+	key_l.shadow_enabled = true
+	key_l.shadow_blur = 1.5
+	key_l.shadow_bias = 0.02
+	key_l.shadow_normal_bias = 0.6
+	# Die Szene ist kleiner als 1,2 m: eine einzige Schattenkarte ergibt scharfe Schatten.
+	key_l.directional_shadow_mode = DirectionalLight3D.SHADOW_ORTHOGONAL
+	key_l.directional_shadow_max_distance = 3.0
 	_preview_vp.add_child(key_l)
 
 	var fill_l := DirectionalLight3D.new()
 	fill_l.rotation_degrees = Vector3(-22.0, -138.0, 0.0)
-	fill_l.light_energy = 0.7
+	fill_l.light_energy = 0.45
+	fill_l.light_color = Color(0.86, 0.91, 1.0)
 	_preview_vp.add_child(fill_l)
+
+	# Kantenlicht von hinten oben trennt Lamellen, Riegel und Kartenkanten vom Hintergrund (ohne Spiegel-Blendung auf der Platine).
+	var rim_l := DirectionalLight3D.new()
+	rim_l.rotation_degrees = Vector3(-30.0, 180.0, 0.0)
+	rim_l.light_energy = 0.50
+	rim_l.light_specular = 0.45
+	_preview_vp.add_child(rim_l)
 
 	var cam := Camera3D.new()
 	cam.position = PREVIEW_CAM_POS * _preview_zoom
@@ -2456,13 +2719,18 @@ func _build_preview() -> void:
 	_preview_pivot = Node3D.new()
 	_preview_vp.add_child(_preview_pivot)
 
-	var pad := MeshInstance3D.new()
-	var pm := BoxMesh.new()
-	pm.size = Vector3(1.12, 0.02, 1.02)
-	pad.mesh = pm
-	pad.material_override = MatLib.get_mat("esd_mat")
-	pad.position = Vector3(0.0, -0.015, 0.0)
-	_preview_pivot.add_child(pad)
+	# Werkbank mit ESD-Matte aus Blender; fehlt das Modell, bleibt die einfache Matte.
+	var bench := HardwareMeshFactory.build_preview_workbench()
+	if bench != null:
+		_preview_pivot.add_child(bench)
+	else:
+		var pad := MeshInstance3D.new()
+		var pm := BoxMesh.new()
+		pm.size = Vector3(1.12, 0.02, 1.02)
+		pad.mesh = pm
+		pad.material_override = MatLib.get_mat("esd_mat")
+		pad.position = Vector3(0.0, -0.015, 0.0)
+		_preview_pivot.add_child(pad)
 
 	_preview_model_holder = Node3D.new()
 	_preview_pivot.add_child(_preview_model_holder)
@@ -2557,6 +2825,11 @@ func _on_preview_gui_input(event: InputEvent) -> void:
 	if event is InputEventMouseButton:
 		var mb := event as InputEventMouseButton
 		if mb.button_index == MOUSE_BUTTON_LEFT:
+			if mb.pressed:
+				_preview_click_travel = 0.0
+			elif _preview_dragging and _preview_click_travel <= PREVIEW_CLICK_SLOP:
+				# Klick ohne Drehen: angeklicktes Bauteil reparieren.
+				_try_repair_preview_part(mb.position)
 			_preview_dragging = mb.pressed
 		elif mb.button_index == MOUSE_BUTTON_WHEEL_UP or mb.button_index == MOUSE_BUTTON_WHEEL_DOWN:
 			if mb.pressed:
@@ -2567,6 +2840,7 @@ func _on_preview_gui_input(event: InputEvent) -> void:
 	elif event is InputEventMouseMotion:
 		var mm := event as InputEventMouseMotion
 		if _preview_dragging:
+			_preview_click_travel += mm.relative.length()
 			_preview_yaw += mm.relative.x * 0.012
 			_preview_pitch = clampf(_preview_pitch + mm.relative.y * 0.008, -0.45, 0.35)
 		_update_preview_hover(mm.position)
@@ -2579,8 +2853,7 @@ func _update_preview_hover(pos: Vector2) -> void:
 	if ov_size.x <= 0.0 or ov_size.y <= 0.0 or _preview_part_nodes.is_empty():
 		_clear_preview_hover()
 		return
-	var vp_pos := pos * (Vector2(_preview_vp.size) / ov_size)
-	var cat := _pick_preview_part(_preview_cam.project_ray_origin(vp_pos), _preview_cam.project_ray_normal(vp_pos))
+	var cat := _preview_part_at(pos)
 	if cat == "":
 		_clear_preview_hover()
 		return
@@ -2588,6 +2861,8 @@ func _update_preview_hover(pos: Vector2) -> void:
 	var txt := GameState.get_component_label(cat)
 	if faulty:
 		txt = tr("%s – DEFEKT!") % txt
+	if _can_repair_preview_part(cat):
+		txt = tr("%s  ·  Klicken: Server zur Werkbank ziehen") % txt
 	_preview_hover_lbl.text = txt
 	_preview_hover_lbl.add_theme_color_override("font_color", UIStyle.COL_RED if faulty else Color(0.92, 0.94, 0.97))
 	_preview_hover_lbl.visible = true
@@ -2601,56 +2876,133 @@ func _update_preview_hover(pos: Vector2) -> void:
 		_try_diagnose_selected_slot()
 
 
+## Bauteil-Kategorie unter der Mausposition in der 3D-Vorschau, "" wenn nichts getroffen wird.
+func _preview_part_at(pos: Vector2) -> String:
+	if _preview_cam == null or _preview_vp == null or _preview_overlay == null:
+		return ""
+	var ov_size := _preview_overlay.size
+	if ov_size.x <= 0.0 or ov_size.y <= 0.0 or _preview_part_nodes.is_empty():
+		return ""
+	var vp_pos := pos * (Vector2(_preview_vp.size) / ov_size)
+	return _pick_preview_part(_preview_cam.project_ray_origin(vp_pos), _preview_cam.project_ray_normal(vp_pos))
+
+
+func _selected_slot_data() -> Dictionary:
+	if not GameState.racks.has(_entity_id):
+		return {}
+	var slots: Array = GameState.racks[_entity_id]["slots"]
+	if _selected_slot < 0 or _selected_slot >= slots.size():
+		return {}
+	return slots[_selected_slot] as Dictionary
+
+
+## Darf ein Klick auf dieses Bauteil den gewählten Slot reparieren?
+func _can_repair_preview_part(cat: String) -> bool:
+	var slot := _selected_slot_data()
+	if str(slot.get("state", "")) != "crashed" or GameState.is_slot_awaiting_diagnosis(slot):
+		return false
+	var faulty := str(slot.get("faulty_part", ""))
+	# Ohne bestimmtes defektes Teil (z. B. Überhitzung) reicht ein Klick auf irgendein Bauteil.
+	return faulty == "" or cat == faulty
+
+
+func _try_repair_preview_part(pos: Vector2) -> void:
+	var cat := _preview_part_at(pos)
+	if cat == "" or not _can_repair_preview_part(cat):
+		return
+	if GameState.is_player_holding_anything(multiplayer.get_unique_id()):
+		SfxManager.play("error", -8.0)
+		return
+	SfxManager.play("pickup", -8.0, 1.0)
+	if not GameState.is_slot_extended(_entity_id, _selected_slot):
+		GameState.request_toggle_slot_extended(_entity_id, _selected_slot)
+	GameState.request_pull_server_tray(_entity_id, _selected_slot)
+	close_requested.emit()
+
+
 func _clear_preview_hover() -> void:
 	if _preview_hover_lbl != null:
 		_preview_hover_lbl.visible = false
 
 
-## Nächstes Bauteil entlang des Mausstrahls. Getestet wird gegen die Welt-AABBs der Meshes,
-## das reicht für die groben Bauteilformen und braucht keine Kollisionsformen.
+## Exaktes Bauteil unter dem Mausstrahl mittels lokalem AABB-Vortest + Dreiecks-Raycast (TriangleMesh).
+## Verhindert die aufgeblähte Welt-AABB gedrehter Mainboards, sodass jedes Teil sauber erkannt wird.
 func _pick_preview_part(origin: Vector3, dir: Vector3) -> String:
-	# Ein Bauteil auf der Grundplatte gewinnt auch dann, wenn es bis zu so viel weiter weg getroffen wird
-	# (gleiche Höhe wie die Platine, z. B. Sockel und Steckplätze).
-	const BASE_MARGIN := 0.004
-	var best_cat := ""
-	var best_d := INF
-	# Grundplatten (Meta part_base, z. B. das Mainboard) gewinnen nur, wenn sie klar näher liegen
-	# als jedes getroffene Bauteil. Sonst würde eine weit entfernte Bauteil-Box die ganze Platine verdecken.
-	var base_cat := ""
-	var base_d := INF
+	var best_non_mb_cat := ""
+	var best_non_mb_d := INF
+	var best_mb_d := INF
 	for part_v in _preview_part_nodes:
 		if not is_instance_valid(part_v):
 			continue
 		var part := part_v as Node
-		var d := _ray_hit_distance(part, origin, dir)
-		if bool(part.get_meta("part_base", false)):
-			if d < base_d:
-				base_d = d
-				base_cat = str(part.get_meta("part_cat", ""))
-		elif d < best_d:
-			best_d = d
-			best_cat = str(part.get_meta("part_cat", ""))
-	if best_cat == "":
-		return base_cat
-	if base_cat != "" and base_d + BASE_MARGIN < best_d:
-		return base_cat
-	return best_cat
+		var cat := str(part.get_meta("part_cat", ""))
+		var d := _ray_hit_distance(part, origin, dir, true)
+		if cat == "mainboard":
+			best_mb_d = minf(best_mb_d, d)
+		elif d < best_non_mb_d:
+			best_non_mb_d = d
+			best_non_mb_cat = cat
+	if best_non_mb_cat != "" and best_non_mb_d <= best_mb_d + 0.001:
+		return best_non_mb_cat
+	# Schmale Luftspalte (z. B. zwischen Kühlrippen, RAM-Modulen oder Lüfterflügeln) dem davor liegenden
+	# Bauteil zuordnen, solange dessen lokale Hüllbox vor der Mainboard-Fläche liegt. Kabel-AABBs (PSU/GPU)
+	# werden ausgenommen, weil diagonale Stränge sonst freie Mainboard-Bereiche überdecken.
+	var box_cat := ""
+	var box_d := INF
+	for part_v in _preview_part_nodes:
+		if not is_instance_valid(part_v):
+			continue
+		var part := part_v as Node
+		var cat := str(part.get_meta("part_cat", ""))
+		if cat != "cpu" and cat != "ram" and cat != "storage" and cat != "cooling":
+			continue
+		var bd := _ray_hit_distance(part, origin, dir, false)
+		if bd <= best_mb_d + 0.002 and bd < box_d:
+			box_d = bd
+			box_cat = cat
+	if box_cat != "":
+		return box_cat
+	return "mainboard" if best_mb_d < INF else ""
 
 
-func _ray_hit_distance(n: Node, origin: Vector3, dir: Vector3) -> float:
+func _get_triangle_mesh(mesh: Mesh) -> TriangleMesh:
+	if mesh == null:
+		return null
+	if _tri_mesh_cache.has(mesh):
+		return _tri_mesh_cache[mesh] as TriangleMesh
+	var tm := mesh.generate_triangle_mesh()
+	_tri_mesh_cache[mesh] = tm
+	return tm
+
+
+func _ray_hit_distance(n: Node, origin: Vector3, dir: Vector3, tri_exact: bool = true) -> float:
 	var best := INF
+	if not tri_exact and n.name.begins_with("Cable"):
+		return best
 	if n is MeshInstance3D:
 		var mi := n as MeshInstance3D
 		if mi.mesh != null and mi.is_visible_in_tree():
-			var box: AABB = mi.global_transform * mi.get_aabb()
-			var hit: Variant = box.intersects_ray(origin, dir)
-			if hit != null:
-				best = origin.distance_to(hit as Vector3)
+			var inv := mi.global_transform.affine_inverse()
+			var local_o := inv * origin
+			var local_d := inv.basis * dir
+			if local_d.length_squared() > 1e-10:
+				local_d = local_d.normalized()
+				var box_hit: Variant = mi.get_aabb().intersects_ray(local_o, local_d)
+				if box_hit != null:
+					var tm := _get_triangle_mesh(mi.mesh) if tri_exact else null
+					if tm != null:
+						var thit: Variant = tm.intersect_ray(local_o, local_d)
+						if thit is Dictionary and (thit as Dictionary).has("position"):
+							var world_p: Vector3 = mi.global_transform * ((thit as Dictionary)["position"] as Vector3)
+							best = minf(best, origin.distance_to(world_p))
+					elif not tri_exact or tm == null:
+						var world_b: Vector3 = mi.global_transform * (box_hit as Vector3)
+						best = minf(best, origin.distance_to(world_b))
 	for c in n.get_children():
 		# Eingebaute Bauteile (z. B. die CPU auf dem Mainboard) werden einzeln getestet.
 		if c.has_meta("part_cat"):
 			continue
-		best = minf(best, _ray_hit_distance(c, origin, dir))
+		best = minf(best, _ray_hit_distance(c, origin, dir, tri_exact))
 	return best
 
 
@@ -2702,7 +3054,7 @@ func _set_preview_zoom(value: float) -> void:
 		_preview_cam.position = PREVIEW_CAM_POS * _preview_zoom
 
 
-func _update_3d_preview(item_type: String, comps: Dictionary, faulty_cat: String = "", reveal_fault: bool = true) -> void:
+func _update_3d_preview(item_type: String, comps: Dictionary, faulty_cat: String = "", reveal_fault: bool = true, broken_visual_cat: String = "") -> void:
 	if _preview_vp == null:
 		return
 	if item_type == "":
@@ -2712,7 +3064,7 @@ func _update_3d_preview(item_type: String, comps: Dictionary, faulty_cat: String
 		return
 	_preview_vp.render_target_update_mode = SubViewport.UPDATE_ALWAYS
 
-	var sig := "%s:%s:%s:%s:%s:%s:%s:%s:%s:%s" % [
+	var sig := "%s:%s:%s:%s:%s:%s:%s:%s:%s:%s:%s" % [
 		item_type,
 		str(comps.get("cpu", "")),
 		str(comps.get("gpu", "")),
@@ -2721,6 +3073,7 @@ func _update_3d_preview(item_type: String, comps: Dictionary, faulty_cat: String
 		str(comps.get("cooling", "")),
 		str(comps.get("psu", "")),
 		faulty_cat,
+		broken_visual_cat,
 		"%s:%d" % [_entity_id, _selected_slot],
 		str(reveal_fault),
 	]
@@ -2734,14 +3087,85 @@ func _update_3d_preview(item_type: String, comps: Dictionary, faulty_cat: String
 	_clear(_preview_model_holder)
 	_preview_fans.clear()
 	_preview_part_nodes.clear()
-	var srv := HardwareMeshFactory.build_open_server_chassis(item_type, comps, _preview_fans)
+	var srv := HardwareMeshFactory.build_open_server_chassis(item_type, comps, _preview_fans, broken_visual_cat)
 	_preview_model_holder.add_child(srv)
 	_collect_preview_parts(srv)
-	if faulty_cat != "" and reveal_fault:
+	if broken_visual_cat != "":
 		for part_v in _preview_part_nodes:
 			var part := part_v as Node
-			if str(part.get_meta("part_cat", "")) == faulty_cat:
-				_set_overlay_recursive(part, _get_fault_mat())
+			if str(part.get_meta("part_cat", "")) == broken_visual_cat:
+				if part is Node3D:
+					_attach_preview_damage_vfx(part as Node3D, broken_visual_cat)
+				if faulty_cat != "" and reveal_fault:
+					_set_overlay_recursive(part, _get_fault_mat())
+
+
+## Dezenter Rauchfaden + Mikro-Funken direkt über dem defekten Bauteil in der 3D-Vorschau.
+func _attach_preview_damage_vfx(target: Node3D, cat: String) -> void:
+	var offset := Vector3(0.0, 0.04, 0.0)
+	if cat == "mainboard":
+		offset = Vector3(-0.08, 0.03, -0.15)
+	elif cat == "psu":
+		offset = Vector3(0.0, 0.08, -0.02)
+	elif cat == "cooling":
+		offset = Vector3(0.0, 0.06, 0.0)
+	elif cat == "gpu":
+		offset = Vector3(0.01, 0.06, 0.03)
+
+	var smoke := CPUParticles3D.new()
+	smoke.amount = 14
+	smoke.lifetime = 1.4
+	smoke.preprocess = 0.6
+	smoke.emission_shape = CPUParticles3D.EMISSION_SHAPE_SPHERE
+	smoke.emission_sphere_radius = 0.024
+	smoke.direction = Vector3(0.0, 1.0, 0.0)
+	smoke.spread = 18.0
+	smoke.gravity = Vector3(0.0, 0.08, 0.0)
+	smoke.initial_velocity_min = 0.06
+	smoke.initial_velocity_max = 0.14
+	smoke.scale_amount_min = 0.5
+	smoke.scale_amount_max = 1.6
+	var qm := QuadMesh.new()
+	qm.size = Vector2(0.05, 0.05)
+	var smat := StandardMaterial3D.new()
+	smat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	smat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	smat.billboard_mode = BaseMaterial3D.BILLBOARD_ENABLED
+	smat.billboard_keep_scale = true
+	smat.vertex_color_use_as_albedo = true
+	smat.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_DISABLED
+	smat.albedo_color = Color(0.18, 0.18, 0.20, 0.42)
+	qm.material = smat
+	smoke.mesh = qm
+	smoke.position = offset
+	target.add_child(smoke)
+
+	var sparks := CPUParticles3D.new()
+	sparks.amount = 8
+	sparks.lifetime = 0.45
+	sparks.preprocess = 0.3
+	sparks.emission_shape = CPUParticles3D.EMISSION_SHAPE_SPHERE
+	sparks.emission_sphere_radius = 0.018
+	sparks.direction = Vector3(0.0, 1.0, 0.0)
+	sparks.spread = 55.0
+	sparks.gravity = Vector3(0.0, -1.2, 0.0)
+	sparks.initial_velocity_min = 0.18
+	sparks.initial_velocity_max = 0.45
+	sparks.scale_amount_min = 0.5
+	sparks.scale_amount_max = 1.1
+	var sqm := QuadMesh.new()
+	sqm.size = Vector2(0.010, 0.010)
+	var spmat := StandardMaterial3D.new()
+	spmat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	spmat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	spmat.billboard_mode = BaseMaterial3D.BILLBOARD_ENABLED
+	spmat.billboard_keep_scale = true
+	spmat.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
+	spmat.albedo_color = Color(1.0, 0.72, 0.22, 0.95)
+	sqm.material = spmat
+	sparks.mesh = sqm
+	sparks.position = offset
+	target.add_child(sparks)
 
 
 ## Die Vorschau hängt zwischen zwei Aufbauten frei im Speicher und wird hier mit aufgeräumt.

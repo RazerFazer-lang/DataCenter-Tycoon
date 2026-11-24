@@ -7,6 +7,7 @@ extends Node3D
 signal terminal_open_requested
 signal rack_inspect_requested(rack_id: String, slot_index: int)
 signal device_inspect_requested(kind: String, entity_id: String)
+signal workbench_open_requested
 
 var local_player: PlayerController = null
 
@@ -382,6 +383,10 @@ func open_terminal() -> void:
 	terminal_open_requested.emit()
 
 
+func open_workbench() -> void:
+	workbench_open_requested.emit()
+
+
 func open_rack_inspector(rack_id: String, slot_index: int = 0) -> void:
 	rack_inspect_requested.emit(rack_id, slot_index)
 
@@ -566,7 +571,7 @@ func _sync_crates() -> void:
 			var cp := CrateProp.new()
 			cp.name = cid
 			_crates_container.add_child(cp)
-			cp.setup(cid, str(data["item_type"]))
+			cp.setup(cid, str(data["item_type"]), data)
 			_crate_nodes[cid] = cp
 		(_crate_nodes[cid] as CrateProp).apply_data(data)
 
@@ -628,7 +633,8 @@ func get_port_world_dir(_cable_type: String, endpoint_id: String) -> Variant:
 	if _rack_nodes.has(endpoint_id):
 		var rp: RackProp = _rack_nodes[endpoint_id]
 		if is_instance_valid(rp) and rp.is_inside_tree():
-			return rp.global_transform.basis.z
+			# Rack-Ports (Strom, LAN, Cluster-Link) sitzen an der Rückseite (-Z lokal) -> Kabel nach hinten herausführen!
+			return -rp.global_transform.basis.z
 	if _ups_nodes.has(endpoint_id):
 		var up: UpsProp = _ups_nodes[endpoint_id]
 		if is_instance_valid(up) and up.is_inside_tree():

@@ -103,13 +103,11 @@ func _process(delta: float) -> void:
 
 func apply_graphics_quality(quality: int) -> void:
 	for i in range(_ceiling_lights.size()):
-		# Enable soft SpotLight shadows on High/Ultra for dramatic depth!
-		# Hoch: 4 Lampen mit Schatten, Ultra: alle 6. Gemessen mit allen Hallen frei kosten die Lampen 4-5
-		# zusammen ~0,55 ms pro Frame, drehende Lüfter machen dabei keinen messbaren Unterschied.
-		_ceiling_lights[i].shadow_enabled = (quality >= 3) or (quality >= 2 and i < 4)
+		# Soft SpotLight shadows nur für die 2-3 zentralen Lampen (spart massiv Shadow-Map-Draw-Calls bei vielen Racks!)
+		_ceiling_lights[i].shadow_enabled = (quality >= 3 and i < 3) or (quality >= 2 and i < 2)
 		_ceiling_lights[i].distance_fade_enabled = true
-		_ceiling_lights[i].distance_fade_begin = 16.0
-		_ceiling_lights[i].distance_fade_shadow = 9.0
+		_ceiling_lights[i].distance_fade_begin = 15.0
+		_ceiling_lights[i].distance_fade_shadow = 8.0
 		_ceiling_lights[i].distance_fade_length = 4.0
 	# Die Proben rendern nur einmal (UPDATE_ONCE) und kosten danach kaum etwas.
 	for rp in _reflection_probes:
@@ -794,6 +792,31 @@ func _build_delivery_zone() -> void:
 	sign_in.modulate = Color(1.0, 0.85, 0.25)
 	add_child(sign_in)
 
+	var cap_lbl := Label3D.new()
+	cap_lbl.text = "Belegt: 0 / %d Plätze" % GameState.DELIVERY_ZONE_MAX_CRATES
+	cap_lbl.font_size = 26
+	cap_lbl.pixel_size = 0.0046
+	cap_lbl.position = Vector3(0.0, 3.00, 4.44)
+	cap_lbl.rotation_degrees.y = 180.0
+	cap_lbl.modulate = Color(0.74, 0.96, 0.78)
+	add_child(cap_lbl)
+	var update_cap := func() -> void:
+		if not is_instance_valid(cap_lbl):
+			return
+		var used := GameState.get_delivery_zone_used_slots()
+		var mx := GameState.DELIVERY_ZONE_MAX_CRATES
+		cap_lbl.text = tr("Lieferfläche: %d / %d Plätze") % [used, mx]
+		if used >= mx:
+			cap_lbl.modulate = Color(1.0, 0.34, 0.26)
+		elif used >= mx - 3:
+			cap_lbl.modulate = Color(1.0, 0.76, 0.22)
+		else:
+			cap_lbl.modulate = Color(0.68, 0.96, 0.76)
+	GameState.crates_changed.connect(update_cap)
+	GameState.van_updated.connect(update_cap)
+	GameState.world_snapshot_loaded.connect(update_cap)
+	update_cap.call()
+
 
 func _build_lighting() -> void:
 	var housing_mat := _mat(Color(0.20, 0.22, 0.26), 0.5, 0.4)
@@ -1176,24 +1199,17 @@ func _setup_breaker_model(model: Node3D, root: Node3D) -> void:
 			deg_to_rad(_glb_extra(door_h, "dct_open_deg", -110.0)), GameState.WALL_BREAKER_ID,
 			Vector3(0.38, -0.08, 0.16), Vector3(0.80, 0.76, 0.46))
 
-	# Nur die mittlere Einspeisedose ist in Betrieb. Alle Kabel kommen dort heraus.
-	# Die beiden äußeren Dosen bekommen eine graue Blindabdeckung, ihre Deckel werden ausgeblendet.
+	# Nur die einzelne mittige Einspeisedose ist verbaut (keine äußeren Blindabdeckungen/Dosen mehr).
 	_socket_lids.clear()
 	_socket_lid_closed.clear()
 	_socket_lid_open.clear()
-	var blank_mat := _mat(Color(0.72, 0.73, 0.72), 0.55, 0.15)
-	for i in range(1, 4):
-		var lid := _glb_find(model, "_Hinge_SocketLid_%d" % i)
-		if lid == null:
-			continue
-		if i != 2:
-			lid.visible = false
-			var bx := -0.12 if i == 1 else 0.12
-			_add_box_visual(root, Vector3(bx, -0.372, 0.164), Vector3(0.074, 0.078, 0.008), blank_mat)
-			continue
-		_socket_lids.append(lid)
-		_socket_lid_closed.append(lid.rotation.x)
-		_socket_lid_open.append(lid.rotation.x + deg_to_rad(_glb_extra(lid, "dct_open_deg_x", -100.0)))
+	var mid_lid := _glb_find(model, "_Hinge_SocketLid_2")
+	if mid_lid == null:
+		mid_lid = _glb_find(model, "_Hinge_SocketLid_1")
+	if mid_lid != null:
+		_socket_lids.append(mid_lid)
+		_socket_lid_closed.append(mid_lid.rotation.x)
+		_socket_lid_open.append(mid_lid.rotation.x + deg_to_rad(_glb_extra(mid_lid, "dct_open_deg_x", -100.0)))
 
 	_build_fuse_tray(root)
 
@@ -1949,18 +1965,21 @@ func _build_wall_decor() -> void:
 
 
 func _build_workshop_props() -> void:
-	# 1. Realistic Heavy-Duty Slotted-Angle Industrial Workshop Rack (Cantilever Toolbox, Hollow Bins, Flanged Cable Reels, Duster Can, Spare Server!)
-	var shelf := BuildingPropFactory.build_heavy_workshop_shelf()
+	# 1. Funktionales 3D-Schwerlast-Lagerregal (2K PBR aus Blender, 12 freie Stellplaetze mit 3D-Etiketten!)
+	var shelf := StorageShelfProp.new()
 	shelf.position = Vector3(-5.12, 0.0, -2.2)
+	shelf.rotation_degrees.y = 90.0
 	add_child(shelf)
-	# Static collider so players don't walk through the workshop shelf
-	_add_invisible_wall(Vector3(-5.12, 1.08, -2.2), Vector3(0.58, 2.16, 1.56))
+	shelf.setup("shelf_0")
+	# Kollisionswand nur im hinteren Regalrahmen, damit die 12 vorderen Fach-Hitboxen (Layer 4) niemals blockiert werden!
+	_add_invisible_wall(Vector3(-5.30, 1.08, -2.2), Vector3(0.24, 2.16, 1.56))
 
-	# 2. Realistic Tech Hardware Workbench (Pegboard + Hanging Wrenches/Screwdrivers + Lab Power Supply + Open Motherboard, CPU, GPU & RAM!)
-	var bench := BuildingPropFactory.build_hardware_workbench()
+	# 2. Funktionale industrielle 3D-IT-Werkbank (2K PBR aus Blender, fuer Zusammenbau & Reparatur!)
+	var bench := WorkbenchProp.new()
 	bench.position = Vector3(-4.95, 0.0, 2.25)
 	bench.rotation_degrees.y = 90.0
 	add_child(bench)
+	bench.setup("wb_main")
 	_add_invisible_wall(Vector3(-4.95, 0.44, 2.25), Vector3(0.84, 0.88, 1.58))
 
 

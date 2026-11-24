@@ -17,6 +17,8 @@ signal port_forward_finished(ok: bool, ip: String, message: String)
 signal pings_updated
 ## Liste der im LAN gefundenen Spiele hat sich geändert (siehe lan_games).
 signal lan_games_updated
+## Bannliste des Hosts hat sich geändert.
+signal ban_list_changed
 
 const DEFAULT_PORT := 7777
 const MAX_PLAYERS := 4
@@ -70,6 +72,9 @@ var player_pings: Dictionary = {}
 var _ping_timer: Timer = null
 ## Grund, den der Host beim Kicken mitgeschickt hat.
 var _kick_reason: String = ""
+## Sitzungs-Bannliste des Hosts (IP-Adressen und kleingeschriebene Spielernamen).
+var banned_ips: Array[String] = []
+var banned_names: Array[String] = []
 ## Daten der letzten Verbindung für reconnect(): {ip, port, password}
 var _last_join: Dictionary = {}
 
@@ -200,9 +205,7 @@ func host_dedicated(server_name: String, port: int, world_name: String, password
 func _start_host_internal(player_name: String, port: int, loaded_state: Dictionary, save_id: String, display_name: String, password: String = "", dedicated: bool = false, use_upnp: bool = true) -> Error:
 	leave_session()
 	host_password = password.strip_edges().left(PASSWORD_MAX_LEN)
-	local_player_name = player_name.strip_edges().left(18)
-	if local_player_name.is_empty():
-		local_player_name = "Host"
+	local_player_name = SecurityGuard.sanitize_player_name(player_name, [], true, "Host")
 	# Der Servername ist kein Spielername und soll die settings.cfg nicht überschreiben.
 	if not dedicated:
 		SettingsManager.player_name = local_player_name
@@ -231,14 +234,13 @@ func _start_host_internal(player_name: String, port: int, loaded_state: Dictiona
 		_start_port_forward(port)
 
 	if loaded_state.is_empty():
-		var clean_name := display_name.strip_edges()
-		if clean_name.is_empty():
-			clean_name = "Mein DataCenter"
+		var clean_name := SecurityGuard.sanitize_label(display_name, 32, "Mein DataCenter")
 		GameState.initialize_new_world(SaveManager.sanitize_save_id(clean_name), clean_name)
 		hosted_world_name = clean_name
 	else:
-		GameState.load_from_save_data(loaded_state, save_id, display_name)
-		hosted_world_name = display_name.strip_edges()
+		var safe_display := SecurityGuard.sanitize_label(display_name, 32, "Mein DataCenter")
+		GameState.load_from_save_data(loaded_state, save_id, safe_display)
+		hosted_world_name = safe_display
 	_start_lan_broadcast(port)
 
 	players_changed.emit()
@@ -252,9 +254,7 @@ func join_game(ip: String, player_name: String, port: int = DEFAULT_PORT, passwo
 	leave_session()
 	_join_password = password.strip_edges().left(PASSWORD_MAX_LEN)
 	_join_error = ""
-	local_player_name = player_name.strip_edges().left(18)
-	if local_player_name.is_empty():
-		local_player_name = "Techniker"
+	local_player_name = SecurityGuard.sanitize_player_name(player_name, [], false, "Techniker")
 	SettingsManager.player_name = local_player_name
 
 	var clean_ip := ip.strip_edges()
@@ -285,6 +285,9 @@ func leave_session() -> void:
 	_joining = false
 	players.clear()
 	player_pings.clear()
+	banned_ips.clear()
+	banned_names.clear()
+	SecurityGuard.clear_all_rate_limits()
 	_stop_lan_broadcast()
 	stop_lan_discovery()
 	hosted_world_name = ""
@@ -415,8 +418,11 @@ func _handle_client_login(peer_id: int, msg: Dictionary) -> void:
 	var nonce := str(_auth_nonces[peer_id])
 	_auth_nonces.erase(peer_id) # Ein Versuch pro Verbindung.
 	var reason := ""
+	var client_ip := _get_peer_ip(peer_id)
 	var client_version := str(msg.get("v", "?")).left(32)
-	if client_version != UIStyle.game_version():
+	if is_ip_banned(client_ip):
+		reason = "Du wurdest vom Host aus dieser Sitzung gebannt."
+	elif client_version != UIStyle.game_version():
 		reason = _version_mismatch_text(UIStyle.game_version(), client_version, false)
 	elif not host_password.is_empty() and str(msg.get("proof", "")) != _password_proof(nonce, host_password):
 		reason = "Falsches Passwort."
@@ -522,12 +528,25 @@ func _rpc_send_chat(raw_text: String) -> void:
 	var sender_id := multiplayer.get_remote_sender_id()
 	if sender_id == 0:
 		sender_id = multiplayer.get_unique_id()
-	var clean := raw_text.strip_edges().left(180)
+	if not SecurityGuard.check_rate_limit(sender_id, "chat", 4, 5.0, false):
+		if sender_id == multiplayer.get_unique_id():
+			_rpc_chat_notice("Bitte warte kurz vor der nächsten Nachricht (Spam-Schutz).")
+		else:
+			_rpc_chat_notice.rpc_id(sender_id, "Bitte warte kurz vor der nächsten Nachricht (Spam-Schutz).")
+		return
+	var clean := SecurityGuard.filter_chat_message(raw_text)
 	if clean.is_empty():
 		return
 	var t_dict := Time.get_time_dict_from_system()
 	var ts := "%02d:%02d" % [int(t_dict.get("hour", 0)), int(t_dict.get("minute", 0))]
 	_rpc_broadcast_chat.rpc(get_player_name(sender_id), get_player_color(sender_id), clean, ts)
+
+
+@rpc("authority", "call_local", "reliable")
+func _rpc_chat_notice(notice_text: String) -> void:
+	var t_dict := Time.get_time_dict_from_system()
+	var ts := "%02d:%02d" % [int(t_dict.get("hour", 0)), int(t_dict.get("minute", 0))]
+	chat_message_received.emit("System", Color(0.95, 0.72, 0.25), tr(notice_text), ts)
 
 
 @rpc("authority", "call_local", "reliable")
@@ -572,6 +591,53 @@ func kick_player(peer_id: int, reason: String = "Du wurdest vom Host aus der Sit
 		return
 	_rpc_kicked.rpc_id(peer_id, reason.left(200))
 	get_tree().create_timer(KICK_GRACE).timeout.connect(_disconnect_kicked.bind(peer_id))
+
+
+## Nur der Host kann bannen (IP + Name für die aktuelle Sitzung).
+func ban_player(peer_id: int, reason: String = "Du wurdest vom Host aus dieser Sitzung gebannt.") -> void:
+	if not is_in_session or multiplayer.multiplayer_peer == null or not multiplayer.is_server() or peer_id == 1:
+		return
+	var ip := _get_peer_ip(peer_id)
+	if not ip.is_empty() and not banned_ips.has(ip):
+		banned_ips.append(ip)
+	var pname := get_player_name(peer_id)
+	var pname_key := pname.strip_edges().to_lower()
+	if not pname_key.is_empty() and not banned_names.has(pname_key):
+		banned_names.append(pname_key)
+	ban_list_changed.emit()
+	GameState.post_event_f("%s wurde vom Host gebannt.", [pname], "warn")
+	kick_player(peer_id, reason)
+
+
+func clear_bans() -> void:
+	if not multiplayer.is_server():
+		return
+	banned_ips.clear()
+	banned_names.clear()
+	ban_list_changed.emit()
+
+
+func get_ban_count() -> int:
+	return maxi(banned_ips.size(), banned_names.size())
+
+
+func is_ip_banned(ip: String) -> bool:
+	return not ip.is_empty() and banned_ips.has(ip)
+
+
+func is_name_banned(player_name: String) -> bool:
+	var key := SecurityGuard.strip_invisible_and_controls(player_name).to_lower()
+	return not key.is_empty() and banned_names.has(key)
+
+
+func _get_peer_ip(peer_id: int) -> String:
+	var enet := multiplayer.multiplayer_peer as ENetMultiplayerPeer
+	if enet == null:
+		return ""
+	var pkt := enet.get_peer(peer_id)
+	if pkt == null:
+		return ""
+	return pkt.get_remote_address()
 
 
 func _disconnect_kicked(peer_id: int) -> void:
@@ -766,6 +832,7 @@ func _on_peer_connected(_peer_id: int) -> void:
 func _on_peer_disconnected(peer_id: int) -> void:
 	if not multiplayer.is_server():
 		return
+	SecurityGuard.clear_peer(peer_id)
 	GameState.handle_player_disconnect(peer_id)
 	_rpc_remove_player.rpc(peer_id)
 
@@ -796,10 +863,17 @@ func _rpc_register_player(player_name: String, skin: Dictionary) -> void:
 	if not multiplayer.is_server():
 		return
 	var peer_id := multiplayer.get_remote_sender_id()
+	if peer_id <= 1 or players.has(peer_id):
+		return
+	if is_ip_banned(_get_peer_ip(peer_id)) or is_name_banned(player_name):
+		kick_player(peer_id, "Du wurdest vom Host aus dieser Sitzung gebannt.")
+		return
+	var existing_names: Array = []
+	for p_info in players.values():
+		if p_info is Dictionary:
+			existing_names.append(str(p_info.get("name", "")))
 	var color_idx := players.size() % PLAYER_COLORS.size()
-	var clean_name := player_name.strip_edges().left(18)
-	if clean_name.is_empty():
-		clean_name = "Techniker %d" % peer_id
+	var clean_name := SecurityGuard.sanitize_player_name(player_name, existing_names, false, "Techniker %d" % peer_id)
 	var info := {
 		"name": clean_name,
 		"color": PLAYER_COLORS[color_idx],

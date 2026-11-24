@@ -547,6 +547,9 @@ func _do_hire(pool_idx: int, peer: int) -> void:
 
 
 func _do_fire(emp_id: String, peer: int) -> void:
+	if not GameState.is_destructive_action_allowed(peer):
+		_feedback(peer, false, "Nur der Host darf Mitarbeiter entlassen (Host-Schutz aktiv).")
+		return
 	if not employees.has(emp_id):
 		_feedback(peer, false, "Mitarbeiter nicht gefunden.")
 		return
@@ -564,6 +567,11 @@ func _do_fire(emp_id: String, peer: int) -> void:
 
 
 func _do_take_loan(offer_id: String, peer: int) -> void:
+	if not SecurityGuard.check_rate_limit(peer, "loan", 4, 10.0):
+		return
+	if not GameState.is_destructive_action_allowed(peer):
+		_feedback(peer, false, "Nur der Host darf Kredite aufnehmen (Host-Schutz aktiv).")
+		return
 	var offer := _find_offer(offer_id)
 	if offer.is_empty():
 		_feedback(peer, false, "Kreditangebot nicht gefunden.")

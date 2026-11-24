@@ -48,17 +48,17 @@ func save_world(save_id: String, display_name: String, state_data: Dictionary, m
 	var clean_id := sanitize_save_id(save_id)
 	if make_backup:
 		_backup_current(clean_id)
-	var clean_display := display_name.strip_edges()
-	if clean_display.is_empty():
-		clean_display = clean_id
+	var clean_display := SecurityGuard.sanitize_label(display_name, 32, clean_id)
 
 	var serialized_state := _serialize_state(state_data)
+	var state_sig := SecurityGuard.compute_save_signature(serialized_state)
 	var rack_count := (state_data.get("racks", {}) as Dictionary).size()
 	var payload := {
 		"version": SAVE_FORMAT_VERSION,
 		"save_id": clean_id,
 		"display_name": clean_display,
 		"saved_at": Time.get_datetime_string_from_system(false, true),
+		"_sig": state_sig,
 		"summary": {
 			"money": int(roundf(float(state_data.get("money", 0.0)))),
 			"rack_count": rack_count,
@@ -103,12 +103,16 @@ func load_world_file(save_id: String) -> Dictionary:
 		return {"ok": false, "error": "Spielstand enthält keine gültigen Weltdaten."}
 
 	var state_dict := _deserialize_state(root["state"] as Dictionary)
+	var integrity := SecurityGuard.verify_and_sanitize_save(root, state_dict)
+	if str(integrity.get("status", "")) == "tampered":
+		push_warning("Spielstand '%s' wurde außerhalb des Spiels verändert (Prüfsumme ungültig) — unplausible Werte wurden bereinigt." % save_id)
 	return {
 		"ok": true,
 		"save_id": str(root.get("save_id", save_id)),
-		"display_name": str(root.get("display_name", save_id)),
+		"display_name": SecurityGuard.sanitize_label(str(root.get("display_name", save_id)), 32, save_id),
 		"saved_at": str(root.get("saved_at", "")),
 		"state": state_dict,
+		"integrity": integrity,
 	}
 
 

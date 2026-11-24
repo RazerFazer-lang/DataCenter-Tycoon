@@ -36,6 +36,7 @@ ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 OutputDir=..\dist
 OutputBaseFilename=DataCenterTycoon-Setup-{#AppVersion}
+SetupIconFile=..\launcher\Assets\app_icon.ico
 Compression=lzma2/max
 SolidCompression=yes
 WizardStyle=modern

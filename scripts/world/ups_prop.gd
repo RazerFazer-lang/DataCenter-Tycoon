@@ -1,7 +1,7 @@
 class_name UpsProp
 extends Node3D
 ## Detailed 3D UPS Emergency Backup Battery Unit (UPS-1) with 5-segment LED charge meter,
-## heavy industrial battery casing, front-top Power Port, and 3D status readout.
+## heavy industrial battery casing and front-top Power Port. Status is shown in the HUD prompt.
 
 ## Frontfläche der CEE-Steckdose am Blender-Modell (tools/blender/build_utilities.py, build_ups).
 const MODEL_PORT_POS := Vector3(0.0, 1.30, 0.29)
@@ -14,7 +14,6 @@ var _power_port_marker: Node3D
 var _bar_mats: Array[StandardMaterial3D] = []
 var _status_led_mat: StandardMaterial3D
 var _ups_audio: AudioStreamPlayer3D
-var _label: Label3D
 var _blink_t: float = 0.0
 
 
@@ -86,11 +85,6 @@ func _refresh_visuals() -> void:
 			m.emission = Color(0.24, 0.78, 0.40)
 			m.emission_energy_multiplier = 0.75
 
-	if _label != null:
-		var state_txt := tr("NOTSTROM!") if discharging else (tr("LÄDT/BEREIT") if connected else tr("KEIN KABEL"))
-		_label.text = tr("%s (USV)\n%s  %.0f%%") % [ups_id.to_upper(), state_txt, charge]
-		_label.modulate = Color(0.96, 0.70, 0.28) if discharging else (Color(0.90, 0.92, 0.94) if connected else Color(0.90, 0.80, 0.46))
-
 
 func _build_geometry() -> void:
 	var custom_m := ModelLoader.instantiate_custom_model("ups")
@@ -143,13 +137,6 @@ func _build_geometry() -> void:
 	area.set_meta("interact_type", "ups_unit")
 	area.set_meta("entity_id", ups_id)
 	add_child(area)
-
-	_label = Label3D.new()
-	_label.text = ups_id.to_upper()
-	_label.font_size = 24
-	_label.pixel_size = 0.0042
-	_label.position = Vector3(0.0, 1.54, 0.15)
-	add_child(_label)
 
 
 ## ups.glb: Ladeanzeige und Status-LED an eigene Materialkopien binden, damit jede USV einzeln leuchtet.

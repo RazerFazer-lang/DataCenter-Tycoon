@@ -254,7 +254,22 @@ def _lin(c):
 def mat(name, rgb, rough, metal=0.0, emission=None, strength=0.0):
     col = tuple(_lin(c) for c in rgb)
     em = tuple(_lin(c) for c in emission) if emission else None
-    return br.make_mat("DCT_U_" + name, col, metal, rough, emission=em, strength=strength)
+    fn = getattr(br, "make_mat", None)
+    if fn is not None:
+        return fn("DCT_U_" + name, col, metal, rough, emission=em, strength=strength)
+    full_name = "DCT_U_" + name
+    m = bpy.data.materials.get(full_name) or bpy.data.materials.new(full_name)
+    m.use_nodes = True
+    bsdf = m.node_tree.nodes.get("Principled BSDF")
+    if bsdf is not None:
+        bsdf.inputs["Base Color"].default_value = (col[0], col[1], col[2], 1.0)
+        bsdf.inputs["Metallic"].default_value = float(metal)
+        bsdf.inputs["Roughness"].default_value = float(rough)
+        if em is not None and "Emission Color" in bsdf.inputs:
+            bsdf.inputs["Emission Color"].default_value = (em[0], em[1], em[2], 1.0)
+            bsdf.inputs["Emission Strength"].default_value = float(strength)
+    m.diffuse_color = (col[0], col[1], col[2], 1.0)
+    return m
 
 
 def glass_mat(name, rgb, alpha):
@@ -272,8 +287,13 @@ def glass_mat(name, rgb, alpha):
 
 
 def build_materials():
-    img = bpy.data.images.get("DCT_Perforation") or br.perforation_image()
-    perf = bpy.data.materials.get("DCT_PerforatedSteel") or br.make_perf_mat(img)
+    perf_fn = getattr(br, "perforation_image", None)
+    perf_mat_fn = getattr(br, "make_perf_mat", None)
+    if perf_fn is not None and perf_mat_fn is not None:
+        img = bpy.data.images.get("DCT_Perforation") or perf_fn()
+        perf = bpy.data.materials.get("DCT_PerforatedSteel") or perf_mat_fn(img)
+    else:
+        perf = mat("PerforatedSteel", (0.12, 0.13, 0.15), 0.55, 0.65)
     return {
         "perf": perf,
         "housing": mat("EnclosureGrey", (0.74, 0.75, 0.74), 0.52, 0.18),
@@ -444,9 +464,9 @@ def build_breaker_box(coll, M):
     p.gbox((0.0, 0.028, 0.097), (0.66, 0.016, 0.002), M["paper"])
     p.gbox((0.0, -0.212, 0.097), (0.66, 0.016, 0.002), M["paper"])
 
-    # Einspeisung: Klemmengehaeuse mit 3 Schuko-Steckdosen (Klappdeckel separat)
-    p.gbox((0.0, -0.37, 0.112), (0.40, 0.17, 0.04), M["dark"])
-    socket_x = [-0.12 + 0.12 * i for i in range(3)]
+    # Einspeisung: Klemmengehaeuse mit einer einzelnen mittigen Schuko-Steckdose (Klappdeckel separat)
+    p.gbox((0.0, -0.37, 0.112), (0.30, 0.17, 0.04), M["dark"])
+    socket_x = [0.0]
     for px in socket_x:
         p.gcyl((px, -0.378, 0.145), 0.030, 0.030, 0.03, M["socket_yellow"], axis="Z", segs=24)
         p.gcyl((px, -0.378, 0.161), 0.021, 0.021, 0.003, M["dark"], axis="Z", segs=24)
@@ -502,12 +522,12 @@ def build_breaker_box(coll, M):
         ob = cap.build(coll, root)
         ob["dct_fuse_slot"] = i
 
-    # Klappdeckel der Steckdosen, Scharnier oben
-    for i, px in enumerate(socket_x):
+    # Klappdeckel der mittigen Steckdose, Scharnier oben (Index 2 bleibt kompatibel zu garage_builder.gd)
+    for px in socket_x:
         hp = (px, -0.343, 0.1645)
-        he = pivot(coll, f"breaker_box_Hinge_SocketLid_{i + 1}", root, hp)
+        he = pivot(coll, "breaker_box_Hinge_SocketLid_2", root, hp)
         he["dct_open_deg_x"] = LID_OPEN_DEG
-        lid = GPart(f"breaker_box_SocketLid_{i + 1}", hp)
+        lid = GPart("breaker_box_SocketLid_2", hp)
         lid.gcyl((px, -0.378, 0.1645), 0.033, 0.033, 0.005, M["socket_yellow"], axis="Z", segs=28)
         lid.gbox((px, -0.346, 0.1645), (0.03, 0.010, 0.005), M["socket_yellow"])
         lid.gbox((px, -0.413, 0.1655), (0.02, 0.008, 0.007), M["socket_yellow"])

@@ -1,0 +1,71 @@
+{
+  "updated": "2026-11-23",
+  "columns": [
+    {
+      "id": "planned",
+      "title": "Geplant",
+      "items": [
+        {
+          "tag": "infrastruktur",
+          "version": "v2.2",
+          "title": "Halle D, zweite Etage & Glasfaser-Backbone",
+          "desc": "Noch größere mehrstöckige Rechenzentren mit Glasfaser-Trunks, Core-Switches und echtem BGP-Routing."
+        },
+        {
+          "tag": "ki",
+          "version": "v2.3",
+          "title": "Mitarbeiter & KI-Techniker einstellen",
+          "desc": "Stelle Techniker für Nachtschichten ein, die automatisch defekte Server diagnostizieren, an der Werkbank reparieren und Brände löschen."
+        },
+        {
+          "tag": "coop",
+          "version": "v2.3",
+          "title": "Dedizierter Co-op-Server & Lobby-Browser",
+          "desc": "24/7-Dedicated-Server-Modus und öffentlicher bzw. passwortgeschützter Lobby-Browser direkt im Spiel & Launcher."
+        }
+      ]
+    },
+    {
+      "id": "in_progress",
+      "title": "In Arbeit",
+      "items": [
+        {
+          "tag": "gameplay",
+          "version": "v2.2",
+          "title": "Erweiterte Strom-, USV- & Wasserkühlungs-Mechaniken",
+          "desc": "Realistische Kühlkreisläufe, Notstrom-Tests, Lastspitzen, Blackout-Events und Redundanz-Schaltungen (N+1)."
+        }
+      ]
+    },
+    {
+      "id": "done",
+      "title": "Fertig",
+      "items": [
+        {
+          "tag": "neu",
+          "version": "v2.1",
+          "title": "3-Stufen-Lieferflotte, 6er-Mengen-Kisten & AAA-Handling",
+          "desc": "7,5t-Kastenwagen (2 Mitarbeiter + Rampe), 18t-Schwerlast-LKW (3 Logistiker + Ladebordwand), 6er-Mengen-Kisten, 16-Plätze-Lieferlimit, Pro-Reparatur-Kits, AAA-3D-Hände & Hologramm-Platzierung."
+        },
+        {
+          "tag": "launcher",
+          "version": "v2.1",
+          "title": "Launcher v2.1: Reparatur, Roadmap, Saves, Mods & Co-op-Favoriten",
+          "desc": "Spiel-Reparatur mit Config-/Cache-Auswahl, Auto-Backups vor Updates, Drag-&-Drop-Skin-Manager, Diagnose-ZIP & Spielzeit-Zähler."
+        },
+        {
+          "tag": "neu",
+          "version": "v2.0",
+          "title": "Werkbank-, Reparatur- & Zusammenbau-Overhaul",
+          "desc": "Teleskop-Rackschächte, IT-Werkbank mit RAM-Clips & Kühler-Demontage, 8 kaputte Hardware-Modelle und funktionelles 9-Fach-Lagerregal."
+        },
+        {
+          "tag": "3d",
+          "version": "v2.0",
+          "title": "Realistische Mixamo-Charaktere, 3D-Skin-Editor & Cloud-Express-Van",
+          "desc": "Skeleton3D-Charaktere für Spieler & Lieferfahrer, 360°-Skin-Editor im Hauptmenü und neuer 2K-PBR Sprinter."
+        }
+      ]
+    }
+  ]
+}

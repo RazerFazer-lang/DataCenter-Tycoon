@@ -12,6 +12,7 @@ extends Node
 const DedicatedServerScript := preload("res://scripts/server/dedicated_server.gd")
 
 var loading_screen: LoadingScreen
+var workbench_ui: WorkbenchUI
 var _is_paused: bool = false
 var _menu_orbit_angle: float = 0.0
 # Hinsetzen läuft, Vollbild ist noch nicht offen. Der Zähler macht alte Timer ungültig.
@@ -25,6 +26,11 @@ func _ready() -> void:
 	loading_screen = LoadingScreen.new()
 	$UI.add_child(loading_screen)
 	loading_screen.loading_finished.connect(_on_loading_finished)
+
+	workbench_ui = WorkbenchUI.new()
+	$UI.add_child(workbench_ui)
+	workbench_ui.visible = false
+	workbench_ui.close_requested.connect(_close_workbench_ui)
 
 	hud.bind_world(world)
 	hud.visible = false
@@ -43,6 +49,7 @@ func _ready() -> void:
 	world.terminal_open_requested.connect(_open_terminal)
 	world.rack_inspect_requested.connect(_open_rack_inspector)
 	world.device_inspect_requested.connect(_open_device_inspector)
+	world.workbench_open_requested.connect(_open_workbench_ui)
 
 	terminal_ui.close_requested.connect(_close_terminal)
 	terminal_ui.typing_state_changed.connect(_on_terminal_typing_changed)
@@ -153,7 +160,9 @@ func _input(event: InputEvent) -> void:
 			return
 		if event.keycode == KEY_ESCAPE:
 			get_viewport().set_input_as_handled()
-			if rack_inspector.visible and rack_inspector.is_preview_fullscreen():
+			if workbench_ui != null and workbench_ui.visible:
+				_close_workbench_ui()
+			elif rack_inspector.visible and rack_inspector.is_preview_fullscreen():
 				rack_inspector.set_preview_fullscreen(false)
 			elif rack_inspector.visible:
 				_close_rack_inspector()
@@ -167,14 +176,8 @@ func _input(event: InputEvent) -> void:
 				_open_pause()
 			return
 
-		# Im Rack-Menü wird [E] abgefangen (Bedienung dort per Maus), damit das Rack nicht erneut öffnet.
+		# [E] schließt das Rack-Menü wieder (beim Umbenennen oben bereits abgefangen).
 		if rack_inspector.visible and event.is_action_pressed("interact"):
-			get_viewport().set_input_as_handled()
-			rack_inspector.press_interact()
-			return
-
-		# Pressing F again closes the Rack Inspector smoothly
-		if rack_inspector.visible and event.is_action_pressed("inspect_rack"):
 			get_viewport().set_input_as_handled()
 			_close_rack_inspector()
 			return
@@ -303,6 +306,24 @@ func _open_device_inspector(kind: String, entity_id: String) -> void:
 
 func _close_rack_inspector() -> void:
 	rack_inspector.close_inspector()
+	if world.local_player != null:
+		world.local_player.set_ui_locked(false)
+	Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
+
+
+func _open_workbench_ui() -> void:
+	if _is_paused or terminal_ui.visible or rack_inspector.visible or workbench_ui == null:
+		return
+	workbench_ui.open_workbench()
+	if workbench_ui.visible:
+		if world.local_player != null:
+			world.local_player.set_ui_locked(true)
+		Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
+
+
+func _close_workbench_ui() -> void:
+	if workbench_ui != null and workbench_ui.visible:
+		workbench_ui.visible = false
 	if world.local_player != null:
 		world.local_player.set_ui_locked(false)
 	Input.mouse_mode = Input.MOUSE_MODE_CAPTURED

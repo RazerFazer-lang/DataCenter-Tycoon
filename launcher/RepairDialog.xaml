@@ -1,0 +1,54 @@
+<Window x:Class="DataCenterLauncher.RepairDialog"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Spiel reparieren"
+        Width="520" SizeToContent="Height"
+        WindowStyle="None"
+        AllowsTransparency="True"
+        Background="Transparent"
+        WindowStartupLocation="CenterOwner"
+        ResizeMode="NoResize">
+
+    <Border Margin="10" CornerRadius="13" Background="#F50D131F" BorderBrush="#2E4A6B" BorderThickness="1.5" Padding="24,20">
+        <Border.Effect>
+            <DropShadowEffect Color="#000000" BlurRadius="20" ShadowDepth="0" Opacity="0.78"/>
+        </Border.Effect>
+        <StackPanel>
+            <TextBlock Text="🔧 Spiel reparieren &amp; neu installieren" Foreground="{StaticResource TextMain}" FontSize="19" FontWeight="Bold" Margin="0,0,0,6"/>
+            <TextBlock Text="Lädt die aktuelle Spielversion sauber neu herunter und ersetzt alle Programmdateien. Wähle optional aus, welche lokalen Daten zurückgesetzt werden sollen:"
+                       Foreground="{StaticResource TextMuted}" FontSize="12.5" TextWrapping="Wrap" Margin="0,0,0,16"/>
+
+            <Border Background="#151E2E" BorderBrush="{StaticResource BorderSubtle}" BorderThickness="1" CornerRadius="9" Padding="14,12" Margin="0,0,0,10">
+                <CheckBox x:Name="ChkClearCache" IsChecked="True" Foreground="{StaticResource TextMain}" FontSize="13" Cursor="Hand">
+                    <StackPanel Margin="4,0,0,0">
+                        <TextBlock Text="Shader- &amp; Vulkan-Cache leeren (Empfohlen)" FontWeight="SemiBold" Foreground="{StaticResource TextMain}"/>
+                        <TextBlock Text="Hilft bei Grafikfehlern, Rucklern oder fehlenden Texturen nach Updates." FontSize="11.5" Foreground="{StaticResource TextMuted}" TextWrapping="Wrap"/>
+                    </StackPanel>
+                </CheckBox>
+            </Border>
+
+            <Border Background="#151E2E" BorderBrush="{StaticResource BorderSubtle}" BorderThickness="1" CornerRadius="9" Padding="14,12" Margin="0,0,0,10">
+                <CheckBox x:Name="ChkResetConfig" IsChecked="False" Foreground="{StaticResource TextMain}" FontSize="13" Cursor="Hand">
+                    <StackPanel Margin="4,0,0,0">
+                        <TextBlock Text="Spiel-Einstellungen (Configs) zurücksetzen" FontWeight="SemiBold" Foreground="{StaticResource TextMain}"/>
+                        <TextBlock Text="Setzt Grafik-, Audio-, Maus- und Skin-Einstellungen auf Werkseinstellungen zurück." FontSize="11.5" Foreground="{StaticResource TextMuted}" TextWrapping="Wrap"/>
+                    </StackPanel>
+                </CheckBox>
+            </Border>
+
+            <Border Background="#2A1216" BorderBrush="#7A2630" BorderThickness="1" CornerRadius="9" Padding="14,12" Margin="0,0,0,18">
+                <CheckBox x:Name="ChkDeleteSaves" IsChecked="False" Foreground="#FF9A9A" FontSize="13" Cursor="Hand">
+                    <StackPanel Margin="4,0,0,0">
+                        <TextBlock Text="⚠ Spielstände (Saves) ebenfalls löschen" FontWeight="Bold" Foreground="#FF8C8C"/>
+                        <TextBlock Text="Standardmäßig geschützt (vor der Reparatur wird automatisch ein Backup angelegt)." FontSize="11.5" Foreground="#D49A9A" TextWrapping="Wrap"/>
+                    </StackPanel>
+                </CheckBox>
+            </Border>
+
+            <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                <Button Style="{StaticResource SecondaryButton}" Content="Abbrechen" Margin="0,0,10,0" Padding="16,9" Click="CancelBtn_Click"/>
+                <Button Style="{StaticResource UpdateActionButton}" Content="🔧 Jetzt reparieren" FontSize="13.5" Padding="18,9" Click="ConfirmBtn_Click"/>
+            </StackPanel>
+        </StackPanel>
+    </Border>
+</Window>

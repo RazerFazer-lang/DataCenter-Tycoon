@@ -8,7 +8,7 @@ const MIX_RATE := 44100
 # Erzeugte Klänge werden hier gespeichert, damit nur der erste Start rechnen muss (~870 ms gemessen).
 const SFX_CACHE_DIR := "user://sfx_cache"
 # Erhöhen, wenn sich ein Generator oder seine Parameter ändern, sonst bleiben die alten Klänge im Cache.
-const SFX_CACHE_VERSION := 2
+const SFX_CACHE_VERSION := 5
 
 var _sounds: Dictionary = {}
 var _loops: Dictionary = {}
@@ -87,10 +87,10 @@ func _generate_sounds() -> void:
 	_loops["room_ambience"] = _gen_room_hvac_loop(3.0)
 	_loops["van_engine"] = _gen_van_engine_loop(2.0)
 	_loops["cart_roll"] = _gen_cart_roll_loop(2.0)
-	_loops["extinguisher_spray"] = _gen_extinguisher_spray_loop(2.0)
+	_loops["extinguisher_spray"] = _gen_extinguisher_spray_loop(2.5)
 
 
-const FOOTSTEP_VARIANTS := 4
+const FOOTSTEP_VARIANTS := 6
 ## Wie lange der Sprühton nach dem letzten keep_extinguisher_spraying()-Aufruf weiterläuft.
 const SPRAY_HOLD_TIME := 0.12
 
@@ -254,8 +254,9 @@ func play_footstep(sprinting: bool = false) -> void:
 	if idx == _last_footstep:
 		idx = (idx + 1) % FOOTSTEP_VARIANTS
 	_last_footstep = idx
-	var vol := -15.5 if sprinting else -17.5
-	play("footstep_%d" % idx, vol + randf_range(-1.2, 1.2), randf_range(0.94, 1.06))
+	var vol := -8.2 if sprinting else -11.2
+	var pitch := randf_range(0.96, 1.09) if sprinting else randf_range(0.92, 1.05)
+	play("footstep_%d" % idx, vol + randf_range(-1.1, 1.1), pitch)
 
 
 ## Jeden Frame aufrufen, solange gesprüht wird. Bleibt der Aufruf aus, blendet der Ton kurz aus.
@@ -268,7 +269,7 @@ func _update_extinguisher_spray(delta: float) -> void:
 		return
 	_spray_hold = maxf(_spray_hold - delta, 0.0)
 	var target := 1.0 if (_spray_hold > 0.0 and GameState.is_active) else 0.0
-	var rate := 14.0 if target > _spray_level else 6.0
+	var rate := 16.0 if target > _spray_level else 7.5
 	_spray_level = move_toward(_spray_level, target, delta * rate)
 	var gain := SettingsManager.get_effective_sfx_gain()
 	if _spray_level <= 0.001 or gain <= 0.005:
@@ -276,9 +277,9 @@ func _update_extinguisher_spray(delta: float) -> void:
 			_spray_player.stop()
 		return
 	if not _spray_player.playing:
-		play("extinguisher_start", -12.0, randf_range(0.95, 1.05))
-		_spray_player.play(randf_range(0.0, 1.5))
-	_spray_player.volume_db = linear_to_db(gain * _spray_level) - 14.0
+		play("extinguisher_start", -7.5, randf_range(0.96, 1.04))
+		_spray_player.play(randf_range(0.0, 1.8))
+	_spray_player.volume_db = linear_to_db(gain * _spray_level) - 8.5
 
 
 func get_loop_stream(loop_name: String) -> AudioStreamWAV:
@@ -688,71 +689,122 @@ func _gen_hardware_install_ratchet() -> AudioStreamWAV:
 	return _make_wav(s)
 
 
-## Schuh auf Beton: dumpfer Fersenaufsatz mit etwas Körnung, kurz danach Abrollen der Sohle
-## mit leichtem Schleifen. Jede Variante hat einen festen Seed und klingt dadurch leicht anders.
+## Realistischer Schritt (Arbeitsschuh / Sneaker auf Beton-/Fliesenboden im Rechenzentrum):
+## Fersen-Gewichtsimpuls + harter Sohlenkontakt + feiner Beton-Grit + Abrollen über den Ballen + kurze Raumreflexion.
 func _gen_footstep(variant: int) -> AudioStreamWAV:
 	var rng := RandomNumberGenerator.new()
-	rng.seed = 7919 + variant * 104729
-	var duration := 0.18
+	rng.seed = 13337 + variant * 104729
+	var duration := 0.24
 	var count := int(MIX_RATE * duration)
-	var s := PackedFloat32Array()
-	s.resize(count)
-	var heel_hz := rng.randf_range(78.0, 96.0)
-	var toe_at := rng.randf_range(0.048, 0.066)
-	var toe_gain := rng.randf_range(0.35, 0.55)
-	var scuff_gain := rng.randf_range(0.10, 0.22)
-	var phase := 0.0
-	var lp1 := 0.0
-	var lp2 := 0.0
+	var dry := PackedFloat32Array()
+	dry.resize(count)
+
+	var body_hz := rng.randf_range(68.0, 86.0)
+	var slap_hz := rng.randf_range(520.0, 740.0)
+	var tile_hz := rng.randf_range(1650.0, 2250.0)
+	var toe_at := rng.randf_range(0.044, 0.062)
+	var toe_gain := rng.randf_range(0.42, 0.62)
+	var grit_gain := rng.randf_range(0.16, 0.28)
+
+	var lp_sub := 0.0
+	var lp_mid := 0.0
 	var hp_in := 0.0
 	var hp_out := 0.0
-	var lp_scuff := 0.0
+	var bp_slap := 0.0
+	var bp_slap_v := 0.0
+	var bp_tile := 0.0
+	var bp_tile_v := 0.0
+	var slap_w := TAU * slap_hz / float(MIX_RATE)
+	var tile_w := TAU * tile_hz / float(MIX_RATE)
+	var phase := 0.0
+
 	for i in range(count):
 		var t := float(i) / float(MIX_RATE)
 		var w := rng.randf_range(-1.0, 1.0)
-		lp1 = lerpf(lp1, w, 0.12)
-		lp2 = lerpf(lp2, lp1, 0.30)
-		hp_out = 0.90 * (hp_out + w - hp_in)
+		lp_sub = lerpf(lp_sub, w, 0.045)
+		lp_mid = lerpf(lp_mid, w, 0.16)
+		hp_out = 0.86 * (hp_out + w - hp_in)
 		hp_in = w
-		lp_scuff = lerpf(lp_scuff, hp_out, 0.30)
-		# Ferse: kurzer, tiefer Aufprall mit leicht fallender Tonhöhe
-		phase += TAU * heel_hz * (1.0 - 0.35 * minf(t / 0.05, 1.0)) / float(MIX_RATE)
-		var heel_env := minf(t / 0.0015, 1.0) * exp(-t * 60.0)
-		var heel := (lp2 * 2.2 + sin(phase) * 0.45) * heel_env
-		var grit := lp_scuff * 0.12 * exp(-t * 90.0)
-		# Sohle: zweiter, leiserer Aufsatz und kurzes Schleifen
+
+		# Resonanter Sohlen-Kontakt (gedämpfter 2.-Ordnung-Filter für echte Fliesen-/Beton-Akustik)
+		var slap_in := (lp_mid - lp_sub) * 1.6
+		bp_slap_v += (slap_in - bp_slap - bp_slap_v * 0.52) * slap_w
+		bp_slap += bp_slap_v * slap_w
+
+		var tile_in := hp_out * 0.85
+		bp_tile_v += (tile_in - bp_tile - bp_tile_v * 0.42) * tile_w
+		bp_tile += bp_tile_v * tile_w
+
+		# 1. Fersen-Gewichtsübertragung (dumpfer Bodenimpuls ohne künstlichen Sinus-Ton)
+		phase += TAU * body_hz * (1.0 - 0.40 * minf(t / 0.035, 1.0)) / float(MIX_RATE)
+		var heel_att := minf(t / 0.0022, 1.0)
+		var heel_weight := (lp_sub * 3.8 + sin(phase) * 0.14) * heel_att * exp(-t * 48.0)
+		var heel_slap := bp_slap * 1.45 * heel_att * exp(-t * 95.0)
+		var heel_click := bp_tile * 0.65 * minf(t / 0.001, 1.0) * exp(-t * 210.0)
+		var heel_grit := hp_out * grit_gain * 0.55 * heel_att * exp(-t * 85.0)
+
+		# 2. Abrollen über den Fußballen + leichtes Gummi-Schleifen
 		var toe := 0.0
-		var scuff := 0.0
 		if t >= toe_at:
 			var tt := t - toe_at
-			toe = lp2 * 2.0 * toe_gain * minf(tt / 0.002, 1.0) * exp(-tt * 75.0)
-			scuff = lp_scuff * scuff_gain * sin(minf(tt / 0.05, 1.0) * PI)
-		s[i] = heel + grit + toe + scuff
-	s = _normalize_peak(s, 0.45)
+			var ta := minf(tt / 0.004, 1.0)
+			var toe_body := lp_sub * 2.4 * ta * exp(-tt * 55.0)
+			var toe_slap := bp_slap * 0.95 * ta * exp(-tt * 110.0)
+			var scuff := hp_out * grit_gain * 0.48 * sin(minf(tt / 0.055, 1.0) * PI) * exp(-tt * 28.0)
+			toe = (toe_body + toe_slap + scuff) * toe_gain
+
+		dry[i] = heel_weight + heel_slap + heel_click + heel_grit + toe
+
+	# Kurze Serverraum-Erstreflexionen (Betonboden + Wände bei 11 ms & 24 ms) für räumliche Tiefe
+	var s := PackedFloat32Array()
+	s.resize(count)
+	var d1 := int(MIX_RATE * 0.011)
+	var d2 := int(MIX_RATE * 0.024)
+	var ref_lp := 0.0
+	for i in range(count):
+		var refl := 0.0
+		if i >= d1:
+			refl += dry[i - d1] * 0.16
+		if i >= d2:
+			refl += dry[i - d2] * 0.08
+		ref_lp = lerpf(ref_lp, refl, 0.35)
+		s[i] = dry[i] + ref_lp
+
+	s = _normalize_peak(s, 0.72)
 	return _make_wav(s)
 
 
-## Ventil öffnet: kurzer Druckstoß mit dumpfem Ploppen, läuft vor dem Sprüh-Loop an.
+## Realistischer Feuerlöscher-Start: metallischer Griff-Klick + plötzlicher Hochdruck-CO2/Pulver-Stoß aus der Düse.
 func _gen_extinguisher_burst() -> AudioStreamWAV:
-	var duration := 0.16
+	var duration := 0.36
 	var count := int(MIX_RATE * duration)
 	var s := PackedFloat32Array()
 	s.resize(count)
 	var hp_in := 0.0
 	var hp_out := 0.0
-	var lp_hiss := 0.0
-	var lp_body := 0.0
+	var lp_roar := 0.0
+	var lp_mid := 0.0
+	var bp1 := 0.0
+	var bp1_v := 0.0
+	var w1 := TAU * 2100.0 / float(MIX_RATE)
 	for i in range(count):
 		var t := float(i) / float(MIX_RATE)
 		var w := randf_range(-1.0, 1.0)
-		hp_out = 0.94 * (hp_out + w - hp_in)
+		hp_out = 0.91 * (hp_out + w - hp_in)
 		hp_in = w
-		lp_hiss = lerpf(lp_hiss, hp_out, 0.55)
-		lp_body = lerpf(lp_body, w, 0.10)
-		var env := minf(t / 0.003, 1.0) * exp(-t * 22.0)
-		var pop := sin(TAU * 95.0 * t) * exp(-t * 45.0) * 0.5
-		s[i] = (lp_hiss * 0.8 + lp_body * 1.4) * env + pop
-	s = _normalize_peak(s, 0.5)
+		lp_roar = lerpf(lp_roar, w, 0.055)
+		lp_mid = lerpf(lp_mid, w, 0.28)
+		# Konische Löschdüsen-Resonanz (charakteristisches Druckgas-Fauchen)
+		bp1_v += ((lp_mid - lp_roar) - bp1 - bp1_v * 0.36) * w1
+		bp1 += bp1_v * w1
+		# Metallisches Auslösehebel-Klicken (0..12 ms)
+		var latch := (sin(TAU * 2450.0 * t) * 0.45 + sin(TAU * 4180.0 * t) * 0.25 + hp_out * 0.4) * exp(-t * 240.0)
+		# Druckstoß aus Tank & Schlauch (steigt in 16 ms steil an)
+		var blast_env := minf(t / 0.016, 1.0) * exp(-t * 6.5)
+		var thump := sin(TAU * 118.0 * t) * exp(-t * 38.0) * 0.32
+		var jet := (hp_out * 0.85 + bp1 * 1.45 + lp_roar * 2.1) * blast_env
+		s[i] = latch * 0.45 + thump + jet
+	s = _normalize_peak(s, 0.78)
 	return _make_wav(s)
 
 
@@ -859,29 +911,43 @@ func _gen_filtered_noise(duration: float, amp: float, alpha: float) -> AudioStre
 	return _make_wav(s)
 
 
-## Druckgas-Zischen des Feuerlöschers: helles Rauschen plus tieferes Rauschen der Düse.
-## Das Ende wird per Equal-Power-Crossfade in den Anfang geblendet, damit der Loop nicht klickt.
+## Realistischer CO2-/Pulver-Feuerlöscher-Sprühstrahl:
+## Tiefes Schlauch-/Tank-Rauschen + resonantes Trichter-Fauchen (~1,8 & 3,7 kHz) + luftiges Hochdruck-Zischen.
 func _gen_extinguisher_spray_loop(duration: float) -> AudioStreamWAV:
 	var count := int(MIX_RATE * duration)
-	var fade := int(MIX_RATE * 0.25)
+	var fade := int(MIX_RATE * 0.30)
 	var total := count + fade
 	var raw := PackedFloat32Array()
 	raw.resize(total)
 	var hp_in := 0.0
 	var hp_out := 0.0
-	var lp_hiss := 0.0
-	var lp_body1 := 0.0
-	var lp_body2 := 0.0
+	var lp_roar1 := 0.0
+	var lp_roar2 := 0.0
+	var lp_mid := 0.0
+	var bp_horn1 := 0.0
+	var bp_horn1_v := 0.0
+	var bp_horn2 := 0.0
+	var bp_horn2_v := 0.0
+	var w_horn1 := TAU * 1850.0 / float(MIX_RATE)
+	var w_horn2 := TAU * 3750.0 / float(MIX_RATE)
+
 	for i in range(total + 4096):
 		var w := randf_range(-1.0, 1.0)
-		hp_out = 0.94 * (hp_out + w - hp_in)
+		hp_out = 0.90 * (hp_out + w - hp_in)
 		hp_in = w
-		lp_hiss = lerpf(lp_hiss, hp_out, 0.55)
-		lp_body1 = lerpf(lp_body1, w, 0.08)
-		lp_body2 = lerpf(lp_body2, lp_body1, 0.25)
-		# Die ersten 4096 Samples wärmen nur die Filter auf
+		lp_roar1 = lerpf(lp_roar1, w, 0.055)
+		lp_roar2 = lerpf(lp_roar2, lp_roar1, 0.22)
+		lp_mid = lerpf(lp_mid, w, 0.36)
+
+		# Zwei konische Düsen-Formanten (geben das typische laute Feuerlöscher-Fauchen)
+		bp_horn1_v += ((lp_mid - lp_roar1) - bp_horn1 - bp_horn1_v * 0.38) * w_horn1
+		bp_horn1 += bp_horn1_v * w_horn1
+		bp_horn2_v += (hp_out - bp_horn2 - bp_horn2_v * 0.45) * w_horn2
+		bp_horn2 += bp_horn2_v * w_horn2
+
 		if i >= 4096:
-			raw[i - 4096] = lp_hiss * 0.55 + lp_body2 * 1.6
+			raw[i - 4096] = lp_roar2 * 2.3 + bp_horn1 * 1.45 + bp_horn2 * 0.85 + hp_out * 0.48
+
 	var s := PackedFloat32Array()
 	s.resize(count)
 	for i in range(count):
@@ -889,13 +955,17 @@ func _gen_extinguisher_spray_loop(duration: float) -> AudioStreamWAV:
 	for i in range(fade):
 		var a := float(i) / float(fade)
 		s[i] = raw[i] * sin(a * PI * 0.5) + raw[count + i] * cos(a * PI * 0.5)
-	# Leichtes Flattern des Drucks, ganze Perioden pro Loop, damit die Naht unhörbar bleibt
-	var c1 := maxf(roundf(3.0 * duration), 1.0)
-	var c2 := maxf(roundf(7.0 * duration), 1.0)
+
+	# Organisches Druck-Pulsieren (ganze Perioden pro Loop für 100 % knackfreie Schleife)
+	var c1 := maxf(roundf(2.4 * duration), 1.0)
+	var c2 := maxf(roundf(6.4 * duration), 1.0)
+	var c3 := maxf(roundf(13.6 * duration), 1.0)
 	for i in range(count):
 		var u := float(i) / float(count)
-		s[i] *= 1.0 + 0.06 * sin(TAU * c1 * u) + 0.04 * sin(TAU * c2 * u + 1.3)
-	s = _normalize_peak(s, 0.55)
+		var turb := 1.0 + 0.07 * sin(TAU * c1 * u) + 0.05 * sin(TAU * c2 * u + 1.4) + 0.03 * sin(TAU * c3 * u + 3.1)
+		s[i] *= turb
+
+	s = _normalize_peak(s, 0.78)
 	return _make_wav(s, true)
 
 
@@ -919,11 +989,13 @@ func _gen_server_fan_loop(duration: float) -> AudioStreamWAV:
 	var hum := _loop_cycles(100.0, duration)
 	var w1 := _loop_cycles(0.7, duration)
 	var w2 := _loop_cycles(1.9, duration)
+	var w3 := _loop_cycles(3.3, duration)
 	var samples := PackedFloat32Array()
 	samples.resize(count)
 	for i in range(count):
 		var ph := TAU * float(i) / float(count)
 		var wobble := 1.0 + 0.07 * sin(ph * w1 + 0.6) + 0.04 * sin(ph * w2 + 2.1)
+		var turbulence := 1.0 + 0.10 * sin(ph * w3 + 4.0)
 		var air := (band_top[i] - band_low[i]) * 0.9 + (white[i] - band_top[i]) * 0.10 + band_low[i] * 0.6
 		var blades := (
 			sin(ph * b1) * 0.050 + sin(ph * b1 * 2.0 + 0.9) * 0.018
@@ -932,7 +1004,7 @@ func _gen_server_fan_loop(duration: float) -> AudioStreamWAV:
 		)
 		var imbalance := sin(ph * r1) * 0.012
 		var psu := sin(ph * hum) * 0.010 + sin(ph * hum * 3.0) * 0.004
-		samples[i] = air * wobble + blades * (0.85 + 0.15 * wobble) + imbalance + psu
+		samples[i] = air * wobble * turbulence + blades * (0.85 + 0.15 * wobble) + imbalance + psu
 	samples = _normalize_rms(samples, 0.06)
 	samples = _add_disk_seeks(samples, maxi(1, int(duration * 1.4)), 7341)
 	return _make_wav(_pad_loop_wrap(samples), true)

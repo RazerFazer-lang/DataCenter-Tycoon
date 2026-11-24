@@ -23,6 +23,8 @@ const PORT_ASSIST_SIGHT_SLACK := 0.25
 const INTERACT_RANGE := 3.6
 const PLACE_RANGE := 5.5
 const AVATAR_MODEL_ID := "player"
+const REALISTIC_AVATAR_MODEL_ID := "player_realistic"
+const RigHelper := preload("res://scripts/world/humanoid_rig_helper.gd")
 
 var peer_id: int = 1
 var is_local: bool = false
@@ -70,14 +72,19 @@ var _right_leg: Node3D
 var _left_arm: Node3D
 var _right_arm: Node3D
 var _nametag: Label3D
+var _skel: Skeleton3D = null
+var _skel_bones: Dictionary = {}
+var _anim_player: AnimationPlayer = null
+var _skel_angles: Dictionary = {"head": 0.0, "leg_l": 0.0, "leg_r": 0.0, "knee_l": 0.0, "knee_r": 0.0, "arm_l": 0.0, "arm_r": 0.0, "forearm_l": 0.14, "forearm_r": 0.14}
 
 # Held visual (shown in first-person corner OR in remote avatar's hands)
 var _held_root: Node3D
 var _held_item_holder: Node3D
-## Ich-Perspektive: Unterarm + Hand (nur lokaler Spieler, sonst null).
+## Ich-Perspektive: Rechte & linke realistische 3D-Hand (nur lokaler Spieler, sonst null).
 var _fp_hand: Node3D
-const FP_HAND_ITEM_POS := Vector3(0.0, -0.13, 0.02)
-const FP_HAND_EXT_POS := Vector3(0.0, 0.26, 0.0)
+var _fp_hand_left: Node3D
+const FP_HAND_ITEM_POS := Vector3(0.0, -0.09, 0.02)
+const FP_HAND_EXT_POS := Vector3(0.03, 0.25, 0.08)
 var _held_item_type_cached: String = ""
 var _held_extinguisher: Node3D
 var _foam_root: Node3D
@@ -86,14 +93,32 @@ var _held_lever_pivot: Node3D
 const EXT_LEVER_PRESS_DEG := 8.0
 var _foam_balls: Array[MeshInstance3D] = []
 
-# Floor placement hologram (local only)
+# AAA Viewmodel-Physik (Maus-Trägheit, Lauf-Bob, Aufnehmen-Spring, Landedämpfer)
+var _vm_sway: Vector2 = Vector2.ZERO
+var _vm_equip: float = 0.0
+var _vm_land_dip: float = 0.0
+var _was_on_floor: bool = true
+var _vm_last_state_key: String = ""
+
+# AAA 3D-Hologramm-Platzierung & Boden-Ablege-Vorschau (local only)
 var _ghost_root: Node3D
-var _ghost_mesh: MeshInstance3D
-var _ghost_front_strip: MeshInstance3D
-var _ghost_mat: StandardMaterial3D
+var _ghost_model_holder: Node3D
+var _ghost_footprint: Node3D
+var _ghost_front_arrow: Node3D
+var _ghost_drop_ring: MeshInstance3D
+var _ghost_holo_mat: ShaderMaterial
+var _ghost_frame_mat: StandardMaterial3D
+var _ghost_model_key: String = ""
+var _ghost_is_drop_preview: bool = false
 var _ghost_valid: bool = false
 var _ghost_rot_y: float = 0.0
 var _ghost_pos: Vector3 = Vector3.ZERO
+var _ghost_visual_pos: Vector3 = Vector3.ZERO
+var _ghost_visual_rot: float = 0.0
+var _ghost_has_visual_pose: bool = false
+var _hovered_shelf: Object = null
+var _hovered_rack: Object = null
+var _ui_unlock_cooldown: float = 0.0
 
 # Remote interpolation targets
 var _target_pos: Vector3 = Vector3.ZERO
@@ -118,6 +143,7 @@ var _stand_probe: CapsuleShape3D
 # Skin (Hose, Haut). Die Jacke steckt in avatar_color.
 var skin_pants_color: Color = Color(0.15, 0.17, 0.21)
 var skin_tone_color: Color = Color(0.88, 0.72, 0.60)
+var skin_data: Dictionary = {}
 
 
 func setup(p_peer_id: int, p_is_local: bool, p_name: String, p_color: Color, world_ref: Node) -> void:
@@ -131,7 +157,8 @@ func setup(p_peer_id: int, p_is_local: bool, p_name: String, p_color: Color, wor
 ## Übernimmt den Skin aus dem Spieler-Eintrag. Nach setup() und vor add_child() aufrufen,
 ## weil die Visuals in _ready() entstehen.
 func apply_skin(skin: Variant) -> void:
-	var colors := SettingsManager.skin_colors(skin, avatar_color)
+	skin_data = SettingsManager.sanitize_skin(skin)
+	var colors := SettingsManager.skin_colors(skin_data, avatar_color)
 	avatar_color = colors["jacket"]
 	skin_pants_color = colors["pants"]
 	skin_tone_color = colors["tone"]
@@ -201,6 +228,7 @@ func _exit_tree() -> void:
 func _on_settings_changed() -> void:
 	if _camera != null:
 		_camera.fov = SettingsManager.fov
+	_refresh_fp_hand_skin()
 
 
 func apply_remote_pose(pos: Vector3, yaw: float, pitch: float, p_tool: int, spraying: bool) -> void:
@@ -250,11 +278,17 @@ func start_relocate_rack(rack_id: String) -> void:
 
 
 func set_ui_locked(locked: bool) -> void:
+	var was_locked := ui_locked
 	ui_locked = locked
 	if ui_locked:
 		_is_spraying_local = false
 		current_prompt = ""
 		current_sub_prompt = ""
+		_clear_shelf_hover()
+		_clear_rack_hover()
+	elif was_locked:
+		# Kurze Sperrfrist nach UI-Schließen (z. B. Rack verkaufen), damit Klick/E kein gehaltenes Item wegwirft oder abstellt!
+		_ui_unlock_cooldown = 0.18
 
 
 func _unhandled_input(event: InputEvent) -> void:
@@ -269,6 +303,22 @@ func _unhandled_input(event: InputEvent) -> void:
 			deg_to_rad(-82.0),
 			deg_to_rad(82.0)
 		)
+		# Sanfte AAA-Maus-Trägheit für gehaltene Objekte & Hände
+		_vm_sway.x = clampf(_vm_sway.x - event.relative.x * 0.00055, -0.055, 0.055)
+		_vm_sway.y = clampf(_vm_sway.y + event.relative.y * 0.00045, -0.042, 0.042)
+
+	# Mausrad dreht das Platzier-Hologramm direkt (wie in AAA-Bau-Simulatoren!)
+	if event is InputEventMouseButton and (event as InputEventMouseButton).pressed and Input.mouse_mode == Input.MOUSE_MODE_CAPTURED:
+		var mb := event as InputEventMouseButton
+		if _ghost_root != null and _ghost_root.visible and not _ghost_is_drop_preview:
+			if mb.button_index == MOUSE_BUTTON_WHEEL_UP:
+				place_rot_y = fmod(place_rot_y + PI * 0.5, TAU)
+				SfxManager.play("click", -12.0, 1.18)
+				return
+			elif mb.button_index == MOUSE_BUTTON_WHEEL_DOWN:
+				place_rot_y = fmod(place_rot_y - PI * 0.5 + TAU, TAU)
+				SfxManager.play("click", -12.0, 0.94)
+				return
 
 	# Kontext-Interaktion: Tasten 1-4 wählen den aktiven Slot, die Aufnahme legt fest, was darin liegt.
 	if event.is_action_pressed("tool_hands"):
@@ -286,10 +336,15 @@ func _unhandled_input(event: InputEvent) -> void:
 		_handle_drop()
 	elif event.is_action_pressed("inspect_rack"):
 		_handle_inspect()
-	elif event.is_action_pressed("interact"): # Interaktion nur über [E] (umlegbar), nicht per Linksklick
-		_handle_primary_interact()
+	elif event.is_action_pressed("primary_action"):
+		if _ui_unlock_cooldown <= 0.0 and Input.mouse_mode == Input.MOUSE_MODE_CAPTURED:
+			if _ghost_root != null and _ghost_root.visible and not _ghost_is_drop_preview:
+				_try_confirm_placement()
+	elif event.is_action_pressed("interact"): # Interaktion über [E]
+		if _ui_unlock_cooldown <= 0.0:
+			_handle_primary_interact()
 	elif event.is_action_pressed("secondary_action"):
-		if Input.mouse_mode == Input.MOUSE_MODE_CAPTURED:
+		if _ui_unlock_cooldown <= 0.0 and Input.mouse_mode == Input.MOUSE_MODE_CAPTURED:
 			_handle_secondary_action()
 
 
@@ -325,13 +380,10 @@ func _handle_inspect() -> void:
 		return
 	var itype := str(target.get_meta("interact_type"))
 	var eid := str(target.get_meta("entity_id"))
-	if itype == "rack_slot":
-		var sidx := int(target.get_meta("slot_index"))
-		_world.open_rack_inspector(eid, sidx)
-	elif (itype == "power_port" or itype == "net_port" or itype == "cluster_port") and GameState.racks.has(eid):
-		_world.open_rack_inspector(eid, 0)
-	elif itype == "wall_router":
+	if itype == "wall_router":
 		_world.open_device_inspector("router", eid)
+	elif itype == "rack_slot" and GameState.racks.has(eid):
+		_world.open_rack_inspector(eid, int(target.get_meta("slot_index", 0)))
 	elif itype == "cooler_unit" and GameState.coolers.has(eid):
 		_world.open_device_inspector("cooler", eid)
 	elif itype == "ups_unit" and GameState.ups_units.has(eid):
@@ -386,6 +438,10 @@ func _process(delta: float) -> void:
 
 func _physics_process(delta: float) -> void:
 	_anim_time += delta
+	if _ui_unlock_cooldown > 0.0:
+		_ui_unlock_cooldown = maxf(0.0, _ui_unlock_cooldown - delta)
+	if relocating_rack_id != "" and not GameState.racks.has(relocating_rack_id):
+		relocating_rack_id = ""
 	_update_held_visuals()
 
 	if not is_local:
@@ -466,11 +522,13 @@ func _physics_process(delta: float) -> void:
 			_head_pivot.position.y = lerpf(_head_pivot.position.y, _head_y(), clampf(delta * 10.0, 0.0, 1.0))
 
 	if not ui_locked:
-		_update_placement_preview()
+		_update_viewmodel_motion(delta, flat_speed)
+		_update_placement_preview(delta)
 		_update_cable_preview()
 		_update_continuous_actions(delta)
 		_update_context_prompt()
 	else:
+		_clear_shelf_hover()
 		if _ghost_root != null:
 			_ghost_root.visible = false
 		if _world != null and _world.has_method("update_cable_preview"):
@@ -540,6 +598,10 @@ func _animate_remote_avatar(delta: float, horiz_speed: float) -> void:
 		var target_y := -0.34 if seated else (-0.42 if crouching else 0.0)
 		_avatar_root.position.y = lerpf(_avatar_root.position.y, target_y, clampf(delta * 10.0, 0.0, 1.0))
 
+	if _skel != null:
+		_animate_skeleton_avatar(delta, horiz_speed, seated, typing, crouching)
+		return
+
 	if _avatar_head != null:
 		var head_x := clampf(_head_pivot.rotation.x * 0.65, -0.7, 0.7)
 		if typing:
@@ -576,6 +638,75 @@ func _animate_remote_avatar(delta: float, horiz_speed: float) -> void:
 		var target_r := 0.85 if holding else leg_swing * 0.6
 		_left_arm.rotation.x = lerpf(_left_arm.rotation.x, target_l, clampf(delta * 12.0, 0.0, 1.0))
 		_right_arm.rotation.x = lerpf(_right_arm.rotation.x, target_r, clampf(delta * 12.0, 0.0, 1.0))
+
+
+func _animate_skeleton_avatar(delta: float, horiz_speed: float, seated: bool, typing: bool, crouching: bool) -> void:
+	var k := clampf(delta * 12.0, 0.0, 1.0)
+	var head_t := clampf(-_head_pivot.rotation.x * 0.65, -0.60, 0.60)
+	if typing:
+		head_t += sin(_anim_time * 8.0) * 0.05 + 0.14
+	elif seated:
+		head_t += 0.08
+	var leg_l_t := 0.0
+	var leg_r_t := 0.0
+	var knee_l_t := -0.04
+	var knee_r_t := -0.04
+	var arm_l_t := 0.04
+	var arm_r_t := 0.04
+	var forearm_l_t := 0.14
+	var forearm_r_t := 0.14
+	if seated:
+		# Oberschenkel nach vorn (+1.48), Knie nach unten (-1.45), Arme nach vorn zur Tastatur (+0.78) + Ellbogen angewinkelt (+0.85)
+		leg_l_t = 1.48
+		leg_r_t = 1.48
+		knee_l_t = -1.45
+		knee_r_t = -1.45
+		arm_l_t = 0.72 + (sin(_anim_time * 24.0) * 0.10 if typing else 0.0)
+		arm_r_t = 0.72 + (cos(_anim_time * 24.0 + 0.7) * 0.10 if typing else 0.0)
+		forearm_l_t = 0.92 + (sin(_anim_time * 24.0 + 0.4) * 0.12 if typing else 0.0)
+		forearm_r_t = 0.92 + (cos(_anim_time * 24.0 + 1.1) * 0.12 if typing else 0.0)
+	else:
+		var moving := horiz_speed > 0.35
+		if moving:
+			_walk_cycle += delta * clampf(horiz_speed * 2.2, 6.0, 14.0)
+		var swing_amp := 0.24 if crouching else 0.52
+		var leg_base := 0.85 if crouching else 0.0
+		var leg_swing := sin(_walk_cycle) * swing_amp if moving else 0.0
+		leg_l_t = leg_base + leg_swing
+		leg_r_t = leg_base - leg_swing
+		knee_l_t = (-1.20 if crouching else -0.04) - maxf(0.0, -leg_swing) * 0.85
+		knee_r_t = (-1.20 if crouching else -0.04) - maxf(0.0, leg_swing) * 0.85
+		var holding := GameState.is_player_holding_anything(peer_id)
+		if holding:
+			arm_l_t = 0.65
+			arm_r_t = 0.65
+			forearm_l_t = 0.88
+			forearm_r_t = 0.88
+		else:
+			arm_l_t = -leg_swing * 0.50
+			arm_r_t = leg_swing * 0.50
+			forearm_l_t = 0.18 + maxf(0.0, -leg_swing) * 0.35
+			forearm_r_t = 0.18 + maxf(0.0, leg_swing) * 0.35
+
+	_skel_angles["head"] = lerpf(float(_skel_angles["head"]), head_t, k)
+	_skel_angles["leg_l"] = lerpf(float(_skel_angles["leg_l"]), leg_l_t, k)
+	_skel_angles["leg_r"] = lerpf(float(_skel_angles["leg_r"]), leg_r_t, k)
+	_skel_angles["knee_l"] = lerpf(float(_skel_angles["knee_l"]), knee_l_t, k)
+	_skel_angles["knee_r"] = lerpf(float(_skel_angles["knee_r"]), knee_r_t, k)
+	_skel_angles["arm_l"] = lerpf(float(_skel_angles["arm_l"]), arm_l_t, k)
+	_skel_angles["arm_r"] = lerpf(float(_skel_angles["arm_r"]), arm_r_t, k)
+	_skel_angles["forearm_l"] = lerpf(float(_skel_angles["forearm_l"]), forearm_l_t, k)
+	_skel_angles["forearm_r"] = lerpf(float(_skel_angles["forearm_r"]), forearm_r_t, k)
+
+	RigHelper.set_torso_pitch(_skel, _skel_bones, "head", float(_skel_angles["head"]))
+	RigHelper.set_leg_pitch(_skel, _skel_bones, "thigh_l", float(_skel_angles["leg_l"]))
+	RigHelper.set_leg_pitch(_skel, _skel_bones, "thigh_r", float(_skel_angles["leg_r"]))
+	RigHelper.set_leg_pitch(_skel, _skel_bones, "knee_l", float(_skel_angles["knee_l"]))
+	RigHelper.set_leg_pitch(_skel, _skel_bones, "knee_r", float(_skel_angles["knee_r"]))
+	RigHelper.set_arm_pose(_skel, _skel_bones, true, float(_skel_angles["arm_l"]), 0.0)
+	RigHelper.set_arm_pose(_skel, _skel_bones, false, float(_skel_angles["arm_r"]), 0.0)
+	RigHelper.set_forearm_bend(_skel, _skel_bones, true, float(_skel_angles["forearm_l"]))
+	RigHelper.set_forearm_bend(_skel, _skel_bones, false, float(_skel_angles["forearm_r"]))
 
 
 func _get_aimed_interactable() -> Object:
@@ -637,19 +768,55 @@ func _handle_drop() -> void:
 		return
 	var held := GameState.get_player_held_crate(peer_id)
 	if not held.is_empty():
-		var forward := -global_transform.basis.z
-		var drop_pos := global_position + forward * 1.15
-		drop_pos.y = 0.0
+		var drop_pos: Vector3
+		if _ghost_root != null and _ghost_root.visible and _ghost_is_drop_preview:
+			drop_pos = _ghost_pos
+		else:
+			# Sicherer Vorwärts-Check gegen feste Hindernisse (Racks/Wände), damit das Item NIE in einem Rack verschwindet!
+			var forward := -global_transform.basis.z
+			forward.y = 0.0
+			if forward.length_squared() < 0.001:
+				forward = Vector3.FORWARD
+			else:
+				forward = forward.normalized()
+			var dist := 1.05
+			var space := get_world_3d().direct_space_state
+			if space != null:
+				var probe_from := global_position + Vector3(0.0, 0.75, 0.0)
+				var probe_to := probe_from + forward * 1.45
+				var q := PhysicsRayQueryParameters3D.create(probe_from, probe_to, 1)
+				q.exclude = [get_rid()]
+				var hit := space.intersect_ray(q)
+				if not hit.is_empty():
+					var hd := probe_from.distance_to(hit["position"] as Vector3)
+					dist = clampf(hd - 0.50, 0.36, 1.05)
+			drop_pos = global_position + forward * dist
+			drop_pos.y = 0.0
 		GameState.request_drop_crate(drop_pos)
+
+
+func _try_confirm_placement() -> void:
+	if relocating_rack_id != "":
+		if _ghost_root != null and _ghost_root.visible and _ghost_valid:
+			GameState.request_relocate_rack(relocating_rack_id, _ghost_pos, _ghost_rot_y)
+			relocating_rack_id = ""
+		else:
+			SfxManager.play("error")
+		return
+	var held := GameState.get_player_held_crate(peer_id)
+	if not held.is_empty():
+		var item_type := str(held["item_type"])
+		var cat_type := str(GameState.ITEM_CATALOG[item_type]["category"])
+		if cat_type == "placeable" and _ghost_root != null and _ghost_root.visible and not _ghost_is_drop_preview:
+			if _ghost_valid:
+				GameState.request_place_held_structure(_ghost_pos, _ghost_rot_y)
+			else:
+				SfxManager.play("error")
 
 
 func _handle_primary_interact() -> void:
 	if relocating_rack_id != "":
-		if _ghost_root != null and _ghost_root.visible and _ghost_valid:
-			GameState.request_relocate_rack(relocating_rack_id, _ghost_pos, place_rot_y)
-			relocating_rack_id = ""
-		else:
-			SfxManager.play("error")
+		_try_confirm_placement()
 		return
 
 	# If player is currently holding a pulled cable in hand -> connect it to aimed compatible target!
@@ -671,18 +838,19 @@ func _handle_primary_interact() -> void:
 			cable_active_type = ""
 		return
 
+	# Wenn man direkt ein Lagerfach, eine Werkbank oder einen Rollwagen anvisiert, hat Einlagern Vorrang vor Boden-Platzierung!
+	var target := _get_aimed_interactable()
+	var target_type := str(target.get_meta("interact_type")) if target != null else ""
+	var prioritize_target := (target_type == "storage_shelf_slot" or target_type == "workbench" or target_type == "cart")
+
 	var held := GameState.get_player_held_crate(peer_id)
-	if not held.is_empty():
+	if not prioritize_target and not held.is_empty():
 		var item_type := str(held["item_type"])
 		var cat_type := str(GameState.ITEM_CATALOG[item_type]["category"])
-		if cat_type == "placeable" and _ghost_root != null and _ghost_root.visible:
-			if _ghost_valid:
-				GameState.request_place_held_structure(_ghost_pos, _ghost_rot_y)
-			else:
-				SfxManager.play("error")
+		if cat_type == "placeable" and _ghost_root != null and _ghost_root.visible and not _ghost_is_drop_preview:
+			_try_confirm_placement()
 			return
 
-	var target := _get_aimed_interactable()
 	if target == null:
 		_try_assisted_cable_start()
 		return
@@ -761,19 +929,53 @@ func _handle_primary_interact() -> void:
 		"ups_unit":
 			if hands_empty and _world != null and _world.has_method("open_device_inspector"):
 				_world.open_device_inspector("ups", eid)
+		"storage_shelf_slot":
+			var s_idx := int(target.get_meta("slot_index", 0))
+			GameState.request_shelf_interact(eid, s_idx)
+		"workbench":
+			var wb := GameState.workbench_state
+			var wb_mode := str(wb.get("mode", ""))
+			if wb.is_empty():
+				if not held.is_empty():
+					GameState.request_workbench_place()
+			elif wb_mode == "build_box":
+				GameState.request_workbench_unpack()
+			elif wb_mode == "assembly" or wb_mode == "repair":
+				if _world != null and _world.has_method("open_workbench"):
+					_world.open_workbench()
+			elif wb_mode == "ready_tray":
+				if hands_empty:
+					GameState.request_workbench_pickup()
 		"rack_slot":
 			var slot_idx := int(target.get_meta("slot_index"))
+			var is_ext := GameState.is_slot_extended(eid, slot_idx)
 			if not held.is_empty():
 				var held_type := str(held["item_type"])
-				if str(GameState.ITEM_CATALOG[held_type]["category"]) == "module":
+				if held_type == "server_tray":
+					if GameState.racks.has(eid):
+						var slot_occ: Dictionary = GameState.racks[eid]["slots"][slot_idx]
+						if str(slot_occ.get("item_type", "")) != "":
+							SfxManager.play("error")
+						elif not is_ext:
+							GameState.request_toggle_slot_extended(eid, slot_idx)
+						else:
+							GameState.request_insert_server_tray(eid, slot_idx)
+				elif str(GameState.ITEM_CATALOG[held_type]["category"]) == "module":
 					GameState.request_install_module(eid, slot_idx)
+				elif _world != null and _world.has_method("open_rack_inspector"):
+					# Auch mit z. B. Reparatur-Kit in der Hand lässt sich das Rack-Menü sicher öffnen (Item bleibt erhalten!)
+					_world.open_rack_inspector(eid, slot_idx)
 			elif hands_empty:
 				if GameState.racks.has(eid):
 					var slot: Dictionary = GameState.racks[eid]["slots"][slot_idx]
 					var st := str(slot["state"])
-					if st != "crashed" and st != "burning":
-						if _world != null and _world.has_method("open_rack_inspector"):
-							_world.open_rack_inspector(eid, slot_idx)
+					var st_item := str(slot["item_type"])
+					if st == "burning":
+						pass
+					elif is_ext and st_item != "":
+						GameState.request_pull_server_tray(eid, slot_idx)
+					elif _world != null and _world.has_method("open_rack_inspector"):
+						_world.open_rack_inspector(eid, slot_idx)
 
 
 func _handle_secondary_action() -> void:
@@ -788,25 +990,47 @@ func _handle_secondary_action() -> void:
 		SfxManager.play("cable_cut", -10.0, 0.9)
 		return
 
-	if GameState.is_player_holding_anything(peer_id):
-		_handle_drop()
-		return
-
+	# ZUERST anvisiertes Ziel prüfen: Rechtsklick auf einen Rack-Schacht fährt ihn IMMER aus/ein —
+	# auch wenn man einen Server-Schlitten oder ein Kit in der Hand hält (wirft das Item NIE ins Rack!).
 	var target := _get_aimed_interactable()
 	if target != null:
 		var itype := str(target.get_meta("interact_type"))
 		var eid := str(target.get_meta("entity_id"))
 		if itype == "rack_slot":
 			var slot_idx := int(target.get_meta("slot_index"))
-			GameState.request_remove_module(eid, slot_idx)
+			GameState.request_toggle_slot_extended(eid, slot_idx)
+			return
+		elif itype == "rack_panel":
+			var rp_node: Variant = target.get_meta("rack_prop", null)
+			if is_instance_valid(rp_node) and (rp_node as Object).has_method("toggle_panel"):
+				(rp_node as Object).call("toggle_panel", str(target.get_meta("panel_id", "")))
+			return
+		elif itype == "storage_shelf_slot":
+			return # Im Lagerregal nicht versehentlich per Rechtsklick auf den Boden werfen!
+		elif itype == "workbench":
+			if not GameState.is_player_holding_anything(peer_id) and not GameState.workbench_state.is_empty():
+				GameState.request_workbench_pickup()
+			return
 		elif itype == "cart":
-			GameState.request_unload_cart_to_hands(eid)
+			if not GameState.is_player_holding_anything(peer_id):
+				GameState.request_unload_cart_to_hands(eid)
+			return
 		elif itype == "power_port":
-			_unplug_into_hand("power", eid)
+			if not GameState.is_player_holding_anything(peer_id):
+				_unplug_into_hand("power", eid)
+			return
 		elif itype == "net_port" or itype == "wall_router":
-			_unplug_into_hand("network", eid)
+			if not GameState.is_player_holding_anything(peer_id):
+				_unplug_into_hand("network", eid)
+			return
 		elif itype == "cluster_port":
-			_unplug_into_hand("cluster", eid)
+			if not GameState.is_player_holding_anything(peer_id):
+				_unplug_into_hand("cluster", eid)
+			return
+
+	# Im freien Raum legt Rechtsklick wie gewohnt ab (alternativ [Q]).
+	if GameState.is_player_holding_anything(peer_id):
+		_handle_drop()
 
 
 func _update_continuous_actions(delta: float) -> void:
@@ -826,20 +1050,7 @@ func _update_continuous_actions(delta: float) -> void:
 				GameState.request_extinguish_slot(eid, sidx, 0.20)
 		return
 
-	if cable_start_id == "" and not GameState.is_player_holding_anything(peer_id) and Input.is_action_pressed("interact"):
-		if target != null and str(target.get_meta("interact_type")) == "rack_slot":
-			var eid := str(target.get_meta("entity_id"))
-			var sidx := int(target.get_meta("slot_index"))
-			if GameState.racks.has(eid):
-				var slot: Dictionary = GameState.racks[eid]["slots"][sidx]
-				if str(slot["item_type"]) != "" and str(slot["state"]) == "crashed" and not GameState.is_slot_awaiting_diagnosis(slot):
-					_action_tick_accum += delta
-					if _action_tick_accum >= 0.18:
-						_action_tick_accum = 0.0
-						SfxManager.play("click", -12.0, 1.35)
-						GameState.request_repair_slot(eid, sidx, 0.16)
-					return
-
+	# Ausgefallene Server werden nur noch in der 3D-Vorschau des Rack-Menüs repariert.
 	_action_tick_accum = 0.0
 
 
@@ -979,41 +1190,147 @@ func _port_in_sight(origin: Vector3, port_pos: Vector3) -> bool:
 	return (hit["position"] as Vector3).distance_to(port_pos) < PORT_ASSIST_SIGHT_SLACK
 
 
-func _update_placement_preview() -> void:
+func _clear_shelf_hover() -> void:
+	if is_instance_valid(_hovered_shelf) and _hovered_shelf.has_method("set_hovered_slot"):
+		_hovered_shelf.call("set_hovered_slot", -1, {})
+	_hovered_shelf = null
+
+
+func _clear_rack_hover() -> void:
+	if is_instance_valid(_hovered_rack) and _hovered_rack.has_method("set_hovered_slot"):
+		_hovered_rack.call("set_hovered_slot", -1, "default")
+	_hovered_rack = null
+
+
+func _is_two_handed_item(item_type: String, pack_count: int = 1) -> bool:
+	if pack_count > 1:
+		return true
+	if item_type == "" or GameState.is_repair_kit(item_type) or item_type == "fuse":
+		return false
+	return true
+
+
+func _update_viewmodel_motion(delta: float, flat_speed: float) -> void:
+	if not is_local or _held_root == null:
+		return
+	var on_floor := is_on_floor()
+	if on_floor and not _was_on_floor:
+		_vm_land_dip = 0.055
+	_was_on_floor = on_floor
+
+	var held_ext := GameState.is_player_holding_extinguisher(peer_id)
+	var held_crate := GameState.get_player_held_crate(peer_id)
+	var item_type := str(held_crate.get("item_type", ""))
+	var state_key := "ext" if held_ext else (item_type if not held_crate.is_empty() else ("cable:" + cable_active_type if not cable_active_type.is_empty() else ""))
+	if state_key != _vm_last_state_key:
+		_vm_last_state_key = state_key
+		if state_key != "":
+			_vm_equip = 1.0
+
+	_vm_sway = _vm_sway.lerp(Vector2.ZERO, clampf(delta * 10.5, 0.0, 1.0))
+	_vm_equip = move_toward(_vm_equip, 0.0, delta * 3.8)
+	_vm_land_dip = lerpf(_vm_land_dip, 0.0, clampf(delta * 11.0, 0.0, 1.0))
+
+	var two_handed := (not held_ext) and (not held_crate.is_empty()) and _is_two_handed_item(item_type, maxi(1, int(held_crate.get("pack_count", 1))))
+	var base_pos := Vector3(0.0, -0.26, -0.78) if two_handed else (Vector3(0.30, -0.29, -0.58) if held_ext else Vector3(0.30, -0.25, -0.56))
+	var base_scale := 0.64 if two_handed else 0.62
+
+	# Figure-8 Lauf- & Atembewegung
+	var move_amp := clampf(flat_speed / MOVE_SPEED, 0.0, 1.45) if (on_floor and not is_seated_at_pc) else 0.0
+	var bob_x := cos(_walk_cycle * 0.5) * 0.016 * move_amp
+	var bob_y := absf(sin(_walk_cycle * 0.5)) * -0.018 * move_amp + sin(_anim_time * 1.9) * 0.004
+	var equip_ease := _vm_equip * _vm_equip * _vm_equip
+
+	var target_pos := base_pos + Vector3(
+		_vm_sway.x + bob_x,
+		_vm_sway.y + bob_y - _vm_land_dip - equip_ease * 0.26,
+		equip_ease * 0.14
+	)
+	_held_root.position = _held_root.position.lerp(target_pos, clampf(delta * 18.0, 0.0, 1.0))
+	var cur_s := lerpf(_held_root.scale.x, base_scale, clampf(delta * 14.0, 0.0, 1.0))
+	_held_root.scale = Vector3(cur_s, cur_s, cur_s)
+
+	# Subtiles Rollen beim Strafen & Neigen beim Aufnehmen
+	var local_vel := global_transform.basis.inverse() * velocity
+	var strafe_roll := clampf(-local_vel.x * 0.014, -0.07, 0.07)
+	var target_rot := Vector3(
+		_vm_sway.y * 1.4 - equip_ease * 0.42,
+		_vm_sway.x * 1.8,
+		strafe_roll - _vm_sway.x * 0.9
+	)
+	_held_root.rotation = _held_root.rotation.lerp(target_rot, clampf(delta * 14.0, 0.0, 1.0))
+
+
+func _update_placement_preview(delta: float) -> void:
 	if _ghost_root == null or not _ghost_root.is_inside_tree():
 		return
+
+	# Zuerst Lagerregal-Hover aktualisieren: wenn man ein Fach anvisiert, übernimmt das Regal die Vorschau!
+	var held := GameState.get_player_held_crate(peer_id)
+	var aimed := _get_aimed_interactable()
+	if aimed != null and str(aimed.get_meta("interact_type", "")) == "storage_shelf_slot":
+		var shelf_obj: Variant = aimed.get_meta("shelf_prop", null)
+		var s_idx := int(aimed.get_meta("slot_index", -1))
+		if is_instance_valid(shelf_obj) and (shelf_obj as Object).has_method("set_hovered_slot"):
+			if _hovered_shelf != null and _hovered_shelf != shelf_obj:
+				_clear_shelf_hover()
+			_hovered_shelf = shelf_obj as Object
+			_hovered_shelf.call("set_hovered_slot", s_idx, held)
+			_ghost_root.visible = false
+			_ghost_has_visual_pose = false
+			return
+	_clear_shelf_hover()
+
 	var item_type := ""
 	var ignore_rid := ""
+	var is_placeable := false
 	if relocating_rack_id != "" and GameState.racks.has(relocating_rack_id):
 		item_type = str(GameState.racks[relocating_rack_id].get("rack_type", "rack"))
 		ignore_rid = relocating_rack_id
+		is_placeable = true
 	else:
-		var held := GameState.get_player_held_crate(peer_id)
 		if held.is_empty():
 			_ghost_root.visible = false
+			_ghost_has_visual_pose = false
 			return
 		item_type = str(held["item_type"])
-		if str(GameState.ITEM_CATALOG[item_type]["category"]) != "placeable":
-			_ghost_root.visible = false
-			return
+		is_placeable = (str(GameState.ITEM_CATALOG[item_type]["category"]) == "placeable")
+
+	# Wenn man ein nicht-platzierbares Item (Box/Kit/Server) trägt und auf Werkbank/Rack zielt, keinen Boden-Drop-Ring zeigen
+	if not is_placeable and aimed != null:
+		_ghost_root.visible = false
+		_ghost_has_visual_pose = false
+		return
 
 	var space := get_world_3d().direct_space_state
 	var origin := _camera.global_position
-	var end := origin + (-_camera.global_transform.basis.z) * PLACE_RANGE
+	var max_dist := PLACE_RANGE if is_placeable else 3.2
+	var end := origin + (-_camera.global_transform.basis.z) * max_dist
 	var query := PhysicsRayQueryParameters3D.create(origin, end, 1)
 	var hit := space.intersect_ray(query)
 	if hit.is_empty():
 		_ghost_root.visible = false
+		_ghost_has_visual_pose = false
 		return
 
 	var hpos: Vector3 = hit["position"]
 	var hnormal: Vector3 = hit["normal"]
-	if item_type == GameState.INDOOR_UNIT_TYPE:
-		# Innengeräte rasten an der Innenwand ein, auf die man schaut
+	_ghost_is_drop_preview = not is_placeable
+
+	if not is_placeable:
+		if hnormal.y < 0.7:
+			_ghost_root.visible = false
+			_ghost_has_visual_pose = false
+			return
+		_ghost_pos = Vector3(hpos.x, hpos.y, hpos.z)
+		_ghost_rot_y = rotation.y
+		_ghost_valid = true
+	elif item_type == GameState.INDOOR_UNIT_TYPE:
 		var spot: Dictionary = GameState.get_wall_mount_spot(hpos, hnormal)
 		if spot.is_empty():
 			if absf(hnormal.y) > 0.3:
 				_ghost_root.visible = false
+				_ghost_has_visual_pose = false
 				return
 			_ghost_pos = hpos + hnormal * GameState.WALL_UNIT_OFFSET
 			_ghost_rot_y = atan2(hnormal.x, hnormal.z)
@@ -1025,47 +1342,45 @@ func _update_placement_preview() -> void:
 	else:
 		if hnormal.y < 0.7:
 			_ghost_root.visible = false
+			_ghost_has_visual_pose = false
 			return
 		_ghost_pos = Vector3(roundf(hpos.x * 2.0) * 0.5, 0.0, roundf(hpos.z * 2.0) * 0.5)
-		# Außengeräte zeigen immer mit dem Lüfter zur Straße
 		_ghost_rot_y = 0.0 if GameState.is_heat_pump_type(item_type) else place_rot_y
 		_ghost_valid = GameState.can_place_item_at(item_type, _ghost_pos, _ghost_rot_y, ignore_rid)
+
+	# Echtes 3D-Hologramm-Modell bei Typwechsel aufbauen
+	var gkey := ("%s|%s" % [item_type, "drop" if _ghost_is_drop_preview else "place"])
+	if _ghost_model_key != gkey:
+		_rebuild_ghost_model(item_type, held, _ghost_is_drop_preview)
+		_ghost_model_key = gkey
+
+	# Sanftes AAA-Spring-Gleiten auf Raster & Drehung
+	if not _ghost_has_visual_pose:
+		_ghost_visual_pos = _ghost_pos
+		_ghost_visual_rot = _ghost_rot_y
+		_ghost_has_visual_pose = true
+	else:
+		var pk := clampf(delta * 18.0, 0.0, 1.0)
+		var rk := clampf(delta * 16.0, 0.0, 1.0)
+		_ghost_visual_pos = _ghost_visual_pos.lerp(_ghost_pos, pk)
+		_ghost_visual_rot = lerp_angle(_ghost_visual_rot, _ghost_rot_y, rk)
+
 	_ghost_root.visible = true
-	_ghost_root.position = _ghost_pos
-	_ghost_root.rotation.y = _ghost_rot_y
+	_ghost_root.position = _ghost_visual_pos
+	_ghost_root.rotation.y = _ghost_visual_rot
 
-	var bm := _ghost_mesh.mesh as BoxMesh
-	if item_type == "rack_pro":
-		bm.size = Vector3(0.92, 2.48, 0.92)
-		_ghost_mesh.position = Vector3(0.0, 1.24, 0.0)
-		_ghost_front_strip.position = Vector3(0.0, 1.24, 0.47)
-	elif item_type == "rack":
-		bm.size = Vector3(0.92, 2.12, 0.92)
-		_ghost_mesh.position = Vector3(0.0, 1.06, 0.0)
-		_ghost_front_strip.position = Vector3(0.0, 1.06, 0.47)
-	elif item_type == "chiller":
-		bm.size = Vector3(1.14, 1.50, 0.52)
-		_ghost_mesh.position = Vector3(0.0, 0.75, 0.0)
-		_ghost_front_strip.position = Vector3(0.0, 0.75, 0.27)
-	elif item_type == "cooler":
-		bm.size = Vector3(1.04, 0.98, 0.48)
-		_ghost_mesh.position = Vector3(0.0, 0.49, 0.0)
-		_ghost_front_strip.position = Vector3(0.0, 0.49, 0.25)
-	elif item_type == GameState.INDOOR_UNIT_TYPE:
-		bm.size = Vector3(0.96, 0.30, 0.22)
-		_ghost_mesh.position = Vector3.ZERO
-		_ghost_front_strip.position = Vector3(0.0, 0.0, 0.12)
+	if _ghost_is_drop_preview:
+		_ghost_holo_mat.set_shader_parameter("holo_color", Color(0.28, 0.78, 1.0, 0.36))
+		_ghost_frame_mat.albedo_color = Color(0.32, 0.84, 1.0, 0.80)
+		_ghost_frame_mat.emission = Color(0.28, 0.78, 1.0)
+	elif _ghost_valid:
+		_ghost_holo_mat.set_shader_parameter("holo_color", Color(0.14, 0.96, 0.56, 0.44))
+		_ghost_frame_mat.albedo_color = Color(0.22, 1.0, 0.62, 0.94)
+		_ghost_frame_mat.emission = Color(0.18, 0.96, 0.54)
 	else:
-		bm.size = Vector3(0.74, 1.32, 0.60)
-		_ghost_mesh.position = Vector3(0.0, 0.66, 0.0)
-		_ghost_front_strip.position = Vector3(0.0, 0.66, 0.31)
-
-	if _ghost_valid:
-		_ghost_mat.albedo_color = Color(0.18, 0.92, 0.44, 0.42)
-		_ghost_mat.emission = Color(0.14, 0.85, 0.38)
-	else:
-		_ghost_mat.albedo_color = Color(0.96, 0.22, 0.20, 0.46)
-		_ghost_mat.emission = Color(0.92, 0.16, 0.16)
+		_ghost_holo_mat.set_shader_parameter("holo_color", Color(0.98, 0.22, 0.20, 0.50))
+		_ghost_frame_mat.albedo_color = Color(1.0, 0.26, 0.22, 0.95)
+		_ghost_frame_mat.emission = Color(0.98, 0.18, 0.16)
 
 
 func _update_cable_preview() -> void:
@@ -1171,12 +1486,17 @@ func _update_context_prompt() -> void:
 		return
 
 	var held := GameState.get_player_held_crate(peer_id)
-	if not held.is_empty():
+	var target := _get_aimed_interactable()
+	var target_type := str(target.get_meta("interact_type")) if target != null else ""
+	var prioritize_target := (target_type == "storage_shelf_slot" or target_type == "workbench" or target_type == "cart")
+
+	if not prioritize_target and not held.is_empty():
 		var item_type := str(held["item_type"])
 		var cat: Dictionary = GameState.ITEM_CATALOG[item_type]
-		if str(cat["category"]) == "placeable" and _ghost_root != null and _ghost_root.visible:
+		if str(cat["category"]) == "placeable" and _ghost_root != null and _ghost_root.visible and not _ghost_is_drop_preview:
+			_clear_rack_hover()
 			if _ghost_valid:
-				current_prompt = tr("[Klick / E] %s hier platzieren") % tr(str(cat["name"]))
+				current_prompt = tr("[Linksklick / E] %s hier platzieren") % tr(str(cat["name"]))
 			elif item_type == GameState.INDOOR_UNIT_TYPE:
 				current_prompt = tr("Hier geht es nicht – auf eine freie Innenwand zielen (nicht über dem Garagentor)")
 			elif GameState.is_heat_pump_type(item_type):
@@ -1186,11 +1506,17 @@ func _update_context_prompt() -> void:
 			if item_type == GameState.INDOOR_UNIT_TYPE or GameState.is_heat_pump_type(item_type):
 				current_sub_prompt = tr("[Q] Karton ablegen")
 			else:
-				current_sub_prompt = tr("[R] Drehen  •  [Q] Karton ablegen")
+				current_sub_prompt = tr("[R / Mausrad] Drehen (90°)  •  [Q] Karton ablegen")
 			return
 
-	var target := _get_aimed_interactable()
+	# Rack-Slot 3D-Hover-Rahmen nur zeigen, wenn direkt auf einen Einschub gezielt wird
+	if target == null or str(target.get_meta("interact_type", "")) != "rack_slot":
+		_clear_rack_hover()
+
 	if target == null:
+		if not held.is_empty() and _ghost_root != null and _ghost_root.visible and _ghost_is_drop_preview:
+			current_sub_prompt = tr("[Q] %s am markierten Punkt abstellen") % GameState.get_crate_display_label(held)
+			return
 		var pc := GameState.get_player_pushed_cart(peer_id)
 		if not pc.is_empty():
 			var cnt := (pc.get("items", []) as Array).size()
@@ -1285,8 +1611,7 @@ func _update_context_prompt() -> void:
 				current_sub_prompt = eid.to_upper()
 		"crate":
 			if GameState.crates.has(eid):
-				var ct := str(GameState.crates[eid]["item_type"])
-				var cname := tr(str(GameState.ITEM_CATALOG[ct]["name"]))
+				var cname := GameState.get_crate_display_label(GameState.crates[eid] as Dictionary)
 				var pc := GameState.get_player_pushed_cart(peer_id)
 				if not pc.is_empty():
 					var cnt := (pc.get("items", []) as Array).size()
@@ -1325,37 +1650,98 @@ func _update_context_prompt() -> void:
 		"ups_unit":
 			if GameState.ups_units.has(eid):
 				var ch := float(GameState.ups_units[eid]["charge"])
-				current_prompt = tr("[E / F] USV-Batterie %s (%.0f%%) — Umsetzen / Verkaufen") % [eid.to_upper(), ch]
+				var ups_state := tr("NOTSTROM!") if bool(GameState.ups_units[eid].get("discharging", false)) else (tr("LÄDT/BEREIT") if bool(GameState.ups_units[eid].get("connected", false)) else tr("KEIN KABEL"))
+				current_prompt = tr("[E / F] USV-Batterie %s (%.0f%%, %s) — Umsetzen / Verkaufen") % [eid.to_upper(), ch, ups_state]
 				current_sub_prompt = tr("Auf gelbe Buchse oben zielen für Stromkabel")
+		"storage_shelf_slot":
+			var s_idx := int(target.get_meta("slot_index", 0))
+			var skey := "%s:%d" % [eid, s_idx]
+			var has_item := GameState.storage_shelf_slots.has(skey)
+			if not held.is_empty():
+				if has_item:
+					current_prompt = tr("Lagerfach %d belegt (%s)") % [s_idx + 1, GameState.get_crate_display_label(GameState.storage_shelf_slots[skey] as Dictionary)]
+				else:
+					current_prompt = tr("[E] %s in Lagerfach %d abstellen") % [GameState.get_crate_display_label(held), s_idx + 1]
+			elif has_item:
+				current_prompt = tr("[E] %s aus Lagerfach %d nehmen") % [GameState.get_crate_display_label(GameState.storage_shelf_slots[skey] as Dictionary), s_idx + 1]
+			else:
+				current_prompt = tr("Lagerfach %d (frei)") % (s_idx + 1)
+		"workbench":
+			var wb := GameState.workbench_state
+			var wb_mode := str(wb.get("mode", ""))
+			if wb.is_empty():
+				if not held.is_empty() and (str(held["item_type"]) == "slot_build_box" or str(held["item_type"]) == "server_tray"):
+					current_prompt = tr("[E] %s auf Werkbank ablegen") % GameState.get_crate_display_label(held)
+				else:
+					current_prompt = tr("IT-Werkbank (frei)")
+					current_sub_prompt = tr("Bausatz-Karton oder defekten Server-Schlitten herbringen")
+			elif wb_mode == "build_box":
+				current_prompt = tr("[E] Bausatz auspacken (%s)") % str(wb.get("label", "Server"))
+				current_sub_prompt = tr("[Rechtsklick] Karton wieder aufnehmen")
+			elif wb_mode == "assembly":
+				current_prompt = tr("[E] Zusammenbau starten (%s)") % str(wb.get("label", "Server"))
+			elif wb_mode == "repair":
+				current_prompt = tr("[E] Reparatur starten (%s)") % str(wb.get("label", "Server"))
+				current_sub_prompt = tr("[Rechtsklick] Server-Schlitten wieder aufnehmen")
+			elif wb_mode == "ready_tray":
+				current_prompt = tr("[E] Fertigen Server aufnehmen (%s)") % str(wb.get("label", "Server"))
+				current_sub_prompt = tr("Ins ausgefahrene Rack einsetzen")
 		"rack_slot":
 			var sidx := int(target.get_meta("slot_index"))
+			var rp_obj: Variant = target.get_meta("rack_prop", null)
+			if is_instance_valid(rp_obj) and (rp_obj as Object).has_method("set_hovered_slot"):
+				if _hovered_rack != null and _hovered_rack != rp_obj:
+					_clear_rack_hover()
+				_hovered_rack = rp_obj as Object
 			if GameState.racks.has(eid):
+				var rname := GameState.get_rack_display_name(eid)
 				var slot: Dictionary = GameState.racks[eid]["slots"][sidx]
 				var st_item := str(slot["item_type"])
 				var st_state := str(slot["state"])
+				var is_ext := GameState.is_slot_extended(eid, sidx)
+				var hover_mode := "default"
 				if st_state == "burning":
+					hover_mode = "warn"
 					if GameState.is_player_holding_extinguisher(peer_id):
-						current_prompt = tr("[Klick / E HALTEN] Brand in %s Slot %d löschen!") % [eid.to_upper(), sidx + 1]
+						current_prompt = tr("[Klick / E HALTEN] Brand in %s · Slot %d löschen!") % [rname, sidx + 1]
 					else:
 						current_prompt = tr("SERVER BRENNT! Feuerlöscher an der Nordwand holen!")
-				elif st_state == "crashed" and GameState.is_slot_awaiting_diagnosis(slot):
-					current_prompt = tr("%s Slot %d: Defekt unbekannt") % [eid.to_upper(), sidx + 1]
-					current_sub_prompt = tr("[F] Rack-Menü öffnen und in der 3D-Vorschau das defekte Teil suchen")
+				elif not held.is_empty() and str(held["item_type"]) == "server_tray":
+					if st_item != "":
+						hover_mode = "warn"
+						current_prompt = tr("%s · Slot %d ist belegt — leeren Slot wählen!") % [rname, sidx + 1]
+						current_sub_prompt = tr("[Rechtsklick] Schacht %d %s") % [sidx + 1, tr("einfahren") if is_ext else tr("ausfahren")]
+					elif is_ext:
+						hover_mode = "insert"
+						current_prompt = tr("[E] Server in %s · Slot %d einsetzen") % [rname, sidx + 1]
+						current_sub_prompt = tr("[Rechtsklick] Schacht einfahren  •  [Q] Server ablegen")
+					else:
+						hover_mode = "insert"
+						current_prompt = tr("[E / Rechtsklick] Schacht %d ausfahren (%s)") % [sidx + 1, rname]
+						current_sub_prompt = tr("Danach [E] zum Einsetzen drücken")
+				elif is_ext and st_item != "" and not GameState.is_player_holding_anything(peer_id):
+					hover_mode = "pull"
+					current_prompt = tr("[E] Server-Schlitten herausziehen (%s · Slot %d)") % [rname, sidx + 1]
+					current_sub_prompt = tr("[Rechtsklick] Schacht einfahren  •  [F] Rack-Menü")
 				elif st_state == "crashed":
-					current_prompt = tr("[E HALTEN] %s Slot %d reparieren (%.0f%%)") % [eid.to_upper(), sidx + 1, float(slot["repair_progress"]) * 100.0]
-					current_sub_prompt = tr("[F] Interaktives Rack-Menü öffnen")
+					hover_mode = "warn"
+					current_prompt = tr("[E] %s · Slot %d (AUSGEFALLEN)") % [rname, sidx + 1]
+					current_sub_prompt = tr("[Rechtsklick] Schacht ausfahren (→ Werkbank)  •  [F] Rack-Menü")
 				elif st_item == "":
 					if not held.is_empty() and str(GameState.ITEM_CATALOG[str(held["item_type"])]["category"]) == "module":
-						current_prompt = tr("[E] %s in %s Slot %d einschieben") % [
-							str(GameState.ITEM_CATALOG[str(held["item_type"])]["name"]), eid.to_upper(), sidx + 1
+						hover_mode = "insert"
+						current_prompt = tr("[E] %s in %s · Slot %d einschieben") % [
+							str(GameState.ITEM_CATALOG[str(held["item_type"])]["name"]), rname, sidx + 1
 						]
+						current_sub_prompt = tr("[Rechtsklick] Schacht %d %s") % [sidx + 1, tr("einfahren") if is_ext else tr("ausfahren")]
 					else:
-						current_prompt = tr("[E / F] %s Übersicht & Hardware-Overlay (Slot %d frei)") % [eid.to_upper(), sidx + 1]
+						current_prompt = tr("[E / F] %s · Slot %d (frei)") % [rname, sidx + 1]
+						current_sub_prompt = tr("[Rechtsklick] Schacht %d %s") % [sidx + 1, tr("einfahren") if is_ext else tr("ausfahren")]
 				else:
-					var m_name := str(GameState.ITEM_CATALOG[st_item]["name"])
-					current_prompt = tr("[E / F] %s Overlay: %s — Strom, Kapazität & Upgrades") % [eid.to_upper(), m_name]
-					if not GameState.is_player_holding_anything(peer_id):
-						current_sub_prompt = tr("[Rechtsklick] Server ausbauen  •  [E / F] 3D-Hardware & Rack-Daten")
+					current_prompt = tr("[E / F] %s · Slot %d verwalten") % [rname, sidx + 1]
+					current_sub_prompt = tr("[Rechtsklick] Schacht %d %s") % [sidx + 1, tr("einfahren") if is_ext else tr("ausfahren")]
+				if is_instance_valid(_hovered_rack):
+					_hovered_rack.call("set_hovered_slot", sidx, hover_mode)
 
 
 func _update_held_visuals() -> void:
@@ -1363,21 +1749,72 @@ func _update_held_visuals() -> void:
 		return
 	var held_ext := GameState.is_player_holding_extinguisher(peer_id)
 	var held_crate := GameState.get_player_held_crate(peer_id)
+	var has_cable := not str(cable_active_type).is_empty()
 
 	_held_extinguisher.visible = held_ext
 	if _fp_hand != null:
-		_fp_hand.visible = held_ext or not held_crate.is_empty() or not str(cable_active_type).is_empty()
-		_fp_hand.position = FP_HAND_EXT_POS if held_ext else FP_HAND_ITEM_POS
+		var show_any := held_ext or not held_crate.is_empty() or has_cable
+		_fp_hand.visible = show_any
+		if held_ext:
+			_fp_hand.position = FP_HAND_EXT_POS
+			_fp_hand.rotation_degrees = Vector3(-14.0, -8.0, 0.0)
+			if _fp_hand_left != null:
+				_fp_hand_left.visible = true
+				_fp_hand_left.position = Vector3(-0.13, 0.02, -0.14)
+				_fp_hand_left.rotation_degrees = Vector3(12.0, 26.0, 18.0)
+		elif not held_crate.is_empty():
+			var itype := str(held_crate["item_type"])
+			var pcount := maxi(1, int(held_crate.get("pack_count", 1)))
+			var two_handed := _is_two_handed_item(itype, pcount)
+			if two_handed:
+				var half_w := 0.255 if (itype == "server_tray" or itype == "slot_build_box") else (0.245 if pcount > 1 else 0.235)
+				_fp_hand.position = Vector3(half_w, 0.045, 0.02)
+				_fp_hand.rotation_degrees = Vector3(14.0, -6.0, 82.0)
+				if _fp_hand_left != null:
+					_fp_hand_left.visible = true
+					_fp_hand_left.position = Vector3(-half_w, 0.045, 0.02)
+					_fp_hand_left.rotation_degrees = Vector3(14.0, 6.0, -82.0)
+			else:
+				_fp_hand.position = FP_HAND_ITEM_POS
+				_fp_hand.rotation_degrees = Vector3(4.0, 4.0, 0.0)
+				if _fp_hand_left != null:
+					_fp_hand_left.visible = false
+		elif has_cable:
+			_fp_hand.position = Vector3(0.02, -0.07, 0.04)
+			_fp_hand.rotation_degrees = Vector3(10.0, 14.0, -10.0)
+			if _fp_hand_left != null:
+				_fp_hand_left.visible = false
+		elif _fp_hand_left != null:
+			_fp_hand_left.visible = false
 	if not held_crate.is_empty():
 		var item_type := str(held_crate["item_type"])
+		var pcount := maxi(1, int(held_crate.get("pack_count", 1)))
+		var cache_key := "%s|%s|%d" % [item_type, str(held_crate.get("label", "")), pcount]
 		_held_item_holder.visible = true
-		if _held_item_type_cached != item_type:
+		if _held_item_type_cached != cache_key:
 			for c in _held_item_holder.get_children():
 				c.queue_free()
-			var model := HardwareMeshFactory.build_item_visual(item_type)
-			model.position = Vector3(0.0, -0.06, 0.0)
+			var model: Node3D
+			if pcount > 1 or GameState.is_repair_kit(item_type) or item_type == "slot_build_box" or item_type == "server_tray":
+				model = StorageShelfProp.build_stored_visual(held_crate)
+			else:
+				model = HardwareMeshFactory.build_item_visual(item_type)
+			if pcount > 1:
+				model.scale = Vector3(0.96, 0.96, 0.96)
+				model.position = Vector3(0.0, -0.06, -0.02)
+			elif item_type == "server_tray":
+				model.scale = Vector3(0.88, 0.88, 0.88)
+				model.position = Vector3(0.0, -0.04, -0.02)
+			elif item_type == "slot_build_box":
+				model.scale = Vector3(1.0, 1.0, 1.0)
+				model.position = Vector3(0.0, -0.06, -0.02)
+			elif GameState.is_repair_kit(item_type):
+				model.scale = Vector3(0.92, 0.92, 0.92)
+				model.position = Vector3(0.0, -0.02, -0.02)
+			else:
+				model.position = Vector3(0.0, -0.05, 0.0)
 			_held_item_holder.add_child(model)
-			_held_item_type_cached = item_type
+			_held_item_type_cached = cache_key
 	else:
 		_held_item_holder.visible = false
 		if _held_item_type_cached != "":
@@ -1475,21 +1912,31 @@ func _add_nametag() -> void:
 	add_child(_nametag)
 
 
-## Lädt player.glb und übernimmt dessen Gelenke für _animate_remote_avatar().
-## Gibt false zurück, wenn das Modell fehlt oder ein Gelenk nicht gefunden wird.
-func _build_model_avatar(tint_mats: Dictionary) -> bool:
-	if not ModelLoader.has_custom_model(AVATAR_MODEL_ID):
+## Lädt player_realistic.glb (Skeleton3D / Mixamo / MakeHuman) oder player.glb.
+## Gibt false zurück, wenn kein gültiges Modell vorhanden ist.
+func _build_model_avatar(_tint_mats: Dictionary) -> bool:
+	var model_id := REALISTIC_AVATAR_MODEL_ID if ModelLoader.has_custom_model(REALISTIC_AVATAR_MODEL_ID) else AVATAR_MODEL_ID
+	if not ModelLoader.has_custom_model(model_id):
 		return false
-	var model := ModelLoader.instantiate_custom_model(AVATAR_MODEL_ID)
+	var model := ModelLoader.instantiate_custom_model(model_id)
 	if model == null:
 		return false
+	var skel: Skeleton3D = RigHelper.find_skeleton(model)
+	if skel != null:
+		_avatar_root.add_child(model)
+		RigHelper.normalize_character_root(model, true)
+		_skel = skel
+		_skel_bones = RigHelper.map_bones(skel)
+		_anim_player = RigHelper.find_anim_player(model)
+		RigHelper.apply_skin_to_skeleton_model(model, skin_data if not skin_data.is_empty() else SettingsManager.get_skin(), avatar_color)
+		return true
 	var left_leg := model.find_child("Pivot_LegL", true, false) as Node3D
 	var right_leg := model.find_child("Pivot_LegR", true, false) as Node3D
 	var left_arm := model.find_child("Pivot_ArmL", true, false) as Node3D
 	var right_arm := model.find_child("Pivot_ArmR", true, false) as Node3D
 	var head := model.find_child("Pivot_Head", true, false) as Node3D
 	if left_leg == null or right_leg == null or left_arm == null or right_arm == null or head == null:
-		push_warning("player.glb: Gelenke Pivot_* fehlen, nutze Box-Avatar.")
+		push_warning("%s.glb: Gelenke Pivot_* oder Skeleton3D fehlen, nutze Box-Avatar." % model_id)
 		model.free()
 		return false
 	_avatar_root.add_child(model)
@@ -1498,12 +1945,53 @@ func _build_model_avatar(tint_mats: Dictionary) -> bool:
 	_left_arm = left_arm
 	_right_arm = right_arm
 	_avatar_head = head
-	_tint_avatar(model, tint_mats)
+	PlayerController.apply_skin_to_model(model, skin_data if not skin_data.is_empty() else SettingsManager.get_skin(), avatar_color)
 	return true
 
 
-## Ersetzt die Blender-Materialien (DCT_Jacket, DCT_Pants, DCT_Skin) durch die Skin-Materialien.
-func _tint_avatar(node: Node, tint_mats: Dictionary) -> void:
+## Wendet Farben (Jacke, Hose, Haut, Haare, Schuhe, Akzent) und Accessoires (Frisur/Mütze/Headset/Brille)
+## auf ein instanziiertes player.glb ODER player_realistic.glb (Skeleton3D) an — im Spiel & im 3D-Skin-Editor!
+static func apply_skin_to_model(model: Node3D, skin: Variant, fallback_team_color: Color = Color(0.14, 0.28, 0.54)) -> void:
+	if model == null:
+		return
+	if RigHelper.find_skeleton(model) != null:
+		RigHelper.apply_skin_to_skeleton_model(model, skin, fallback_team_color)
+		return
+	var c := SettingsManager.skin_colors(skin, fallback_team_color)
+	var mk := func(col: Color, rough: float, metal: float = 0.0) -> StandardMaterial3D:
+		var m := StandardMaterial3D.new()
+		m.albedo_color = col
+		m.roughness = rough
+		m.metallic = metal
+		return m
+	var tint_mats := {
+		"DCT_Jacket": mk.call(c["jacket"], 0.62, 0.05),
+		"DCT_Pants": mk.call(c["pants"], 0.78, 0.0),
+		"DCT_Skin": mk.call(c["tone"], 0.60, 0.0),
+		"DCT_Hair": mk.call(c["hair"], 0.80, 0.0),
+		"DCT_Shoes": mk.call(c["shoes"], 0.52, 0.04),
+		"DCT_Accent": mk.call(c["accent"], 0.35, 0.08),
+	}
+	_tint_avatar_static(model, tint_mats)
+
+	var hw := int(c.get("headwear", 2))
+	var gl := int(c.get("glasses", 0))
+	var vis_map := {
+		"Hair_Short": (hw == 0 or hw == 2 or hw == 4 or hw == 5),
+		"Hair_Undercut": (hw == 1),
+		"Hat_Cap": (hw == 2 or hw == 5),
+		"Hat_Beanie": (hw == 3),
+		"Acc_Headset": (hw == 4 or hw == 5),
+		"Acc_Glasses": (gl == 1),
+		"Acc_SafetyGlasses": (gl == 2),
+	}
+	for node_name in vis_map.keys():
+		var nd := model.find_child(str(node_name), true, false) as Node3D
+		if nd != null:
+			nd.visible = bool(vis_map[node_name])
+
+
+static func _tint_avatar_static(node: Node, tint_mats: Dictionary) -> void:
 	if node is MeshInstance3D:
 		var mi := node as MeshInstance3D
 		if mi.mesh != null:
@@ -1512,27 +2000,48 @@ func _tint_avatar(node: Node, tint_mats: Dictionary) -> void:
 				if m != null and tint_mats.has(m.resource_name):
 					mi.set_surface_override_material(i, tint_mats[m.resource_name] as Material)
 	for child in node.get_children():
-		_tint_avatar(child, tint_mats)
+		_tint_avatar_static(child, tint_mats)
 
 
-## Ich-Perspektive: Hand und Unterarm im Jackenstoff, Maße wie beim Box-Avatar.
-## Hängt an _held_root und ist nur sichtbar, solange der aktive Slot etwas enthält.
+## Ich-Perspektive: Realistische rechte UND linke 3D-Hand (fp_hand.glb) im aktuellen Skin-Farbschema.
+## Zweihändig für Kartons, Server, Racks & Feuerlöscher; einhändig für Kits & Kabel!
 func _build_fp_hand() -> void:
 	_fp_hand = Node3D.new()
 	_fp_hand.visible = false
 	_fp_hand.position = FP_HAND_ITEM_POS
 	_held_root.add_child(_fp_hand)
 
-	var sleeve_mat := _mat(avatar_color, 0.45, 0.12)
-	var skin_mat := _mat(skin_tone_color, 0.65, 0.0)
-	_add_box(_fp_hand, Vector3.ZERO, Vector3(0.11, 0.09, 0.13), skin_mat)
+	_fp_hand_left = Node3D.new()
+	_fp_hand_left.visible = false
+	_fp_hand_left.position = Vector3(-0.24, -0.04, 0.03)
+	_held_root.add_child(_fp_hand_left)
 
-	# Unterarm läuft von der Hand nach hinten, leicht nach unten und nach rechts aus dem Bild.
-	var forearm := Node3D.new()
-	forearm.position = Vector3(0.02, -0.02, 0.06)
-	forearm.rotation_degrees = Vector3(18.0, 8.0, 0.0)
-	_fp_hand.add_child(forearm)
-	_add_box(forearm, Vector3(0.0, 0.0, 0.20), Vector3(0.13, 0.13, 0.40), sleeve_mat)
+	var right_m := ModelLoader.instantiate_custom_model("fp_hand")
+	if right_m != null:
+		_fp_hand.add_child(right_m)
+	var left_m := ModelLoader.instantiate_custom_model("fp_hand")
+	if left_m != null:
+		left_m.scale = Vector3(-1.0, 1.0, 1.0)
+		_fp_hand_left.add_child(left_m)
+
+	_refresh_fp_hand_skin()
+
+
+func _refresh_fp_hand_skin() -> void:
+	if _fp_hand == null:
+		return
+	var c := SettingsManager.skin_colors(skin_data if not skin_data.is_empty() else SettingsManager.get_skin(), avatar_color)
+	var sleeve_col: Color = c["jacket"]
+	var cuff_col: Color = sleeve_col.darkened(0.28)
+	var skin_col: Color = c["tone"]
+	var tint_mats := {
+		"DCT_FP_Skin": _mat(skin_col, 0.60, 0.0),
+		"DCT_FP_Sleeve": _mat(sleeve_col, 0.84, 0.0),
+		"DCT_FP_Cuff": _mat(cuff_col, 0.88, 0.0),
+	}
+	_tint_avatar_static(_fp_hand, tint_mats)
+	if _fp_hand_left != null:
+		_tint_avatar_static(_fp_hand_left, tint_mats)
 
 
 func _build_held_visuals() -> void:
@@ -1665,31 +2174,140 @@ func _build_placement_ghost() -> void:
 	else:
 		get_parent().add_child.call_deferred(_ghost_root)
 
-	_ghost_mat = StandardMaterial3D.new()
-	_ghost_mat.albedo_color = Color(0.18, 0.92, 0.44, 0.42)
-	_ghost_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	_ghost_mat.emission_enabled = true
-	_ghost_mat.emission = Color(0.14, 0.85, 0.38)
-	_ghost_mat.emission_energy_multiplier = 0.9
+	# AAA Blueprint-Fresnel + Scanline Hologramm-Shader
+	var sh := Shader.new()
+	sh.code = """
+shader_type spatial;
+render_mode blend_mix, depth_draw_never, cull_back, unshaded;
+uniform vec4 holo_color : source_color = vec4(0.14, 0.96, 0.56, 0.44);
+void fragment() {
+	float ndv = clamp(dot(normalize(NORMAL), normalize(VIEW)), 0.0, 1.0);
+	float fresnel = pow(1.0 - ndv, 2.2);
+	float scan = 0.5 + 0.5 * sin(FRAGCOORD.y * 0.30 - TIME * 4.8);
+	float pulse = 0.88 + 0.12 * sin(TIME * 3.0);
+	ALBEDO = holo_color.rgb * (1.05 + fresnel * 1.25);
+	ALPHA = clamp((holo_color.a * 0.42 + fresnel * 0.68 + scan * 0.08) * pulse, 0.10, 0.92);
+}
+"""
+	_ghost_holo_mat = ShaderMaterial.new()
+	_ghost_holo_mat.shader = sh
+	_ghost_holo_mat.set_shader_parameter("holo_color", Color(0.14, 0.96, 0.56, 0.44))
 
-	_ghost_mesh = MeshInstance3D.new()
-	var bm := BoxMesh.new()
-	bm.size = Vector3(0.92, 2.12, 0.92)
-	_ghost_mesh.mesh = bm
-	_ghost_mesh.material_override = _ghost_mat
-	_ghost_root.add_child(_ghost_mesh)
+	_ghost_frame_mat = StandardMaterial3D.new()
+	_ghost_frame_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	_ghost_frame_mat.albedo_color = Color(0.22, 1.0, 0.62, 0.94)
+	_ghost_frame_mat.emission_enabled = true
+	_ghost_frame_mat.emission = Color(0.18, 0.96, 0.54)
+	_ghost_frame_mat.emission_energy_multiplier = 1.6
 
-	_ghost_front_strip = MeshInstance3D.new()
-	var fbm := BoxMesh.new()
-	fbm.size = Vector3(0.65, 0.18, 0.04)
-	_ghost_front_strip.mesh = fbm
-	var fmat := StandardMaterial3D.new()
-	fmat.albedo_color = Color(1.0, 1.0, 1.0, 0.9)
-	fmat.emission_enabled = true
-	fmat.emission = Color(1.0, 1.0, 1.0)
-	fmat.emission_energy_multiplier = 2.0
-	_ghost_front_strip.material_override = fmat
-	_ghost_root.add_child(_ghost_front_strip)
+	_ghost_model_holder = Node3D.new()
+	_ghost_root.add_child(_ghost_model_holder)
+
+	_ghost_footprint = Node3D.new()
+	_ghost_root.add_child(_ghost_footprint)
+
+	# Leuchtender Front-Richtungs-Pfeil am Boden (zeigt exakt wohin die Rack-Glastür öffnet!)
+	_ghost_front_arrow = Node3D.new()
+	_ghost_root.add_child(_ghost_front_arrow)
+	var shaft := _add_box(_ghost_front_arrow, Vector3(0.0, 0.015, 0.10), Vector3(0.06, 0.012, 0.18), _ghost_frame_mat)
+	var wing_l := _add_box(_ghost_front_arrow, Vector3(-0.075, 0.015, 0.17), Vector3(0.045, 0.012, 0.18), _ghost_frame_mat)
+	wing_l.rotation_degrees.y = -42.0
+	var wing_r := _add_box(_ghost_front_arrow, Vector3(0.075, 0.015, 0.17), Vector3(0.045, 0.012, 0.18), _ghost_frame_mat)
+	wing_r.rotation_degrees.y = 42.0
+	var front_lbl := Label3D.new()
+	front_lbl.text = "FRONT"
+	front_lbl.font_size = 24
+	front_lbl.pixel_size = 0.0022
+	front_lbl.shaded = false
+	front_lbl.modulate = Color(0.90, 1.0, 0.95)
+	front_lbl.position = Vector3(0.0, 0.022, 0.34)
+	front_lbl.rotation_degrees.x = -90.0
+	_ghost_front_arrow.add_child(front_lbl)
+	shaft.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+
+	# Präziser Boden-Zielring für nicht-platzierbare Items (beim Ablegen mit [Q])
+	_ghost_drop_ring = MeshInstance3D.new()
+	var tm := TorusMesh.new()
+	tm.inner_radius = 0.20
+	tm.outer_radius = 0.23
+	_ghost_drop_ring.mesh = tm
+	_ghost_drop_ring.material_override = _ghost_frame_mat
+	_ghost_drop_ring.position = Vector3(0.0, 0.014, 0.0)
+	_ghost_drop_ring.visible = false
+	_ghost_root.add_child(_ghost_drop_ring)
+
+
+func _rebuild_ghost_model(item_type: String, held: Dictionary, is_drop_preview: bool) -> void:
+	for c in _ghost_model_holder.get_children():
+		c.queue_free()
+	for c in _ghost_footprint.get_children():
+		c.queue_free()
+
+	var fp_size := Vector2(0.92, 0.92)
+	var show_footprint := not is_drop_preview and item_type != GameState.INDOOR_UNIT_TYPE
+	_ghost_drop_ring.visible = is_drop_preview
+	_ghost_footprint.visible = show_footprint
+	_ghost_front_arrow.visible = show_footprint
+
+	var model: Node3D = null
+	if is_drop_preview:
+		if GameState.is_repair_kit(item_type) or item_type == "slot_build_box" or item_type == "server_tray":
+			model = StorageShelfProp.build_stored_visual(held)
+		else:
+			model = HardwareMeshFactory.build_item_visual(item_type)
+			model.scale = Vector3(0.75, 0.75, 0.75)
+	elif item_type == "rack_pro":
+		model = ModelLoader.instantiate_custom_model("rack_pro")
+		fp_size = Vector2(0.94, 0.94)
+	elif item_type == "rack":
+		model = ModelLoader.instantiate_custom_model("rack_std")
+		fp_size = Vector2(0.94, 0.94)
+	elif item_type == "ups":
+		model = ModelLoader.instantiate_custom_model("ups_unit")
+		fp_size = Vector2(0.76, 0.62)
+	elif item_type == "cooler" or item_type == "chiller" or item_type == GameState.INDOOR_UNIT_TYPE:
+		var box_sz := Vector3(1.14, 1.50, 0.52) if item_type == "chiller" else (Vector3(0.96, 0.30, 0.22) if item_type == GameState.INDOOR_UNIT_TYPE else Vector3(1.04, 0.98, 0.48))
+		var mi := MeshInstance3D.new()
+		var bm := BoxMesh.new()
+		bm.size = box_sz
+		mi.mesh = bm
+		mi.position = Vector3(0.0, 0.0 if item_type == GameState.INDOOR_UNIT_TYPE else box_sz.y * 0.5, 0.0)
+		model = mi
+		fp_size = Vector2(box_sz.x + 0.04, box_sz.z + 0.04)
+
+	if model == null:
+		var fb := MeshInstance3D.new()
+		var fbm := BoxMesh.new()
+		fbm.size = Vector3(0.90, 2.10, 0.90)
+		fb.mesh = fbm
+		fb.position = Vector3(0.0, 1.05, 0.0)
+		model = fb
+
+	_apply_holo_shader_recursive(model, _ghost_holo_mat)
+	_ghost_model_holder.add_child(model)
+
+	if show_footprint:
+		var hx := fp_size.x * 0.5
+		var hz := fp_size.y * 0.5
+		var corner_len := minf(0.22, minf(hx, hz) * 0.65)
+		for sx in [-1.0, 1.0]:
+			for sz in [-1.0, 1.0]:
+				_add_box(_ghost_footprint, Vector3(sx * (hx - corner_len * 0.5), 0.012, sz * hz), Vector3(corner_len, 0.012, 0.022), _ghost_frame_mat)
+				_add_box(_ghost_footprint, Vector3(sx * hx, 0.012, sz * (hz - corner_len * 0.5)), Vector3(0.022, 0.012, corner_len), _ghost_frame_mat)
+				_add_box(_ghost_footprint, Vector3(sx * hx, 0.09, sz * hz), Vector3(0.016, 0.16, 0.016), _ghost_frame_mat)
+		_ghost_front_arrow.position = Vector3(0.0, 0.0, hz + 0.06)
+
+
+func _apply_holo_shader_recursive(n: Node, mat: Material) -> void:
+	if n is MeshInstance3D:
+		var mi := n as MeshInstance3D
+		mi.material_override = mat
+		mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	elif n is Label3D or n is Light3D or n is CPUParticles3D:
+		if n is Node3D:
+			(n as Node3D).visible = false
+	for c in n.get_children():
+		_apply_holo_shader_recursive(c, mat)
 
 
 func _add_box(parent: Node3D, pos: Vector3, size: Vector3, mat: Material) -> MeshInstance3D:

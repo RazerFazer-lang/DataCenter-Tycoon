@@ -7,6 +7,8 @@ extends Node3D
 ## Alle Positionen sind lokal zum DeliveryVan (Fahrtrichtung +X, Garage auf -Z).
 
 const HandTruckScript := preload("res://scripts/world/hand_truck.gd")
+const REALISTIC_DRIVER_MODEL_ID := "delivery_driver_realistic"
+const RigHelper := preload("res://scripts/world/humanoid_rig_helper.gd")
 
 enum TruckMode { HIDDEN, PARKED, PUSHED, PULLED, STOWED }
 
@@ -54,6 +56,16 @@ var _step: String = ""
 var _truck_out: bool = false
 var _crouch: float = 0.0
 
+# Mehr-Personal-Konfiguration fuer Liefer-Stufen 1 (1 Fahrer), 2 (2 Mitarbeiter) & 3 (3 Logistiker)
+var _role_idx: int = 0
+var _vehicle_tier: int = 1
+var _seat_pos: Vector3 = SEAT_POS
+var _door_out_pos: Vector3 = DOOR_OUT_POS
+var _cargo_pos: Vector3 = CARGO_POS
+var _target_offset: Vector3 = Vector3.ZERO
+var _time_lag: float = 0.0
+var _stow_pos: Vector3 = TRUCK_STOW_POS
+
 # Ergebnis der aktuellen Frame-Berechnung
 var _o_pos: Vector3 = SEAT_POS
 var _o_yaw: float = YAW_DRIVE
@@ -74,6 +86,9 @@ var _shoulder_r: Node3D
 var _elbow_l: Node3D
 var _elbow_r: Node3D
 var _held_box: MeshInstance3D
+var _skel: Skeleton3D = null
+var _skel_bones: Dictionary = {}
+var _skel_cur: PackedFloat32Array = PackedFloat32Array()
 
 
 func _ready() -> void:
@@ -87,16 +102,64 @@ func set_hand_truck(truck: HandTruckScript) -> void:
 		_truck.visible = false
 
 
+## Konfiguriert Rolle & Positionen fuer Liefer-Stufe 1 (Sprinter), 2 (7,5t Kastenwagen) oder 3 (18t LKW).
+func configure_worker(role_idx: int, tier: int) -> void:
+	_role_idx = maxi(0, role_idx)
+	_vehicle_tier = clampi(tier, 1, 3)
+	_time_lag = float(_role_idx) * 0.24
+	if _vehicle_tier == 1:
+		_seat_pos = SEAT_POS
+		_door_out_pos = DOOR_OUT_POS
+		_cargo_pos = CARGO_POS
+		_target_offset = Vector3.ZERO
+		_stow_pos = TRUCK_STOW_POS
+	elif _vehicle_tier == 2:
+		# 7,5t Kastenwagen mit Ausklapp-Rampe & 2 Mitarbeitern (Fahrer + Beifahrer)
+		if _role_idx == 0:
+			_seat_pos = Vector3(2.35, 0.78, -0.54)
+			_door_out_pos = Vector3(2.45, 0.0, -1.78)
+			_cargo_pos = Vector3(0.35, 0.0, -2.55)
+			_target_offset = Vector3(0.72, 0.0, 0.0)
+			_stow_pos = Vector3(0.20, 0.86, -0.82)
+		else:
+			_seat_pos = Vector3(2.35, 0.78, 0.54)
+			_door_out_pos = Vector3(1.85, 0.0, -1.90)
+			_cargo_pos = Vector3(-0.78, 0.0, -2.55)
+			_target_offset = Vector3(-0.72, 0.0, 0.14)
+			_stow_pos = Vector3(-0.75, 0.86, -0.82)
+	else:
+		# 18t Schwerlast-LKW mit Hydraulik-Ladebordwand & 3 Logistikern gleichzeitig!
+		if _role_idx == 0:
+			_seat_pos = Vector3(3.12, 1.05, -0.64)
+			_door_out_pos = Vector3(3.18, 0.0, -1.88)
+			_cargo_pos = Vector3(0.45, 0.0, -2.72)
+			_target_offset = Vector3(1.08, 0.0, -0.08)
+			_stow_pos = Vector3(0.35, 1.08, -0.92)
+		elif _role_idx == 1:
+			_seat_pos = Vector3(3.12, 1.05, 0.0)
+			_door_out_pos = Vector3(2.45, 0.0, -1.98)
+			_cargo_pos = Vector3(-0.45, 0.0, -2.72)
+			_target_offset = Vector3(0.0, 0.0, 0.16)
+			_stow_pos = Vector3(-0.45, 1.08, -0.92)
+		else:
+			_seat_pos = Vector3(3.12, 1.05, 0.64)
+			_door_out_pos = Vector3(1.80, 0.0, -2.08)
+			_cargo_pos = Vector3(-1.35, 0.0, -2.72)
+			_target_offset = Vector3(-1.08, 0.0, -0.04)
+			_stow_pos = Vector3(-1.25, 1.08, -0.92)
+	reset_to_seat()
+
+
 ## Setzt den Fahrer sofort auf den Fahrersitz (z. B. wenn der Wagen unsichtbar ist).
 func reset_to_seat() -> void:
 	_ensure_built()
 	_step = ""
 	_truck_out = false
 	_held_box.visible = false
-	_o_pos = SEAT_POS
+	_o_pos = _seat_pos
 	_o_yaw = YAW_DRIVE
 	_o_scale = SEATED_SCALE
-	_apply_transform(SEAT_POS, YAW_DRIVE, SEATED_SCALE)
+	_apply_transform(_seat_pos, YAW_DRIVE, SEATED_SCALE)
 	_apply_pose(_pose_seated(), 0.0, true)
 	_update_truck(TruckMode.HIDDEN, 0.0, 0.0, 0, 0.0)
 
@@ -109,13 +172,17 @@ func update_driver(delta: float, phase: String, _unload_t: float, _cargo_count: 
 	var step: String = GameState.van_trip_phase if phase == "unloading" else ""
 	_step = step
 	var dur: float = maxf(GameState.van_trip_duration, 0.1)
-	var t := _trip_t
-	var n: int = clampi(GameState.van_trip_count, 0, HandTruckScript.MAX_CRATES)
+	var t := maxf(0.0, _trip_t - _time_lag)
+	var staff_n := 1 if _vehicle_tier == 1 else (2 if _vehicle_tier == 2 else 3)
+	var total_n: int = maxi(0, GameState.van_trip_count)
+	var n: int = clampi(ceili(float(total_n) / float(staff_n)), 0, HandTruckScript.MAX_CRATES)
+	if total_n > 0 and _role_idx >= total_n:
+		n = 0
 	var with_truck: bool = GameState.van_trip_kind == "truck"
 	var turn: float = GameState.VAN_DRIVER_TURN_TIME
-	var target := _to_van_local(GameState.van_trip_target)
+	var target := _to_van_local(GameState.van_trip_target) + _target_offset
 
-	_o_pos = SEAT_POS
+	_o_pos = _seat_pos
 	_o_yaw = YAW_DRIVE
 	_o_scale = SEATED_SCALE
 	_o_pose = _pose_seated()
@@ -141,15 +208,19 @@ func update_driver(delta: float, phase: String, _unload_t: float, _cargo_count: 
 				var walk_d := maxf(dur - CAB_EXIT_TIME - 0.1, 0.3)
 				var u := clampf((t - CAB_EXIT_TIME) / walk_d, 0.0, 1.0)
 				var tu := clampf((t - CAB_EXIT_TIME) / 0.3, 0.0, 1.0)
-				_set_walk(DOOR_OUT_POS, CARGO_POS, u, tu, YAW_OUT, YAW_TO_VAN, PackedFloat32Array(), delta)
+				_set_walk(_door_out_pos, _cargo_pos, u, tu, YAW_OUT, YAW_TO_VAN, PackedFloat32Array(), delta)
 
 		"load":
-			_o_pos = CARGO_POS
+			_o_pos = _cargo_pos
 			_o_yaw = YAW_TO_VAN
 			_o_scale = STANDING_SCALE
-			if with_truck:
-				var fetch: float = GameState.VAN_TRUCK_FETCH_TIME
-				var per: float = GameState.VAN_LOAD_TIME_PER_CRATE
+			if n <= 0:
+				_o_pose = _pose_standing()
+				truck_mode = TruckMode.HIDDEN
+			elif with_truck:
+				var spd := 1.0 if _vehicle_tier == 1 else (1.30 if _vehicle_tier == 2 else 1.55)
+				var fetch: float = GameState.VAN_TRUCK_FETCH_TIME / spd
+				var per: float = GameState.VAN_LOAD_TIME_PER_CRATE / spd
 				if t < fetch:
 					# Sackkarre aus dem Laderaum nehmen
 					_o_pose = _pose_reach(sin(PI * t / fetch) * 2.0 - 1.0)
@@ -178,68 +249,87 @@ func update_driver(delta: float, phase: String, _unload_t: float, _cargo_count: 
 				show_box = u > 0.42
 
 		"walk_in":
-			var walk_d := maxf(dur - turn, 0.1)
-			var u := clampf((t - turn) / walk_d, 0.0, 1.0)
-			var tu := clampf(t / turn, 0.0, 1.0)
-			var upper := _pose_push() if with_truck else _pose_carry()
-			_set_walk(CARGO_POS, target, u, tu, YAW_TO_VAN, YAW_OUT, upper, delta)
-			if with_truck:
-				_truck_out = true
-				truck_mode = TruckMode.PUSHED
-				truck_blend = smoothstep(0.0, 1.0, clampf(t / (turn + 0.25), 0.0, 1.0))
-				truck_tilt = TRUCK_PUSH_TILT * truck_blend
-				truck_crates = n
+			if n <= 0:
+				_o_pos = _cargo_pos
+				_o_yaw = YAW_OUT
+				_o_scale = STANDING_SCALE
+				_o_pose = _pose_standing()
+				truck_mode = TruckMode.HIDDEN
 			else:
-				show_box = true
+				var walk_d := maxf(dur - turn, 0.1)
+				var u := clampf((t - turn) / walk_d, 0.0, 1.0)
+				var tu := clampf(t / turn, 0.0, 1.0)
+				var upper := _pose_push() if with_truck else _pose_carry()
+				_set_walk(_cargo_pos, target, u, tu, YAW_TO_VAN, YAW_OUT, upper, delta)
+				if with_truck:
+					_truck_out = true
+					truck_mode = TruckMode.PUSHED
+					truck_blend = smoothstep(0.0, 1.0, clampf(t / (turn + 0.25), 0.0, 1.0))
+					truck_tilt = TRUCK_PUSH_TILT * truck_blend
+					truck_crates = n
+				else:
+					show_box = true
 
 		"drop":
-			_o_pos = target
-			_o_yaw = YAW_OUT
-			_o_scale = STANDING_SCALE
-			if with_truck:
-				var tilt_t: float = GameState.VAN_TRUCK_TILT_TIME
-				var per: float = GameState.VAN_DROP_TIME_PER_CRATE_TRUCK
-				var up := smoothstep(0.0, 1.0, clampf(t / tilt_t, 0.0, 1.0))
-				var dropped := 0
-				if t >= dur:
-					dropped = n
-				elif t >= tilt_t:
-					dropped = clampi(floori((t - tilt_t) / per), 0, n)
-				dropped = maxi(dropped, clampi(GameState.van_trip_dropped, 0, n))
-				var tug := 0.0
-				if t > tilt_t:
-					tug = sin(PI * fmod(t - tilt_t, per) / per)
-				_o_pose = _blend(_blend(_pose_push(), _pose_truck_upright(), up), _pose_truck_tug(), tug * 0.6)
-				_truck_out = true
-				truck_mode = TruckMode.PUSHED
-				truck_blend = 1.0
-				truck_tilt = TRUCK_PUSH_TILT * (1.0 - up)
-				truck_crates = n - dropped
+			if n <= 0:
+				_o_pos = _cargo_pos
+				_o_yaw = YAW_OUT
+				_o_scale = STANDING_SCALE
+				_o_pose = _pose_standing()
+				truck_mode = TruckMode.HIDDEN
 			else:
-				var bend := smoothstep(0.0, 1.0, clampf(t / (dur * 0.75), 0.0, 1.0))
-				_o_pose = _blend(_pose_carry(), _pose_drop_hand(), bend)
-				show_box = t < dur
+				_o_pos = target
+				_o_yaw = YAW_OUT
+				_o_scale = STANDING_SCALE
+				if with_truck:
+					var spd := 1.0 if _vehicle_tier == 1 else (1.30 if _vehicle_tier == 2 else 1.55)
+					var tilt_t: float = GameState.VAN_TRUCK_TILT_TIME / spd
+					var per: float = GameState.VAN_DROP_TIME_PER_CRATE_TRUCK / spd
+					var up := smoothstep(0.0, 1.0, clampf(t / tilt_t, 0.0, 1.0))
+					var dropped := 0
+					if t >= dur:
+						dropped = n
+					elif t >= tilt_t:
+						dropped = clampi(floori((t - tilt_t) / per), 0, n)
+					var tug := 0.0
+					if t > tilt_t:
+						tug = sin(PI * fmod(t - tilt_t, per) / per)
+					_o_pose = _blend(_blend(_pose_push(), _pose_truck_upright(), up), _pose_truck_tug(), tug * 0.6)
+					_truck_out = true
+					truck_mode = TruckMode.PUSHED
+					truck_blend = 1.0
+					truck_tilt = TRUCK_PUSH_TILT * (1.0 - up)
+					truck_crates = maxi(0, n - dropped)
+				else:
+					var bend := smoothstep(0.0, 1.0, clampf(t / (dur * 0.75), 0.0, 1.0))
+					_o_pose = _blend(_pose_carry(), _pose_drop_hand(), bend)
+					show_box = t < dur
 
 		"walk_back":
-			var walk_d := maxf(dur - turn, 0.1)
-			var u := clampf((t - turn) / walk_d, 0.0, 1.0)
-			var tu := clampf(t / turn, 0.0, 1.0)
-			if with_truck:
-				# Leere Karre hinter sich herziehen, am Wagen wieder neben die Schiebetür stellen
-				_set_walk(target, CARGO_POS, u, tu, YAW_OUT, YAW_TO_VAN, _pose_pull(), delta)
-				truck_mode = TruckMode.PULLED
-				truck_blend = 1.0 - smoothstep(0.0, 1.0, clampf((u - 0.8) / 0.2, 0.0, 1.0))
-				truck_tilt = TRUCK_PULL_TILT * smoothstep(0.0, 1.0, tu) * truck_blend
+			if n <= 0:
+				_o_pos = _cargo_pos
+				_o_yaw = YAW_TO_VAN
+				_o_scale = STANDING_SCALE
+				_o_pose = _pose_standing()
+				truck_mode = TruckMode.HIDDEN
 			else:
-				_set_walk(target, CARGO_POS, u, tu, YAW_OUT, YAW_TO_VAN, PackedFloat32Array(), delta)
-				if t < turn:
-					_o_pose = _blend(_pose_drop_hand(), _pose_standing(), smoothstep(0.0, 1.0, tu))
+				var walk_d := maxf(dur - turn, 0.1)
+				var u := clampf((t - turn) / walk_d, 0.0, 1.0)
+				var tu := clampf(t / turn, 0.0, 1.0)
+				if with_truck:
+					_set_walk(target, _cargo_pos, u, tu, YAW_OUT, YAW_TO_VAN, _pose_pull(), delta)
+					truck_mode = TruckMode.PULLED
+					truck_blend = 1.0 - smoothstep(0.0, 1.0, clampf((u - 0.8) / 0.2, 0.0, 1.0))
+					truck_tilt = TRUCK_PULL_TILT * smoothstep(0.0, 1.0, tu) * truck_blend
+				else:
+					_set_walk(target, _cargo_pos, u, tu, YAW_OUT, YAW_TO_VAN, PackedFloat32Array(), delta)
+					if t < turn:
+						_o_pose = _blend(_pose_drop_hand(), _pose_standing(), smoothstep(0.0, 1.0, tu))
 
 		"enter":
 			var walk_end := maxf(dur - CAB_ENTER_TIME, STOW_TIME + 0.3)
 			if t < STOW_TIME:
-				# Sackkarre in den Laderaum heben bzw. Schiebetür zuziehen
-				_o_pos = CARGO_POS
+				_o_pos = _cargo_pos
 				_o_yaw = YAW_TO_VAN
 				_o_scale = STANDING_SCALE
 				_o_pose = _pose_reach(sin(PI * t / STOW_TIME) * 2.0 - 1.0)
@@ -251,7 +341,7 @@ func update_driver(delta: float, phase: String, _unload_t: float, _cargo_count: 
 				truck_mode = TruckMode.HIDDEN
 				var u := clampf((t - STOW_TIME) / (walk_end - STOW_TIME), 0.0, 1.0)
 				var tu := clampf((t - STOW_TIME) / 0.3, 0.0, 1.0)
-				_set_walk(CARGO_POS, DOOR_OUT_POS, u, tu, YAW_TO_VAN, YAW_TO_VAN, PackedFloat32Array(), delta)
+				_set_walk(_cargo_pos, _door_out_pos, u, tu, YAW_TO_VAN, YAW_TO_VAN, PackedFloat32Array(), delta)
 			else:
 				_truck_out = false
 				truck_mode = TruckMode.HIDDEN
@@ -352,7 +442,7 @@ func _update_truck(mode: int, blend: float, tilt: float, crates: int, stow_u: fl
 		_truck.reset_motion()
 		return
 	_truck.visible = true
-	var park_pos := CARGO_POS + TRUCK_PARK_OFFSET
+	var park_pos := _cargo_pos + TRUCK_PARK_OFFSET
 	var pos := park_pos
 	var yaw := YAW_OUT
 	match mode:
@@ -370,9 +460,8 @@ func _update_truck(mode: int, blend: float, tilt: float, crates: int, stow_u: fl
 			pos = park_pos.lerp(att_pos, b)
 			yaw = lerp_angle(YAW_OUT, att_yaw, b)
 		TruckMode.STOWED:
-			pos = park_pos.lerp(TRUCK_STOW_POS, smoothstep(0.0, 1.0, stow_u))
-			# Erst anheben, dann über die Ladekante schieben
-			pos.y = TRUCK_STOW_POS.y * smoothstep(0.0, 0.55, stow_u)
+			pos = park_pos.lerp(_stow_pos, smoothstep(0.0, 1.0, stow_u))
+			pos.y = _stow_pos.y * smoothstep(0.0, 0.55, stow_u)
 	_truck.set_pose(pos, yaw, tilt, crates)
 
 
@@ -382,9 +471,9 @@ func _cab_path(u: float) -> Vector3:
 	var side_u := smoothstep(0.0, 1.0, clampf(u / 0.65, 0.0, 1.0))
 	var drop_u := smoothstep(0.0, 1.0, clampf((u - 0.4) / 0.6, 0.0, 1.0))
 	return Vector3(
-		lerpf(SEAT_POS.x, DOOR_OUT_POS.x, u),
-		lerpf(SEAT_POS.y, DOOR_OUT_POS.y, drop_u),
-		lerpf(SEAT_POS.z, DOOR_OUT_POS.z, side_u)
+		lerpf(_seat_pos.x, _door_out_pos.x, u),
+		lerpf(_seat_pos.y, _door_out_pos.y, drop_u),
+		lerpf(_seat_pos.z, _door_out_pos.z, side_u)
 	)
 
 
@@ -485,6 +574,24 @@ static func _blend(a: PackedFloat32Array, b: PackedFloat32Array, u: float) -> Pa
 
 func _apply_pose(pose: PackedFloat32Array, delta: float, snap: bool) -> void:
 	var k := 1.0 if snap else clampf(delta * 14.0, 0.0, 1.0)
+	if _skel != null:
+		if _skel_cur.size() != J_COUNT:
+			_skel_cur.resize(J_COUNT)
+		for i in range(J_COUNT):
+			_skel_cur[i] = lerpf(_skel_cur[i], pose[i], k)
+		RigHelper.set_leg_pitch(_skel, _skel_bones, "thigh_l", _skel_cur[J_THIGH_L])
+		RigHelper.set_leg_pitch(_skel, _skel_bones, "thigh_r", _skel_cur[J_THIGH_R])
+		RigHelper.set_leg_pitch(_skel, _skel_bones, "knee_l", _skel_cur[J_KNEE_L])
+		RigHelper.set_leg_pitch(_skel, _skel_bones, "knee_r", _skel_cur[J_KNEE_R])
+		RigHelper.set_arm_pose(_skel, _skel_bones, true, _skel_cur[J_SHOULDER_L], -_skel_cur[J_SHOULDER_L_Z])
+		RigHelper.set_arm_pose(_skel, _skel_bones, false, _skel_cur[J_SHOULDER_R], _skel_cur[J_SHOULDER_R_Z])
+		RigHelper.set_forearm_bend(_skel, _skel_bones, true, _skel_cur[J_ELBOW_L])
+		RigHelper.set_forearm_bend(_skel, _skel_bones, false, _skel_cur[J_ELBOW_R])
+		RigHelper.set_torso_pitch(_skel, _skel_bones, "spine", -_skel_cur[J_TORSO])
+		RigHelper.set_torso_pitch(_skel, _skel_bones, "head", -_skel_cur[J_HEAD])
+		_crouch = _skel_cur[J_CROUCH]
+		_body.position = Vector3(0.0, -0.26 * _crouch, 0.15 * _crouch)
+		return
 	_thigh_l.rotation.x = lerpf(_thigh_l.rotation.x, pose[J_THIGH_L], k)
 	_thigh_r.rotation.x = lerpf(_thigh_r.rotation.x, pose[J_THIGH_R], k)
 	_knee_l.rotation.x = lerpf(_knee_l.rotation.x, pose[J_KNEE_L], k)
@@ -513,6 +620,58 @@ func _ensure_built() -> void:
 
 
 func _build_body() -> void:
+	var tape_mat := _mat(Color(0.74, 0.62, 0.42), 0.50, 0.0)
+	var label_mat := _mat(Color(0.93, 0.93, 0.90), 0.60, 0.0)
+	var cardboard: Material = MatLib.get_mat("cardboard")
+
+	var driver_id := REALISTIC_DRIVER_MODEL_ID if ModelLoader.has_custom_model(REALISTIC_DRIVER_MODEL_ID) else "delivery_driver"
+	var custom := ModelLoader.instantiate_custom_model(driver_id)
+	if custom != null:
+		var skel: Skeleton3D = RigHelper.find_skeleton(custom)
+		if skel != null:
+			_body = Node3D.new()
+			add_child(_body)
+			_body.add_child(custom)
+			RigHelper.normalize_character_root(custom, true)
+			_skel = skel
+			_skel_bones = RigHelper.map_bones(skel)
+			_skel_cur.resize(J_COUNT)
+			_held_box = _add_box(_body, Vector3(0.0, 1.18, -0.47), Vector3(0.42, 0.30, 0.34), cardboard)
+			_add_box(_held_box, Vector3(0.0, 0.151, 0.0), Vector3(0.06, 0.005, 0.345), tape_mat)
+			_add_box(_held_box, Vector3(0.10, 0.03, -0.172), Vector3(0.13, 0.09, 0.004), label_mat)
+			_held_box.visible = false
+			return
+		var p_body := custom.find_child("Pivot_Body", true, false) as Node3D
+		var p_torso := custom.find_child("Pivot_Torso", true, false) as Node3D
+		var p_head := custom.find_child("Pivot_Head", true, false) as Node3D
+		var p_tl := custom.find_child("Pivot_ThighL", true, false) as Node3D
+		var p_tr := custom.find_child("Pivot_ThighR", true, false) as Node3D
+		var p_kl := custom.find_child("Pivot_KneeL", true, false) as Node3D
+		var p_kr := custom.find_child("Pivot_KneeR", true, false) as Node3D
+		var p_sl := custom.find_child("Pivot_ShoulderL", true, false) as Node3D
+		var p_sr := custom.find_child("Pivot_ShoulderR", true, false) as Node3D
+		var p_el := custom.find_child("Pivot_ElbowL", true, false) as Node3D
+		var p_er := custom.find_child("Pivot_ElbowR", true, false) as Node3D
+		if p_body != null and p_torso != null and p_head != null and p_tl != null and p_tr != null and p_kl != null and p_kr != null and p_sl != null and p_sr != null and p_el != null and p_er != null:
+			add_child(custom)
+			_body = p_body
+			_torso = p_torso
+			_head = p_head
+			_thigh_l = p_tl
+			_thigh_r = p_tr
+			_knee_l = p_kl
+			_knee_r = p_kr
+			_shoulder_l = p_sl
+			_shoulder_r = p_sr
+			_elbow_l = p_el
+			_elbow_r = p_er
+			_held_box = _add_box(_torso, Vector3(0.0, 0.30, -0.47), Vector3(0.42, 0.30, 0.34), cardboard)
+			_add_box(_held_box, Vector3(0.0, 0.151, 0.0), Vector3(0.06, 0.005, 0.345), tape_mat)
+			_add_box(_held_box, Vector3(0.10, 0.03, -0.172), Vector3(0.13, 0.09, 0.004), label_mat)
+			_held_box.visible = false
+			return
+		custom.free()
+
 	var uniform_mat := _mat(Color(0.11, 0.19, 0.31), 0.78, 0.0)
 	var collar_mat := _mat(Color(0.08, 0.14, 0.24), 0.80, 0.0)
 	var trouser_mat := _mat(Color(0.17, 0.18, 0.20), 0.85, 0.0)
@@ -527,9 +686,6 @@ func _build_body() -> void:
 	var amber_mat := _mat(Color(0.88, 0.58, 0.12), 0.50, 0.0)
 	var belt_mat := _mat(Color(0.10, 0.10, 0.11), 0.55, 0.20)
 	var buckle_mat := _mat(Color(0.70, 0.72, 0.75), 0.25, 0.85)
-	var tape_mat := _mat(Color(0.74, 0.62, 0.42), 0.50, 0.0)
-	var label_mat := _mat(Color(0.93, 0.93, 0.90), 0.60, 0.0)
-	var cardboard: Material = MatLib.get_mat("cardboard")
 
 	_body = Node3D.new()
 	add_child(_body)

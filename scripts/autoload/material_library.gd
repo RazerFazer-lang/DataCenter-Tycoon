@@ -21,6 +21,8 @@ const WALL_TEX_VERSION := 1
 const SURFACE_TEX_VERSION := 1
 # Gleiches Prinzip für Platinen, Kühlkörper, gebürstetes Metall, Lochblech und Warnstreifen.
 const GEN_TEX_VERSION := 1
+# Version der Platinen-Textur (_gen_pcb_tex). Erhöhen, wenn sich die Funktion ändert.
+const PCB_TEX_VERSION := 3
 
 
 func _ready() -> void:
@@ -292,7 +294,7 @@ func _build_all_materials() -> void:
 	# ==========================================================================
 
 	# 16. Enterprise Green Server Motherboard PCB (with copper circuit traces & gold vias!)
-	var pcb_g_pair := _cached_textures("pcb_green_g%d_256" % GEN_TEX_VERSION, _gen_pcb_tex.bind(256, Color(0.06, 0.26, 0.14), Color(0.11, 0.36, 0.20), Color(0.76, 0.64, 0.26)), [false, true])
+	var pcb_g_pair := _cached_textures("pcb_green_p%d_1024" % PCB_TEX_VERSION, _gen_pcb_tex.bind(1024, Color(0.06, 0.26, 0.14), Color(0.11, 0.36, 0.20), Color(0.76, 0.64, 0.26)), [false, true])
 	var pcb_g := StandardMaterial3D.new()
 	pcb_g.albedo_texture = pcb_g_pair[0]
 	pcb_g.normal_enabled = true
@@ -303,7 +305,7 @@ func _build_all_materials() -> void:
 	_materials["pcb_green"] = pcb_g
 
 	# 17. Matte-Black Workstation/GPU PCB (with metallic dark-gold circuit paths!)
-	var pcb_b_pair := _cached_textures("pcb_black_g%d_256" % GEN_TEX_VERSION, _gen_pcb_tex.bind(256, Color(0.08, 0.09, 0.10), Color(0.14, 0.15, 0.17), Color(0.62, 0.52, 0.28)), [false, true])
+	var pcb_b_pair := _cached_textures("pcb_black_p%d_1024" % PCB_TEX_VERSION, _gen_pcb_tex.bind(1024, Color(0.08, 0.09, 0.10), Color(0.14, 0.15, 0.17), Color(0.62, 0.52, 0.28)), [false, true])
 	var pcb_b := StandardMaterial3D.new()
 	pcb_b.albedo_texture = pcb_b_pair[0]
 	pcb_b.normal_enabled = true
@@ -769,20 +771,30 @@ func _render_raised_floor(size: int, col_a: Color, col_b: Color, grout_col: Colo
 
 
 func _gen_pcb_tex(size: int, base_col: Color, trace_col: Color, pad_col: Color) -> Array:
+	# Zwei kachelbare Rauschfelder: Körnung des Lötstopplacks und feine helle Punkte.
+	var grain := _noise_l8(FastNoiseLite.TYPE_SIMPLEX_SMOOTH, 0.06, 3, 811, size)
+	var speck := _noise_l8(FastNoiseLite.TYPE_SIMPLEX, 0.5, 1, 812, size)
 	var alb := Image.create(size, size, false, Image.FORMAT_RGB8)
 	var hgt := Image.create(size, size, false, Image.FORMAT_L8)
+	var dark_base := base_col.darkened(0.25)
 	for y in range(size):
 		for x in range(size):
-			var c := base_col
-			var hv := 0.45
-			# Fine horizontal & vertical PCB copper trace buses
+			var i := y * size + x
+			var n := float(grain[i]) / 255.0
+			var s := float(speck[i]) / 255.0
+			var c := base_col.lerp(dark_base, n * 0.5)
+			var hv := 0.40 + n * 0.08
+			if s > 0.80:
+				c = c.lightened(0.05)
+			# Kupferbahnen: 2 px breit, mit leicht dunklerem, körnigem Rand
 			var hx := x % 16
 			var hy := y % 16
 			var diag := (x + y) % 32
-			if hx == 2 or hy == 4 or (diag == 6 and ((x / 16) % 2 == 0)):
-				c = trace_col
-				hv = 0.72
-			# Gold solder via pads at grid intersections
+			var on_trace := hx == 2 or hx == 3 or hy == 4 or hy == 5 or (diag == 6 and ((x / 16) % 2 == 0))
+			if on_trace:
+				c = trace_col.lerp(dark_base, n * 0.3)
+				hv = 0.70 + n * 0.04
+			# Durchkontaktierungen: goldener Kern, dunkler Ring, Kupfer-Lötring
 			var vx := (x % 32) - 16
 			var vy := (y % 32) - 16
 			var d2 := vx * vx + vy * vy
@@ -790,8 +802,11 @@ func _gen_pcb_tex(size: int, base_col: Color, trace_col: Color, pad_col: Color) 
 				c = pad_col
 				hv = 0.92
 			elif d2 <= 10:
-				c = base_col.darkened(0.25)
+				c = dark_base
 				hv = 0.25
+			elif d2 <= 14:
+				c = c.lerp(pad_col, 0.25)
+				hv = 0.55
 			alb.set_pixel(x, y, c)
 			hgt.set_pixel(x, y, Color(hv, hv, hv))
 	return [ImageTexture.create_from_image(alb), _height_to_normal(hgt, 2.4)]
