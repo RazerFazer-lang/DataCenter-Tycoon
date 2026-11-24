@@ -488,10 +488,9 @@ def build_workbench():
     B.cyl((-0.51, -0.18, H_TOP + 0.016), 0.042, 0.032, M["anthracite"], seg=16)
     B.cyl((-0.51, -0.18, H_TOP + 0.075), 0.010, 0.12, M["chrome"], seg=12)
 
-    # Magnet-Schraubenschale & Waermeleitpaste-Spritze vorne rechts auf der ESD-Matte
+    # Magnet-Schraubenschale vorne rechts auf der ESD-Matte. Die Waermeleitpaste ist ein greifbares
+    # Werkzeug (asm_tools.glb, Objekt "Syringe") und gehoert deshalb nicht zum Tischmodell.
     B.cyl((0.56, -0.22, H_TOP + 0.012), 0.048, 0.018, M["chrome"], seg=24)
-    B.cyl((0.56, -0.11, H_TOP + 0.010), 0.008, 0.11, M["plastic_grey"], axis="x", seg=14)
-    B.cyl((0.625, -0.11, H_TOP + 0.010), 0.0035, 0.025, M["plastic_dark"], axis="x", seg=10)
 
     B.build_object()
     export_glb(os.path.join(OUT_MODELS_DIR, "workshop_workbench.glb"))

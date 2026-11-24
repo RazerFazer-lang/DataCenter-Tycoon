@@ -1,5 +1,5 @@
 {
-  "updated": "2026-11-24",
+  "updated": "2026-11-25",
   "columns": [
     {
       "id": "planned",
@@ -10,12 +10,6 @@
           "version": "v2.3",
           "title": "Halle D, zweite Etage & Glasfaser-Backbone",
           "desc": "Noch größere mehrstöckige Rechenzentren mit Glasfaser-Trunks, Core-Switches und echtem BGP-Routing."
-        },
-        {
-          "tag": "ki",
-          "version": "v2.3",
-          "title": "Mitarbeiter & KI-Techniker einstellen",
-          "desc": "Stelle Techniker für Nachtschichten ein, die automatisch defekte Server diagnostizieren, an der Werkbank reparieren und Brände löschen."
         },
         {
           "tag": "coop",
@@ -41,6 +35,12 @@
       "id": "done",
       "title": "Fertig",
       "items": [
+        {
+          "tag": "neu",
+          "version": "v2.5",
+          "title": "Werkbank-Overhaul, Bauqualität, Profi-Werkzeug & Techniker",
+          "desc": "Montage und Reparatur mit der Maus direkt an der 3D-Werkbank, Diagnose per POST-Code und Multimeter, echte Ersatzteile, Bauqualität 0–100 % sowie Techniker für Tag- und Nachtschicht."
+        },
         {
           "tag": "neu",
           "version": "v2.4",

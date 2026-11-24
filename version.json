@@ -1,9 +1,24 @@
 {
-  "version": "2.4.2",
-  "launcher_version": "2.4.2",
-  "codename": "v2.4.2 Hotfix: Deko & Leisten im Spielstand, Launcher ohne .NET-Installation",
-  "release_date": "2026-11-24",
+  "version": "2.5.0",
+  "launcher_version": "2.5.0",
+  "codename": "v2.5.0 Werkbank-Overhaul: Montage, Diagnose & Techniker",
+  "release_date": "2026-11-25",
   "changelog": [
+    {
+      "version": "v2.5.0",
+      "date": "2026-11-25",
+      "title": "Update 2.5: Werkbank-Overhaul mit echter Montage, Diagnose, Bauqualität, Profi-Werkzeug & Technikern",
+      "items": [
+        "[NEU / WERKBANK] Zusammenbau und Reparatur laufen direkt an der Werkbank in der 3D-Welt: Teile mit der Maus ziehen, Werkzeug selbst nehmen, Schrauben halten bis sie fest sind, Wärmeleitpaste auftragen und Kabel stecken. 25 neue Blender-5.2-Modelle.",
+        "[NEU / DIAGNOSE] Fehler findest du über POST-Codes, das Multimeter und sichtbare Schäden. Repariert wird mit echten Ersatzteilen oder Reparatur-Kits, dazu kommen Schrauben und Wärmeleitpaste als Verbrauchsmaterial.",
+        "[GAMEPLAY] Bauqualität 0–100 %: Vergessene Schrauben, schlechte Paste oder lose Kabel lassen Server heißer und schlechter laufen. Grobe Fehler zerstören Teile. Server lassen sich an der Werkbank überholen.",
+        "[GAMEPLAY] Die Schnellreparatur am Rack ist nur noch eine Notlösung. Volle Leistung gibt es nach einer Reparatur an der Werkbank.",
+        "[NEU / PERSONAL] 3 Techniker für Tag- oder Nachtschicht: Sie bauen Bausätze, reparieren defekte Server, überholen Server, arbeiten sichtbar an der Werkbank und fahren mit dem Shuttle nach Halle Nord. Mit [E] übernimmst du jederzeit.",
+        "[NEU / SHOP] Profi-Werkzeug: Akkuschrauber, Drehmoment-Kupplung, Dosierpistole, Profi-Multimeter und Personenschutz-Schalter, für alle an der Werkbank.",
+        "[CO-OP] Einer arbeitet, alle anderen sehen live zu. Der Fortschritt bleibt erhalten und lässt sich von anderen fortsetzen.",
+        "[AUDIO] Neue Werkbank-Geräusche für Schrauben, Stecken, Messen und den Akkuschrauber."
+      ]
+    },
     {
       "version": "v2.4.2",
       "date": "2026-11-24",

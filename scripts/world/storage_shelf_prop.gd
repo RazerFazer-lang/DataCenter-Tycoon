@@ -347,7 +347,7 @@ static func build_stored_visual(data: Dictionary) -> Node3D:
 		var td: Dictionary = data.get("tray_data", {}) as Dictionary
 		var mb_id := str(td.get("mainboard_id", "web_server"))
 		var comps: Dictionary = td.get("components", {}) as Dictionary
-		var brk := str(td.get("faulty_part", "")) if str(td.get("state", "ok")) == "crashed" else ""
+		var brk := GameState.get_visible_fault(td)
 		var srv := HardwareMeshFactory.build_open_server_chassis(mb_id, comps, [], brk)
 		srv.scale = Vector3(0.56, 0.56, 0.56)
 		root.add_child(srv)

@@ -1071,6 +1071,42 @@ func _render_shop_app() -> void:
 				GameState.request_refill_maint_kits()
 				_refresh_all(),
 		})
+		_add_shop_section(left_list, tr("Werkbank-Material"), tr("Schrauben und Wärmeleitpaste für Zusammenbau und Reparatur. Lieferung per Sprinter."))
+		_add_shop_item_card(left_list, {
+			"title": tr("Schraubensortiment (%d Stück)") % GameState.SCREW_BOX_COUNT,
+			"desc": tr("M3- und M.2-Schrauben. Beim Ausbauen gelöste Schrauben landen wieder in der Schale."),
+			"info": tr("Vorrat an der Werkbank: %d Schrauben") % GameState.bench_screws,
+			"color": Color(0.46, 0.52, 0.60),
+			"price": GameState.SCREW_BOX_PRICE,
+			"on_buy": func(): _cart_add("acc", "screw_box", "", "Schraubensortiment", GameState.SCREW_BOX_PRICE),
+		})
+		_add_shop_item_card(left_list, {
+			"title": tr("Wärmeleitpaste (%d Anwendungen)") % int(GameState.PASTE_TUBE_USES),
+			"desc": tr("Für jeden CPU-Kühler. Im CPU-Reparatur-Kit liegt eine kleine Tube bei."),
+			"info": tr("Vorrat an der Werkbank: %.1f Anwendungen") % GameState.bench_paste,
+			"color": Color(0.62, 0.64, 0.68),
+			"price": GameState.PASTE_TUBE_PRICE,
+			"on_buy": func(): _cart_add("acc", "paste_tube", "", "Wärmeleitpaste", GameState.PASTE_TUBE_PRICE),
+		})
+		_add_shop_section(left_list, tr("Profi-Werkzeug"), tr("Einmal kaufen, für alle an der Werkbank. Auch Techniker arbeiten damit besser."))
+		for tid_v in GameState.BENCH_TOOLS.keys():
+			var tid := str(tid_v)
+			var td: Dictionary = GameState.BENCH_TOOLS[tid]
+			var owned: bool = GameState.has_bench_tool(tid)
+			var need := str(td.get("needs", ""))
+			var locked: bool = need != "" and not GameState.has_bench_tool(need)
+			var tname := str(td["name"])
+			var tprice := int(td["price"])
+			_add_shop_item_card(left_list, {
+				"title": tr(tname),
+				"desc": tr(str(td["desc"])),
+				"info": tr("Vorhanden") if owned else (tr("Braucht: %s") % tr(str(GameState.BENCH_TOOLS[need]["name"])) if locked else tr("Lieferung per Sprinter")),
+				"color": Color(0.80, 0.52, 0.18),
+				"price": tprice,
+				"disabled": owned or locked,
+				"btn_text": tr("Vorhanden") if owned else (tr("Gesperrt") if locked else ""),
+				"on_buy": func(): _cart_add("acc", "tool_" + tid, "", tname, tprice),
+			})
 		_add_shop_section(left_list, tr("Werkstatt-Spar-Bundle"), tr("Alle 7 Reparatur-Kits im Paket — Lieferung per Sprinter zum Einlagern im Regal."))
 		_populate_physical_shop_list(left_list, ["kit_bundle_all"])
 		_add_shop_section(left_list, tr("Einzelne Reparatur-Kits"), tr("Für Reparaturen an der 3D-Werkbank. Mehrere Kits gleicher Art kommen automatisch in platzsparenden 6er-Mengen-Kisten!"))

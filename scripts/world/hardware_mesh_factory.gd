@@ -148,7 +148,12 @@ static func build_preview_workbench() -> Node3D:
 	return _load_part_model("prop_workbench")
 
 
-static func build_open_server_chassis(item_type: String, components: Dictionary, out_fans: Array = [], broken_cat: String = "") -> Node3D:
+## Leeres Gehäuse mit Laufwerkskäfig, ohne Platine und Einbauteile (für die Werkbank).
+static func build_chassis_shell(item_type: String, components: Dictionary) -> Node3D:
+	return build_open_server_chassis(item_type, components, [], "", true)
+
+
+static func build_open_server_chassis(item_type: String, components: Dictionary, out_fans: Array = [], broken_cat: String = "", shell_only: bool = false) -> Node3D:
 	# Mainboards nutzen das passende 1U/2U/4U-Gehäuse.
 	item_type = GameState.get_chassis_visual(item_type)
 	var root := Node3D.new()
@@ -178,6 +183,8 @@ static func build_open_server_chassis(item_type: String, components: Dictionary,
 			_box(root, Vector3(float(sx) * 1.03, 0.072, 0.376), Vector3(0.018, 0.09, 0.036), steel)
 		# Front Drive Bay Cage / Faceplate
 		_box(root, Vector3(0.0, 0.072, 0.305), Vector3(0.71, 0.124, 0.11), dark_steel)
+	if item_type == "net_switch" and shell_only:
+		return root
 	if item_type == "net_switch":
 		# 24-Port Managed Ethernet Switch PCB & Front RJ45 Shielded Cages
 		_box(root, Vector3(0.0, 0.022, -0.04), Vector3(0.66, 0.012, 0.50), MatLib.get_mat("pcb_green"))
@@ -212,6 +219,9 @@ static func build_open_server_chassis(item_type: String, components: Dictionary,
 			# Silver metal drive pull latch + small amber/green release button
 			_box(root, Vector3(bx, 0.072, 0.373), Vector3(bay_w * 0.78, 0.022, 0.012), steel)
 			_box(root, Vector3(bx + bay_w * 0.34, 0.072, 0.374), Vector3(0.016, 0.028, 0.014), copper)
+
+	if shell_only:
+		return root
 
 	# 2. Realistic Server Motherboard PCB (with standoffs, Rear I/O ports, CMOS battery, Capacitors, Chipset)
 	var mb := Node3D.new()

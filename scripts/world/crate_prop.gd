@@ -126,7 +126,7 @@ func _populate_visual() -> void:
 		var td: Dictionary = _crate_data.get("tray_data", {}) as Dictionary
 		var mb_id := str(td.get("mainboard_id", "web_server"))
 		var comps: Dictionary = td.get("components", {}) as Dictionary
-		var brk := str(td.get("faulty_part", "")) if str(td.get("state", "ok")) == "crashed" else ""
+		var brk := GameState.get_visible_fault(td)
 		var srv := HardwareMeshFactory.build_open_server_chassis(mb_id, comps, [], brk)
 		srv.position = Vector3(0.0, 0.02, 0.0)
 		_visual_holder.add_child(srv)

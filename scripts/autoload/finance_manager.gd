@@ -57,6 +57,11 @@ const ROLES := {
 		"desc": "Bezahlt Rechnungen automatisch vor der Fälligkeit, wenn genug Geld da ist.",
 		"icon": "invoice",
 	},
+	"technician": {
+		"title": "Techniker",
+		"desc": "Baut Bausätze, repariert defekte Server an der Werkbank und setzt sie wieder ein. Braucht Kits oder Teile aus dem Lager.",
+		"icon": "building",
+	},
 }
 
 const BILL_KINDS := {
@@ -85,6 +90,10 @@ const CANDIDATE_POOL := [
 	{"name": "Marco Rossi", "role": "accounting", "skill": 2, "wage": 120},
 	{"name": "Sabine Wolf", "role": "accounting", "skill": 3, "wage": 160},
 	{"name": "Julia Neumann", "role": "accounting", "skill": 5, "wage": 230},
+	# Neue Bewerbungen immer hinten anfügen: gespeicherte Spielstände merken sich den Platz in der Liste.
+	{"name": "Kim Vogt", "role": "technician", "skill": 2, "wage": 150},
+	{"name": "Robin Krause", "role": "technician", "skill": 3, "wage": 205},
+	{"name": "Alex Brandt", "role": "technician", "skill": 5, "wage": 340},
 ]
 
 var employees: Dictionary = {}
@@ -313,6 +322,11 @@ func get_daily_wage_total() -> int:
 	return sum
 
 
+## Geänderte Mitarbeiterdaten (Schicht, Aufgaben, Zähler) an alle schicken.
+func sync_employees() -> void:
+	_broadcast()
+
+
 func get_accountant() -> Dictionary:
 	var best: Dictionary = {}
 	for e_v in employees.values():
@@ -537,6 +551,13 @@ func _do_hire(pool_idx: int, peer: int) -> void:
 		"hired_day": day,
 		"work_done": 0,
 	}
+	if str(c["role"]) == "technician":
+		employees[eid]["shift"] = "day"
+		# Die zweite Person übernimmt gleich die Nachtschicht.
+		for other in employees.values():
+			if str(other["id"]) != eid and str(other["role"]) == "technician" and str(other.get("shift", "day")) == "day":
+				employees[eid]["shift"] = "night"
+		employees[eid]["duties"] = {"build": true, "repair": true, "service": true}
 	hired_pool.append(pool_idx)
 	_debit(float(wage), "Startprämie %s", day, [str(c["name"])])
 	GameState.post_event_f("%s hat %s als %s eingestellt (%s pro Tag).", [

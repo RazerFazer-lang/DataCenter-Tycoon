@@ -42,6 +42,8 @@ var place_rot_y: float = 0.0
 
 var ui_locked: bool = false
 var is_seated_at_pc: bool = false
+var is_at_workbench: bool = false
+var _workbench_pos: Vector3 = Vector3.ZERO
 var is_typing_at_pc: bool = false
 var _pre_seat_pos: Vector3 = Vector3(2.78, 0.0, -2.05)
 var _pre_seat_yaw: float = 0.0
@@ -274,6 +276,24 @@ func exit_pc_seat() -> void:
 		SfxManager.play("chair_sit", -11.0, 1.18)
 
 
+## An der Werkbank: eigene Figur ausblenden (die Werkbank-Kamera übernimmt) und zum Tisch drehen.
+func enter_workbench(bench_pos: Vector3) -> void:
+	if not is_local:
+		return
+	is_at_workbench = true
+	_workbench_pos = bench_pos
+	visible = false
+
+
+func exit_workbench() -> void:
+	if not is_local or not is_at_workbench:
+		return
+	is_at_workbench = false
+	visible = true
+	if _camera != null:
+		_camera.make_current()
+
+
 func set_typing_at_pc(active: bool) -> void:
 	is_typing_at_pc = active and is_seated_at_pc
 
@@ -404,6 +424,9 @@ func _handle_inspect() -> void:
 	var eid := str(target.get_meta("entity_id"))
 	if itype == "wall_router":
 		_world.open_device_inspector("router", eid)
+	elif itype == "workbench":
+		if GameState.can_workbench_service():
+			GameState.request_workbench_service()
 	elif itype == "rack_slot" and GameState.racks.has(eid):
 		_world.open_rack_inspector(eid, int(target.get_meta("slot_index", 0)))
 	elif itype == "cooler_unit" and GameState.coolers.has(eid):
@@ -532,6 +555,11 @@ func _physics_process(delta: float) -> void:
 				velocity.z = move_toward(velocity.z, 0.0, 22.0 * delta)
 
 		move_and_slide()
+
+	if is_at_workbench:
+		var to_bench := _workbench_pos - position
+		rotation.y = lerp_angle(rotation.y, atan2(-to_bench.x, -to_bench.z), clampf(delta * 8.0, 0.0, 1.0))
+		_head_pivot.rotation.x = lerpf(_head_pivot.rotation.x, -0.55, clampf(delta * 6.0, 0.0, 1.0))
 
 	# Smoothly push active cart right in front of the player
 	var pushed_cart := GameState.get_player_pushed_cart(peer_id)
@@ -1061,7 +1089,7 @@ func _handle_primary_interact() -> void:
 					GameState.request_workbench_place()
 			elif wb_mode == "build_box":
 				GameState.request_workbench_unpack()
-			elif wb_mode == "assembly" or wb_mode == "repair":
+			elif GameState.is_workbench_job():
 				if _world != null and _world.has_method("open_workbench"):
 					_world.open_workbench()
 			elif wb_mode == "ready_tray":
@@ -1902,14 +1930,29 @@ func _update_context_prompt() -> void:
 			elif wb_mode == "build_box":
 				current_prompt = tr("[E] Bausatz auspacken (%s)") % str(wb.get("label", "Server"))
 				current_sub_prompt = tr("[Rechtsklick] Karton wieder aufnehmen")
+			elif GameState.is_workbench_job() and GameState.get_workbench_worker() < 0:
+				current_prompt = tr("[E] Von %s übernehmen") % TechnicianManager.get_worker_name()
+			elif GameState.is_workbench_job() and GameState.get_workbench_worker() > 0:
+				current_prompt = tr("%s arbeitet gerade") % NetworkManager.get_player_name(GameState.get_workbench_worker())
 			elif wb_mode == "assembly":
-				current_prompt = tr("[E] Zusammenbau starten (%s)") % str(wb.get("label", "Server"))
+				var fmt_a := tr("[E] Weiterbauen (%s)") if GameState.is_workbench_started() else tr("[E] Zusammenbau starten (%s)")
+				current_prompt = fmt_a % str(wb.get("label", "Server"))
+				if not GameState.is_workbench_started():
+					current_sub_prompt = tr("[Rechtsklick] Karton wieder aufnehmen")
 			elif wb_mode == "repair":
-				current_prompt = tr("[E] Reparatur starten (%s)") % str(wb.get("label", "Server"))
-				current_sub_prompt = tr("[Rechtsklick] Server-Schlitten wieder aufnehmen")
+				var fmt_r := tr("[E] Weiter reparieren (%s)") if GameState.is_workbench_started() else tr("[E] Reparatur starten (%s)")
+				current_prompt = fmt_r % str(wb.get("label", "Server"))
+				if not GameState.is_workbench_started():
+					current_sub_prompt = tr("[Rechtsklick] Server-Schlitten wieder aufnehmen")
+			elif wb_mode == "service":
+				current_prompt = tr("[E] Überholen (%s)") % str(wb.get("label", "Server"))
+				if not GameState.is_workbench_started():
+					current_sub_prompt = tr("[Rechtsklick] Server-Schlitten wieder aufnehmen")
 			elif wb_mode == "ready_tray":
 				current_prompt = tr("[E] Fertigen Server aufnehmen (%s)") % str(wb.get("label", "Server"))
 				current_sub_prompt = tr("Ins ausgefahrene Rack einsetzen")
+				if GameState.can_workbench_service():
+					current_sub_prompt = tr("[F] Überholen (Bauqualität %d %%)") % GameState.get_build_quality(wb)
 		"rack_slot":
 			var sidx := int(target.get_meta("slot_index"))
 			var rp_obj: Variant = target.get_meta("rack_prop", null)

@@ -130,6 +130,7 @@ func _ready() -> void:
 	_build_shuttle_terminal(self, Vector3(-5.38, 1.42, -3.55), 90.0, false)
 	_build_garage_pv_upgrade()
 	add_child(ConstructionCrew.new())
+	add_child(TechnicianNpc.new())
 	add_child(AmbientNpcSystem.new())
 	apply_graphics_quality(SettingsManager.graphics_quality)
 	GameState.panel_states_changed.connect(_on_panel_states_changed)

@@ -36,7 +36,7 @@ static func render_staff(host: Control, feedback: String, feedback_ok: bool) -> 
 	_section(body, "Dein Team")
 	if team.is_empty():
 		var empty_card := _card(body)
-		empty_card.add_child(_label("Noch niemand eingestellt. Support-Agenten beantworten Tickets, Buchhalter bezahlen deine Rechnungen.", 13, COL_MUTED, true))
+		empty_card.add_child(_label("Noch niemand eingestellt. Support-Agenten beantworten Tickets, Buchhalter bezahlen deine Rechnungen, Techniker bauen und reparieren Server.", 13, COL_MUTED, true))
 	for e_v in team:
 		var e: Dictionary = e_v
 		var eid := str(e["id"])
@@ -56,6 +56,8 @@ static func render_staff(host: Control, feedback: String, feedback_ok: bool) -> 
 		info.add_child(_label(_t("%s  •  Erfahrung %d/5  •  seit Tag %d") % [_t(FinanceManager.get_role_title(role)), skill, int(e["hired_day"])], 12, COL_MUTED))
 		info.add_child(_bar(float(skill) / 5.0, COL_ACCENT))
 		info.add_child(_label(_work_text(role, skill, int(e["work_done"])), 12, COL_MUTED, true))
+		if role == "technician":
+			_technician_options(info, e)
 
 		var right := VBoxContainer.new()
 		right.alignment = BoxContainer.ALIGNMENT_CENTER
@@ -113,7 +115,28 @@ static func _work_text(role: String, skill: int, done: int) -> String:
 	if role == "accounting":
 		var when := _t("einen Tag vor Fälligkeit") if skill >= 3 else _t("am Fälligkeitstag")
 		return _t("Bezahlt Rechnungen %s  •  %d Rechnungen bezahlt") % [when, done]
+	if role == "technician":
+		return _t("Arbeitsqualität etwa %d %%  •  %d Server fertig") % [40 + skill * 11, done]
 	return ""
+
+
+## Schicht und Aufgaben eines Technikers.
+static func _technician_options(info: VBoxContainer, e: Dictionary) -> void:
+	var eid := str(e["id"])
+	var on_duty: bool = str(TechnicianManager.view.get("id", "")) == eid
+	if on_duty:
+		info.add_child(_label(_t("Gerade: %s") % str(TechnicianManager.view.get("text", "")), 12, COL_GOOD, true))
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 6)
+	info.add_child(row)
+	var night: bool = TechnicianManager.shift_of(e) == "night"
+	row.add_child(_button(_t("Schicht: Nacht (18–6 Uhr)") if night else _t("Schicht: Tag (6–18 Uhr)"), COL_ACCENT,
+		func(): TechnicianManager.request_set_shift(eid, "day" if night else "night")))
+	for d in [["build", "Bauen"], ["repair", "Reparieren"], ["service", "Überholen"]]:
+		var duty := str(d[0])
+		var on: bool = TechnicianManager.has_duty(e, duty)
+		row.add_child(_button(("✓ " if on else "✗ ") + _t(str(d[1])), COL_GOOD if on else COL_MUTED,
+			func(): TechnicianManager.request_set_duty(eid, duty, not on)))
 
 
 # ---------------------------------------------------------------- Bank

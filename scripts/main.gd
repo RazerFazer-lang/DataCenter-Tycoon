@@ -145,7 +145,7 @@ func _notification(what: int) -> void:
 func _release_mouse_for_os() -> void:
 	if Input.mouse_mode != Input.MOUSE_MODE_CAPTURED:
 		return
-	if NetworkManager.is_in_session and not _is_paused and not _pc_entering and not terminal_ui.visible and not rack_inspector.visible:
+	if NetworkManager.is_in_session and not _is_paused and not _pc_entering and not terminal_ui.visible and not rack_inspector.visible and not workbench_ui.visible:
 		_open_pause()
 	else:
 		Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
@@ -238,6 +238,8 @@ func _return_to_menu_ui() -> void:
 	_is_paused = false
 	_pc_entering = false
 	_pc_enter_token += 1
+	if workbench_ui != null and workbench_ui.visible:
+		workbench_ui.close_workbench()
 	world.reset_world()
 	world.show_menu_showcase()
 	hud.visible = false
@@ -324,19 +326,30 @@ func _close_rack_inspector() -> void:
 func _open_workbench_ui() -> void:
 	if _is_paused or terminal_ui.visible or rack_inspector.visible or workbench_ui == null:
 		return
+	var worker := GameState.get_workbench_worker()
+	if worker > 0 and worker != multiplayer.get_unique_id():
+		hud.show_toast(tr("Werkbank besetzt: %s arbeitet gerade") % NetworkManager.get_player_name(worker), true)
+		return
 	workbench_ui.open_workbench()
 	if workbench_ui.visible:
+		hud.visible = false
 		if world.local_player != null:
 			world.local_player.set_ui_locked(true)
+			world.local_player.enter_workbench(workbench_ui.prop.global_position)
 		Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
 
 
 func _close_workbench_ui() -> void:
 	if workbench_ui != null and workbench_ui.visible:
-		workbench_ui.visible = false
+		# Löst close_requested aus und landet damit noch einmal hier.
+		workbench_ui.close_workbench()
+		return
+	hud.visible = NetworkManager.is_in_session
 	if world.local_player != null:
+		world.local_player.exit_workbench()
 		world.local_player.set_ui_locked(false)
-	Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
+	if NetworkManager.is_in_session:
+		Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
 
 
 func _on_relocate_rack_requested(rack_id: String) -> void:

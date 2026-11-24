@@ -34,6 +34,11 @@ signal garage_door_changed(is_open: bool)
 signal cart_changed
 signal shelf_changed
 signal workbench_changed
+## Live-Bewegung des Spielers an der Werkbank: {tool, item, xf, task, t}
+signal workbench_hand_moved(data: Dictionary)
+## Der Host hat einen Handgriff abgelehnt; die Vorab-Anzeige muss zurück.
+signal workbench_task_rejected(task_id: String)
+signal bench_supplies_changed
 signal host_permissions_changed
 signal world_ping_received(peer_id: int, world_pos: Vector3, kind: String, label: String)
 signal player_emote_received(peer_id: int, emote_id: String)
@@ -958,6 +963,8 @@ const BUILDING_UPGRADE_ORDER: Array[String] = [
 	"upg_pv_solar", "upg_roof_chillers", "upg_security_gate",
 	"upg_noc_suite", "upg_cold_aisle_pro", "upg_diesel_gen",
 ]
+## Anteil der Defekte ohne sichtbare Spuren; die findet man nur mit POST-Code und Messgerät.
+const FAULT_HIDDEN_CHANCE := 0.5
 const FAULT_DIAGNOSIS_META := {
 	"cpu": {"code": "ERR-THM-07", "cause": "Wärmeleitpaste ausgetrocknet / CPU-Throttling", "tool": "Wärmeleitpaste- & Wartungs-Kit"},
 	"cooling": {"code": "ERR-FAN-04", "cause": "Lüfterlager blockiert / Kühlkörper verstaubt", "tool": "Druckluft & Ersatz-Lüfter"},
@@ -970,6 +977,10 @@ const FAULT_DIAGNOSIS_META := {
 var building_upgrades: Dictionary = {} # upgrade_id -> true
 var active_constructions: Dictionary = {} # upgrade_id -> {remaining, duration, site}
 var decor_items: Dictionary = {} # decor_id -> {id, item_type, pos, rot_y, stored_items}
+var bench_screws: int = BENCH_SCREWS_START
+var bench_paste: float = BENCH_PASTE_START
+## Gekauftes Profi-Werkzeug: akku, torque, paste_gun, meter_pro, rcd -> true
+var bench_tools: Dictionary = {}
 var maint_kits: int = 3 # Vorrat an Wartungs-/Druckluft-/Wärmeleitpaste-Kits
 ## Zahl der erreichten Firmenwert-Meilensteine. -1 = alter Spielstand, wird beim nächsten Check still übernommen.
 var company_milestones_reached: int = 0
@@ -1022,6 +1033,27 @@ var shopping_cart: Array = []
 var pending_build_orders: Dictionary = {}
 ## Freie Stellplätze im 3D-Lagerregal: "shelf_0:0" .. "shelf_0:11" -> crate_data Dictionary.
 const STORAGE_SHELF_SLOTS := 12
+## Verbrauchsmaterial der Werkbank: Schrauben (Stück) und Wärmeleitpaste (Anwendungen).
+## Bauqualität: Deckel nach Schnellreparatur am Rack (mit bzw. ohne Ersatzteil-Kit).
+const RACK_REPAIR_QUALITY_KIT := 70
+const RACK_REPAIR_QUALITY := 50
+const BENCH_JOBS: Array[String] = ["assembly", "repair", "service"]
+const BENCH_SCREWS_START := 80
+const BENCH_PASTE_START := 10.0
+const SCREW_BOX_PRICE := 14
+const SCREW_BOX_COUNT := 100
+const PASTE_TUBE_PRICE := 9
+const PASTE_TUBE_USES := 10.0
+## Profi-Werkzeug für die Werkbank (einmalig, kommt per Sprinter). "needs" = vorher nötig.
+const BENCH_TOOLS := {
+	"akku": {"name": "Akkuschrauber", "price": 180, "desc": "Schraubt fast doppelt so schnell – rein und raus."},
+	"torque": {"name": "Drehmoment-Kupplung", "price": 320, "needs": "akku", "desc": "Aufsatz für den Akkuschrauber: stoppt genau richtig, nichts wird locker oder überdreht."},
+	"paste_gun": {"name": "Dosierpistole", "price": 140, "desc": "Trägt immer die ideale Menge Wärmeleitpaste auf."},
+	"meter_pro": {"name": "Profi-Multimeter", "price": 260, "desc": "Misst doppelt so schnell und grenzt den Verdacht nach dem POST-Code enger ein."},
+	"rcd": {"name": "Personenschutz-Schalter", "price": 120, "desc": "Schaltet bei Arbeiten unter Strom sofort ab: das Mainboard bleibt heil."},
+}
+const BENCH_SCREWS_MAX := 600
+const BENCH_PASTE_MAX := 60.0
 const MAINTAIN_MIN_DUST := 15.0
 const MAINTAIN_MAX_THERMAL := 85.0
 var storage_shelf_slots: Dictionary = {}
@@ -1557,6 +1589,7 @@ func _deliver_parts_parcel() -> void:
 	var n_strips := 0
 	var n_hubs := 0
 	var n_power := 0
+	var n_bench := 0
 	for pid_v in _van_parcel_parts:
 		var pid := str(pid_v)
 		match pid:
@@ -1575,6 +1608,20 @@ func _deliver_parts_parcel() -> void:
 					n_hubs += 1
 				else:
 					money += float(NET_HUB_PRICE)
+			"acc:tool_akku", "acc:tool_torque", "acc:tool_paste_gun", "acc:tool_meter_pro", "acc:tool_rcd":
+				var tid := pid.substr(9)
+				if has_bench_tool(tid):
+					money += float(BENCH_TOOLS[tid]["price"])
+				else:
+					bench_tools[tid] = true
+					_rpc_sync_bench_tools.rpc(bench_tools)
+					post_event_f("📦 Neues Werkzeug an der Werkbank: %s.", [str(BENCH_TOOLS[tid]["name"])], "good")
+			"acc:screw_box":
+				bench_screws = mini(BENCH_SCREWS_MAX, bench_screws + SCREW_BOX_COUNT)
+				n_bench += 1
+			"acc:paste_tube":
+				bench_paste = minf(BENCH_PASTE_MAX, bench_paste + PASTE_TUBE_USES)
+				n_bench += 1
 			"acc:power_fuse":
 				if power_fuse_stock == 0:
 					power_fuse_stock = 1
@@ -1589,6 +1636,9 @@ func _deliver_parts_parcel() -> void:
 	if n_parts > 0:
 		_broadcast_inventory()
 		post_event_f("📦 %d Hardware-Bauteil(e) ins Teile-Lager geliefert! Jetzt am Rack einbauen [E].", [n_parts], "good")
+	if n_bench > 0:
+		_rpc_sync_bench_supplies.rpc(bench_screws, bench_paste)
+		post_event_f("📦 %d× Werkbank-Material geliefert (Schrauben: %d, Wärmeleitpaste: %.0f Anwendungen).", [n_bench, bench_screws, bench_paste], "good")
 	if n_fuses > 0 or n_power > 0:
 		_broadcast_fuses()
 	if n_fuses > 0:
@@ -1852,6 +1902,9 @@ func load_from_save_data(data: Dictionary, save_id: String, display_name: String
 	_autosave_accum = 0.0
 
 	_apply_snapshot(data)
+	if not workbench_state.is_empty():
+		workbench_state["worker"] = 0
+		workbench_state["done"] = AssemblyPlan.sanitize_done(AssemblyPlan.build(workbench_state), workbench_state.get("done", {}))
 	var saved_finance: Variant = data.get("finance", {})
 	FinanceManager.import_data(saved_finance if saved_finance is Dictionary else {})
 	# Queue any items that were in transit when the game was saved
@@ -1930,6 +1983,9 @@ func clear_local_state() -> void:
 	pending_build_orders.clear()
 	storage_shelf_slots.clear()
 	workbench_state.clear()
+	bench_screws = BENCH_SCREWS_START
+	bench_paste = BENCH_PASTE_START
+	bench_tools = {}
 	weather_state = "clear"
 	airflow_bonus = 0.0
 	cable_mgmt_bonus = 0.0
@@ -2178,6 +2234,9 @@ func build_snapshot() -> Dictionary:
 		"garage_door_open": garage_door_open,
 		"storage_shelf_slots": storage_shelf_slots.duplicate(true),
 		"workbench_state": workbench_state.duplicate(true),
+		"bench_screws": bench_screws,
+		"bench_paste": bench_paste,
+		"bench_tools": bench_tools.duplicate(),
 		"pending_build_orders": pending_build_orders.duplicate(true),
 		"host_only_destructive": host_only_destructive,
 		"weather_state": weather_state,
@@ -2286,6 +2345,9 @@ func _apply_snapshot(snap: Dictionary) -> void:
 		storage_shelf_slots.clear()
 		_ensure_starter_shelf_kits()
 	workbench_state = (snap.get("workbench_state", {}) as Dictionary).duplicate(true) if snap.get("workbench_state", {}) is Dictionary else {}
+	bench_screws = clampi(int(snap.get("bench_screws", BENCH_SCREWS_START)), 0, BENCH_SCREWS_MAX)
+	bench_paste = clampf(float(snap.get("bench_paste", BENCH_PASTE_START)), 0.0, BENCH_PASTE_MAX)
+	bench_tools = _sanitize_bench_tools(snap.get("bench_tools", {}))
 	pending_build_orders = (snap.get("pending_build_orders", {}) as Dictionary).duplicate(true) if snap.get("pending_build_orders", {}) is Dictionary else {}
 	shelf_changed.emit()
 	workbench_changed.emit()
@@ -2349,6 +2411,9 @@ func handle_player_disconnect(peer_id: int) -> void:
 	if changed_carts:
 		_broadcast_carts()
 	player_active_slot.erase(peer_id)
+	if not workbench_state.is_empty() and get_workbench_worker() == peer_id:
+		workbench_state["worker"] = 0
+		_broadcast_workbench()
 	if extinguisher_held_by == peer_id:
 		extinguisher_held_by = 0
 		_rpc_sync_extinguisher.rpc(0)
@@ -2491,6 +2556,15 @@ func _sanitize_research(raw: Variant) -> Dictionary:
 	return out
 
 
+## Bauqualität eines Einschubs oder Schlittens (0–100). Server aus alten Spielständen haben 100.
+func get_build_quality(data: Dictionary) -> int:
+	return clampi(int(roundf(float(data.get("build_quality", 100)))), 0, 100)
+
+
+func get_slot_sloppiness(slot: Dictionary) -> float:
+	return float(100 - get_build_quality(slot)) / 100.0
+
+
 func get_slot_stats(slot: Dictionary) -> Dictionary:
 	var item_type := str(slot.get("item_type", ""))
 	if item_type == "" or not ITEM_CATALOG.has(item_type):
@@ -2570,13 +2644,23 @@ func get_slot_stats(slot: Dictionary) -> Dictionary:
 	watt_mult *= get_research_mult("efficiency")
 	fault_mult *= get_research_mult("reliability")
 
+	# Schlampig gebaute Server laufen wärmer, fallen öfter aus und drosseln.
+	var sloppy := get_slot_sloppiness(slot)
+	heat *= 1.0 + 0.60 * sloppy
+	fault_mult = clampf(fault_mult, 0.15, 3.0) * (1.0 + 2.0 * sloppy)
+	var throttle := 1.0 - 0.30 * maxf(0.0, sloppy - 0.15)
+	compute = int(roundf(float(compute) * throttle))
+	cpu_score = int(roundf(float(cpu_score) * throttle))
+	gpu_score = int(roundf(float(gpu_score) * throttle))
+
 	var final_watts := maxi(40, int(roundf(watts * watt_mult)))
 	var final_heat := maxf(1.5, heat)
 	return {
 		"compute": compute,
 		"watts": final_watts,
 		"heat": final_heat,
-		"fault_mult": clampf(fault_mult, 0.15, 3.0),
+		"fault_mult": clampf(fault_mult, 0.15, 6.0),
+		"build_quality": get_build_quality(slot),
 		"revenue_bonus": rev_bonus,
 		"total_value": total_val,
 		"cpu_score": cpu_score,
@@ -2702,6 +2786,7 @@ func _trigger_water_leak() -> void:
 		slot["repair_progress"] = 0.0
 		slot["faulty_part"] = ""
 		slot["diagnosed"] = false
+		slot["fault_hidden"] = false
 		hit.append(str(ok_idx[j] + 1))
 
 	money = maxf(0.0, money - WATER_LEAK_COST)
@@ -3569,7 +3654,7 @@ func _run_simulation_step(dt: float) -> void:
 			elif st == "ok" and bool(rack["powered"]):
 				# Staub sammelt sich sehr langsam an; vorbeugende Wartung drückt Ausfallrisiko auf nahezu 0 %!
 				var dust := clampf(float(slot.get("dust_level", 0.0)) + dt * 0.048, 0.0, 100.0)
-				var th_hp := clampf(float(slot.get("thermal_health", 100.0)) - dt * 0.022, 0.0, 100.0)
+				var th_hp := clampf(float(slot.get("thermal_health", 100.0)) - dt * 0.022 * (1.0 + 1.5 * get_slot_sloppiness(slot)), 0.0, 100.0)
 				slot["dust_level"] = dust
 				slot["thermal_health"] = th_hp
 
@@ -3590,6 +3675,7 @@ func _run_simulation_step(dt: float) -> void:
 					slot["repair_progress"] = 0.0
 					slot["faulty_part"] = "cooling" if dust >= 45.0 else "cpu"
 					slot["diagnosed"] = false
+					slot["fault_hidden"] = randf() < FAULT_HIDDEN_CHANCE
 					racks_dirty = true
 					post_event_f("Überhitzung: %s Slot %d abgestürzt! Diagnose & Reparatur im Rack-Menü nötig.", [get_rack_display_name(rid), i + 1], "warn")
 					_rpc_play_sfx.rpc("alarm")
@@ -3598,6 +3684,7 @@ func _run_simulation_step(dt: float) -> void:
 					slot["repair_progress"] = 0.0
 					slot["faulty_part"] = _pick_faulty_part(slot)
 					slot["diagnosed"] = false
+					slot["fault_hidden"] = randf() < FAULT_HIDDEN_CHANCE
 					racks_dirty = true
 					if str(slot["faulty_part"]) != "":
 						post_event_f("Hardware-Störung in %s Slot %d — Diagnose im Rack-Menü starten.", [get_rack_display_name(rid), i + 1], "warn")
@@ -4712,6 +4799,13 @@ func is_slot_awaiting_diagnosis(slot: Dictionary) -> bool:
 		and not bool(slot.get("diagnosed", false))
 
 
+## Teil, das man dem Server (Einschub oder Schlitten) als kaputt ansieht. "" = nichts zu sehen.
+func get_visible_fault(data: Dictionary) -> String:
+	if str(data.get("state", "")) != "crashed" or bool(data.get("fault_hidden", false)):
+		return ""
+	return str(data.get("faulty_part", ""))
+
+
 func get_component_label(cat: String) -> String:
 	# Das Mainboard ist kein austauschbares Bauteil, braucht aber einen Namen für den Hover.
 	if cat == "mainboard":
@@ -4916,6 +5010,8 @@ func _rpc_req_pickup_crate(crate_id: String) -> void:
 		return
 	crates[crate_id]["held_by"] = peer_id
 	crates[crate_id]["held_slot"] = get_active_slot(peer_id)
+	# Was ein Spieler nimmt, holt der Techniker nicht mehr zurück.
+	crates[crate_id].erase("tech")
 	_broadcast_crates()
 	_rpc_play_sfx.rpc_id(peer_id, "pickup")
 
@@ -6263,9 +6359,11 @@ func _rpc_req_repair_slot(rack_id: String, slot_idx: int, amount: float) -> void
 		slot.erase("_using_kit")
 		slot["dust_level"] = 0.0 if full_ok else 35.0
 		slot["thermal_health"] = 100.0 if full_ok else 72.0
+		# Schnell geflickt ist nicht ordentlich repariert: volle Qualität gibt es nur an der Werkbank.
+		slot["build_quality"] = mini(get_build_quality(slot), RACK_REPAIR_QUALITY_KIT if full_ok else RACK_REPAIR_QUALITY)
 		_recalculate_networks_and_metrics()
 		_broadcast_sim_tick()
-		var diag_str := tr("mit Ersatzteil-Kit (100 % Zustand)") if full_ok else tr("(Not-Reparatur — 72 % Zustand)")
+		var diag_str := tr("notdürftig mit Ersatzteil-Kit (Bauqualität höchstens 70 %)") if full_ok else tr("notdürftig (Bauqualität höchstens 50 %)")
 		post_event_f("%s hat %s Slot %d %s repariert!", [
 			NetworkManager.get_player_name(peer_id), get_rack_display_name(rack_id), slot_idx + 1, diag_str
 		], "good")
@@ -6843,6 +6941,12 @@ func _accessory_price(aid: String) -> int:
 			return POWER_STRIP_PRICE
 		"net_hub":
 			return NET_HUB_PRICE
+		"screw_box":
+			return SCREW_BOX_PRICE
+		"paste_tube":
+			return PASTE_TUBE_PRICE
+	if aid.begins_with("tool_") and BENCH_TOOLS.has(aid.substr(5)):
+		return int(BENCH_TOOLS[aid.substr(5)]["price"])
 	return 0
 
 
@@ -6855,6 +6959,15 @@ func _accessory_order_room(aid: String) -> int:
 			return maxi(0, POWER_STRIP_MAX - power_strips - on_way)
 		"net_hub":
 			return maxi(0, NET_HUB_MAX - net_hubs - on_way)
+		"screw_box":
+			return maxi(0, (BENCH_SCREWS_MAX - bench_screws) / SCREW_BOX_COUNT - on_way)
+		"paste_tube":
+			return maxi(0, int((BENCH_PASTE_MAX - bench_paste) / PASTE_TUBE_USES) - on_way)
+	if aid.begins_with("tool_"):
+		var tid := aid.substr(5)
+		var need := str((BENCH_TOOLS.get(tid, {}) as Dictionary).get("needs", ""))
+		var need_ok := need == "" or has_bench_tool(need) or pending_delivery_items.has("acc:tool_" + need) or van_cargo.has("acc:tool_" + need) or _van_parcel_parts.has("acc:tool_" + need)
+		return 0 if (has_bench_tool(tid) or on_way > 0 or not need_ok) else 1
 	return 20
 
 
@@ -7320,6 +7433,22 @@ func _rpc_req_pull_server_tray(rack_id: String, slot_idx: int) -> void:
 		_rpc_play_sfx.rpc_id(peer_id, "error")
 		return
 	var rlabel := get_rack_display_name(rack_id)
+	_tray_from_slot(rack_id, slot_idx, slot, peer_id)
+	slots[slot_idx] = _make_empty_slot()
+	_recalculate_networks_and_metrics()
+	_broadcast_racks()
+	_broadcast_crates()
+	_broadcast_sim_tick()
+	_rpc_play_sfx.rpc_id(peer_id, "pickup")
+	post_event_f("🔧 %s hat den Server-Schlitten aus %s · Slot %d herausgezogen.", [
+		NetworkManager.get_player_name(peer_id), rlabel, slot_idx + 1
+	], "info")
+
+
+## Server aus dem Einschub als Schlitten in die Hand nehmen; liefert die Kisten-ID.
+func _tray_from_slot(rack_id: String, slot_idx: int, slot: Dictionary, peer_id: int) -> String:
+	var rlabel := get_rack_display_name(rack_id)
+	var itype := str(slot.get("item_type", ""))
 	var st := str(slot.get("state", "ok"))
 	var cid := _alloc_id("crate")
 	crates[cid] = {
@@ -7335,19 +7464,13 @@ func _rpc_req_pull_server_tray(rack_id: String, slot_idx: int) -> void:
 			"state": st,
 			"faulty_part": str(slot.get("faulty_part", "")),
 			"diagnosed": bool(slot.get("diagnosed", false)),
+			"fault_hidden": bool(slot.get("fault_hidden", false)),
+			"build_quality": get_build_quality(slot),
 			"source_rack_id": rack_id,
 			"source_slot_idx": slot_idx,
 		},
 	}
-	slots[slot_idx] = _make_empty_slot()
-	_recalculate_networks_and_metrics()
-	_broadcast_racks()
-	_broadcast_crates()
-	_broadcast_sim_tick()
-	_rpc_play_sfx.rpc_id(peer_id, "pickup")
-	post_event_f("🔧 %s hat den Server-Schlitten aus %s · Slot %d herausgezogen.", [
-		NetworkManager.get_player_name(peer_id), rlabel, slot_idx + 1
-	], "info")
+	return cid
 
 
 @rpc("any_peer", "call_local", "reliable")
@@ -7367,20 +7490,7 @@ func _rpc_req_insert_server_tray(rack_id: String, slot_idx: int) -> void:
 	if str(slots[slot_idx].get("item_type", "")) != "":
 		_rpc_play_sfx.rpc_id(peer_id, "error")
 		return
-	var td: Dictionary = held.get("tray_data", {}) as Dictionary
-	var mb_id := str(td.get("mainboard_id", "web_server"))
-	if not ITEM_CATALOG.has(mb_id):
-		mb_id = "web_server"
-	var st := str(td.get("state", "ok"))
-	slots[slot_idx] = {
-		"item_type": mb_id,
-		"state": st,
-		"faulty_part": str(td.get("faulty_part", "")) if st == "crashed" else "",
-		"diagnosed": bool(td.get("diagnosed", false)) if st == "crashed" else false,
-		"repair_progress": 0.0,
-		"fire_level": 0.0,
-		"components": (td.get("components", _default_components(mb_id)) as Dictionary).duplicate(true),
-	}
+	slots[slot_idx] = _slot_from_tray(held.get("tray_data", {}) as Dictionary)
 	crates.erase(str(held["id"]))
 	_recalculate_networks_and_metrics()
 	_broadcast_crates()
@@ -7390,6 +7500,24 @@ func _rpc_req_insert_server_tray(rack_id: String, slot_idx: int) -> void:
 	post_event_f("✅ %s hat den Server in %s · Slot %d eingesetzt!", [
 		NetworkManager.get_player_name(peer_id), get_rack_display_name(rack_id), slot_idx + 1
 	], "good")
+
+
+func _slot_from_tray(td: Dictionary) -> Dictionary:
+	var mb_id := str(td.get("mainboard_id", "web_server"))
+	if not ITEM_CATALOG.has(mb_id):
+		mb_id = "web_server"
+	var st := str(td.get("state", "ok"))
+	return {
+		"item_type": mb_id,
+		"state": st,
+		"faulty_part": str(td.get("faulty_part", "")) if st == "crashed" else "",
+		"diagnosed": bool(td.get("diagnosed", false)) if st == "crashed" else false,
+		"fault_hidden": bool(td.get("fault_hidden", false)) if st == "crashed" else false,
+		"build_quality": get_build_quality(td),
+		"repair_progress": 0.0,
+		"fire_level": 0.0,
+		"components": (td.get("components", _default_components(mb_id)) as Dictionary).duplicate(true),
+	}
 
 
 ## --- Funktionales 3D-Lagerregal ---
@@ -7519,12 +7647,143 @@ func request_workbench_pickup() -> void:
 	_rpc_req_workbench_pickup.rpc_id(1)
 
 
-func request_workbench_complete_assembly() -> void:
-	_rpc_req_workbench_complete_assembly.rpc_id(1)
+## Arbeitsplatz an der Werkbank belegen bzw. freigeben (immer nur ein Spieler gleichzeitig).
+func request_workbench_enter() -> void:
+	_rpc_req_workbench_enter.rpc_id(1)
 
 
-func request_workbench_complete_repair(cat: String) -> void:
-	_rpc_req_workbench_complete_repair.rpc_id(1, cat)
+func request_workbench_leave() -> void:
+	_rpc_req_workbench_leave.rpc_id(1)
+
+
+## Ein Handgriff ist fertig. amount ist nur bei der Wärmeleitpaste wichtig (1.0 = genau richtig).
+func request_workbench_task(task_id: String, amount: float = 1.0) -> void:
+	_rpc_req_workbench_task.rpc_id(1, task_id, amount)
+
+
+## Liegt gerade etwas auf der Werkbank, an dem gearbeitet werden kann?
+func is_workbench_job() -> bool:
+	return BENCH_JOBS.has(str(workbench_state.get("mode", "")))
+
+
+## Fertigen Server überholen: Schrauben nachziehen, Paste erneuern.
+func request_workbench_service() -> void:
+	_rpc_req_workbench_service.rpc_id(1)
+
+
+func can_workbench_service() -> bool:
+	return str(workbench_state.get("mode", "")) == "ready_tray" and get_build_quality(workbench_state) < 100 and AssemblyPlan.can_service(workbench_state)
+
+
+@rpc("any_peer", "call_local", "reliable")
+func _rpc_req_workbench_service() -> void:
+	if not multiplayer.is_server() or not can_workbench_service() or get_workbench_worker() != 0:
+		return
+	workbench_state["mode"] = "service"
+	workbench_state["done"] = {}
+	workbench_state["flaws"] = []
+	_broadcast_workbench()
+	_rpc_play_sfx.rpc_id(_get_sender_id(), "pickup")
+
+
+## CPU mit Gewalt verkehrt herum eingesetzt: Pins verbogen, Teil zerstört.
+func request_workbench_break(task_id: String) -> void:
+	_rpc_req_workbench_break.rpc_id(1, task_id)
+
+
+@rpc("any_peer", "call_local", "reliable")
+func _rpc_req_workbench_break(task_id: String) -> void:
+	if not multiplayer.is_server():
+		return
+	var peer_id := _get_sender_id()
+	if get_workbench_worker() != peer_id or task_id != "cpu_place" or not SecurityGuard.check_rate_limit(peer_id, "wb_break", 6, 5.0):
+		return
+	var plan := AssemblyPlan.build(workbench_state)
+	var done := AssemblyPlan.sanitize_done(plan, workbench_state.get("done", {}))
+	if not AssemblyPlan.is_available(plan, done, task_id):
+		return
+	if str(plan["mode"]) == "repair":
+		if bool(workbench_state.get("kit_used", false)) or not _consume_spare_server(peer_id):
+			return
+		workbench_state.erase("spare")
+		workbench_state["spare_broken"] = true
+	elif str(plan["mode"]) == "assembly":
+		if (workbench_state.get("broken", []) as Array).has("cpu"):
+			return
+		workbench_state["broken"] = ["cpu"]
+	else:
+		return
+	_broadcast_workbench()
+	_rpc_play_sfx.rpc("spark")
+	post_event_f("💥 %s hat die CPU verkehrt herum eingedrückt: Pins verbogen, CPU zerstört! Neue CPU wählen.", [get_worker_name(peer_id)], "alert")
+
+
+## Braucht der Bau gerade ein Ersatzteil (zerstörte CPU)?
+func needs_workbench_replacement() -> bool:
+	return bool(workbench_state.get("spare_broken", false)) or not (workbench_state.get("broken", []) as Array).is_empty()
+
+
+func get_workbench_worker() -> int:
+	return int(workbench_state.get("worker", 0))
+
+
+func get_workbench_done() -> Dictionary:
+	var raw: Variant = workbench_state.get("done", {})
+	return raw if raw is Dictionary else {}
+
+
+## Hat an der Werkbank schon jemand einen Handgriff gemacht?
+func is_workbench_started() -> bool:
+	return not get_workbench_done().is_empty()
+
+
+func send_workbench_hand(data: Dictionary) -> void:
+	if not NetworkManager.is_in_session:
+		return
+	if multiplayer.is_server():
+		_rpc_workbench_hand.rpc(data)
+		# Technikerbewegungen sieht auch der Host selbst.
+		if data.is_empty() or data.has("auto"):
+			workbench_hand_moved.emit(data)
+	else:
+		_rpc_submit_workbench_hand.rpc_id(1, data)
+
+
+@rpc("any_peer", "call_remote", "unreliable_ordered")
+func _rpc_submit_workbench_hand(data: Dictionary) -> void:
+	if not multiplayer.is_server():
+		return
+	var sid := multiplayer.get_remote_sender_id()
+	if get_workbench_worker() != sid or data.size() > 6:
+		return
+	if not SecurityGuard.check_rate_limit(sid, "wb_hand", 40, 1.0):
+		return
+	var clean := _sanitize_workbench_hand(data)
+	workbench_hand_moved.emit(clean)
+	for pid in multiplayer.get_peers():
+		if pid != sid:
+			_rpc_workbench_hand.rpc_id(pid, clean)
+
+
+func _sanitize_workbench_hand(data: Dictionary) -> Dictionary:
+	var xf_v: Variant = data.get("xf", Transform3D.IDENTITY)
+	var xf: Transform3D = xf_v if xf_v is Transform3D else Transform3D.IDENTITY
+	if not xf.is_finite() or xf.origin.length() > 4.0:
+		xf = Transform3D.IDENTITY
+	var t_v: Variant = data.get("t", 0.0)
+	var t := float(t_v) if (t_v is float or t_v is int) else 0.0
+	return {
+		"tool": str(data.get("tool", "")).left(16),
+		"item": str(data.get("item", "")).left(24),
+		"xf": xf,
+		"task": str(data.get("task", "")).left(24),
+		"t": clampf(t if SecurityGuard.is_finite_float(t) else 0.0, 0.0, AssemblyPlan.PASTE_MAX),
+	}
+
+
+@rpc("authority", "call_remote", "unreliable_ordered")
+func _rpc_workbench_hand(data: Dictionary) -> void:
+	workbench_hand_moved.emit(data)
 
 
 @rpc("any_peer", "call_local", "reliable")
@@ -7533,11 +7792,21 @@ func _rpc_req_workbench_place() -> void:
 		return
 	var peer_id := _get_sender_id()
 	if not workbench_state.is_empty():
-		_rpc_play_sfx.rpc_id(peer_id, "error")
+		_sfx_to(peer_id, "error")
 		return
 	var held := get_player_held_crate(peer_id)
 	if held.is_empty():
 		return
+	if _put_crate_on_bench(held):
+		_broadcast_crates()
+		_broadcast_workbench()
+		_sfx_to(peer_id, "place")
+	else:
+		_sfx_to(peer_id, "error")
+
+
+## Bausatz oder Schlitten auf die Werkbank legen. false, wenn die Kiste nicht passt.
+func _put_crate_on_bench(held: Dictionary) -> bool:
 	var itype := str(held.get("item_type", ""))
 	if itype == "slot_build_box":
 		var bd: Dictionary = (held.get("build_data", {}) as Dictionary).duplicate(true)
@@ -7551,9 +7820,7 @@ func _rpc_req_workbench_place() -> void:
 			"components": (bd.get("components", {}) as Dictionary).duplicate(true),
 		}
 		crates.erase(str(held["id"]))
-		_broadcast_crates()
-		_broadcast_workbench()
-		_rpc_play_sfx.rpc_id(peer_id, "place")
+		return true
 	elif itype == "server_tray":
 		var td: Dictionary = (held.get("tray_data", {}) as Dictionary).duplicate(true)
 		var is_crashed := str(td.get("state", "ok")) == "crashed"
@@ -7567,13 +7834,12 @@ func _rpc_req_workbench_place() -> void:
 			"state": str(td.get("state", "ok")),
 			"faulty_part": str(td.get("faulty_part", "")),
 			"diagnosed": bool(td.get("diagnosed", false)),
+			"fault_hidden": bool(td.get("fault_hidden", false)),
+			"build_quality": get_build_quality(td),
 		}
 		crates.erase(str(held["id"]))
-		_broadcast_crates()
-		_broadcast_workbench()
-		_rpc_play_sfx.rpc_id(peer_id, "place")
-	else:
-		_rpc_play_sfx.rpc_id(peer_id, "error")
+		return true
+	return false
 
 
 @rpc("any_peer", "call_local", "reliable")
@@ -7582,51 +7848,494 @@ func _rpc_req_workbench_unpack() -> void:
 		return
 	if str(workbench_state.get("mode", "")) != "build_box":
 		return
+	server_workbench_unpack()
+
+
+func server_workbench_unpack() -> void:
+	if str(workbench_state.get("mode", "")) != "build_box":
+		return
 	workbench_state["mode"] = "assembly"
 	_broadcast_workbench()
 	_rpc_play_sfx.rpc("pickup")
 
 
-@rpc("any_peer", "call_local", "reliable")
-func _rpc_req_workbench_complete_assembly() -> void:
-	if not multiplayer.is_server():
+func server_workbench_service() -> void:
+	if not can_workbench_service() or get_workbench_worker() > 0:
 		return
-	if str(workbench_state.get("mode", "")) != "assembly":
-		return
-	var peer_id := _get_sender_id()
-	workbench_state["mode"] = "ready_tray"
-	workbench_state["state"] = "ok"
-	workbench_state["faulty_part"] = ""
-	workbench_state["diagnosed"] = false
+	workbench_state["mode"] = "service"
+	workbench_state["done"] = {}
+	workbench_state["flaws"] = []
 	_broadcast_workbench()
+
+
+func set_workbench_worker(worker: int) -> void:
+	if workbench_state.is_empty():
+		return
+	workbench_state["worker"] = worker
+	_broadcast_workbench()
+
+
+## Geräusch nur für einen Spieler; der Techniker (negative ID) hört nichts.
+func _sfx_to(peer_id: int, sfx_name: String) -> void:
+	if peer_id > 0:
+		_rpc_play_sfx.rpc_id(peer_id, sfx_name)
+
+
+func get_worker_name(worker: int) -> String:
+	return TechnicianManager.get_worker_name() if worker < 0 else NetworkManager.get_player_name(worker)
+
+
+# --- Handgriffe des Technikers (nur Host) ---
+
+func server_hold_crate(cid: String, holder: int) -> void:
+	if crates.has(cid):
+		crates[cid]["held_by"] = holder
+		crates[cid]["held_slot"] = 0
+		_broadcast_crates()
+
+
+func server_drop_crate(cid: String, pos: Vector3) -> void:
+	if crates.has(cid):
+		crates[cid]["held_by"] = 0
+		crates[cid]["pos"] = _clamp_drop_pos(pos + Vector3(0.0, 0.0, 0.5))
+		_broadcast_crates()
+
+
+func server_take_tray(rack_id: String, slot_idx: int, holder: int) -> String:
+	if not racks.has(rack_id):
+		return ""
+	var slots: Array = racks[rack_id]["slots"]
+	if slot_idx < 0 or slot_idx >= slots.size():
+		return ""
+	var slot: Dictionary = slots[slot_idx]
+	if str(slot.get("item_type", "")) == "" or str(slot.get("state", "")) == "burning":
+		return ""
+	var cid := _tray_from_slot(rack_id, slot_idx, slot, holder)
+	slots[slot_idx] = _make_empty_slot()
+	_recalculate_networks_and_metrics()
+	_broadcast_racks()
+	_broadcast_crates()
+	_broadcast_sim_tick()
 	_rpc_play_sfx.rpc("snap")
-	post_event_f("🛠️ %s hat %s fertig zusammengebaut! Jetzt ins ausgefahrene Rack einsetzen.", [
-		NetworkManager.get_player_name(peer_id), str(workbench_state.get("label", "Server"))
-	], "good")
+	return cid
+
+
+func server_put_tray(cid: String, rack_id: String, slot_idx: int, who: String) -> bool:
+	if not crates.has(cid) or not racks.has(rack_id):
+		return false
+	var slots: Array = racks[rack_id]["slots"]
+	if slot_idx < 0 or slot_idx >= slots.size() or str(slots[slot_idx].get("item_type", "")) != "":
+		return false
+	slots[slot_idx] = _slot_from_tray(crates[cid].get("tray_data", {}) as Dictionary)
+	crates.erase(cid)
+	_recalculate_networks_and_metrics()
+	_broadcast_crates()
+	_broadcast_racks()
+	_broadcast_sim_tick()
+	_rpc_play_sfx.rpc("snap")
+	post_event_f("✅ %s hat den Server in %s · Slot %d eingesetzt!", [who, get_rack_display_name(rack_id), slot_idx + 1], "good")
+	return true
+
+
+func server_place_on_bench(cid: String) -> bool:
+	if not crates.has(cid) or not workbench_state.is_empty():
+		return false
+	if not _put_crate_on_bench(crates[cid]):
+		return false
+	_broadcast_crates()
+	_broadcast_workbench()
+	_rpc_play_sfx.rpc("place")
+	return true
+
+
+func server_take_from_bench(holder: int) -> String:
+	if str(workbench_state.get("mode", "")) != "ready_tray" or get_workbench_worker() != 0:
+		return ""
+	var cid := _crate_from_bench(holder)
+	workbench_state.clear()
+	_broadcast_workbench()
+	_broadcast_crates()
+	return cid
+
+
+# --- Profi-Werkzeug ---
+
+func has_bench_tool(tool_id: String) -> bool:
+	return bool(bench_tools.get(tool_id, false))
+
+
+## Zeitfaktor eines Handgriffs durch gekauftes Werkzeug.
+func get_tool_time_mult(kind: String) -> float:
+	match kind:
+		"screw", "unscrew":
+			return 0.55 if has_bench_tool("akku") else 1.0
+		"paste":
+			return 0.65 if has_bench_tool("paste_gun") else 1.0
+		"measure":
+			return 0.45 if has_bench_tool("meter_pro") else 1.0
+	return 1.0
 
 
 @rpc("any_peer", "call_local", "reliable")
-func _rpc_req_workbench_complete_repair(cat: String) -> void:
+func _rpc_req_workbench_enter() -> void:
 	if not multiplayer.is_server():
 		return
 	var peer_id := _get_sender_id()
+	if not is_workbench_job():
+		return
+	if get_workbench_worker() > 0:
+		# Schon besetzt: dem Anfragenden den echten Stand schicken. Ein Techniker macht dagegen Platz.
+		_rpc_sync_workbench.rpc_id(peer_id, workbench_state.duplicate(true))
+		return
+	workbench_state["worker"] = peer_id
+	_broadcast_workbench()
+
+
+@rpc("any_peer", "call_local", "reliable")
+func _rpc_req_workbench_leave() -> void:
+	if not multiplayer.is_server():
+		return
+	if workbench_state.is_empty() or get_workbench_worker() != _get_sender_id():
+		return
+	workbench_state["worker"] = 0
+	_broadcast_workbench()
+
+
+@rpc("any_peer", "call_local", "reliable")
+func _rpc_req_workbench_task(task_id: String, amount: float) -> void:
+	if not multiplayer.is_server():
+		return
+	var peer_id := _get_sender_id()
+	if not SecurityGuard.is_finite_float(amount) or task_id.length() > 32:
+		return
+	if not SecurityGuard.check_rate_limit(peer_id, "wb_task", 30, 5.0):
+		_reject_workbench_task(peer_id, task_id)
+		return
+	server_workbench_task(peer_id, task_id, amount)
+
+
+## Handgriff ausführen (nur Host). peer_id = Spieler oder TechnicianManager.WORKER_ID.
+func server_workbench_task(peer_id: int, task_id: String, amount: float) -> bool:
+	if get_workbench_worker() != peer_id:
+		_reject_workbench_task(peer_id, task_id)
+		return false
+	_run_workbench_task(peer_id, task_id, amount)
+	return get_workbench_done().has(task_id) or not is_workbench_job()
+
+
+func _run_workbench_task(peer_id: int, task_id: String, amount: float) -> void:
+	var plan := AssemblyPlan.build(workbench_state)
+	var done := AssemblyPlan.sanitize_done(plan, workbench_state.get("done", {}))
+	if not AssemblyPlan.is_available(plan, done, task_id):
+		_reject_workbench_task(peer_id, task_id)
+		return
+	var task: Dictionary = plan["by_id"][task_id]
+	var kind := str(task["kind"])
+	if kind == "choose":
+		_reject_workbench_task(peer_id, task_id)
+		return
+	if kind == "paste":
+		amount = clampf(amount, AssemblyPlan.PASTE_MIN, AssemblyPlan.PASTE_MAX)
+	elif kind == "screw":
+		amount = clampf(amount, AssemblyPlan.SCREW_MIN, AssemblyPlan.DONE_MAX)
+	else:
+		amount = 1.0
+	if needs_workbench_replacement() and task_id == "cpu_place":
+		_reject_workbench_task(peer_id, task_id)
+		return
+	if not _use_bench_supplies(plan, task, amount, true):
+		_sfx_to(peer_id, "error")
+		_reject_workbench_task(peer_id, task_id)
+		return
+	if bool(task["kit"]) and not bool(workbench_state.get("kit_used", false)):
+		if not _consume_spare_server(peer_id):
+			_sfx_to(peer_id, "error")
+			_reject_workbench_task(peer_id, task_id)
+			return
+		workbench_state["kit_used"] = true
+	_use_bench_supplies(plan, task, amount, false)
+	if AssemblyPlan.is_live_risk(task, done):
+		_workbench_short_circuit(peer_id, plan, done)
+	done[task_id] = amount
+	workbench_state["done"] = done
+	if task_id == "test_on":
+		workbench_state["test"] = AssemblyPlan.test_result(plan, done, workbench_state)
+		if str((workbench_state["test"] as Dictionary)["kind"]) == "cpu":
+			_rpc_play_sfx.rpc("spark")
+	elif task_id == "test_off":
+		if _handle_failed_test(peer_id):
+			_broadcast_workbench()
+			return
+	if AssemblyPlan.is_complete(plan, done):
+		_finish_workbench_job(peer_id)
+	else:
+		_broadcast_workbench()
+
+
+## Ersatzteil für die laufende Reparatur festlegen: "kit" oder die ID eines Teils aus dem Teile-Lager.
+func request_workbench_choose(spare_id: String) -> void:
+	_rpc_req_workbench_choose.rpc_id(1, spare_id)
+
+
+@rpc("any_peer", "call_local", "reliable")
+func _rpc_req_workbench_choose(spare_id: String) -> void:
+	if not multiplayer.is_server():
+		return
+	var peer_id := _get_sender_id()
+	if get_workbench_worker() != peer_id or spare_id.length() > 48:
+		return
+	if not SecurityGuard.check_rate_limit(peer_id, "wb_choose", 10, 5.0):
+		return
+	server_workbench_choose(peer_id, spare_id)
+
+
+func server_workbench_choose(peer_id: int, spare_id: String) -> void:
+	if get_workbench_worker() != peer_id:
+		return
+	if str(workbench_state.get("mode", "")) == "assembly":
+		_choose_assembly_replacement(peer_id, spare_id)
+		return
 	if str(workbench_state.get("mode", "")) != "repair":
 		return
-	var target_cat := str(workbench_state.get("faulty_part", ""))
-	if target_cat.is_empty():
-		target_cat = cat if not cat.is_empty() else "mainboard"
-	if not _consume_repair_kit_server(peer_id, target_cat):
-		_rpc_play_sfx.rpc_id(peer_id, "error")
+	var plan := AssemblyPlan.build(workbench_state)
+	var done := AssemblyPlan.sanitize_done(plan, workbench_state.get("done", {}))
+	var again := done.has("choose") and (not AssemblyPlan.is_choice_locked(plan, done) or bool(workbench_state.get("spare_broken", false)))
+	if not again and not AssemblyPlan.is_available(plan, done, "choose"):
 		return
+	var rcat := str(plan["repair_cat"])
+	if spare_id == AssemblyPlan.SPARE_KIT:
+		workbench_state["spare"] = {"kind": AssemblyPlan.SPARE_KIT, "id": get_workbench_kit_id()}
+	else:
+		if not AssemblyPlan.accepts_parts(rcat) or HardwareCatalog.find_part_category(spare_id) != rcat or int(parts_inventory.get(spare_id, 0)) <= 0:
+			_sfx_to(peer_id, "error")
+			return
+		workbench_state["spare"] = {"kind": "part", "id": spare_id}
+	workbench_state.erase("spare_broken")
+	# Mit dem Teil kann sich der Plan ändern; die Fehlersuche davor bleibt gültig.
+	done["choose"] = 1.0
+	workbench_state["done"] = AssemblyPlan.sanitize_done(AssemblyPlan.build(workbench_state), done)
+	_broadcast_workbench()
+	_sfx_to(peer_id, "pickup")
+
+
+## Beim Zusammenbau zerstörte CPU ersetzen: Kit oder Teil aus dem Lager, wird sofort verbraucht.
+func _choose_assembly_replacement(peer_id: int, spare_id: String) -> void:
+	if not (workbench_state.get("broken", []) as Array).has("cpu"):
+		return
+	if spare_id == AssemblyPlan.SPARE_KIT:
+		if not _consume_repair_kit_server(peer_id, "cpu"):
+			_sfx_to(peer_id, "error")
+			return
+	else:
+		if HardwareCatalog.find_part_category(spare_id) != "cpu" or int(parts_inventory.get(spare_id, 0)) <= 0:
+			_sfx_to(peer_id, "error")
+			return
+		parts_inventory[spare_id] = int(parts_inventory[spare_id]) - 1
+		if int(parts_inventory[spare_id]) <= 0:
+			parts_inventory.erase(spare_id)
+		_broadcast_inventory()
+		var comps: Dictionary = (workbench_state.get("components", {}) as Dictionary).duplicate(true)
+		comps["cpu"] = spare_id
+		workbench_state["components"] = comps
+	workbench_state["broken"] = []
+	workbench_state["done"] = AssemblyPlan.sanitize_done(AssemblyPlan.build(workbench_state), workbench_state.get("done", {}))
+	_broadcast_workbench()
+	_sfx_to(peer_id, "pickup")
+
+
+## Kit, das zum Defekt auf der Werkbank passt.
+func get_workbench_kit_id() -> String:
+	return get_repair_kit_id_for_cat(get_workbench_kit_cat())
+
+
+func get_workbench_kit_cat() -> String:
+	if str(workbench_state.get("mode", "")) == "assembly":
+		return "cpu"
+	var cat := str(workbench_state.get("faulty_part", ""))
+	return cat if not cat.is_empty() else "mainboard"
+
+
+## Liegt das gewählte Ersatzteil bereit (oder ist es schon verbaut)?
+func is_workbench_spare_ready() -> bool:
+	if needs_workbench_replacement():
+		return false
+	if str(workbench_state.get("mode", "")) != "repair":
+		return true
+	if bool(workbench_state.get("kit_used", false)):
+		return true
+	var spare := AssemblyPlan.spare_of(workbench_state)
+	match str(spare.get("kind", "")):
+		"kit":
+			return count_repair_kits(get_workbench_kit_cat()) > 0
+		"part":
+			return int(parts_inventory.get(str(spare.get("id", "")), 0)) > 0
+	return false
+
+
+func _consume_spare_server(peer_id: int) -> bool:
+	var spare := AssemblyPlan.spare_of(workbench_state)
+	if str(spare.get("kind", "")) == "part":
+		var pid := str(spare.get("id", ""))
+		var stock := int(parts_inventory.get(pid, 0))
+		if stock <= 0:
+			return false
+		parts_inventory[pid] = stock - 1
+		if int(parts_inventory[pid]) <= 0:
+			parts_inventory.erase(pid)
+		_broadcast_inventory()
+		return true
+	return _consume_repair_kit_server(peer_id, get_workbench_kit_cat())
+
+
+## Prüft bzw. verbraucht Schrauben und Paste. Gelöste Schrauben kommen in die Schale zurück.
+func _use_bench_supplies(plan: Dictionary, task: Dictionary, amount: float, dry_run: bool) -> bool:
+	var kind := str(task["kind"])
+	if kind == "screw" or kind == "unscrew":
+		var spec: Dictionary = (plan["items"] as Dictionary).get(str(task["item"]), {})
+		if bool(spec.get("captive", false)) or bool(spec.get("own", false)):
+			return true
+		if kind == "screw":
+			if bench_screws <= 0:
+				return false
+			if not dry_run:
+				bench_screws -= 1
+		elif not dry_run:
+			bench_screws = mini(BENCH_SCREWS_MAX, bench_screws + 1)
+		if not dry_run:
+			_rpc_sync_bench_supplies.rpc(bench_screws, bench_paste)
+	elif kind == "paste" and not is_workbench_paste_free():
+		if bench_paste < AssemblyPlan.PASTE_MIN:
+			return false
+		if not dry_run:
+			bench_paste = maxf(0.0, bench_paste - amount)
+			_rpc_sync_bench_supplies.rpc(bench_screws, bench_paste)
+	return true
+
+
+## Im CPU-Kit liegt eine kleine Tube Paste bei.
+func is_workbench_paste_free() -> bool:
+	return str(AssemblyPlan.spare_of(workbench_state).get("kind", "")) == AssemblyPlan.SPARE_KIT
+
+
+@rpc("authority", "call_local", "reliable")
+func _rpc_sync_bench_tools(tools: Dictionary) -> void:
+	bench_tools = _sanitize_bench_tools(tools)
+	bench_supplies_changed.emit()
+
+
+func _sanitize_bench_tools(raw: Variant) -> Dictionary:
+	var out: Dictionary = {}
+	if raw is Dictionary:
+		for k in BENCH_TOOLS.keys():
+			if bool((raw as Dictionary).get(k, false)):
+				out[k] = true
+	return out
+
+
+@rpc("authority", "call_local", "reliable")
+func _rpc_sync_bench_supplies(screws: int, paste: float) -> void:
+	bench_screws = clampi(screws, 0, BENCH_SCREWS_MAX)
+	bench_paste = clampf(paste, 0.0, BENCH_PASTE_MAX)
+	bench_supplies_changed.emit()
+
+
+func _reject_workbench_task(peer_id: int, task_id: String) -> void:
+	if peer_id <= 0:
+		return
+	_rpc_workbench_rejected.rpc_id(peer_id, task_id)
+	_rpc_sync_workbench.rpc_id(peer_id, workbench_state.duplicate(true))
+
+
+@rpc("authority", "call_local", "reliable")
+func _rpc_workbench_rejected(task_id: String) -> void:
+	workbench_task_rejected.emit(task_id)
+
+
+## Teile unter Strom angefasst: Funken, Sicherung fliegt, das Mainboard nimmt Schaden.
+func _workbench_short_circuit(peer_id: int, plan: Dictionary, done: Dictionary) -> void:
+	done["power_off"] = 1.0
+	# Der Testlauf zählt nicht: er muss wiederholt werden und zeigt dann den Schaden.
+	done.erase("test_on")
+	workbench_state.erase("test")
+	var flaws: Array = (workbench_state.get("flaws", []) as Array).duplicate()
+	if not flaws.has("live"):
+		flaws.append("live")
+	workbench_state["flaws"] = flaws
+	var msg := "⚡ %s hat unter Strom gearbeitet: Kurzschluss! Die Bauqualität leidet."
+	if has_bench_tool("rcd"):
+		msg = "⚡ %s hat unter Strom gearbeitet: Der Personenschutz-Schalter hat rechtzeitig abgeschaltet."
+	elif str(plan["repair_cat"]) != "mainboard":
+		workbench_state["extra_fault"] = "mainboard"
+		msg = "⚡ %s hat unter Strom gearbeitet: Kurzschluss! Das Mainboard ist beschädigt."
+	_rpc_play_sfx.rpc("spark")
+	post_event_f(msg, [get_worker_name(peer_id)], "alert")
+
+
+## Testlauf nicht bestanden. Vergessene Kabel: nachstecken und neu testen. Zerstörte Teile: neue Reparatur.
+func _handle_failed_test(peer_id: int) -> bool:
+	var test: Dictionary = workbench_state.get("test", {}) if workbench_state.get("test", {}) is Dictionary else {}
+	workbench_state.erase("test")
+	if test.is_empty() or bool(test.get("ok", true)):
+		return false
+	var kind := str(test.get("kind", ""))
+	if kind == "cable":
+		var done: Dictionary = get_workbench_done().duplicate()
+		done.erase("test_on")
+		done.erase("test_off")
+		workbench_state["done"] = done
+		return true
+	# Alles bisher Gebaute zählt weiter, dazu kommt jetzt das zerstörte Teil.
+	var plan := AssemblyPlan.build(workbench_state)
+	var done_now := AssemblyPlan.sanitize_done(plan, workbench_state.get("done", {}))
+	workbench_state["build_quality"] = int(AssemblyPlan.quality(plan, done_now, workbench_state)["quality"])
+	_apply_workbench_spare()
+	workbench_state["mode"] = "repair"
+	workbench_state["state"] = "crashed"
+	workbench_state["faulty_part"] = kind
+	workbench_state["diagnosed"] = true
+	workbench_state["fault_hidden"] = kind == "mainboard"
+	workbench_state["flaws"] = []
+	for k in ["extra_fault", "kit_used", "spare", "spare_broken", "broken"]:
+		workbench_state.erase(k)
+	workbench_state["done"] = {"lid_out0": 1.0, "lid_out1": 1.0, "lid_off": 1.0}
+	post_event_f("💥 Testlauf fehlgeschlagen: %s ist zerstört und muss ersetzt werden.", [get_component_label(kind)], "alert")
+	_sfx_to(peer_id, "error")
+	return true
+
+
+## Ein aus dem Lager gewähltes Ersatzteil gehört nach dem Einbau zum Server.
+func _apply_workbench_spare() -> void:
+	var spare := AssemblyPlan.spare_of(workbench_state)
+	if str(workbench_state.get("mode", "")) == "repair" and str(spare.get("kind", "")) == "part" and bool(workbench_state.get("kit_used", false)):
+		var comps: Dictionary = (workbench_state.get("components", {}) as Dictionary).duplicate(true)
+		comps[AssemblyPlan.repair_cat(workbench_state)] = str(spare.get("id", ""))
+		workbench_state["components"] = comps
+
+
+func _finish_workbench_job(peer_id: int) -> void:
+	var mode := str(workbench_state.get("mode", ""))
+	var plan := AssemblyPlan.build(workbench_state)
+	var result := AssemblyPlan.quality(plan, AssemblyPlan.sanitize_done(plan, workbench_state.get("done", {})), workbench_state)
+	_apply_workbench_spare()
+	workbench_state["build_quality"] = int(result["quality"])
 	workbench_state["mode"] = "ready_tray"
 	workbench_state["state"] = "ok"
 	workbench_state["faulty_part"] = ""
 	workbench_state["diagnosed"] = false
+	workbench_state["worker"] = 0
+	for k in ["done", "kit_used", "spare", "spare_broken", "broken", "fault_hidden", "flaws", "test", "extra_fault"]:
+		workbench_state.erase(k)
 	_broadcast_workbench()
 	_rpc_play_sfx.rpc("snap")
-	post_event_f("✅ %s hat %s an der Werkbank repariert! Jetzt zurück ins Rack schieben.", [
-		NetworkManager.get_player_name(peer_id), str(workbench_state.get("label", "Server"))
-	], "good")
+	var fmt := "🛠️ %s hat %s fertig zusammengebaut! Bauqualität %d %%."
+	if mode == "repair":
+		fmt = "✅ %s hat %s an der Werkbank repariert! Bauqualität %d %%."
+	elif mode == "service":
+		fmt = "🔧 %s hat %s überholt! Bauqualität %d %%."
+	var q := int(result["quality"])
+	post_event_f(fmt, [get_worker_name(peer_id), str(workbench_state.get("label", "Server")), q], "good" if q >= 75 else "warn")
+	for n in (result["notes"] as Array).slice(0, 3):
+		post_event_f("   Mangel: " + str(n[0]), n[1], "info")
 
 
 @rpc("any_peer", "call_local", "reliable")
@@ -7635,11 +8344,25 @@ func _rpc_req_workbench_pickup() -> void:
 		return
 	var peer_id := _get_sender_id()
 	if workbench_state.is_empty() or is_player_holding_anything(peer_id):
-		_rpc_play_sfx.rpc_id(peer_id, "error")
+		_sfx_to(peer_id, "error")
 		return
 	var mode := str(workbench_state.get("mode", ""))
+	# Angefangene Arbeit bleibt auf der Werkbank, sonst gingen eingebaute Teile verloren.
+	if get_workbench_worker() != 0 or (is_workbench_job() and (is_workbench_started() or not (workbench_state.get("broken", []) as Array).is_empty())):
+		_sfx_to(peer_id, "error")
+		return
+	_crate_from_bench(peer_id)
+	workbench_state.clear()
+	_broadcast_workbench()
+	_broadcast_crates()
+	_sfx_to(peer_id, "pickup")
+
+
+## Inhalt der Werkbank als Kiste in die Hand nehmen; liefert die Kisten-ID.
+func _crate_from_bench(peer_id: int) -> String:
+	var mode := str(workbench_state.get("mode", ""))
 	var cid := _alloc_id("crate")
-	if mode == "build_box":
+	if mode == "build_box" or mode == "assembly":
 		crates[cid] = {
 			"id": cid,
 			"item_type": "slot_build_box",
@@ -7671,14 +8394,13 @@ func _rpc_req_workbench_pickup() -> void:
 				"state": st,
 				"faulty_part": str(workbench_state.get("faulty_part", "")),
 				"diagnosed": bool(workbench_state.get("diagnosed", false)),
+				"fault_hidden": bool(workbench_state.get("fault_hidden", false)),
+				"build_quality": get_build_quality(workbench_state),
 				"source_rack_id": str(workbench_state.get("rack_id", "")),
 				"source_slot_idx": int(workbench_state.get("slot_idx", 0)),
 			},
 		}
-	workbench_state.clear()
-	_broadcast_workbench()
-	_broadcast_crates()
-	_rpc_play_sfx.rpc_id(peer_id, "pickup")
+	return cid
 
 
 func _broadcast_workbench() -> void:

@@ -8,7 +8,7 @@ const MIX_RATE := 44100
 # Erzeugte Klänge werden hier gespeichert, damit nur der erste Start rechnen muss (~870 ms gemessen).
 const SFX_CACHE_DIR := "user://sfx_cache"
 # Erhöhen, wenn sich ein Generator oder seine Parameter ändern, sonst bleiben die alten Klänge im Cache.
-const SFX_CACHE_VERSION := 11
+const SFX_CACHE_VERSION := 15
 const EXTERNAL_AUDIO_DIR := "res://assets/audio"
 
 var _sounds: Dictionary = {}
@@ -58,6 +58,20 @@ func _generate_sounds() -> void:
 	_sounds["breaker_trip"] = _gen_breaker_trip()
 	_sounds["power_down"] = _gen_power_down_whine()
 	_sounds["upgrade"] = _gen_hardware_install_ratchet()
+	# Werkbank: Schraubendreher, Clips, Steckplätze, Paste
+	_sounds["screw_tick"] = _gen_click_burst([[0.0, 2300.0, 0.30, 260.0], [0.006, 1500.0, 0.20, 210.0]], 0.035, 0.30)
+	_sounds["screw_tight"] = _gen_click_burst([[0.0, 900.0, 0.36, 60.0], [0.045, 1650.0, 0.42, 120.0], [0.052, 520.0, 0.30, 50.0]], 0.16, 0.26)
+	_sounds["screw_loose"] = _gen_click_burst([[0.0, 620.0, 0.30, 55.0], [0.030, 2100.0, 0.24, 150.0]], 0.13, 0.22)
+	_sounds["clip"] = _gen_click_burst([[0.0, 1850.0, 0.46, 120.0], [0.022, 780.0, 0.36, 80.0], [0.026, 3100.0, 0.18, 220.0]], 0.11, 0.34)
+	_sounds["part_set"] = _gen_click_burst([[0.0, 240.0, 0.48, 44.0], [0.004, 1250.0, 0.20, 130.0]], 0.15, 0.24)
+	_sounds["part_touch"] = _gen_click_burst([[0.0, 1400.0, 0.24, 150.0]], 0.06, 0.18)
+	_sounds["part_slide"] = _gen_friction_slide(0.20)
+	_sounds["tool_pick"] = _gen_click_burst([[0.0, 3400.0, 0.20, 75.0], [0.018, 2500.0, 0.16, 60.0]], 0.14, 0.10)
+	_sounds["paste"] = _gen_soft_squish(0.22)
+	_sounds["screw_strain"] = _gen_click_burst([[0.0, 310.0, 0.34, 18.0], [0.05, 460.0, 0.30, 22.0], [0.11, 620.0, 0.26, 26.0]], 0.24, 0.20)
+	_sounds["drill"] = _gen_drill_burst(0.15)
+	_sounds["post_beep"] = _gen_soft_chime([987.77], 0.16, 0.30)
+	_sounds["meter_beep"] = _gen_soft_chime([1760.0], 0.09, 0.20)
 	for v in range(FOOTSTEP_VARIANTS):
 		_sounds["footstep_%d" % v] = _gen_footstep(v)
 	_sounds["footstep"] = _sounds["footstep_0"]
@@ -923,6 +937,70 @@ func _gen_power_down_whine() -> AudioStreamWAV:
 		lp = lerpf(lp, randf_range(-1.0, 1.0), 0.14)
 		var env := (1.0 - u) * sin(minf(u * 14.0, 1.0) * PI * 0.5)
 		s[i] = clampf((sin(phase) * 0.24 + sin(phase * 2.0) * 0.09 + lp * 0.26) * env * 0.56, -0.95, 0.95)
+	return _make_wav(s)
+
+
+## Kurze mechanische Klicks: je Eintrag [Zeitpunkt, Frequenz, Lautstärke, Abklingrate] plus Geräuschanteil.
+func _gen_click_burst(hits: Array, duration: float, noise: float) -> AudioStreamWAV:
+	var count := int(MIX_RATE * duration)
+	var s := PackedFloat32Array()
+	s.resize(count)
+	var lp := 0.0
+	for i in range(count):
+		var t := float(i) / float(MIX_RATE)
+		var w := randf_range(-1.0, 1.0)
+		lp = lerpf(lp, w, 0.30)
+		var v := 0.0
+		for h in hits:
+			var dt := t - float(h[0])
+			if dt >= 0.0:
+				var env := exp(-dt * float(h[3]))
+				v += (sin(TAU * float(h[1]) * dt) * float(h[2]) + (w - lp) * noise) * env
+		s[i] = clampf(v * 0.62, -0.95, 0.95)
+	return _make_wav(s)
+
+
+## Kurzer Motorstoß des Akkuschraubers.
+func _gen_drill_burst(duration: float) -> AudioStreamWAV:
+	var count := int(MIX_RATE * duration)
+	var s := PackedFloat32Array()
+	s.resize(count)
+	var lp := 0.0
+	for i in range(count):
+		var t := float(i) / float(MIX_RATE)
+		var p := float(i) / float(count)
+		lp = lerpf(lp, randf_range(-1.0, 1.0), 0.18)
+		var v := sin(TAU * 420.0 * t) * 0.18 + sin(TAU * 840.0 * t) * 0.12 + sin(TAU * 1370.0 * t) * 0.07 + lp * 0.22
+		s[i] = v * minf(1.0, sin(p * PI) * 2.2) * 0.75
+	return _make_wav(s)
+
+
+## Blech bzw. Platine gleitet aus der Führung.
+func _gen_friction_slide(duration: float) -> AudioStreamWAV:
+	var count := int(MIX_RATE * duration)
+	var s := PackedFloat32Array()
+	s.resize(count)
+	var lp := 0.0
+	var lp2 := 0.0
+	for i in range(count):
+		var p := float(i) / float(count)
+		var w := randf_range(-1.0, 1.0)
+		lp = lerpf(lp, w, 0.22 + 0.16 * p)
+		lp2 = lerpf(lp2, lp, 0.08)
+		s[i] = (lp - lp2) * 0.50 * sin(p * PI) * (0.75 + 0.25 * sin(p * 61.0))
+	return _make_wav(s)
+
+
+## Zähes, leises Quetschen der Wärmeleitpaste.
+func _gen_soft_squish(duration: float) -> AudioStreamWAV:
+	var count := int(MIX_RATE * duration)
+	var s := PackedFloat32Array()
+	s.resize(count)
+	var lp := 0.0
+	for i in range(count):
+		var p := float(i) / float(count)
+		lp = lerpf(lp, randf_range(-1.0, 1.0), 0.05 + 0.05 * sin(p * 17.0))
+		s[i] = lp * 1.1 * sin(p * PI)
 	return _make_wav(s)
 
 

@@ -1,19 +1,29 @@
 class_name WorkbenchProp
 extends Node3D
 ## Funktionale industrielle 3D-IT-Werkbank (2K PBR aus Blender).
-## Zeigt live den aktuellen Arbeitsgegenstand auf der ESD-Matte (Bausatz-Karton,
-## zerlegter Bausatz, defekter Server-Schlitten oder fertiger Server).
+## Zeigt live den Arbeitsgegenstand auf der ESD-Matte: Bausatz-Karton, den halb fertigen Server
+## mit jedem einzelnen Teil (WorkbenchPiece) oder den fertigen Server mit Deckel.
+
+const MAT_TOP := 0.886
 
 var workbench_id: String = "wb_main"
+var piece: WorkbenchPiece
 var _work_holder: Node3D
 var _status_lbl: Label3D
 
 
 func setup(p_id: String = "wb_main") -> void:
 	workbench_id = p_id
+	add_to_group("workbench")
 	_build_bench()
 	GameState.workbench_changed.connect(_refresh_workpiece)
 	GameState.world_snapshot_loaded.connect(_refresh_workpiece)
+	GameState.shelf_changed.connect(_on_kits_changed)
+	GameState.crates_changed.connect(_on_kits_changed)
+	GameState.inventory_changed.connect(_on_kits_changed)
+	GameState.bench_supplies_changed.connect(func(): piece.refresh_tools())
+	GameState.workbench_hand_moved.connect(_on_hand_moved)
+	GameState.workbench_task_rejected.connect(func(task_id: String): piece.reject(task_id))
 	_refresh_workpiece()
 
 
@@ -35,8 +45,13 @@ func _build_bench() -> void:
 
 	# Ablage-Anker mittig auf der ESD-Matte (Oberkante y = 0.885 m)
 	_work_holder = Node3D.new()
-	_work_holder.position = Vector3(0.12, 0.886, 0.04)
+	_work_holder.position = Vector3(0.0, MAT_TOP, 0.02)
 	add_child(_work_holder)
+
+	piece = WorkbenchPiece.new()
+	piece.name = "Piece"
+	piece.position = Vector3(0.0, MAT_TOP, 0.0)
+	add_child(piece)
 
 	# Status-Anzeige an der Lochwand
 	_status_lbl = Label3D.new()
@@ -66,6 +81,17 @@ func _build_bench() -> void:
 	add_child(area)
 
 
+func _on_kits_changed() -> void:
+	if not piece.is_empty():
+		piece._refresh_visibility()
+
+
+func _on_hand_moved(data: Dictionary) -> void:
+	# Wer selbst arbeitet, bewegt die Teile direkt.
+	if GameState.get_workbench_worker() != multiplayer.get_unique_id():
+		piece.apply_remote_hand(data)
+
+
 func _refresh_workpiece() -> void:
 	if _work_holder == null:
 		return
@@ -73,12 +99,19 @@ func _refresh_workpiece() -> void:
 		c.queue_free()
 
 	var wb := GameState.workbench_state
+	var mode := str(wb.get("mode", ""))
+	if GameState.is_workbench_job():
+		piece.sync_from_state(wb)
+		if GameState.get_workbench_worker() == 0:
+			piece.stop_remote_hand()
+	else:
+		piece.clear()
+
 	if wb.is_empty():
 		_status_lbl.text = tr("IT-WERKBANK  ·  FREI")
 		_status_lbl.modulate = Color(0.72, 0.84, 0.94)
 		return
 
-	var mode := str(wb.get("mode", ""))
 	var lbl := str(wb.get("label", "Server"))
 	if mode == "build_box":
 		_status_lbl.text = tr("BAUSATZ: %s  ·  [E] AUSPACKEN") % lbl
@@ -96,27 +129,46 @@ func _refresh_workpiece() -> void:
 		tl.position = Vector3(0.0, 0.225, 0.06)
 		tl.rotation_degrees = Vector3(-90.0, 0.0, 0.0)
 		_work_holder.add_child(tl)
-	elif mode == "assembly":
-		_status_lbl.text = tr("ZUSAMMENBAU: %s  ·  [E] MONTIEREN") % lbl
-		_status_lbl.modulate = Color(0.32, 0.82, 0.98)
-		var mb_id := str(wb.get("mainboard_id", "web_server"))
-		var srv := HardwareMeshFactory.build_open_server_chassis(mb_id, {}, [], "")
-		srv.scale = Vector3(0.72, 0.72, 0.72)
-		_work_holder.add_child(srv)
-	elif mode == "repair":
-		_status_lbl.text = tr("REPARATUR: %s  ·  [E] REPARIEREN") % lbl
-		_status_lbl.modulate = Color(0.98, 0.36, 0.26)
-		var mb_id := str(wb.get("mainboard_id", "web_server"))
-		var comps: Dictionary = wb.get("components", {}) as Dictionary
-		var fcat := str(wb.get("faulty_part", "mainboard"))
-		var srv := HardwareMeshFactory.build_open_server_chassis(mb_id, comps, [], fcat)
-		srv.scale = Vector3(0.72, 0.72, 0.72)
-		_work_holder.add_child(srv)
+	elif GameState.is_workbench_job():
+		_set_progress_label(mode, lbl)
 	elif mode == "ready_tray":
 		_status_lbl.text = tr("FERTIG: %s  ·  [E] MITNEHMEN") % lbl
+		var q := GameState.get_build_quality(wb)
+		if q < 100:
+			_status_lbl.text += "\n" + tr("Bauqualität %d %%  ·  [F] ÜBERHOLEN") % q
 		_status_lbl.modulate = Color(0.26, 0.92, 0.48)
 		var mb_id := str(wb.get("mainboard_id", "web_server"))
 		var comps: Dictionary = wb.get("components", {}) as Dictionary
 		var srv := HardwareMeshFactory.build_open_server_chassis(mb_id, comps, [], "")
-		srv.scale = Vector3(0.72, 0.72, 0.72)
+		srv.scale = Vector3.ONE * WorkbenchPiece.S
 		_work_holder.add_child(srv)
+		var lid := ModelLoader.instantiate_custom_model("asm_lid")
+		if lid != null:
+			_apply_lid_material(lid)
+			lid.position = AssemblyPlan.LID_POS
+			srv.add_child(lid)
+
+
+func _set_progress_label(mode: String, lbl: String) -> void:
+	var total := AssemblyPlan.count_total(piece.plan)
+	var n := AssemblyPlan.count_done(piece.plan, piece.done)
+	var who := GameState.get_workbench_worker()
+	var head := tr("ZUSAMMENBAU") if mode == "assembly" else (tr("REPARATUR") if mode == "repair" else tr("ÜBERHOLUNG"))
+	_status_lbl.modulate = Color(0.32, 0.82, 0.98) if mode == "assembly" else Color(0.98, 0.36, 0.26)
+	if who != 0:
+		_status_lbl.text = "%s: %s  ·  %d/%d\n%s" % [head, lbl, n, total, tr("%s arbeitet gerade") % GameState.get_worker_name(who)]
+	else:
+		_status_lbl.text = "%s: %s  ·  %d/%d  ·  %s" % [head, lbl, n, total, tr("[E] WEITER") if n > 0 else tr("[E] START")]
+
+
+func _apply_lid_material(n: Node) -> void:
+	if n is MeshInstance3D and (n as MeshInstance3D).mesh != null:
+		var mi := n as MeshInstance3D
+		for s in range(mi.mesh.get_surface_count()):
+			var m := mi.mesh.surface_get_material(s)
+			if m != null:
+				var shared := WorkbenchPiece._shared_material(m.resource_name, "asm_lid")
+				if shared != null:
+					mi.set_surface_override_material(s, shared)
+	for c in n.get_children():
+		_apply_lid_material(c)

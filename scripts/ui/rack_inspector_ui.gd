@@ -1601,15 +1601,15 @@ func _build_side_column(side: VBoxContainer, slot: Dictionary, itype: String) ->
 			_move_preview_to_fullscreen()
 		var slot_state := str(slot.get("state", ""))
 		var faulty_cat := str(slot.get("faulty_part", "")) if slot_state == "crashed" else ""
-		var broken_visual_cat := faulty_cat
-		if broken_visual_cat == "" and (slot_state == "crashed" or slot_state == "burning"):
+		var broken_visual_cat := GameState.get_visible_fault(slot)
+		if faulty_cat == "" and (slot_state == "crashed" or slot_state == "burning"):
 			broken_visual_cat = "mainboard"
 		# Vor der Diagnose bleibt das rote Highlight aus, aber das Bauteil sieht im 3D-Menü sichtbar kaputt aus!
 		var reveal_fault := not GameState.is_slot_awaiting_diagnosis(slot)
 		_update_3d_preview(itype, slot.get("components", {}) as Dictionary, faulty_cat, reveal_fault, broken_visual_cat)
 		if GameState.is_slot_awaiting_diagnosis(slot):
 			var hint := Label.new()
-			hint.text = tr("Störung ohne bekannte Ursache: Fahre mit der Maus über die Bauteile, um das defekte Teil zu finden.")
+			hint.text = tr("Störung ohne bekannte Ursache: Fahre mit der Maus über die Bauteile, um das defekte Teil zu finden — oder zieh den Server heraus und miss ihn an der Werkbank durch.")
 			hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 			hint.add_theme_font_size_override("font_size", 12)
 			hint.add_theme_color_override("font_color", UIStyle.COL_AMBER)
@@ -1617,7 +1617,7 @@ func _build_side_column(side: VBoxContainer, slot: Dictionary, itype: String) ->
 		elif faulty_cat != "":
 			var diag := GameState.get_fault_diagnosis_info(slot)
 			var found := Label.new()
-			found.text = tr("[%s] %s (%s)\nEmpfohlen: %s — Server herausziehen & an Werkbank oder direkt mit Kit reparieren!") % [
+			found.text = tr("[%s] %s (%s)\nEmpfohlen: %s — an der Werkbank ordentlich reparieren. Hier am Rack geht nur eine Notreparatur (Bauqualität höchstens 70 %%).") % [
 				str(diag.get("code", "ERR")),
 				GameState.get_component_label(faulty_cat),
 				str(diag.get("cause", "")),
@@ -1646,6 +1646,14 @@ func _build_side_column(side: VBoxContainer, slot: Dictionary, itype: String) ->
 			ml.add_theme_font_size_override("font_size", 11.5)
 			ml.add_theme_color_override("font_color", UIStyle.COL_AMBER if (dust_pct >= 55 or th_pct <= 45) else UIStyle.COL_TEXT_SUB)
 			m_row.add_child(ml)
+			var bq := GameState.get_build_quality(slot)
+			var ql := Label.new()
+			ql.text = tr("Bauqualität: %d %%") % bq
+			ql.tooltip_text = tr("Unter 100 % läuft der Server wärmer und fällt öfter aus. An der Werkbank mit [F] überholen.")
+			ql.mouse_filter = Control.MOUSE_FILTER_PASS
+			ql.add_theme_font_size_override("font_size", 11.5)
+			ql.add_theme_color_override("font_color", UIStyle.COL_GREEN if bq >= 90 else (UIStyle.COL_AMBER if bq >= 60 else UIStyle.COL_RED))
+			m_row.add_child(ql)
 			if GameState.is_slot_maintainable(slot):
 				var mbtn := Button.new()
 				mbtn.text = tr("🧹 Warten (%d Kits)") % GameState.maint_kits
