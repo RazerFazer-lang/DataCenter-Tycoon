@@ -78,16 +78,14 @@ public static class UpdateService
                 || url.StartsWith("http://github.com/", StringComparison.OrdinalIgnoreCase))
             {
                 var repo = NormalizeGitHubRepo(url);
-                url = $"https://api.github.com/repos/{repo}/releases?per_page=15";
-                releasePage = $"https://github.com/{repo}/releases";
+                return await CheckGitHubGameReleaseAsync(repo, installedVersion);
             }
             else if (!url.StartsWith("http://", StringComparison.OrdinalIgnoreCase)
                      && !url.StartsWith("https://", StringComparison.OrdinalIgnoreCase)
                      && url.Contains('/'))
             {
                 var repo = NormalizeGitHubRepo(url);
-                url = $"https://api.github.com/repos/{repo}/releases?per_page=15";
-                releasePage = $"https://github.com/{repo}/releases";
+                return await CheckGitHubGameReleaseAsync(repo, installedVersion);
             }
 
             using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
@@ -172,6 +170,91 @@ public static class UpdateService
             return new UpdateCheckResult(false, false, installedVersion, "", 0, "", "",
                 $"Update-Check fehlgeschlagen: {ex.Message}");
         }
+    }
+
+    private static async Task<UpdateCheckResult> CheckGitHubGameReleaseAsync(string repo, string installedVersion)
+    {
+        var releasePage = $"https://github.com/{repo}/releases";
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+
+        // Sowohl /releases/latest (kein Listen-Cache!) als auch /releases?per_page=15 abfragen und das neueste nehmen.
+        var best = (Found: false, Version: installedVersion, DlUrl: "", Size: 0L, Notes: "", Page: releasePage);
+        foreach (var endpoint in new[]
+        {
+            $"https://api.github.com/repos/{repo}/releases/latest",
+            $"https://api.github.com/repos/{repo}/releases?per_page=15"
+        })
+        {
+            try
+            {
+                using var resp = await Http.GetAsync(endpoint, cts.Token);
+                if (!resp.IsSuccessStatusCode) continue;
+                var json = await resp.Content.ReadAsStringAsync(cts.Token);
+                using var doc = JsonDocument.Parse(json);
+                var root = doc.RootElement;
+
+                JsonElement relElem = default;
+                bool hasRel = false;
+                if (root.ValueKind == JsonValueKind.Array)
+                {
+                    foreach (var rel in root.EnumerateArray())
+                    {
+                        if (rel.TryGetProperty("draft", out var dr) && dr.ValueKind == JsonValueKind.True) continue;
+                        var t = rel.TryGetProperty("tag_name", out var tp) ? (tp.GetString() ?? "") : "";
+                        if (t.StartsWith("launcher", StringComparison.OrdinalIgnoreCase)) continue;
+                        relElem = rel;
+                        hasRel = true;
+                        break;
+                    }
+                }
+                else if (root.ValueKind == JsonValueKind.Object && root.TryGetProperty("tag_name", out _))
+                {
+                    var t = root.TryGetProperty("tag_name", out var tp) ? (tp.GetString() ?? "") : "";
+                    if (!t.StartsWith("launcher", StringComparison.OrdinalIgnoreCase))
+                    {
+                        relElem = root;
+                        hasRel = true;
+                    }
+                }
+
+                if (!hasRel) continue;
+                var candVer = (relElem.GetProperty("tag_name").GetString() ?? installedVersion).TrimStart('v', 'V');
+                var candNotes = relElem.TryGetProperty("body", out var bodyProp) ? (bodyProp.GetString() ?? "") : "";
+                var candPage = relElem.TryGetProperty("html_url", out var htmlProp) ? (htmlProp.GetString() ?? releasePage) : releasePage;
+                string candUrl = "";
+                long candSize = 0;
+                if (relElem.TryGetProperty("assets", out var assets) && assets.ValueKind == JsonValueKind.Array)
+                {
+                    foreach (var a in assets.EnumerateArray())
+                    {
+                        var name = a.TryGetProperty("name", out var np) ? (np.GetString() ?? "") : "";
+                        if (name.EndsWith(".zip", StringComparison.OrdinalIgnoreCase)
+                            && !name.Contains("launcher", StringComparison.OrdinalIgnoreCase)
+                            && a.TryGetProperty("browser_download_url", out var urlProp))
+                        {
+                            candUrl = urlProp.GetString() ?? "";
+                            if (a.TryGetProperty("size", out var szProp))
+                                candSize = szProp.GetInt64();
+                            break;
+                        }
+                    }
+                }
+
+                if (!best.Found || IsNewerVersion(candVer, best.Version))
+                    best = (true, candVer, candUrl, candSize, candNotes, candPage);
+            }
+            catch
+            {
+                // Einzelnen Endpoint ignorieren, falls der andere erfolgreich war
+            }
+        }
+
+        if (!best.Found)
+            return new UpdateCheckResult(false, false, installedVersion, "", 0, "", releasePage,
+                "Kein veröffentlichtes GitHub Release gefunden.");
+
+        bool newer = string.IsNullOrWhiteSpace(installedVersion) || IsNewerVersion(best.Version, installedVersion);
+        return new UpdateCheckResult(true, newer, best.Version, best.DlUrl, best.Size, best.Notes, best.Page);
     }
 
     public static async Task<(bool Ok, string Message, string InstalledExe)> DownloadAndInstallAsync(
@@ -494,21 +577,6 @@ public static class UpdateService
 
             if (isGitHub)
             {
-                var apiUrl = $"https://api.github.com/repos/{repo}/releases?per_page=15";
-                using var resp = await Http.GetAsync(apiUrl, cts.Token);
-                if ((int)resp.StatusCode == 404)
-                {
-                    return new LauncherUpdateCheckResult(true, false, currentLauncherVersion, currentLauncherVersion, "", 0, "",
-                        $"https://github.com/{repo}/releases");
-                }
-                resp.EnsureSuccessStatusCode();
-
-                var json = await resp.Content.ReadAsStringAsync(cts.Token);
-                using var doc = JsonDocument.Parse(json);
-                if (doc.RootElement.ValueKind != JsonValueKind.Array)
-                    return new LauncherUpdateCheckResult(true, false, currentLauncherVersion, currentLauncherVersion, "", 0, "",
-                        $"https://github.com/{repo}/releases");
-
                 string bestVer = currentLauncherVersion;
                 string bestUrl = "";
                 long bestSize = 0;
@@ -516,8 +584,31 @@ public static class UpdateService
                 string bestPage = $"https://github.com/{repo}/releases";
                 bool foundAnyLauncherRelease = false;
 
-                foreach (var rel in doc.RootElement.EnumerateArray())
+                foreach (var apiUrl in new[]
                 {
+                    $"https://api.github.com/repos/{repo}/releases/latest",
+                    $"https://api.github.com/repos/{repo}/releases?per_page=15"
+                })
+                {
+                    using var resp = await Http.GetAsync(apiUrl, cts.Token);
+                    if (!resp.IsSuccessStatusCode) continue;
+
+                    var json = await resp.Content.ReadAsStringAsync(cts.Token);
+                    using var doc = JsonDocument.Parse(json);
+
+                    var relList = new List<JsonElement>();
+                    if (doc.RootElement.ValueKind == JsonValueKind.Array)
+                    {
+                        foreach (var r in doc.RootElement.EnumerateArray())
+                            relList.Add(r);
+                    }
+                    else if (doc.RootElement.ValueKind == JsonValueKind.Object)
+                    {
+                        relList.Add(doc.RootElement);
+                    }
+
+                    foreach (var rel in relList)
+                    {
                     if (rel.TryGetProperty("draft", out var dr) && dr.ValueKind == JsonValueKind.True)
                         continue;
 
@@ -561,14 +652,15 @@ public static class UpdateService
                     if (string.IsNullOrWhiteSpace(candidateVer))
                         continue;
 
-                    if (!foundAnyLauncherRelease || IsNewerVersion(candidateVer, bestVer))
-                    {
-                        foundAnyLauncherRelease = true;
-                        bestVer = candidateVer;
-                        bestUrl = candidateUrl;
-                        bestSize = candidateSize;
-                        bestNotes = notes;
-                        bestPage = html;
+                        if (!foundAnyLauncherRelease || IsNewerVersion(candidateVer, bestVer))
+                        {
+                            foundAnyLauncherRelease = true;
+                            bestVer = candidateVer;
+                            bestUrl = candidateUrl;
+                            bestSize = candidateSize;
+                            bestNotes = notes;
+                            bestPage = html;
+                        }
                     }
                 }
 
