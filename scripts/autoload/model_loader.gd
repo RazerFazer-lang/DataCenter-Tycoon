@@ -20,6 +20,7 @@ func instantiate_custom_model(model_id: String) -> Node3D:
 		if res is PackedScene:
 			var inst := (res as PackedScene).instantiate()
 			if inst is Node3D:
+				_configure_imported_visuals(inst as Node3D)
 				return inst as Node3D
 
 	# Runtime GLTFDocument loader works even for external .glb files next to the exported .exe!
@@ -30,8 +31,25 @@ func instantiate_custom_model(model_id: String) -> Node3D:
 		return null
 	var scene_root := doc.generate_scene(state)
 	if scene_root is Node3D:
+		_configure_imported_visuals(scene_root as Node3D)
 		return scene_root as Node3D
 	return null
+
+
+func _configure_imported_visuals(node: Node) -> void:
+	if node is MeshInstance3D:
+		var mi := node as MeshInstance3D
+		if mi.name.contains("Glass"):
+			mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+			if mi.mesh != null:
+				for s_idx in range(mi.mesh.get_surface_count()):
+					var mat := mi.get_active_material(s_idx)
+					if mat is BaseMaterial3D:
+						var bm := mat as BaseMaterial3D
+						bm.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+						bm.cull_mode = BaseMaterial3D.CULL_DISABLED
+	for child in node.get_children():
+		_configure_imported_visuals(child)
 
 
 func _find_model_path(model_id: String) -> String:

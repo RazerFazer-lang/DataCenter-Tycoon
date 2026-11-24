@@ -1055,6 +1055,17 @@ func _render_shop_app() -> void:
 		_add_shop_section(left_list, tr("Netzwerk"), tr("Switches für mehr Netzwerk-Ports im Rack."))
 		_populate_physical_shop_list(left_list, ["net_switch"])
 	elif _shop_tab == "kits":
+		_add_shop_section(left_list, tr("Wartungs- & Reinigungs-Kits (Druckluft & Wärmeleitpaste)"), tr("Vorrat: %d / 12 Kits • Für vorbeugende Wartung & 2,2× schnellere Reparaturen.") % GameState.maint_kits)
+		_add_shop_item_card(left_list, {
+			"title": tr("+3 Wartungs- & Ersatzteil-Kits (Sofort-Vorrat)"),
+			"desc": tr("Senkt Ausfallrisiko durch Staub-Reinigung & Wärmeleitpaste fast auf 0 %. Mit Ersatzteil-Schrank nur $20!"),
+			"info": tr("Aktueller Vorrat: %d / 12 Kits") % GameState.maint_kits,
+			"color": Color(0.18, 0.72, 0.56),
+			"price": 45,
+			"on_buy": func():
+				GameState.request_refill_maint_kits()
+				_refresh_all(),
+		})
 		_add_shop_section(left_list, tr("Werkstatt-Spar-Bundle"), tr("Alle 7 Reparatur-Kits im Paket — Lieferung per Sprinter zum Einlagern im Regal."))
 		_populate_physical_shop_list(left_list, ["kit_bundle_all"])
 		_add_shop_section(left_list, tr("Einzelne Reparatur-Kits"), tr("Für Reparaturen an der 3D-Werkbank. Mehrere Kits gleicher Art kommen automatisch in platzsparenden 6er-Mengen-Kisten!"))
@@ -1084,6 +1095,11 @@ func _render_shop_app() -> void:
 		_add_fuse_shop_card(left_list)
 		_add_shop_section(left_list, tr("Netzwerk-Zubehör"), tr("Mehr Netzwerkdosen am Router."))
 		_add_net_hub_card(left_list)
+		_add_shop_section(left_list, tr("Einrichtung, Lagerregale & Technik-Props"), tr("Frei in allen Hallen platzierbar! Echte Lagerplätze, Werkbänke, Kaltgang-Türen & Deko."))
+		_populate_physical_shop_list(left_list, [
+			"prop_storage_shelf", "prop_esd_workbench", "prop_parts_cabinet",
+			"prop_cold_aisle_gate", "prop_vending_lounge", "prop_cctv_monitor",
+		])
 	elif _shop_tab == "deals":
 		_add_shop_section(left_list, tr("Gebrauchtmarkt & Firmenauflösungen (Tag %d)") % GameState.day_number, tr("Täglich wechselnde B-Ware mit 35–45 % Rabatt! Nur einmal pro Angebot verfügbar."))
 		if GameState.daily_deals.is_empty():
@@ -1333,7 +1349,9 @@ func _populate_physical_shop_list(parent: VBoxContainer, keys: Array) -> void:
 			continue
 		var cat: Dictionary = GameState.ITEM_CATALOG[cap_it]
 		var cap_n := str(cat["name"])
-		var cap_p := int(cat["price"])
+		var cap_p := GameState.get_discounted_price(float(cat["price"]))
+		var unlocked := GameState.is_item_unlocked(cap_it)
+		var req_lvl := GameState.get_item_required_level(cap_it)
 		var card_opts := {
 			"title": tr(cap_n),
 			"desc": tr(str(cat.get("desc", ""))),
@@ -1341,7 +1359,10 @@ func _populate_physical_shop_list(parent: VBoxContainer, keys: Array) -> void:
 			"price": cap_p,
 			"on_buy": func(): _cart_add("item", cap_it, "", cap_n, cap_p, 1),
 		}
-		if GameState.is_bulk_packable(cap_it):
+		if not unlocked:
+			card_opts["disabled"] = true
+			card_opts["btn_text"] = tr("🔒 Ab Firmenstufe %d") % req_lvl
+		elif GameState.is_bulk_packable(cap_it):
 			card_opts["on_buy_bulk"] = func(): _cart_add("item", cap_it, "", cap_n, cap_p, GameState.BULK_PACK_MAX)
 			card_opts["bulk_text"] = tr("+ %der-Kiste ($%d)") % [GameState.BULK_PACK_MAX, cap_p * GameState.BULK_PACK_MAX]
 		_add_shop_item_card(parent, card_opts)
@@ -1565,7 +1586,38 @@ func _render_career_subtab(content: VBoxContainer) -> void:
 	bonus_lbl.modulate = Color(0.24, 0.32, 0.44)
 	tv.add_child(bonus_lbl)
 
-	# 2. Karriere-Meilensteine (bodenständige Großkunden-Stufen)
+	# 2. Firmenstufe & Meilenstein-Boni Übersicht (Level 1 bis 5)
+	var cur_lvl := GameState.get_company_level()
+	var lvl_card := _make_light_card(Color(0.94, 0.96, 1.0), Color(0.28, 0.52, 0.86), 7, 14, 10)
+	content.add_child(lvl_card)
+	var lv := VBoxContainer.new()
+	lv.add_theme_constant_override("separation", 4)
+	lvl_card.add_child(lv)
+	var l_head := Label.new()
+	var cur_val := GameState.get_company_value()
+	var next_thr := int(GameState.COMPANY_LEVEL_THRESHOLDS[mini(cur_lvl, GameState.COMPANY_LEVEL_THRESHOLDS.size() - 1)])
+	l_head.text = tr("FIRMENSTUFE %d / 5  •  Firmenwert: $%d%s") % [
+		cur_lvl, cur_val, (tr("  (Nächste Stufe bei $%d)") % next_thr) if cur_lvl < 5 else tr("  (MAXIMALSTUFE)")
+	]
+	l_head.add_theme_font_size_override("font_size", 13.5)
+	l_head.modulate = Color(0.08, 0.24, 0.48)
+	lv.add_child(l_head)
+	for lvl_i in range(1, 6):
+		var b_info: Dictionary = GameState.COMPANY_LEVEL_BENEFITS.get(lvl_i, {})
+		var unlocked_l := cur_lvl >= lvl_i
+		var bl := Label.new()
+		bl.text = "%s Stufe %d ($%d): %s" % [
+			"✓" if unlocked_l else "🔒",
+			lvl_i,
+			int(GameState.COMPANY_LEVEL_THRESHOLDS[lvl_i - 1]),
+			str(b_info.get("summary", "")),
+		]
+		bl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		bl.add_theme_font_size_override("font_size", 11.5)
+		bl.modulate = Color(0.12, 0.44, 0.22) if unlocked_l else Color(0.42, 0.46, 0.52)
+		lv.add_child(bl)
+
+	# 3. Karriere-Meilensteine (bodenständige Großkunden-Stufen mit permanenten Boni!)
 	for m_v in GameState.CAREER_MILESTONES:
 		var m: Dictionary = m_v
 		var done := GameState.career_completed.has(str(m["id"]))
@@ -2024,6 +2076,155 @@ func _render_upgrades_app() -> void:
 		rbtn.disabled = true
 		_style_win_btn(rbtn, Color(0.88, 0.90, 0.93), Color(0.76, 0.79, 0.82), Color(0.32, 0.36, 0.42))
 	rh.add_child(rbtn)
+
+	# 3b. Neuer Großstandort HALLE NORD (240 m² / 20 x 12 m) — ab Firmenstufe 3 kaufbar + Teleport & Lieferziel!
+	var hn_owned := GameState.halle_nord_owned
+	var hn_lvl_ok := GameState.get_company_level() >= GameState.HALLE_NORD_REQ_LEVEL
+	var hn_c := _make_light_card(
+		Color(0.93, 0.98, 0.94) if hn_owned else Color(0.97, 0.98, 1.0),
+		Color(0.26, 0.68, 0.40) if hn_owned else Color(0.42, 0.62, 0.88),
+		7, 14, 12
+	)
+	content.add_child(hn_c)
+	var hnv := VBoxContainer.new()
+	hnv.add_theme_constant_override("separation", 8)
+	hn_c.add_child(hnv)
+	var hnh := HBoxContainer.new()
+	hnh.add_theme_constant_override("separation", 12)
+	hnv.add_child(hnh)
+	var hni := VBoxContainer.new()
+	hni.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	hnh.add_child(hni)
+	var hnt := Label.new()
+	hnt.text = tr("Standort 2: Großstandort HALLE NORD (20 × 12 m = 240 m²)") + (tr("  •  AKTIV") if hn_owned else "")
+	hnt.add_theme_font_size_override("font_size", 15)
+	hnt.modulate = Color(0.10, 0.42, 0.22) if hn_owned else Color(0.10, 0.14, 0.22)
+	hni.add_child(hnt)
+	var hnd := Label.new()
+	hnd.text = tr("Platz für 16+ Racks, eigener 8.500 W Schwerlast-Strombus (16 Dosen), 10G-Fiber-Switch (16 Ports), eigene Lieferzone & 2. Management-PC. Hin & her teleportieren jederzeit mit [T] oder am Shuttle-Terminal [E]!")
+	hnd.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	hnd.add_theme_font_size_override("font_size", 12)
+	hnd.modulate = Color(0.32, 0.36, 0.44)
+	hni.add_child(hnd)
+
+	var hn_btn := Button.new()
+	hn_btn.custom_minimum_size = Vector2(210, 38)
+	if hn_owned:
+		hn_btn.text = tr("⚡ Jetzt teleportieren [T]")
+		_style_win_btn(hn_btn, Color(0.12, 0.54, 0.34), Color(0.08, 0.42, 0.26), Color.WHITE)
+		hn_btn.pressed.connect(func():
+			SfxManager.play("click", -10.0)
+			close_terminal()
+			var lp := get_tree().get_first_node_in_group("local_player")
+			if lp != null and lp.has_method("teleport_between_sites"):
+				lp.call("teleport_between_sites")
+		)
+	elif not hn_lvl_ok:
+		hn_btn.text = tr("🔒 Ab Firmenstufe %d") % GameState.HALLE_NORD_REQ_LEVEL
+		hn_btn.disabled = true
+		_style_win_btn(hn_btn, Color(0.84, 0.86, 0.89), Color(0.74, 0.76, 0.80), Color(0.45, 0.48, 0.52))
+	else:
+		hn_btn.text = tr("Kaufen ($%d)") % GameState.HALLE_NORD_COST
+		hn_btn.disabled = GameState.money < float(GameState.HALLE_NORD_COST)
+		_style_win_btn(hn_btn, Color(0.10, 0.48, 0.84) if not hn_btn.disabled else Color(0.84, 0.86, 0.89), Color(0.08, 0.38, 0.70), Color.WHITE if not hn_btn.disabled else Color(0.45, 0.48, 0.52))
+		hn_btn.pressed.connect(func():
+			SfxManager.play("click", -10.0)
+			GameState.request_buy_halle_nord()
+			_refresh_all()
+		)
+	hnh.add_child(hn_btn)
+
+	if hn_owned:
+		var del_row := HBoxContainer.new()
+		del_row.add_theme_constant_override("separation", 8)
+		hnv.add_child(del_row)
+		var del_lbl := Label.new()
+		del_lbl.text = tr("Aktuelles Lieferziel für Shop-Bestellungen:")
+		del_lbl.add_theme_font_size_override("font_size", 12)
+		del_lbl.modulate = Color(0.20, 0.28, 0.36)
+		del_row.add_child(del_lbl)
+		for site_spec in [["garage", "Start-Garage"], ["halle_nord", "Halle Nord (240 m²)"]]:
+			var sid := str(site_spec[0])
+			var slbl := str(site_spec[1])
+			var sb := Button.new()
+			sb.text = slbl
+			sb.custom_minimum_size = Vector2(150, 28)
+			var is_sel := (GameState.delivery_target_site == sid)
+			_style_win_btn(sb, Color(0.10, 0.46, 0.82) if is_sel else Color(0.90, 0.92, 0.95), Color(0.08, 0.36, 0.68), Color.WHITE if is_sel else Color(0.18, 0.22, 0.28))
+			sb.pressed.connect(func():
+				SfxManager.play("click", -12.0)
+				GameState.request_set_delivery_site(sid)
+				_refresh_all()
+			)
+			del_row.add_child(sb)
+
+	# 3d. Sichtbarer Gebäude-Ausbau mit Live-Bautrupp (PV, Diesel, Pförtnerhaus, NOC, Chiller, Kaltgang)
+	var bupg_card := _make_light_card(Color(0.95, 0.98, 1.0), Color(0.24, 0.54, 0.82), 7, 14, 12)
+	content.add_child(bupg_card)
+	var buv := VBoxContainer.new()
+	buv.add_theme_constant_override("separation", 8)
+	bupg_card.add_child(buv)
+	var bu_t := Label.new()
+	bu_t.text = tr("🚧 Gebäude-Ausbau & Live-Bautrupp (Sichtbare Erweiterungen)")
+	bu_t.add_theme_font_size_override("font_size", 15)
+	bu_t.modulate = Color(0.08, 0.28, 0.54)
+	buv.add_child(bu_t)
+	var bu_sub := Label.new()
+	bu_sub.text = tr("Nach dem Kauf rückt ein echter Bautrupp mit Transporter, Warnwesten & Gerüst an und errichtet das Upgrade live in 45–65 Sek.")
+	bu_sub.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	bu_sub.add_theme_font_size_override("font_size", 11.5)
+	bu_sub.modulate = Color(0.24, 0.30, 0.38)
+	buv.add_child(bu_sub)
+	for uid in GameState.BUILDING_UPGRADE_ORDER:
+		var um: Dictionary = GameState.BUILDING_UPGRADE_CATALOG[uid]
+		var built := GameState.has_building_upgrade(uid)
+		var building := GameState.is_construction_active(uid)
+		var req_nord := bool(um.get("req_nord", false))
+		var locked_nord := req_nord and not GameState.halle_nord_owned
+		var price := int(um.get("price", 0))
+		var row := HBoxContainer.new()
+		row.add_theme_constant_override("separation", 10)
+		buv.add_child(row)
+		var info_v := VBoxContainer.new()
+		info_v.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		row.add_child(info_v)
+		var nl := Label.new()
+		nl.text = "%s %s" % [str(um.get("icon", "🏗")), str(um.get("name", uid))]
+		nl.add_theme_font_size_override("font_size", 13)
+		nl.modulate = Color(0.10, 0.42, 0.22) if built else Color(0.14, 0.18, 0.24)
+		info_v.add_child(nl)
+		var el := Label.new()
+		el.text = "%s  •  %s" % [str(um.get("effect", "")), str(um.get("desc", ""))]
+		el.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		el.add_theme_font_size_override("font_size", 11)
+		el.modulate = Color(0.32, 0.38, 0.46)
+		info_v.add_child(el)
+		var btn := Button.new()
+		btn.custom_minimum_size = Vector2(180, 32)
+		if built:
+			btn.text = tr("✅ Gebaut & aktiv")
+			btn.disabled = true
+			_style_win_btn(btn, Color(0.84, 0.94, 0.86), Color(0.24, 0.62, 0.34), Color(0.12, 0.40, 0.18))
+		elif building:
+			var rem := int(ceilf(float((GameState.active_constructions[uid] as Dictionary).get("remaining", 0.0))))
+			btn.text = tr("🚧 Bautrupp (%d s)") % rem
+			btn.disabled = true
+			_style_win_btn(btn, Color(0.98, 0.92, 0.76), Color(0.82, 0.56, 0.12), Color(0.48, 0.30, 0.04))
+		elif locked_nord:
+			btn.text = tr("🔒 Benötigt Halle Nord")
+			btn.disabled = true
+			_style_win_btn(btn, Color(0.90, 0.91, 0.93), Color(0.70, 0.72, 0.76), Color(0.42, 0.44, 0.48))
+		else:
+			btn.text = tr("Bauen ($%d)") % price
+			btn.disabled = GameState.money < float(price)
+			_style_win_btn(btn, Color(0.10, 0.46, 0.82), Color(0.08, 0.36, 0.68), Color.WHITE)
+			var cap_uid := str(uid)
+			btn.pressed.connect(func():
+				SfxManager.play("click", -10.0)
+				GameState.request_buy_building_upgrade(cap_uid)
+				_refresh_all()
+			)
+		row.add_child(btn)
 
 	# 4. Electricity Meter
 	var bc := _make_light_card(Color(0.99, 0.98, 0.94), Color(0.86, 0.78, 0.56), 7, 14, 12)

@@ -1,9 +1,22 @@
 {
-  "version": "2.2.0",
-  "launcher_version": "2.2.0",
-  "codename": "v2.2.0 Außenwelt 2.0, Wetter, Karriere, Gebrauchtmarkt, Co-op Pings & Verion-Digital Branding",
+  "version": "2.3.0",
+  "launcher_version": "2.3.0",
+  "codename": "v2.3.0 High-Poly Hallen-Overhaul, Halle Nord Campus, Bautrupp & Realismus-Audio",
   "release_date": "2026-11-24",
   "changelog": [
+    {
+      "version": "v2.3.0",
+      "date": "2026-11-24",
+      "title": "Mega-Update 2.3: High-Poly & 2K-ORM-PBR Hallen-Overhaul, Halle Nord Campus, Live-Bautrupp, Gebäude-Upgrades & Realismus-Audio",
+      "items": [
+        "[3D / OVERHAUL] Kompletter High-Poly- & 2K-ORM-PBR-Hallen-Overhaul: Alle Hallen (Halle Nord, Start-Garage, Halle B & C), Technik-Einbauten (400V-Schaltanlage, 42U-Core-Rack mit 3D-LWL-Bögen, NOC-Echtglas-Leitstand) sowie alle 6 kaufbaren Shop-Dekos wurden mit 25 neu gebauten Blender-5.2-Modellen, 2K-Epoxidboden, HEB-Stahlrahmen, 3D-Trapezblechdach, durchgebrochenen Echtglas-Oberlichtern und weichen SpotLight-Schatten neu aufgebaut.",
+        "[NEU] Großstandort Halle Nord (240 m² Tier-4 Enterprise-Campus): Ab Firmen-Level 3 freischaltbar ($8.500), mit eigenem 8.500-W-Strombus, 10G-Core-Switch, Shuttle-Terminal ([T] / [E]), Lieferziel-Wahl und komplettem Gewerbecampus.",
+        "[NEU] 6 Gebäude-Upgrades mit Live-Bautrupp (PV-Solaranlage, 2-MVA Notstrom-Diesel, Sicherheitsschranke, NOC-Leitstand, Dach-Kaltwasserkühler & Kaltgang-Pro) + 6 frei platzierbare Einrichtungs-Items.",
+        "[NEU] Außenwelt 3.1 & Realismus-Overhaul: Erweitertes deutsches Gewerbegebiet, 4K-Mixamo-NPCs mit Skelett-Laufanimation, FBM-Soft-Rauch/Dampf, Luftperspektiven-Nebel & nasser spiegelnder Asphalt bei Regen.",
+        "[GAMEPLAY] Seltener Ausfall (~80 % reduziert), tiefes Fehlercode-Diagnose- & vorbeugendes Wartungssystem (Staub / Wärmeleitpaste / Maint-Kits) sowie Pro-Rack-Freischaltung ab Firmen-Level 3.",
+        "[AUDIO] Mehrschichtiger Regen, Tag/Nacht-Naturkulisse, untergrundabhängige Schritte (Doppelboden / Nass / Beton), Dieselgenerator-Sound & Hallen-Reverb."
+      ]
+    },
     {
       "version": "v2.2.0",
       "date": "2026-11-24",

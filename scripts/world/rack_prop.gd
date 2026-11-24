@@ -955,22 +955,26 @@ func _make_particle_quad(tex: Texture2D, additive: bool, quad_size: float = 0.22
 func _make_smoke_emitter() -> CPUParticles3D:
 	var p := CPUParticles3D.new()
 	p.emitting = false
-	p.amount = 24
-	p.lifetime = 1.8
+	p.amount = 42
+	p.lifetime = 2.2
 	p.preprocess = 0.3
 	p.emission_shape = CPUParticles3D.EMISSION_SHAPE_BOX
 	p.emission_box_extents = Vector3(0.24, 0.04, 0.12)
 	p.direction = Vector3(0.0, 1.0, 0.24)
 	p.spread = 24.0
-	p.gravity = Vector3(0.0, 0.30, 0.0)
-	p.initial_velocity_min = 0.32
-	p.initial_velocity_max = 0.58
+	p.gravity = Vector3(0.0, 0.32, 0.0)
+	p.initial_velocity_min = 0.36
+	p.initial_velocity_max = 0.68
+	p.angle_min = -180.0
+	p.angle_max = 180.0
+	p.angular_velocity_min = -36.0
+	p.angular_velocity_max = 36.0
 	p.scale_amount_min = 0.85
-	p.scale_amount_max = 2.0
-	p.mesh = _make_particle_quad(_tex_soft_smoke, false, 0.24)
+	p.scale_amount_max = 2.25
+	p.mesh = _make_particle_quad(RealisticVfx.get_smoke_puff_texture(), false, 0.32)
 	var grad := Gradient.new()
-	grad.set_color(0, Color(0.16, 0.16, 0.18, 0.0))
-	grad.add_point(0.18, Color(0.12, 0.12, 0.14, 0.85))
+	grad.set_color(0, Color(0.14, 0.14, 0.16, 0.0))
+	grad.add_point(0.18, Color(0.10, 0.10, 0.12, 0.82))
 	grad.set_color(1, Color(0.24, 0.24, 0.26, 0.0))
 	p.color_ramp = grad
 	return p

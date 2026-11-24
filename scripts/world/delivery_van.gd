@@ -29,6 +29,9 @@ var _headlight_glow: OmniLight3D
 var _cargo_light: OmniLight3D
 var _cargo_boxes: Array[MeshInstance3D] = []
 var _engine_audio: AudioStreamPlayer3D
+var _sfx_audio: AudioStreamPlayer3D
+var _prev_van_phase: String = "idle"
+var _backup_beep_accum: float = 0.0
 var _driver: DeliveryDriverScript
 var _drivers: Array = []
 var _hand_truck: HandTruckScript
@@ -107,11 +110,17 @@ func _setup_audio() -> void:
 	_engine_audio = AudioStreamPlayer3D.new()
 	_engine_audio.position = Vector3(2.2, 0.85, 0.0)
 	_engine_audio.stream = SfxManager.get_loop_stream("van_engine")
-	_engine_audio.max_distance = 24.0
-	_engine_audio.unit_size = 4.2
+	_engine_audio.max_distance = 28.0
+	_engine_audio.unit_size = 4.6
 	_engine_audio.attenuation_model = AudioStreamPlayer3D.ATTENUATION_INVERSE_DISTANCE
 	_engine_audio.volume_db = -60.0
 	add_child(_engine_audio)
+
+	_sfx_audio = AudioStreamPlayer3D.new()
+	_sfx_audio.position = Vector3(-1.8, 0.95, 0.0)
+	_sfx_audio.max_distance = 32.0
+	_sfx_audio.unit_size = 5.0
+	add_child(_sfx_audio)
 
 
 func _process(delta: float) -> void:
@@ -129,12 +138,49 @@ func _process(delta: float) -> void:
 			(dr as DeliveryDriverScript).reset_to_seat()
 		if _engine_audio != null and _engine_audio.playing:
 			_engine_audio.stop()
+		_prev_van_phase = "idle"
+		_backup_beep_accum = 0.0
 		return
 
 	# Fahrzeugmodell (Stufe 1 Sprinter / Stufe 2 Kastenwagen 7,5t / Stufe 3 Schwerlast-LKW 18t) dynamisch umschalten!
 	var want_tier := clampi(GameState.van_delivery_tier, 1, 3)
 	if want_tier != _active_tier:
 		_switch_vehicle_tier(want_tier)
+
+	# Bei Ankunft: Garagentor automatisch oeffnen + Druckluft-Bremszischen bei 7,5t/18t LKW!
+	if phase != _prev_van_phase:
+		if phase == "arriving":
+			var world := get_parent()
+			if world != null:
+				var garage := world.get_node_or_null("Garage")
+				if garage != null and garage.has_method("ensure_garage_door_open"):
+					garage.call("ensure_garage_door_open")
+		elif phase == "unloading" and _active_tier >= 2 and _sfx_audio != null:
+			var ab := SfxManager.get_sound_stream("air_brake")
+			var g_gain := SettingsManager.get_effective_sfx_gain()
+			if ab != null and g_gain > 0.005:
+				_sfx_audio.stream = ab
+				_sfx_audio.volume_db = linear_to_db(g_gain * SfxManager.get_outdoor_transmission()) - 4.5
+				_sfx_audio.pitch_scale = randf_range(0.92, 1.05)
+				_sfx_audio.play()
+		_prev_van_phase = phase
+
+	# Authentisches Rueckfahr-/Rangier-Piepen beim Einparken (letzte 2.2 s) & Ausparken (erste 2.2 s)!
+	var beeping_now := (phase == "arriving" and pt > GameState.VAN_ARRIVE_DURATION - 2.4) \
+		or (phase == "departing" and pt < 2.2)
+	if beeping_now and _sfx_audio != null:
+		_backup_beep_accum += delta
+		if _backup_beep_accum >= 0.72:
+			_backup_beep_accum = 0.0
+			var bp := SfxManager.get_sound_stream("backup_beep")
+			var g_gain := SettingsManager.get_effective_sfx_gain()
+			if bp != null and g_gain > 0.005:
+				_sfx_audio.stream = bp
+				_sfx_audio.volume_db = linear_to_db(g_gain * SfxManager.get_outdoor_transmission()) - 6.5
+				_sfx_audio.pitch_scale = 1.0 if _active_tier <= 2 else 0.94
+				_sfx_audio.play()
+	else:
+		_backup_beep_accum = 0.55
 
 	visible = true
 	var lane_z := LANE_Z + (0.28 if _active_tier == 2 else (0.58 if _active_tier == 3 else 0.0))

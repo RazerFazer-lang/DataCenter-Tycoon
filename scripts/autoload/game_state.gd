@@ -16,6 +16,11 @@ signal crates_changed
 signal cables_changed
 signal extinguisher_changed
 signal room_level_changed
+signal halle_nord_changed
+signal delivery_site_changed
+signal decor_items_changed
+signal building_upgrades_changed
+signal constructions_changed
 signal van_updated
 signal tickets_changed
 signal call_changed
@@ -122,9 +127,9 @@ const RESEARCH_TREE := {
 	},
 }
 const RESEARCH_ORDER: Array[String] = ["cooling", "efficiency", "reliability"]
-## Wasserschaden: Abstand zwischen zwei Lecks in Sekunden, betroffene Slots und Kosten.
-const WATER_LEAK_MIN_S := 240.0
-const WATER_LEAK_MAX_S := 420.0
+## Wasserschaden: Abstand zwischen zwei Lecks in Sekunden, betroffene Slots und Kosten (deutlich seltener!).
+const WATER_LEAK_MIN_S := 540.0
+const WATER_LEAK_MAX_S := 840.0
 const WATER_LEAK_MAX_SLOTS := 2
 const WATER_LEAK_COST := 150.0
 const PAYOUT_CYCLE_SECONDS := 5.0
@@ -198,6 +203,14 @@ const WALL_BREAKER_ID := "wall_breaker"
 const WALL_ROUTER_ID := "wall_router"
 const HALL_C_BREAKER_ID := "hall_c_breaker"
 const HALL_C_ROUTER_ID := "hall_c_router"
+const HALL_NORD_BREAKER_ID := "hall_nord_breaker"
+const HALL_NORD_ROUTER_ID := "hall_nord_router"
+
+const HALLE_NORD_COST := 8500
+const HALLE_NORD_REQ_LEVEL := 3
+const HALLE_NORD_ORIGIN := Vector3(0.0, 0.0, -320.0)
+const HALLE_NORD_EXTRA_WATTS := 8500
+const HALLE_NORD_EXTRA_MBPS := 10000.0
 
 const ITEM_CATALOG := {
 	"rack": {
@@ -217,6 +230,7 @@ const ITEM_CATALOG := {
 		"name": "Enterprise-Rack Pro (6U)",
 		"category": "placeable",
 		"price": 950,
+		"unlock_level": 3,
 		"slots": 6,
 		"max_pdu_watts": 6000,
 		"passive_cooling": 4.0,
@@ -224,7 +238,7 @@ const ITEM_CATALOG := {
 		"compute": 0,
 		"heat": 0.0,
 		"color": Color(0.18, 0.44, 0.62),
-		"desc": "6 Einschub-Slots | Max. 6.000W PDU | Aktiv-Kühlung (-4°C)",
+		"desc": "Ab Firmen-Level 3 • 6 Einschub-Slots | Max. 6.000W PDU | Aktiv-Kühlung (-4°C)",
 	},
 	"old_fuse": {
 		"name": "Alte Schraubsicherung",
@@ -539,6 +553,73 @@ const ITEM_CATALOG := {
 		"color": Color(0.95, 0.68, 0.14),
 		"desc": "Enthält je 1 Reparatur-Kit für alle 7 Kategorien (18 % günstiger!).",
 	},
+	# --- Kaufbare & frei platzierbare Einrichtung, Lagerregale & Technik-Props ---
+	"prop_storage_shelf": {
+		"name": "Schwerlast-Lagerregal (4 Plätze)",
+		"category": "placeable",
+		"is_decor": true,
+		"price": 220,
+		"watts": 0,
+		"compute": 0,
+		"heat": 0.0,
+		"color": Color(0.28, 0.42, 0.56),
+		"desc": "Frei platzierbares 3D-Lagerregal mit 4 echten Ablageplätzen für Bauteile, Kits & Kartons!",
+	},
+	"prop_esd_workbench": {
+		"name": "ESD-Diagnose-Werkbank",
+		"category": "placeable",
+		"is_decor": true,
+		"price": 480,
+		"watts": 40,
+		"compute": 0,
+		"heat": 0.2,
+		"color": Color(0.20, 0.62, 0.72),
+		"desc": "Professionelle Elektronik-Werkbank mit Oszilloskop • +35 % Reparatur- & Diagnose-Tempo!",
+	},
+	"prop_parts_cabinet": {
+		"name": "Ersatzteil-Schrank & Kabeltrommeln",
+		"category": "placeable",
+		"is_decor": true,
+		"price": 360,
+		"watts": 0,
+		"compute": 0,
+		"heat": 0.0,
+		"color": Color(0.84, 0.60, 0.16),
+		"desc": "Interaktiver Ersatzteil-Schrank [E] • Füllt Wartungs- & Reinigungs-Kits direkt vor Ort auf!",
+	},
+	"prop_cold_aisle_gate": {
+		"name": "Kaltgang-Schiebetür-Portal",
+		"category": "placeable",
+		"is_decor": true,
+		"price": 550,
+		"watts": 25,
+		"compute": 0,
+		"heat": 0.0,
+		"color": Color(0.16, 0.64, 0.94),
+		"desc": "Glas-/Alu-Kaltgang-Portal mit digitaler Temperatur-Anzeige • +6 % Kühleffizienz (bis +18 %)!",
+	},
+	"prop_vending_lounge": {
+		"name": "Getränkeautomat & Kaffee-Lounge",
+		"category": "placeable",
+		"is_decor": true,
+		"price": 320,
+		"watts": 90,
+		"compute": 0,
+		"heat": 0.4,
+		"color": Color(0.76, 0.26, 0.24),
+		"desc": "Beleuchteter Snack-/Getränkeautomat mit Lounge-Deko • +5 % Firmen-Ruf!",
+	},
+	"prop_cctv_monitor": {
+		"name": "CCTV- & Temperatur-Stele",
+		"category": "placeable",
+		"is_decor": true,
+		"price": 290,
+		"watts": 35,
+		"compute": 0,
+		"heat": 0.1,
+		"color": Color(0.22, 0.76, 0.50),
+		"desc": "Überwachungskamera, Live-Temperaturanzeige & Feuerlöscher-Station • +4 % Ruf & Frühwarnung!",
+	},
 	"slot_build_box": {
 		"name": "Server-Bausatz",
 		"category": "workshop_box",
@@ -704,8 +785,30 @@ const COMPANY_VALUE_MILESTONES := [
 ]
 ## Anteil des Kaufpreises, mit dem verbaute Hardware in den Firmenwert eingeht.
 const COMPANY_HARDWARE_VALUE_FACTOR := 0.6
-## Firmenstufen: Mindest-Firmenwert für Stufe 1 bis 5. Die Stufe schaltet Bauteile und Mainboards frei.
+## Firmenstufen: Mindest-Firmenwert für Stufe 1 bis 5. Die Stufe schaltet Bauteile, Pro-Rack, Halle Nord & Boni frei.
 const COMPANY_LEVEL_THRESHOLDS := [0, 24000, 72000, 180000, 400000]
+const COMPANY_LEVEL_BENEFITS := {
+	1: {
+		"rev_mult": 1.00, "discount": 0.00, "fail_mult": 1.00, "delivery_bonus": 0, "max_contracts": 4,
+		"summary": "Start-Setup: Standard-Rack, Express-Sprinter, Basis-Hardware",
+	},
+	2: {
+		"rev_mult": 1.06, "discount": 0.05, "fail_mult": 0.90, "delivery_bonus": 4, "max_contracts": 6,
+		"summary": "+6% Kundenvergütung • -5% Hardware-/Stromkosten • 7,5t-LKW & 20 Lieferplätze • -10% Ausfallrate • 6 Verträge",
+	},
+	3: {
+		"rev_mult": 1.14, "discount": 0.10, "fail_mult": 0.80, "delivery_bonus": 8, "max_contracts": 8,
+		"summary": "Pro-Rack (6U) & Großstandort Halle Nord (240 m²) freigeschaltet • +14% Einnahmen • -10% Kosten • 18t-LKW & 24 Plätze",
+	},
+	4: {
+		"rev_mult": 1.24, "discount": 0.15, "fail_mult": 0.72, "delivery_bonus": 12, "max_contracts": 11,
+		"summary": "GPU-Server freigeschaltet • +24% Einnahmen • -15% Kosten • 28 Lieferplätze • -28% Ausfallrate • 11 Verträge",
+	},
+	5: {
+		"rev_mult": 1.36, "discount": 0.20, "fail_mult": 0.62, "delivery_bonus": 16, "max_contracts": 15,
+		"summary": "Enterprise-Hyperscaler • +36% Einnahmen • -20% Kosten • 32 Lieferplätze • -38% Ausfallrate • 15 Verträge",
+	},
+}
 ## Benötigte Firmenstufe je Mainboard-Kategorie.
 const MAINBOARD_CATEGORY_LEVEL := {"entry": 1, "server": 2, "storage": 3, "gpu": 4}
 ## Support-SLA: Sekunden, bis ein unbeantwortetes Ticket eskaliert, je Priorität.
@@ -762,6 +865,82 @@ var router_tier: int = 0
 ## Erforschte Stufe pro Zweig aus RESEARCH_TREE (fehlender Eintrag = 0).
 var research_levels: Dictionary = {}
 var room_level: int = 0 # 0 = Garage, 1 = +Halle B, 2 = +Halle C Enterprise
+var halle_nord_owned: bool = false
+var delivery_target_site: String = "garage" # "garage" | "halle_nord"
+## Sichtbare Gebäude-Upgrades (erst nach Kauf + Live-Bautrupp sichtbar!) & laufende Baustellen
+const BUILDING_UPGRADE_CATALOG := {
+	"upg_pv_solar": {
+		"name": "PV-Solaranlage & Solar-Carport",
+		"price": 2800,
+		"duration": 50.0,
+		"req_nord": false,
+		"icon": "☀",
+		"effect": "-28 % laufende Stromkosten (Dach-PV & Solar-Carport mit Wallboxen)",
+		"desc": "Bautrupp installiert Photovoltaik-Module & Solar-Carport mit E-Ladesäulen.",
+	},
+	"upg_diesel_gen": {
+		"name": "2-MVA Notstrom-Dieselgenerator",
+		"price": 4200,
+		"duration": 65.0,
+		"req_nord": true,
+		"icon": "⚡",
+		"effect": "Übernimmt bei Stadtwerke-Netzausfall automatisch (kein Blackout!)",
+		"desc": "Schwerlast-Dieselaggregat im Schallschutz-Container inkl. Kabelbrücke zur Halle.",
+	},
+	"upg_security_gate": {
+		"name": "Sicherheits-Pförtnerhaus, Schranke & Pylon",
+		"price": 2400,
+		"duration": 45.0,
+		"req_nord": true,
+		"icon": "🛡",
+		"effect": "+12 % Firmen-Ruf & 24/7-Zugangskontrolle mit Pförtner-NPC",
+		"desc": "Verglastes Torhaus mit automatischer Schranke, Ausweis-Stele & Firmen-Pylon.",
+	},
+	"upg_noc_suite": {
+		"name": "Verglaster NOC-Leitstand & 3-Screen-Videowall",
+		"price": 3400,
+		"duration": 55.0,
+		"req_nord": true,
+		"icon": "🖥",
+		"effect": "+15 % Support-Einnahmen & automatische Wartungs-Frühwarnung",
+		"desc": "Stahl-Glas-Leitstand mit 3-Monitor-Telemetrie-Wand & Kaffeebar in Halle Nord.",
+	},
+	"upg_roof_chillers": {
+		"name": "Dach-Rückkühlwerk & Außen-Chiller-Farm",
+		"price": 3800,
+		"duration": 60.0,
+		"req_nord": false,
+		"icon": "❄",
+		"effect": "-4,5 °C niedrigere Grundtemperatur in allen Hallen",
+		"desc": "Industrielle Kaltwasserkühler & Dach-Rückkühler mit Verrohrung.",
+	},
+	"upg_cold_aisle_pro": {
+		"name": "Kaltgang-Einhausung & LED-Bodenführung",
+		"price": 2600,
+		"duration": 45.0,
+		"req_nord": true,
+		"icon": "💨",
+		"effect": "+22 % zusätzliche Kühleffizienz & digitale Gang-Temperaturanzeigen",
+		"desc": "Leuchtende Kaltgang-Führung, Glas-Einhausungsportale & hängende Temp-Displays.",
+	},
+}
+const BUILDING_UPGRADE_ORDER: Array[String] = [
+	"upg_pv_solar", "upg_roof_chillers", "upg_security_gate",
+	"upg_noc_suite", "upg_cold_aisle_pro", "upg_diesel_gen",
+]
+const FAULT_DIAGNOSIS_META := {
+	"cpu": {"code": "ERR-THM-07", "cause": "Wärmeleitpaste ausgetrocknet / CPU-Throttling", "tool": "Wärmeleitpaste- & Wartungs-Kit"},
+	"cooling": {"code": "ERR-FAN-04", "cause": "Lüfterlager blockiert / Kühlkörper verstaubt", "tool": "Druckluft & Ersatz-Lüfter"},
+	"psu": {"code": "ERR-PSU-12", "cause": "Netzteil-Kondensator defekt (Spannungsabfall)", "tool": "Netzteil-Ersatzmodul"},
+	"ram": {"code": "ERR-ECC-03", "cause": "ECC-Speicherbank meldet Paritätsfehler", "tool": "Kontaktspray & ECC-Riegel"},
+	"storage": {"code": "ERR-NVM-08", "cause": "NVMe-Controller überhitzt / Sektorfehler", "tool": "NVMe-Ersatzmodul"},
+	"gpu": {"code": "ERR-GPU-15", "cause": "VRMs überhitzt / 8-Pin-Stecker verschmort", "tool": "GPU-Wärmeleitpads & Stecker"},
+	"mainboard": {"code": "ERR-BKP-02", "cause": "Backplane-Stecker locker / Bus-Fehler", "tool": "Diagnose-Prüfer & Löt-Kit"},
+}
+var building_upgrades: Dictionary = {} # upgrade_id -> true
+var active_constructions: Dictionary = {} # upgrade_id -> {remaining, duration, site}
+var decor_items: Dictionary = {} # decor_id -> {id, item_type, pos, rot_y, stored_items}
+var maint_kits: int = 3 # Vorrat an Wartungs-/Druckluft-/Wärmeleitpaste-Kits
 ## Zahl der erreichten Firmenwert-Meilensteine. -1 = alter Spielstand, wird beim nächsten Check still übernommen.
 var company_milestones_reached: int = 0
 ## Erreichte Firmenstufe (1-5). 0 = alter Spielstand, wird beim nächsten Check aus dem Firmenwert berechnet.
@@ -1224,7 +1403,35 @@ func get_delivery_zone_used_slots() -> int:
 
 
 func get_delivery_zone_free_slots() -> int:
-	return maxi(0, DELIVERY_ZONE_MAX_CRATES - get_delivery_zone_used_slots())
+	return maxi(0, get_max_delivery_slots() - get_delivery_zone_used_slots())
+
+
+func get_max_delivery_slots() -> int:
+	var lvl_b: Dictionary = COMPANY_LEVEL_BENEFITS.get(get_company_level(), {})
+	var extra := int(lvl_b.get("delivery_bonus", 0))
+	return DELIVERY_ZONE_MAX_CRATES + extra + (career_completed.size() * 2)
+
+
+func get_level_revenue_mult() -> float:
+	var lvl_b: Dictionary = COMPANY_LEVEL_BENEFITS.get(get_company_level(), {})
+	return float(lvl_b.get("rev_mult", 1.0)) + float(career_completed.size()) * 0.03
+
+
+func get_level_discount_mult() -> float:
+	var lvl_b: Dictionary = COMPANY_LEVEL_BENEFITS.get(get_company_level(), {})
+	var disc := float(lvl_b.get("discount", 0.0)) + float(career_completed.size()) * 0.015
+	return clampf(1.0 - disc, 0.65, 1.0)
+
+
+func get_level_failure_mult() -> float:
+	var lvl_b: Dictionary = COMPANY_LEVEL_BENEFITS.get(get_company_level(), {})
+	var fm := float(lvl_b.get("fail_mult", 1.0)) - float(career_completed.size()) * 0.03
+	return clampf(fm, 0.45, 1.0)
+
+
+func get_max_contracts_limit() -> int:
+	var lvl_b: Dictionary = COMPANY_LEVEL_BENEFITS.get(get_company_level(), {})
+	return int(lvl_b.get("max_contracts", 4)) + career_completed.size()
 
 
 ## Berechnet für den Warenkorb: {"crates": physische Kisten, "tier": 1..3, "packed": Array}.
@@ -1327,7 +1534,10 @@ func _delivery_slot_pos(index: int) -> Vector3:
 	var idx := index % DELIVERY_ZONE_MAX_CRATES
 	var col := idx % 4
 	var row := idx / 4
-	return Vector3(-1.35 + float(col) * 0.90, 0.0, 5.45 + float(row) * 0.78)
+	var base := Vector3(-1.35 + float(col) * 0.90, 0.0, 5.45 + float(row) * 0.78)
+	if halle_nord_owned and delivery_target_site == "halle_nord":
+		return HALLE_NORD_ORIGIN + Vector3(0.0, 0.0, 2.5) + base
+	return base
 
 
 func _find_free_delivery_slot_pos() -> Vector3:
@@ -1457,6 +1667,12 @@ func initialize_new_world(save_id: String = "mein_datacenter", save_name: String
 	router_tier = 0
 	research_levels = {}
 	room_level = 0
+	halle_nord_owned = false
+	delivery_target_site = "garage"
+	building_upgrades.clear()
+	active_constructions.clear()
+	decor_items.clear()
+	maint_kits = 3
 	ai_platform_level = 0
 	ddos_active = false
 	ddos_cooldown = 70.0
@@ -1807,6 +2023,12 @@ func build_snapshot() -> Dictionary:
 		"router_tier": router_tier,
 		"research_levels": research_levels.duplicate(),
 		"room_level": room_level,
+		"halle_nord_owned": halle_nord_owned,
+		"delivery_target_site": delivery_target_site,
+		"building_upgrades": building_upgrades.duplicate(true),
+		"active_constructions": active_constructions.duplicate(true),
+		"decor_items": decor_items.duplicate(true),
+		"maint_kits": maint_kits,
 		"company_milestones_reached": company_milestones_reached,
 		"company_level": company_level,
 		"ai_platform_level": ai_platform_level,
@@ -1906,6 +2128,14 @@ func _apply_snapshot(snap: Dictionary) -> void:
 		room_level = clampi(int(snap.get("room_level", 0)), 0, 2)
 	else:
 		room_level = 1 if bool(snap.get("room_expanded", false)) else 0
+	halle_nord_owned = bool(snap.get("halle_nord_owned", false))
+	delivery_target_site = str(snap.get("delivery_target_site", "garage"))
+	if not halle_nord_owned:
+		delivery_target_site = "garage"
+	building_upgrades = (snap.get("building_upgrades", {}) as Dictionary).duplicate(true)
+	active_constructions = (snap.get("active_constructions", {}) as Dictionary).duplicate(true)
+	decor_items = (snap.get("decor_items", {}) as Dictionary).duplicate(true)
+	maint_kits = maxi(0, int(snap.get("maint_kits", 3)))
 	ai_platform_level = int(snap.get("ai_platform_level", 0))
 	company_milestones_reached = clampi(int(snap.get("company_milestones_reached", -1)), -1, COMPANY_VALUE_MILESTONES.size())
 	company_level = clampi(int(snap.get("company_level", 0)), 0, COMPANY_LEVEL_THRESHOLDS.size())
@@ -2560,6 +2790,8 @@ func get_max_ports(cable_type: String, endpoint_id: String) -> int:
 			return BREAKER_BASE_SOCKETS + power_strips * POWER_STRIP_EXTRA
 		if endpoint_id == HALL_C_BREAKER_ID:
 			return 6 + power_tier * 2
+		if endpoint_id == HALL_NORD_BREAKER_ID:
+			return 16
 		if racks.has(endpoint_id):
 			return 2
 		if coolers.has(endpoint_id):
@@ -2573,6 +2805,8 @@ func get_max_ports(cable_type: String, endpoint_id: String) -> int:
 			return ROUTER_BASE_PORTS + net_hubs * NET_HUB_EXTRA
 		if endpoint_id == HALL_C_ROUTER_ID:
 			return 4
+		if endpoint_id == HALL_NORD_ROUTER_ID:
+			return 16
 		if racks.has(endpoint_id):
 			return 1 + _count_rack_switches(endpoint_id) * 3
 		return 0
@@ -2727,20 +2961,34 @@ func can_place_wall_unit_at(pos: Vector3, rot_y: float) -> bool:
 
 
 func can_place_at(pos: Vector3, ignore_rack_id: String = "") -> bool:
-	var max_x := 4.8 if room_level == 0 else (11.7 if room_level == 1 else 20.6)
-	if pos.x < -4.8 or pos.x > max_x:
-		return false
-	if pos.z < -3.7 or pos.z > 3.7:
-		return false
-	# Keep desk & North Wall walkway clear
-	if pos.z < -2.9 and pos.x > 1.5 and pos.x < 5.0:
-		return false
-	# Keep Hall C subpanel walkway clear
-	if pos.z < -3.0 and pos.x > 13.5 and pos.x < 17.5:
-		return false
-	# Keep garage doorway clear
-	if pos.z > 2.6 and absf(pos.x) < 2.2:
-		return false
+	if halle_nord_owned and pos.z < -100.0:
+		var lz := pos.z - HALLE_NORD_ORIGIN.z
+		if pos.x < -9.3 or pos.x > 9.3 or lz < -5.2 or lz > 5.2:
+			return false
+		# Verglaster NOC-Leitstand, Schaltanlage/Core-Rack, Shuttle-Kiosk & Rolltor freihalten
+		if lz < -2.3 and pos.x > 4.3:
+			return false
+		if lz < -4.5 and pos.x < -3.7:
+			return false
+		if lz < -4.3 and absf(pos.x - 3.2) < 0.9:
+			return false
+		if lz > 4.0 and absf(pos.x) < 2.3:
+			return false
+	else:
+		var max_x := 4.8 if room_level == 0 else (11.7 if room_level == 1 else 20.6)
+		if pos.x < -4.8 or pos.x > max_x:
+			return false
+		if pos.z < -3.7 or pos.z > 3.7:
+			return false
+		# Keep desk & North Wall walkway clear
+		if pos.z < -2.9 and pos.x > 1.5 and pos.x < 5.0:
+			return false
+		# Keep Hall C subpanel walkway clear
+		if pos.z < -3.0 and pos.x > 13.5 and pos.x < 17.5:
+			return false
+		# Keep garage doorway clear
+		if pos.z > 2.6 and absf(pos.x) < 2.2:
+			return false
 	for rid in racks.keys():
 		if rid == ignore_rack_id:
 			continue
@@ -2967,7 +3215,8 @@ func _update_company_level(value: int) -> void:
 		return
 	while company_level < target:
 		company_level += 1
-		post_event_f("⭐ Firmenstufe %d erreicht! Neue Bauteile im Shop freigeschaltet.", [company_level], "good")
+		var binfo: Dictionary = COMPANY_LEVEL_BENEFITS.get(company_level, {})
+		post_event_f("⭐ FIRMENSTUFE %d ERREICHT! %s", [company_level, str(binfo.get("summary", "Neue Inhalte freigeschaltet!"))], "good")
 		_rpc_play_sfx.rpc("upgrade")
 
 
@@ -2984,14 +3233,15 @@ func is_part_unlocked(pd: Dictionary) -> bool:
 	return get_company_level() >= get_part_required_level(pd)
 
 
-## Mainboards werden nach Kategorie freigeschaltet, alle anderen Artikel sind immer verfügbar.
+## Artikel mit 'unlock_level' und Mainboards werden nach Firmenstufe freigeschaltet.
 func get_item_required_level(item_type: String) -> int:
 	if not ITEM_CATALOG.has(item_type):
 		return 1
 	var item: Dictionary = ITEM_CATALOG[item_type]
-	if not bool(item.get("mainboard", false)):
-		return 1
-	return int(MAINBOARD_CATEGORY_LEVEL.get(str(item.get("mb_cat", "")), 1))
+	var req := int(item.get("unlock_level", 1))
+	if bool(item.get("mainboard", false)):
+		req = maxi(req, int(MAINBOARD_CATEGORY_LEVEL.get(str(item.get("mb_cat", "")), 1)))
+	return req
 
 
 func is_item_unlocked(item_type: String) -> bool:
@@ -3006,11 +3256,12 @@ func _run_simulation_step(dt: float) -> void:
 	var prev_ups_backup := ups_backup_active
 	_recalculate_networks_and_metrics()
 
-	# 0. Day/Night Clock & kWh Meter
+	# 0. Day/Night Clock & kWh Meter (PV-Solaranlage spart 28 % laufenden Strom!)
 	var kw_now := float(total_watts) / 1000.0
 	if breaker_on:
+		var pv_mult := 0.72 if has_building_upgrade("upg_pv_solar") else 1.0
 		# Verbrauch in Spielstunden: ein Spieltag zählt 24 Stunden Last (realistische kWh pro Tag).
-		daily_kwh += kw_now * (dt / DAY_LENGTH_SECONDS) * 24.0
+		daily_kwh += kw_now * pv_mult * (dt / DAY_LENGTH_SECONDS) * 24.0
 	if _day_rollover_pending:
 		_day_rollover_pending = false
 		day_number += 1
@@ -3036,6 +3287,7 @@ func _run_simulation_step(dt: float) -> void:
 
 	_tick_grid_outage(dt * (2.2 if weather_state == "storm" else 1.0))
 	_tick_weather(dt)
+	_tick_constructions(dt)
 	_check_career_milestones()
 	_tick_team_order(dt)
 
@@ -3153,15 +3405,22 @@ func _run_simulation_step(dt: float) -> void:
 	# Die Kälte der Außengeräte kommt nur über ein Goldis Innengerät in den Raum.
 	# Kaltgang/Warmgang-Airflow steigert die reale Kühlleistung um bis zu +30 %!
 	if indoor_units > 0:
-		total_cooling += heat_pump_capacity * (1.0 + airflow_bonus)
+		var extra_cool_bonus := 0.22 if has_building_upgrade("upg_cold_aisle_pro") else 0.0
+		var gate_count := 0
+		for did in decor_items.keys():
+			if str((decor_items[did] as Dictionary).get("item_type", "")) == "prop_cold_aisle_gate":
+				gate_count += 1
+		extra_cool_bonus += minf(0.18, float(gate_count) * 0.06)
+		total_cooling += heat_pump_capacity * (1.0 + airflow_bonus + extra_cool_bonus)
 
-	# Slight natural night cooling (-3°C at night) + dynamisches Wetter (Hitzewelle / Regen)!
+	# Slight natural night cooling (-3°C at night) + dynamisches Wetter + Dach-Rückkühlwerk (-4.5°C)!
 	var night_bonus := -3.0 if (time_of_day < 0.22 or time_of_day > 0.80) else 0.0
+	var chiller_farm_bonus := -4.5 if has_building_upgrade("upg_roof_chillers") else 0.0
 	var weather_temp_delta := 8.5 if weather_state == "heatwave" else (-2.5 if (weather_state == "rain" or weather_state == "storm") else 0.0)
-	var target_room := clampf(22.0 + night_bonus + weather_temp_delta + total_heat_gen - total_cooling, 15.0, 96.0)
+	var target_room := clampf(22.0 + night_bonus + chiller_farm_bonus + weather_temp_delta + total_heat_gen - total_cooling, 15.0, 96.0)
 	room_temp = move_toward(room_temp, target_room, dt * 2.0)
 
-	# 4. Hardware Faults & Fires (modulated by NVMe/PSU/Cooling fault_mult!)
+	# 4. Hardware Faults & Fires — DRASTISCH seltener (~80 % weniger Ausfälle!) + Staub/Wartungs-Simulation!
 	var racks_dirty := false
 	for rid in racks.keys():
 		var rack: Dictionary = racks[rid]
@@ -3176,34 +3435,42 @@ func _run_simulation_step(dt: float) -> void:
 			if st == "burning":
 				money = maxf(0.0, money - 3.0 * dt)
 			elif st == "ok" and bool(rack["powered"]):
+				# Staub sammelt sich sehr langsam an; vorbeugende Wartung drückt Ausfallrisiko auf nahezu 0 %!
+				var dust := clampf(float(slot.get("dust_level", 0.0)) + dt * 0.048, 0.0, 100.0)
+				var th_hp := clampf(float(slot.get("thermal_health", 100.0)) - dt * 0.022, 0.0, 100.0)
+				slot["dust_level"] = dust
+				slot["thermal_health"] = th_hp
+
 				var stats := get_slot_stats(slot)
 				var fmult := float(stats["fault_mult"])
-				if rtemp >= 80.0 and randf() < 0.030 * fmult:
+				# Wartungs-Faktor: sauber gewartete Server (< 20 % Staub & > 75 % Paste) fallen fast nie aus!
+				var maint_risk := 0.14 if (dust < 20.0 and th_hp > 75.0) else (0.55 if dust < 55.0 else (1.15 + (dust - 55.0) * 0.015))
+				var eff_temp := rtemp + (dust * 0.05) + ((100.0 - th_hp) * 0.03)
+
+				if eff_temp >= 82.0 and randf() < 0.008 * fmult:
 					slot["state"] = "burning"
 					slot["fire_level"] = 1.0
 					racks_dirty = true
 					post_event_f("BRAND in %s (Slot %d)! Feuerlöscher von der Wand holen!", [get_rack_display_name(rid), i + 1], "alert")
 					_rpc_play_sfx.rpc("alarm")
-				elif rtemp >= 68.0 and randf() < 0.014 * fmult:
+				elif eff_temp >= 70.0 and randf() < 0.0032 * fmult:
 					slot["state"] = "crashed"
 					slot["repair_progress"] = 0.0
-					slot["faulty_part"] = ""
+					slot["faulty_part"] = "cooling" if dust >= 45.0 else "cpu"
 					slot["diagnosed"] = false
 					racks_dirty = true
-					post_event_f("Überhitzung: %s Slot %d abgestürzt! Reparatur über die 3D-Vorschau im Rack-Menü.", [get_rack_display_name(rid), i + 1], "warn")
+					post_event_f("Überhitzung: %s Slot %d abgestürzt! Diagnose & Reparatur im Rack-Menü nötig.", [get_rack_display_name(rid), i + 1], "warn")
 					_rpc_play_sfx.rpc("alarm")
-				elif bool(rack["networked"]) and randf() < 0.0012 * fmult:
+				elif bool(rack["networked"]) and randf() < 0.00022 * fmult * maint_risk:
 					slot["state"] = "crashed"
 					slot["repair_progress"] = 0.0
-					# Ein eingebautes Bauteil geht kaputt. Welches, verrät die Meldung nicht:
-					# Der Spieler findet es in der 3D-Vorschau des Racks.
 					slot["faulty_part"] = _pick_faulty_part(slot)
 					slot["diagnosed"] = false
 					racks_dirty = true
 					if str(slot["faulty_part"]) != "":
-						post_event_f("Hardware-Fehler in %s! Ursache unbekannt – im Rack nachsehen.", [get_rack_display_name(rid)], "warn")
+						post_event_f("Hardware-Störung in %s Slot %d — Diagnose im Rack-Menü starten.", [get_rack_display_name(rid), i + 1], "warn")
 					else:
-						post_event_f("Hardware-Fehler in %s Slot %d – Wartung [E] nötig.", [get_rack_display_name(rid), i + 1], "warn")
+						post_event_f("Hardware-Störung in %s Slot %d — Wartung [E] nötig.", [get_rack_display_name(rid), i + 1], "warn")
 					_rpc_play_sfx.rpc("error")
 
 	if racks_dirty:
@@ -3812,6 +4079,8 @@ func _describe_issue_call(rack_id: String, rack: Dictionary, issue_key: String) 
 
 func _recalculate_networks_and_metrics() -> void:
 	max_watts = int(POWER_TIERS[power_tier]["watts"])
+	if halle_nord_owned:
+		max_watts += HALLE_NORD_EXTRA_WATTS
 
 	for rid in racks.keys():
 		racks[rid]["powered"] = false
@@ -3826,6 +4095,8 @@ func _recalculate_networks_and_metrics() -> void:
 	var bus_sources: Array[String] = [WALL_BREAKER_ID]
 	if room_level >= 2:
 		bus_sources.append(HALL_C_BREAKER_ID)
+	if halle_nord_owned:
+		bus_sources.append(HALL_NORD_BREAKER_ID)
 
 	var bus_visited: Dictionary = {}
 	var bus_queue: Array = []
@@ -3909,12 +4180,16 @@ func _recalculate_networks_and_metrics() -> void:
 		if room_level >= 2:
 			n_visited[HALL_C_ROUTER_ID] = true
 			n_queue.append(HALL_C_ROUTER_ID)
+		if halle_nord_owned:
+			n_visited[HALL_NORD_ROUTER_ID] = true
+			n_queue.append(HALL_NORD_ROUTER_ID)
 
 		while not n_queue.is_empty():
 			var curr := str(n_queue.pop_front())
 			var can_forward := (
 				curr == WALL_ROUTER_ID
 				or curr == HALL_C_ROUTER_ID
+				or curr == HALL_NORD_ROUTER_ID
 				or (racks.has(curr) and bool(racks[curr]["powered"]) and _count_rack_switches(curr) > 0)
 			)
 			if not can_forward:
@@ -3998,6 +4273,9 @@ func _recalculate_networks_and_metrics() -> void:
 	var rt_d: Dictionary = ROUTER_TIERS[clampi(router_tier, 0, ROUTER_TIERS.size() - 1)]
 	max_bandwidth_cu = int(rt_d["max_cu"])
 	max_bandwidth_mbps = float(rt_d.get("max_mbps", 50.0))
+	if halle_nord_owned:
+		max_bandwidth_mbps += HALLE_NORD_EXTRA_MBPS
+		max_bandwidth_cu += 600
 	total_watts = watts
 	total_ram_gb = sum_ram
 	total_cpu_score = sum_cpu
@@ -4007,7 +4285,7 @@ func _recalculate_networks_and_metrics() -> void:
 	raw_compute = compute
 	total_compute = mini(compute, max_bandwidth_cu)
 	used_compute = req_compute
-	revenue_bonus_mult = 1.0 + minf(bonus_sum + cable_mgmt_bonus, 0.92)
+	revenue_bonus_mult = (1.0 + minf(bonus_sum + cable_mgmt_bonus, 0.92)) * get_level_revenue_mult()
 
 
 # ==============================================================================
@@ -4473,10 +4751,15 @@ func _rpc_req_drop_crate(drop_pos: Vector3) -> void:
 	if held.is_empty():
 		return
 	var cid := str(held["id"])
-	var max_x := 5.0 if room_level == 0 else (11.8 if room_level == 1 else 20.8)
-	var clamped := Vector3(clampf(drop_pos.x, -5.0, max_x), 0.0, clampf(drop_pos.z, -4.0, 8.8))
-	# Verhindert, dass abgelegte Items in einem Server-Rack oder Gerät verschwinden!
-	clamped = _push_drop_outside_obstacles(clamped, max_x)
+	var clamped: Vector3
+	if halle_nord_owned and drop_pos.z < -100.0:
+		clamped = Vector3(clampf(drop_pos.x, -9.5, 9.5), 0.0, clampf(drop_pos.z, HALLE_NORD_ORIGIN.z - 5.5, HALLE_NORD_ORIGIN.z + 12.5))
+		clamped = _push_drop_outside_obstacles(clamped, 9.5)
+	else:
+		var max_x := 5.0 if room_level == 0 else (11.8 if room_level == 1 else 20.8)
+		clamped = Vector3(clampf(drop_pos.x, -5.0, max_x), 0.0, clampf(drop_pos.z, -4.0, 8.8))
+		# Verhindert, dass abgelegte Items in einem Server-Rack oder Gerät verschwinden!
+		clamped = _push_drop_outside_obstacles(clamped, max_x)
 	crates[cid]["held_by"] = 0
 	crates[cid]["pos"] = clamped
 	_broadcast_crates()
@@ -4573,6 +4856,21 @@ func _rpc_req_place_held_structure(pos: Vector3, rot_y: float) -> void:
 		_recalculate_networks_and_metrics()
 		_broadcast_ups()
 		post_event_f("%s hat USV-Notstrom %s aufgestellt (mit Stromkabel [2] verbinden!).", [NetworkManager.get_player_name(peer_id), uid.to_upper()], "good")
+	elif is_decor_type(item_type):
+		var did := _alloc_id("decor")
+		var stored: Array = []
+		if item_type == "prop_storage_shelf":
+			stored = [null, null, null, null]
+		decor_items[did] = {
+			"id": did,
+			"item_type": item_type,
+			"pos": snapped,
+			"rot_y": rot_y,
+			"stored_items": stored,
+		}
+		_recalculate_networks_and_metrics()
+		_broadcast_decor_items()
+		post_event_f("%s hat %s aufgestellt.", [NetworkManager.get_player_name(peer_id), ITEM_CATALOG[item_type]["name"]], "good")
 
 	_broadcast_crates()
 	_broadcast_sim_tick()
@@ -5475,12 +5773,16 @@ func _is_valid_cable_endpoint(cable_type: String, endpoint_id: String) -> bool:
 			return true
 		if endpoint_id == HALL_C_BREAKER_ID and room_level >= 2:
 			return true
+		if endpoint_id == HALL_NORD_BREAKER_ID and halle_nord_owned:
+			return true
 		# Das Goldis Innengerät hat keine Strombuchse.
 		return racks.has(endpoint_id) or (coolers.has(endpoint_id) and not is_indoor_unit(endpoint_id)) or ups_units.has(endpoint_id)
 	else:
 		if endpoint_id == WALL_ROUTER_ID:
 			return true
 		if endpoint_id == HALL_C_ROUTER_ID and room_level >= 2:
+			return true
+		if endpoint_id == HALL_NORD_ROUTER_ID and halle_nord_owned:
 			return true
 		return racks.has(endpoint_id)
 
@@ -5545,6 +5847,11 @@ func _broadcast_power_change() -> void:
 
 
 func _start_grid_outage(duration: float) -> void:
+	# 2-MVA Notstrom-Dieselgenerator übernimmt bei Netzausfall komplett unterbrechungsfrei!
+	if has_building_upgrade("upg_diesel_gen"):
+		post_event("⚡ Stadtwerke-Netzausfall erkannt — 2-MVA Notstrom-Dieselgenerator hat automatisch übernommen (0 s Ausfallzeit)!", "good")
+		_rpc_play_sfx.rpc("save")
+		return
 	_grid_breaker_restore = breaker_on
 	grid_outage_left = duration
 	breaker_on = false
@@ -5707,16 +6014,29 @@ func _rpc_req_repair_slot(rack_id: String, slot_idx: int, amount: float) -> void
 	# Erst das defekte Teil finden, dann reparieren.
 	if is_slot_awaiting_diagnosis(slot):
 		return
-	slot["repair_progress"] = minf(1.0, float(slot["repair_progress"]) + clampf(amount, 0.0, 1.0))
+	var speed_mult := get_repair_speed_multiplier()
+	var used_kit := false
+	if maint_kits > 0 and float(slot["repair_progress"]) <= 0.001:
+		maint_kits -= 1
+		used_kit = true
+	if used_kit or bool(slot.get("_using_kit", false)):
+		slot["_using_kit"] = true
+		speed_mult *= 2.2
+	slot["repair_progress"] = minf(1.0, float(slot["repair_progress"]) + clampf(amount * speed_mult, 0.0, 1.0))
 	if float(slot["repair_progress"]) >= 1.0:
+		var full_ok := bool(slot.get("_using_kit", false))
 		slot["state"] = "ok"
 		slot["repair_progress"] = 0.0
 		slot["faulty_part"] = ""
 		slot["diagnosed"] = false
+		slot.erase("_using_kit")
+		slot["dust_level"] = 0.0 if full_ok else 35.0
+		slot["thermal_health"] = 100.0 if full_ok else 72.0
 		_recalculate_networks_and_metrics()
 		_broadcast_sim_tick()
-		post_event_f("%s hat %s Slot %d repariert & neugestartet!", [
-			NetworkManager.get_player_name(peer_id), get_rack_display_name(rack_id), slot_idx + 1
+		var diag_str := tr("mit Ersatzteil-Kit (100 % Zustand)") if full_ok else tr("(Not-Reparatur — 72 % Zustand)")
+		post_event_f("%s hat %s Slot %d %s repariert!", [
+			NetworkManager.get_player_name(peer_id), get_rack_display_name(rack_id), slot_idx + 1, diag_str
 		], "good")
 		_rpc_play_sfx.rpc("repair")
 	_broadcast_racks()
@@ -5922,8 +6242,11 @@ func _rpc_req_release_cart(pos: Vector3, rot_y: float) -> void:
 	if cart.is_empty():
 		return
 	var cid := str(cart["id"])
-	var max_x := 4.9 if room_level == 0 else (11.8 if room_level == 1 else 20.8)
-	carts[cid]["pos"] = Vector3(clampf(pos.x, -4.9, max_x), 0.0, clampf(pos.z, -3.9, 9.2))
+	if halle_nord_owned and pos.z < -100.0:
+		carts[cid]["pos"] = Vector3(clampf(pos.x, -9.4, 9.4), 0.0, clampf(pos.z, HALLE_NORD_ORIGIN.z - 5.2, HALLE_NORD_ORIGIN.z + 12.0))
+	else:
+		var max_x := 4.9 if room_level == 0 else (11.8 if room_level == 1 else 20.8)
+		carts[cid]["pos"] = Vector3(clampf(pos.x, -4.9, max_x), 0.0, clampf(pos.z, -3.9, 9.2))
 	carts[cid]["rot_y"] = rot_y
 	carts[cid]["pushed_by"] = 0
 	_broadcast_carts()
@@ -6449,6 +6772,12 @@ func _broadcast_sim_tick() -> void:
 		"cable_mgmt_bonus": cable_mgmt_bonus,
 		"career_completed": career_completed,
 		"active_team_order": active_team_order,
+		"halle_nord_owned": halle_nord_owned,
+		"delivery_target_site": delivery_target_site,
+		"building_upgrades": building_upgrades.duplicate(true),
+		"active_constructions": active_constructions.duplicate(true),
+		"decor_items": decor_items.duplicate(true),
+		"maint_kits": maint_kits,
 	}
 	_rpc_sync_sim_tick.rpc(packet)
 
@@ -6507,6 +6836,22 @@ func _rpc_sync_sim_tick(packet: Dictionary) -> void:
 			career_completed = (packet["career_completed"] as Array).duplicate()
 		if packet.has("active_team_order") and packet["active_team_order"] is Dictionary:
 			active_team_order = (packet["active_team_order"] as Dictionary).duplicate(true)
+		var prev_hn := halle_nord_owned
+		halle_nord_owned = bool(packet.get("halle_nord_owned", halle_nord_owned))
+		delivery_target_site = str(packet.get("delivery_target_site", delivery_target_site))
+		maint_kits = int(packet.get("maint_kits", maint_kits))
+		if packet.has("building_upgrades") and packet["building_upgrades"] is Dictionary:
+			var new_bu: Dictionary = (packet["building_upgrades"] as Dictionary).duplicate(true)
+			if new_bu != building_upgrades:
+				building_upgrades = new_bu
+				building_upgrades_changed.emit()
+		if packet.has("active_constructions") and packet["active_constructions"] is Dictionary:
+			var new_ac: Dictionary = (packet["active_constructions"] as Dictionary).duplicate(true)
+			if new_ac != active_constructions:
+				active_constructions = new_ac
+				constructions_changed.emit()
+		if halle_nord_owned != prev_hn:
+			halle_nord_changed.emit()
 		var rtemps: Dictionary = packet["rack_temps"]
 		for rid in rtemps.keys():
 			if racks.has(rid):
@@ -7238,6 +7583,10 @@ func _approx_endpoint_pos(eid: String) -> Vector3:
 		return Vector3(21.0, 1.5, -4.3)
 	if eid == HALL_C_ROUTER_ID:
 		return Vector3(21.0, 1.8, -2.5)
+	if eid == HALL_NORD_BREAKER_ID:
+		return HALLE_NORD_ORIGIN + Vector3(-8.2, 1.5, -5.7)
+	if eid == HALL_NORD_ROUTER_ID:
+		return HALLE_NORD_ORIGIN + Vector3(-4.6, 1.8, -5.7)
 	return Vector3.ZERO
 
 
@@ -7249,9 +7598,9 @@ func _generate_daily_deals() -> void:
 	daily_deals.clear()
 	var pool_items: Array[String] = ["rack", "web_server", "game_server", "storage_server", "ups", "cooler"]
 	if get_company_level() >= 2:
-		pool_items.append("rack_pro")
 		pool_items.append("cloud_server")
 	if get_company_level() >= 3:
+		pool_items.append("rack_pro")
 		pool_items.append("ai_server")
 	pool_items.shuffle()
 	var count := mini(3, pool_items.size())
@@ -7494,3 +7843,325 @@ func _rpc_req_player_emote(emote_id: String) -> void:
 func _rpc_broadcast_player_emote(peer_id: int, emote_id: String) -> void:
 	SfxManager.play("emote", -10.0, 1.05 if emote_id == "thumbs_up" else 0.96)
 	player_emote_received.emit(peer_id, emote_id)
+
+
+# --- Großstandort Halle Nord (240 m², ab Firmen-Level 3, eigene Strom-/Fiber-/Lieferzone) ---
+
+func get_discounted_price(base_price: float) -> int:
+	return maxi(1, int(roundf(base_price * get_level_discount_mult())))
+
+
+func request_buy_halle_nord() -> void:
+	_rpc_req_buy_halle_nord.rpc_id(1)
+
+
+@rpc("any_peer", "call_local", "reliable")
+func _rpc_req_buy_halle_nord() -> void:
+	if not multiplayer.is_server():
+		return
+	var peer_id := _get_sender_id()
+	if halle_nord_owned:
+		return
+	if get_company_level() < HALLE_NORD_REQ_LEVEL or money < float(HALLE_NORD_COST):
+		_rpc_play_sfx.rpc_id(peer_id, "error")
+		return
+	money -= float(HALLE_NORD_COST)
+	halle_nord_owned = true
+	_recalculate_networks_and_metrics()
+	_rpc_sync_halle_nord.rpc(true, delivery_target_site)
+	_broadcast_sim_tick()
+	_rpc_play_sfx.rpc("upgrade")
+	post_event_f("🏭 %s hat Großstandort HALLE NORD (240 m²) gekauft! Drücke [T] oder nutze das Shuttle-Terminal zum Teleportieren.", [
+		NetworkManager.get_player_name(peer_id)
+	], "good")
+
+
+func request_set_delivery_site(site: String) -> void:
+	_rpc_req_set_delivery_site.rpc_id(1, site)
+
+
+@rpc("any_peer", "call_local", "reliable")
+func _rpc_req_set_delivery_site(site: String) -> void:
+	if not multiplayer.is_server():
+		return
+	var target := "halle_nord" if (site == "halle_nord" and halle_nord_owned) else "garage"
+	delivery_target_site = target
+	_rpc_sync_halle_nord.rpc(halle_nord_owned, delivery_target_site)
+	_broadcast_sim_tick()
+
+
+@rpc("authority", "call_local", "reliable")
+func _rpc_sync_halle_nord(owned: bool, del_site: String) -> void:
+	var changed_own := (halle_nord_owned != owned)
+	var changed_site := (delivery_target_site != del_site)
+	halle_nord_owned = owned
+	delivery_target_site = del_site if owned else "garage"
+	if changed_own:
+		halle_nord_changed.emit()
+	if changed_site:
+		delivery_site_changed.emit()
+	state_updated.emit()
+
+
+
+# ---------------------------------------------------------------- Kaufbare Einrichtung, Gebäude-Upgrades & Tiefes Wartungssystem
+
+func is_decor_type(item_type: String) -> bool:
+	return bool((ITEM_CATALOG.get(item_type, {}) as Dictionary).get("is_decor", false))
+
+
+func has_building_upgrade(uid: String) -> bool:
+	return bool(building_upgrades.get(uid, false))
+
+
+func is_construction_active(uid: String) -> bool:
+	return active_constructions.has(uid)
+
+
+func get_repair_speed_multiplier() -> float:
+	var mult := 1.0
+	for did in decor_items.keys():
+		if str((decor_items[did] as Dictionary).get("item_type", "")) == "prop_esd_workbench":
+			mult = 1.35
+			break
+	return mult
+
+
+func get_fault_diagnosis_info(slot: Dictionary) -> Dictionary:
+	var part := str(slot.get("faulty_part", ""))
+	if FAULT_DIAGNOSIS_META.has(part):
+		return FAULT_DIAGNOSIS_META[part] as Dictionary
+	return {"code": "ERR-GEN-01", "cause": "Allgemeine Hardware-Störung", "tool": "Wartungs-Kit"}
+
+
+func get_maintenance_warnings() -> Array[Dictionary]:
+	var out: Array[Dictionary] = []
+	for rid in racks.keys():
+		var rack: Dictionary = racks[rid]
+		var slots: Array = rack.get("slots", [])
+		for i in range(slots.size()):
+			var sl: Dictionary = slots[i]
+			if str(sl.get("item_type", "")) == "":
+				continue
+			var dust := float(sl.get("dust_level", 0.0))
+			var th_hp := float(sl.get("thermal_health", 100.0))
+			if str(sl.get("state", "ok")) != "ok" or dust >= 65.0 or th_hp <= 35.0:
+				out.append({
+					"rack_id": rid,
+					"rack_name": get_rack_display_name(rid),
+					"slot_idx": i,
+					"state": str(sl.get("state", "ok")),
+					"dust": int(roundf(dust)),
+					"health": int(roundf(th_hp)),
+				})
+	return out
+
+
+func request_buy_building_upgrade(uid: String) -> void:
+	_rpc_req_buy_building_upgrade.rpc_id(1, uid)
+
+
+@rpc("any_peer", "call_local", "reliable")
+func _rpc_req_buy_building_upgrade(uid: String) -> void:
+	if not multiplayer.is_server():
+		return
+	var peer_id := _get_sender_id()
+	if not BUILDING_UPGRADE_CATALOG.has(uid):
+		return
+	if has_building_upgrade(uid) or is_construction_active(uid):
+		_rpc_play_sfx.rpc_id(peer_id, "error")
+		return
+	var meta: Dictionary = BUILDING_UPGRADE_CATALOG[uid]
+	if bool(meta.get("req_nord", false)) and not halle_nord_owned:
+		_rpc_play_sfx.rpc_id(peer_id, "error")
+		return
+	var price := float(meta.get("price", 0))
+	if money < price:
+		_rpc_play_sfx.rpc_id(peer_id, "error")
+		return
+	money -= price
+	var dur := float(meta.get("duration", 50.0))
+	active_constructions[uid] = {
+		"remaining": dur,
+		"duration": dur,
+		"site": "halle_nord" if bool(meta.get("req_nord", false)) else ("halle_nord" if halle_nord_owned else "garage"),
+	}
+	_broadcast_building_upgrades()
+	_broadcast_sim_tick()
+	_rpc_play_sfx.rpc("upgrade")
+	post_event_f("🚧 Bautrupp beauftragt: %s! Handwerker rücken an (Bauzeit ca. %d s).", [
+		str(meta["name"]), int(roundf(dur))
+	], "good")
+
+
+func _tick_constructions(dt: float) -> void:
+	if active_constructions.is_empty():
+		return
+	var finished: Array[String] = []
+	for uid in active_constructions.keys():
+		var c: Dictionary = active_constructions[uid]
+		c["remaining"] = maxf(0.0, float(c.get("remaining", 0.0)) - dt)
+		if float(c["remaining"]) <= 0.0:
+			finished.append(str(uid))
+	if not finished.is_empty():
+		for uid in finished:
+			active_constructions.erase(uid)
+			building_upgrades[uid] = true
+			var meta: Dictionary = BUILDING_UPGRADE_CATALOG.get(uid, {})
+			if uid == "upg_security_gate":
+				reputation = minf(100.0, reputation + 8.0)
+			post_event_f("✅ Bauarbeiten abgeschlossen: %s ist jetzt einsatzbereit!", [str(meta.get("name", uid))], "good")
+		_recalculate_networks_and_metrics()
+		_broadcast_building_upgrades()
+		_rpc_play_sfx.rpc("save")
+
+
+func request_maintain_slot(rack_id: String, slot_idx: int) -> void:
+	_rpc_req_maintain_slot.rpc_id(1, rack_id, slot_idx)
+
+
+@rpc("any_peer", "call_local", "reliable")
+func _rpc_req_maintain_slot(rack_id: String, slot_idx: int) -> void:
+	if not multiplayer.is_server():
+		return
+	var peer_id := _get_sender_id()
+	if not racks.has(rack_id):
+		return
+	var slots: Array = racks[rack_id]["slots"]
+	if slot_idx < 0 or slot_idx >= slots.size():
+		return
+	var slot: Dictionary = slots[slot_idx]
+	if str(slot.get("item_type", "")) == "" or str(slot.get("state", "ok")) != "ok":
+		return
+	if maint_kits > 0:
+		maint_kits -= 1
+	slot["dust_level"] = 0.0
+	slot["thermal_health"] = 100.0
+	racks[rack_id]["temp"] = maxf(22.0, float(racks[rack_id].get("temp", 35.0)) - 3.0)
+	_broadcast_racks()
+	_broadcast_sim_tick()
+	_rpc_play_sfx.rpc("repair")
+	post_event_f("🧹 %s hat %s Slot %d gewartet (Staub 0 %%, Wärmeleitpaste 100 %% — Ausfallrisiko minimal!).", [
+		NetworkManager.get_player_name(peer_id), get_rack_display_name(rack_id), slot_idx + 1
+	], "good")
+
+
+func request_refill_maint_kits() -> void:
+	_rpc_req_refill_maint_kits.rpc_id(1)
+
+
+@rpc("any_peer", "call_local", "reliable")
+func _rpc_req_refill_maint_kits() -> void:
+	if not multiplayer.is_server():
+		return
+	var peer_id := _get_sender_id()
+	if maint_kits >= 12:
+		_rpc_play_sfx.rpc_id(peer_id, "error")
+		return
+	var has_cabinet := false
+	for did in decor_items.keys():
+		if str((decor_items[did] as Dictionary).get("item_type", "")) == "prop_parts_cabinet":
+			has_cabinet = true
+			break
+	var cost := 20.0 if has_cabinet else 45.0
+	if money < cost:
+		_rpc_play_sfx.rpc_id(peer_id, "error")
+		return
+	money -= cost
+	maint_kits = mini(12, maint_kits + 3)
+	_broadcast_sim_tick()
+	_rpc_play_sfx.rpc("snap")
+	post_event_f("🧰 +3 Wartungs- & Ersatzteil-Kits aufgefüllt (Vorrat: %d, Kosten: $%d).", [maint_kits, int(cost)], "good")
+
+
+func request_sell_decor(decor_id: String) -> void:
+	_rpc_req_sell_decor.rpc_id(1, decor_id)
+
+
+@rpc("any_peer", "call_local", "reliable")
+func _rpc_req_sell_decor(decor_id: String) -> void:
+	if not multiplayer.is_server():
+		return
+	var peer_id := _get_sender_id()
+	if not decor_items.has(decor_id):
+		return
+	var d: Dictionary = decor_items[decor_id]
+	var itype := str(d.get("item_type", ""))
+	var refund := int(roundf(float((ITEM_CATALOG.get(itype, {}) as Dictionary).get("price", 0)) * SELL_REFUND_RATIO))
+	decor_items.erase(decor_id)
+	money += float(refund)
+	_recalculate_networks_and_metrics()
+	_broadcast_decor_items()
+	_broadcast_sim_tick()
+	_rpc_play_sfx.rpc("sell")
+	post_event_f("%s hat %s für +$%d verkauft.", [
+		NetworkManager.get_player_name(peer_id), str((ITEM_CATALOG.get(itype, {}) as Dictionary).get("name", itype)), refund
+	], "good")
+
+
+func request_decor_shelf_interact(decor_id: String, slot_idx: int) -> void:
+	_rpc_req_decor_shelf_interact.rpc_id(1, decor_id, slot_idx)
+
+
+@rpc("any_peer", "call_local", "reliable")
+func _rpc_req_decor_shelf_interact(decor_id: String, slot_idx: int) -> void:
+	if not multiplayer.is_server():
+		return
+	var peer_id := _get_sender_id()
+	if not decor_items.has(decor_id):
+		return
+	var d: Dictionary = decor_items[decor_id]
+	if str(d.get("item_type", "")) != "prop_storage_shelf":
+		return
+	var stored: Array = d.get("stored_items", [null, null, null, null])
+	if slot_idx < 0 or slot_idx >= stored.size():
+		return
+	var held := get_player_held_crate(peer_id)
+	if not held.is_empty():
+		if stored[slot_idx] != null:
+			_rpc_play_sfx.rpc_id(peer_id, "error")
+			return
+		var cid := str(held["id"])
+		stored[slot_idx] = crates[cid].duplicate(true)
+		(stored[slot_idx] as Dictionary)["held_by"] = 0
+		crates.erase(cid)
+		d["stored_items"] = stored
+		_broadcast_crates()
+		_broadcast_decor_items()
+		_rpc_play_sfx.rpc("place")
+	else:
+		if stored[slot_idx] == null:
+			return
+		var item_d: Dictionary = (stored[slot_idx] as Dictionary).duplicate(true)
+		var new_cid := _alloc_id("crate")
+		item_d["id"] = new_cid
+		item_d["held_by"] = peer_id
+		crates[new_cid] = item_d
+		stored[slot_idx] = null
+		d["stored_items"] = stored
+		_broadcast_crates()
+		_broadcast_decor_items()
+		_rpc_play_sfx.rpc("pickup")
+
+
+func _broadcast_decor_items() -> void:
+	_rpc_sync_decor_items.rpc(decor_items.duplicate(true))
+
+
+@rpc("authority", "call_local", "reliable")
+func _rpc_sync_decor_items(data: Dictionary) -> void:
+	decor_items = data.duplicate(true)
+	decor_items_changed.emit()
+
+
+func _broadcast_building_upgrades() -> void:
+	_rpc_sync_building_upgrades.rpc(building_upgrades.duplicate(true), active_constructions.duplicate(true))
+
+
+@rpc("authority", "call_local", "reliable")
+func _rpc_sync_building_upgrades(bu: Dictionary, ac: Dictionary) -> void:
+	building_upgrades = bu.duplicate(true)
+	active_constructions = ac.duplicate(true)
+	building_upgrades_changed.emit()
+	constructions_changed.emit()
+	state_updated.emit()

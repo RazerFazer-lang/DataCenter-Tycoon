@@ -28,6 +28,7 @@ var _showcase_container: Node3D
 var _rack_nodes: Dictionary = {}   # rack_id -> RackProp
 var _cooler_nodes: Dictionary = {} # cooler_id -> CoolerProp
 var _ups_nodes: Dictionary = {}    # ups_id -> UpsProp
+var _decor_nodes: Dictionary = {}  # decor_id -> DecorProp
 var _cart_nodes: Dictionary = {}   # cart_id -> CartProp
 var _crate_nodes: Dictionary = {}  # crate_id -> CrateProp
 var _player_nodes: Dictionary = {} # peer_id -> PlayerController
@@ -78,6 +79,7 @@ func _ready() -> void:
 	GameState.racks_changed.connect(_sync_racks)
 	GameState.coolers_changed.connect(_sync_coolers)
 	GameState.ups_changed.connect(_sync_ups)
+	GameState.decor_items_changed.connect(_sync_decor_items)
 	GameState.carts_changed.connect(_sync_carts)
 	GameState.crates_changed.connect(_sync_crates)
 	GameState.cables_changed.connect(_sync_cables)
@@ -247,6 +249,13 @@ func _apply_graphics_quality() -> void:
 	env.sdfgi_use_occlusion = true
 	env.sdfgi_energy = 0.78
 	env.sdfgi_cascades = 3
+	# Realistische Luftperspektive & Tiefennebel: entfernte Hügel, Windräder & Gebäude verschmelzen weich mit dem Horizont!
+	env.fog_enabled = true
+	env.fog_mode = Environment.FOG_MODE_EXPONENTIAL
+	env.fog_density = 0.0024
+	env.fog_aerial_perspective = 0.78
+	env.fog_sky_affect = 0.32
+	env.fog_light_color = Color(0.68, 0.76, 0.86)
 	env.volumetric_fog_enabled = (q >= 3)
 	env.volumetric_fog_density = 0.0022
 	env.volumetric_fog_albedo = Color(0.88, 0.89, 0.90)
@@ -339,9 +348,15 @@ func _update_day_night_atmosphere() -> void:
 		_sun_light.light_color = Color(0.42, 0.62, 0.98)
 		_sun_light.light_energy = 0.28
 
-	# Dynamische Innen-/Außen-Raumakustik je nach Spielerposition (Tor bei Z = 4.65)
+	# Dynamische Innen-/Außen-Raumakustik & Hallen-Reverb (Garage: Tor bei Z = 4.65; Halle Nord: 20 x 12 m)
 	if local_player != null and is_instance_valid(local_player):
-		SfxManager.set_listener_outdoor(local_player.position.z > 4.65)
+		var lp: Vector3 = local_player.position
+		if lp.z < -80.0:
+			var lz := lp.z - GameState.HALLE_NORD_ORIGIN.z
+			var in_hn := (absf(lp.x) < 10.1 and absf(lz) < 6.1)
+			SfxManager.set_listener_outdoor(not in_hn, in_hn)
+		else:
+			SfxManager.set_listener_outdoor(lp.z > 4.65, false)
 
 	var sky_sh := MatLib.get_sky_shader_material()
 	if sky_sh != null:
@@ -359,6 +374,20 @@ func _update_day_night_atmosphere() -> void:
 	env.ambient_light_color = Color(0.08, 0.13, 0.24).lerp(Color(0.28, 0.33, 0.40), day_factor)
 	# Etwas weniger Grundhelligkeit, damit Lampen und Schatten das Bild formen statt flachem Einheitslicht.
 	env.ambient_light_energy = lerpf(0.20, 0.45, day_factor)
+
+	# Dynamische Nebel-Atmosphäre & nasser spiegelnder Asphalt bei Regen/Gewitter!
+	var w_now: String = GameState.weather_state if GameState.is_active else "clear"
+	var is_wet := (w_now == "rain" or w_now == "storm")
+	env.fog_density = 0.0062 if w_now == "storm" else (0.0044 if w_now == "rain" else 0.0022)
+	var day_fog := Color(0.58, 0.64, 0.72) if is_wet else Color(0.70, 0.78, 0.88)
+	var night_fog := Color(0.06, 0.09, 0.16)
+	env.fog_light_color = night_fog.lerp(day_fog, day_factor)
+	var asp := MatLib.get_mat("asphalt")
+	if asp != null:
+		asp.roughness = lerpf(asp.roughness, 0.18 if is_wet else 0.86, 0.06)
+		asp.clearcoat_enabled = is_wet or asp.clearcoat > 0.02
+		asp.clearcoat = lerpf(asp.clearcoat, 0.82 if is_wet else 0.0, 0.06)
+		asp.albedo_color = asp.albedo_color.lerp(Color(0.56, 0.58, 0.62) if is_wet else Color(1.0, 1.0, 1.0), 0.06)
 
 
 func show_menu_showcase() -> void:
@@ -458,7 +487,7 @@ func activate_session() -> void:
 
 
 func reset_world() -> void:
-	for container_dict in [_rack_nodes, _cooler_nodes, _ups_nodes, _cart_nodes, _crate_nodes, _player_nodes]:
+	for container_dict in [_rack_nodes, _cooler_nodes, _ups_nodes, _decor_nodes, _cart_nodes, _crate_nodes, _player_nodes]:
 		var d: Dictionary = container_dict
 		for node in d.values():
 			if is_instance_valid(node):
@@ -506,6 +535,10 @@ func get_port_world_pos(cable_type: String, endpoint_id: String) -> Variant:
 		return _garage.hall_c_breaker_port_pos
 	if endpoint_id == GameState.HALL_C_ROUTER_ID:
 		return _garage.hall_c_router_port_pos
+	if endpoint_id == GameState.HALL_NORD_BREAKER_ID:
+		return _garage.hall_nord_breaker_port_pos
+	if endpoint_id == GameState.HALL_NORD_ROUTER_ID:
+		return _garage.hall_nord_router_port_pos
 	if _rack_nodes.has(endpoint_id):
 		var rp: RackProp = _rack_nodes[endpoint_id]
 		if cable_type == "cluster":
@@ -526,6 +559,7 @@ func _on_full_rebuild() -> void:
 	_sync_racks()
 	_sync_coolers()
 	_sync_ups()
+	_sync_decor_items()
 	_sync_carts()
 	_sync_crates()
 	_sync_cables()
@@ -599,6 +633,23 @@ func _sync_ups() -> void:
 			_ups_nodes[uid] = up
 		(_ups_nodes[uid] as UpsProp).apply_data(GameState.ups_units[uid])
 	_sync_cables()
+
+
+func _sync_decor_items() -> void:
+	for did in _decor_nodes.keys():
+		if not GameState.decor_items.has(did):
+			_decor_nodes[did].queue_free()
+			_decor_nodes.erase(did)
+	for did in GameState.decor_items.keys():
+		var d: Dictionary = GameState.decor_items[did]
+		if not _decor_nodes.has(did):
+			var dp := DecorProp.new()
+			dp.name = str(did)
+			_ups_container.add_child(dp)
+			dp.setup(str(did), str(d.get("item_type", "")), d)
+			_decor_nodes[did] = dp
+		else:
+			(_decor_nodes[did] as DecorProp).apply_data(d)
 
 
 func _sync_carts() -> void:
@@ -720,7 +771,9 @@ func get_socket_world_pos(cable_type: String, endpoint_id: String, idx: int) -> 
 func get_port_world_dir(_cable_type: String, endpoint_id: String) -> Variant:
 	# Wandkästen hängen an der Rückwand und zeigen in den Raum (+Z)
 	if endpoint_id == GameState.WALL_BREAKER_ID or endpoint_id == GameState.HALL_C_BREAKER_ID \
-			or endpoint_id == GameState.WALL_ROUTER_ID or endpoint_id == GameState.HALL_C_ROUTER_ID:
+			or endpoint_id == GameState.HALL_NORD_BREAKER_ID \
+			or endpoint_id == GameState.WALL_ROUTER_ID or endpoint_id == GameState.HALL_C_ROUTER_ID \
+			or endpoint_id == GameState.HALL_NORD_ROUTER_ID:
 		return Vector3.BACK
 	if _rack_nodes.has(endpoint_id):
 		var rp: RackProp = _rack_nodes[endpoint_id]

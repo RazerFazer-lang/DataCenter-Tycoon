@@ -197,13 +197,14 @@ func _ready() -> void:
 	_build_held_visuals()
 
 	if is_local:
+		add_to_group("local_player")
 		_avatar_root.visible = false
 		_nametag.visible = false
 
 		_camera = Camera3D.new()
 		_camera.fov = SettingsManager.fov
 		_camera.near = 0.06
-		_camera.far = 260.0
+		_camera.far = 320.0
 		_head_pivot.add_child(_camera)
 		_camera.current = true
 		SettingsManager.settings_changed.connect(_on_settings_changed)
@@ -364,6 +365,9 @@ func _unhandled_input(event: InputEvent) -> void:
 	elif event.is_action_pressed("emote_thumbs"):
 		if _ui_unlock_cooldown <= 0.0 and Input.mouse_mode == Input.MOUSE_MODE_CAPTURED:
 			GameState.request_player_emote("thumbs_up")
+	elif event.is_action_pressed("teleport_site"):
+		if _ui_unlock_cooldown <= 0.0 and not ui_locked:
+			teleport_between_sites()
 
 
 ## Kabeltyp in einem Slot ("" | "power" | "network"). Der aktive Slot liest das laufende Kabel.
@@ -546,7 +550,17 @@ func _physics_process(delta: float) -> void:
 			_footstep_accum += delta
 			if _footstep_accum >= step_interval:
 				_footstep_accum = 0.0
-				SfxManager.play_footstep(flat_speed > 5.8)
+				var surf := "concrete"
+				var is_wet := (GameState.weather_state == "rain" or GameState.weather_state == "storm")
+				if position.z < -80.0:
+					var lz := position.z - GameState.HALLE_NORD_ORIGIN.z
+					if absf(position.x) < 10.0 and absf(lz) < 6.0:
+						surf = "raised_floor"
+					elif is_wet:
+						surf = "wet"
+				elif position.z > 4.65 and is_wet:
+					surf = "wet"
+				SfxManager.play_footstep(flat_speed > 5.8, surf)
 		else:
 			_footstep_accum = 0.25
 			_head_pivot.position.y = lerpf(_head_pivot.position.y, _head_y() - _cam_weight_dip, clampf(delta * 10.0, 0.0, 1.0))
@@ -952,6 +966,16 @@ func _handle_primary_interact() -> void:
 				SfxManager.play("error")
 			elif _world != null and _world.has_method("open_terminal"):
 				_world.open_terminal()
+		"garage_door":
+			var garage := _world.get_node_or_null("Garage") if _world != null else null
+			if garage != null and garage.has_method("toggle_garage_door"):
+				garage.call("toggle_garage_door")
+		"shuttle_teleport":
+			teleport_between_sites()
+		"decor_shelf_slot":
+			GameState.request_decor_shelf_interact(str(target.get_meta("decor_id", "")), int(target.get_meta("slot_idx", 0)))
+		"parts_cabinet":
+			GameState.request_refill_maint_kits()
 		"wall_breaker":
 			if GameState.is_breaker_door_open():
 				GameState.request_toggle_breaker()
@@ -1622,6 +1646,32 @@ func _update_context_prompt() -> void:
 			current_prompt = tr("[E] Windows Server-PC öffnen (Shop, Verträge, Router, Upgrades)")
 			if PcScreenState.is_occupied_by_other():
 				current_prompt = tr("PC besetzt: %s sitzt gerade davor") % PcScreenState.user_name
+		"garage_door":
+			var garage := _world.get_node_or_null("Garage") if _world != null else null
+			var door_open := true
+			if garage != null and garage.has_method("is_garage_door_open"):
+				door_open = bool(garage.call("is_garage_door_open"))
+			current_prompt = tr("[E] Garagentor schließen (dämpft Straßenlärm)") if door_open else tr("[E] Garagentor öffnen")
+		"shuttle_teleport":
+			if not GameState.halle_nord_owned:
+				current_prompt = tr("Shuttle-Terminal: Großstandort Halle Nord ab Level 3 im PC kaufbar ($8.500)")
+			elif position.z < -80.0:
+				current_prompt = tr("[E] Zurück zur Start-Garage teleportieren (oder Taste [T])")
+			else:
+				current_prompt = tr("[E] Nach HALLE NORD (240 m²) teleportieren (oder Taste [T])")
+		"decor_shelf_slot":
+			var s_idx := int(target.get_meta("slot_idx", 0))
+			var has_crate := not GameState.get_player_held_crate(multiplayer.get_unique_id()).is_empty()
+			if has_crate:
+				current_prompt = tr("[E] Karton ins Lagerregal (Fach %d) stellen") % (s_idx + 1)
+			else:
+				current_prompt = tr("[E] Gegenstand aus Lagerregal (Fach %d) nehmen") % (s_idx + 1)
+		"parts_cabinet":
+			current_prompt = tr("[E] +3 Wartungs- & Ersatzteil-Kits auffüllen ($20 • Vorrat: %d/12)") % GameState.maint_kits
+		"decor_info":
+			var d_itype := str(target.get_meta("item_type", ""))
+			if d_itype == "prop_esd_workbench":
+				current_prompt = tr("ESD-Diagnose-Werkbank aktiv (+35 % Reparatur- & Diagnose-Tempo)")
 		"wall_breaker":
 			if GameState.grid_outage_left > 0.0:
 				current_prompt = tr("Netzausfall der Stadtwerke: Strom kommt in ca. %d Min. zurück") % GameState.get_grid_outage_minutes()
@@ -2317,6 +2367,35 @@ func _add_hose_part(parent: Node3D, points: PackedVector3Array, radius: float, m
 		var q: Quaternion = Quaternion(Vector3.UP, dir) if dir.dot(Vector3.UP) > -0.9999 else Quaternion(Vector3.RIGHT, PI)
 		mi.transform = Transform3D(Basis(q), (a + b) * 0.5)
 		parent.add_child(mi)
+
+
+func teleport_between_sites() -> void:
+	if not GameState.is_active:
+		return
+	if not GameState.halle_nord_owned:
+		SfxManager.play("error", -10.0)
+		GameState.post_event("Großstandort Halle Nord ist noch nicht gekauft (ab Firmenstufe 3 unter Upgrades & Standorte).", "warn")
+		return
+	# Ein gerade halb gezogenes Kabel sauber abbrechen; getragene Items (Kisten/Server/Kits/Feuerlöscher) bleiben in der Hand!
+	if not cable_start_id.is_empty():
+		cable_start_id = ""
+		cable_start_slot = -1
+	if is_crouching:
+		_apply_crouch(false)
+	var in_nord := (position.z < -80.0)
+	if in_nord:
+		position = Vector3(-4.1, 0.12, -3.5)
+		rotation.y = -PI * 0.5
+		GameState.post_event("📍 Standortwechsel: Start-Garage.", "info")
+	else:
+		position = GameState.HALLE_NORD_ORIGIN + Vector3(3.2, 0.12, -4.2)
+		rotation.y = 0.0
+		GameState.post_event("📍 Standortwechsel: Großstandort HALLE NORD (240 m²).", "good")
+	velocity = Vector3.ZERO
+	_head_pivot.rotation.x = 0.0
+	SfxManager.play("save", -7.0, 1.08)
+	if _world != null and _world.has_method("send_local_pose"):
+		_world.send_local_pose(position, rotation.y, _head_pivot.rotation.x, 0, false)
 
 
 func _build_placement_ghost() -> void:

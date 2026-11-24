@@ -34,6 +34,10 @@ const SCRIPTS: Array[String] = [
 	"res://scripts/world/delivery_van.gd",
 	"res://scripts/world/delivery_driver.gd",
 	"res://scripts/world/humanoid_rig_helper.gd",
+	"res://scripts/world/decor_prop.gd",
+	"res://scripts/world/building_prop_factory.gd",
+	"res://scripts/world/halle_nord_campus.gd",
+	"res://scripts/autoload/model_loader.gd",
 ]
 
 

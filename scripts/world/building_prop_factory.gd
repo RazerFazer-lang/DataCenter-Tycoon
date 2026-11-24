@@ -9,6 +9,9 @@ extends RefCounted
 
 
 static func build_heavy_workshop_shelf() -> Node3D:
+	var glb := ModelLoader.instantiate_custom_model("halle_nord_stocked_shelf")
+	if glb != null:
+		return glb
 	var root := Node3D.new()
 	var steel := MatLib.make_brushed_metal(Color(0.24, 0.25, 0.27), 0.44, 0.62)
 	var galv := MatLib.get_mat("galvanized_steel")
@@ -145,6 +148,12 @@ static func build_heavy_workshop_shelf() -> Node3D:
 
 
 static func build_hardware_workbench() -> Node3D:
+	var glb := ModelLoader.instantiate_custom_model("decor_esd_workbench")
+	if glb != null:
+		var hw := HardwareMeshFactory.build_workbench_display()
+		hw.position = Vector3(-0.04, 0.880, 0.06)
+		glb.add_child(hw)
+		return glb
 	var root := Node3D.new()
 	var steel := MatLib.make_brushed_metal(Color(0.22, 0.24, 0.26), 0.44, 0.60)
 	var galv := MatLib.get_mat("galvanized_steel")

@@ -8,7 +8,7 @@ const MIX_RATE := 44100
 # Erzeugte Klänge werden hier gespeichert, damit nur der erste Start rechnen muss (~870 ms gemessen).
 const SFX_CACHE_DIR := "user://sfx_cache"
 # Erhöhen, wenn sich ein Generator oder seine Parameter ändern, sonst bleiben die alten Klänge im Cache.
-const SFX_CACHE_VERSION := 7
+const SFX_CACHE_VERSION := 11
 const EXTERNAL_AUDIO_DIR := "res://assets/audio"
 
 var _sounds: Dictionary = {}
@@ -17,10 +17,16 @@ var _pool: Array[AudioStreamPlayer] = []
 var _pool_index: int = 0
 var _room_amb_player: AudioStreamPlayer
 var _rain_amb_player: AudioStreamPlayer
+var _rain_roof_player: AudioStreamPlayer
+var _outdoor_day_player: AudioStreamPlayer
+var _outdoor_night_player: AudioStreamPlayer
+var _distant_highway_player: AudioStreamPlayer
+var _wind_gust_player: AudioStreamPlayer
 var _overload_player: AudioStreamPlayer
 var _overload_stinger_accum: float = 0.0
 var _listener_outdoor: bool = false
 var _outdoor_blend: float = 0.0
+var _garage_door_open: float = 1.0
 
 
 func _ready() -> void:
@@ -55,6 +61,8 @@ func _generate_sounds() -> void:
 	for v in range(FOOTSTEP_VARIANTS):
 		_sounds["footstep_%d" % v] = _gen_footstep(v)
 	_sounds["footstep"] = _sounds["footstep_0"]
+	_sounds["step_raised"] = _gen_step_raised_floor()
+	_sounds["step_wet"] = _gen_step_wet_asphalt()
 	_sounds["extinguisher_start"] = _gen_extinguisher_burst()
 	_sounds["van_horn"] = _gen_van_horn()
 	_sounds["van_door"] = _gen_sliding_door()
@@ -63,6 +71,11 @@ func _generate_sounds() -> void:
 	_sounds["thunder"] = _gen_thunder_roll()
 	_sounds["ping"] = _gen_soft_chime([880.0, 1318.51], 0.04, 0.13)
 	_sounds["emote"] = _gen_soft_chime([523.25, 659.25], 0.045, 0.12)
+	_sounds["backup_beep"] = _gen_backup_beep()
+	_sounds["air_brake"] = _gen_air_brake_hiss()
+	_sounds["garage_door_stop"] = _gen_handling_thud(92.0, 0.18, false)
+	_sounds["distant_jet"] = _gen_distant_jet_pass()
+	_sounds["distant_yard_beep"] = _gen_distant_yard_beep()
 
 	# Support Desk, VoIP Phone & Clean System Chimes
 	_sounds["phone_ring"] = _gen_office_phone_ring()
@@ -97,7 +110,18 @@ func _generate_sounds() -> void:
 	_loops["van_engine"] = _gen_van_engine_loop(2.0)
 	_loops["cart_roll"] = _gen_cart_roll_loop(2.0)
 	_loops["extinguisher_spray"] = _gen_extinguisher_spray_loop(2.5)
-	_loops["rain_ambience"] = _gen_rain_loop(3.0)
+	_loops["rain_ambience"] = _gen_rain_loop(8.0)
+	_loops["rain_roof_indoor"] = _gen_rain_roof_loop(7.0)
+	_loops["outdoor_day"] = _gen_outdoor_day_loop(14.0)
+	_loops["outdoor_night"] = _gen_outdoor_night_loop(9.0)
+	_loops["wind_gust"] = _gen_wind_gust_loop(4.0)
+	_loops["car_pass_sedan"] = _gen_car_pass_loop(2.0, false)
+	_loops["car_pass_truck"] = _gen_car_pass_loop(2.5, true)
+	_loops["tire_wet"] = _gen_tire_wet_loop(2.0)
+	_loops["substation_hum"] = _gen_mains_hum_loop(2.0, 50.0)
+	_loops["diesel_gen_idle"] = _gen_diesel_gen_loop(3.0)
+	_loops["garage_door_motor"] = _gen_garage_door_motor_loop(2.0)
+	_loops["distant_highway"] = _gen_distant_highway_loop(5.0)
 
 
 const FOOTSTEP_VARIANTS := 6
@@ -183,6 +207,26 @@ func _setup_room_ambience() -> void:
 	_rain_amb_player.stream = _loops.get("rain_ambience") as AudioStream
 	_rain_amb_player.volume_db = -80.0
 	add_child(_rain_amb_player)
+	_rain_roof_player = AudioStreamPlayer.new()
+	_rain_roof_player.stream = _loops.get("rain_roof_indoor") as AudioStream
+	_rain_roof_player.volume_db = -80.0
+	add_child(_rain_roof_player)
+	_outdoor_day_player = AudioStreamPlayer.new()
+	_outdoor_day_player.stream = _loops.get("outdoor_day") as AudioStream
+	_outdoor_day_player.volume_db = -80.0
+	add_child(_outdoor_day_player)
+	_outdoor_night_player = AudioStreamPlayer.new()
+	_outdoor_night_player.stream = _loops.get("outdoor_night") as AudioStream
+	_outdoor_night_player.volume_db = -80.0
+	add_child(_outdoor_night_player)
+	_distant_highway_player = AudioStreamPlayer.new()
+	_distant_highway_player.stream = _loops.get("distant_highway") as AudioStream
+	_distant_highway_player.volume_db = -80.0
+	add_child(_distant_highway_player)
+	_wind_gust_player = AudioStreamPlayer.new()
+	_wind_gust_player.stream = _loops.get("wind_gust") as AudioStream
+	_wind_gust_player.volume_db = -80.0
+	add_child(_wind_gust_player)
 
 
 func _cache_index_path() -> String:
@@ -248,8 +292,43 @@ func _save_streams(source: Dictionary, kind: String) -> bool:
 	return true
 
 
-func set_listener_outdoor(outdoor: bool) -> void:
+var _hall_reverb: AudioEffectReverb = null
+var _listener_in_large_hall: bool = false
+
+
+func set_listener_outdoor(outdoor: bool, in_large_hall: bool = false) -> void:
 	_listener_outdoor = outdoor
+	_listener_in_large_hall = in_large_hall
+	if _hall_reverb == null:
+		var bus_idx := AudioServer.get_bus_index("Master")
+		if bus_idx >= 0:
+			_hall_reverb = AudioEffectReverb.new()
+			_hall_reverb.room_size = 0.48
+			_hall_reverb.damping = 0.58
+			_hall_reverb.spread = 0.72
+			_hall_reverb.wet = 0.0
+			_hall_reverb.dry = 1.0
+			AudioServer.add_bus_effect(bus_idx, _hall_reverb)
+	if _hall_reverb != null:
+		if outdoor:
+			_hall_reverb.wet = 0.0
+		elif in_large_hall:
+			_hall_reverb.room_size = 0.56
+			_hall_reverb.wet = 0.14
+		else:
+			_hall_reverb.room_size = 0.28
+			_hall_reverb.wet = 0.06
+
+
+func set_garage_door_open(open_amount: float) -> void:
+	_garage_door_open = clampf(open_amount, 0.0, 1.0)
+
+
+## Wie stark Aussengeraeusche (Verkehr, Wind, Voegel) beim Spieler ankommen:
+## 1.0 draussen, ~0.58 drinnen bei offenem Tor, ~0.16 drinnen bei geschlossenem Tor!
+func get_outdoor_transmission() -> float:
+	var inside_leak := lerpf(0.16, 0.58, _garage_door_open)
+	return lerpf(inside_leak, 1.0, _outdoor_blend)
 
 
 func _process(delta: float) -> void:
@@ -257,6 +336,7 @@ func _process(delta: float) -> void:
 	_update_overload_hum(delta)
 	_update_extinguisher_spray(delta)
 	_update_rain_ambience()
+	_update_outdoor_ambience()
 	if _room_amb_player == null:
 		return
 	var should_play := GameState.is_active and SettingsManager.get_effective_fan_gain() > 0.005
@@ -286,21 +366,86 @@ func _update_room_ambience_volume() -> void:
 
 
 func _update_rain_ambience() -> void:
-	if _rain_amb_player == null or _rain_amb_player.stream == null:
-		return
 	var w: String = GameState.weather_state if GameState.is_active else "clear"
 	var raining := (w == "rain" or w == "storm")
 	var gain := SettingsManager.get_effective_fan_gain()
-	if not raining or gain <= 0.005:
-		if _rain_amb_player.playing:
-			_rain_amb_player.stop()
-		return
-	if not _rain_amb_player.playing:
-		_rain_amb_player.play()
-	var storm_boost := 3.5 if w == "storm" else 0.0
-	# Drinnen gedämpftes Regendach-Prasseln (-24 dB), draußen klarer Regen (-13.5 dB)!
-	var base_db := lerpf(-24.5, -13.5, _outdoor_blend) + storm_boost
-	_rain_amb_player.volume_db = linear_to_db(gain) + base_db
+	var trans := get_outdoor_transmission()
+	if _rain_amb_player != null and _rain_amb_player.stream != null:
+		if not raining or gain <= 0.005:
+			if _rain_amb_player.playing:
+				_rain_amb_player.stop()
+		else:
+			if not _rain_amb_player.playing:
+				_rain_amb_player.play()
+			var storm_boost := 3.5 if w == "storm" else 0.0
+			var base_db := lerpf(-27.0, -12.5, trans) + storm_boost
+			_rain_amb_player.volume_db = linear_to_db(gain) + base_db
+
+	# Echtes Regen-Prasseln auf dem Hallen-Blechdach (drinnen deutlich hoerbar!)
+	if _rain_roof_player != null and _rain_roof_player.stream != null:
+		if not raining or gain <= 0.005 or _outdoor_blend > 0.96:
+			if _rain_roof_player.playing:
+				_rain_roof_player.stop()
+		else:
+			if not _rain_roof_player.playing:
+				_rain_roof_player.play()
+			var indoor_factor := clampf(1.0 - _outdoor_blend, 0.05, 1.0)
+			var roof_boost := 3.0 if w == "storm" else 0.0
+			_rain_roof_player.volume_db = linear_to_db(gain * indoor_factor) - 17.5 + roof_boost
+
+	# Windboeen bei Gewitter / Regen
+	if _wind_gust_player != null and _wind_gust_player.stream != null:
+		var windy := (w == "storm" or w == "rain") and GameState.is_active and gain > 0.005
+		if not windy:
+			if _wind_gust_player.playing:
+				_wind_gust_player.stop()
+		else:
+			if not _wind_gust_player.playing:
+				_wind_gust_player.play()
+			var w_db := (-15.5 if w == "storm" else -24.0) + lerpf(-10.0, 0.0, trans)
+			_wind_gust_player.volume_db = linear_to_db(gain) + w_db
+
+
+func _update_outdoor_ambience() -> void:
+	var gain := SettingsManager.get_effective_fan_gain()
+	var active := GameState.is_active and gain > 0.005
+	var trans := get_outdoor_transmission()
+	var w: String = GameState.weather_state if active else "clear"
+	var quiet_birds := (w == "rain" or w == "storm")
+	var tod := GameState.time_of_day if active else 0.38
+	var is_night := (tod < 0.24 or tod > 0.76)
+
+	if _outdoor_day_player != null and _outdoor_day_player.stream != null:
+		var day_on := active and not is_night and not quiet_birds and trans > 0.14
+		if not day_on:
+			if _outdoor_day_player.playing:
+				_outdoor_day_player.stop()
+		else:
+			if not _outdoor_day_player.playing:
+				_outdoor_day_player.play()
+			_outdoor_day_player.volume_db = linear_to_db(gain * trans) - 18.5
+
+	if _outdoor_night_player != null and _outdoor_night_player.stream != null:
+		var night_on := active and is_night and not quiet_birds and trans > 0.14
+		if not night_on:
+			if _outdoor_night_player.playing:
+				_outdoor_night_player.stop()
+		else:
+			if not _outdoor_night_player.playing:
+				_outdoor_night_player.play()
+			_outdoor_night_player.volume_db = linear_to_db(gain * trans) - 21.5
+
+	# Ganz leises fernes Autobahn-/Gewerbegebiets-Rauschen am Horizont (macht die Welt lebendig!)
+	if _distant_highway_player != null and _distant_highway_player.stream != null:
+		var hw_on := active and trans > 0.22
+		if not hw_on:
+			if _distant_highway_player.playing:
+				_distant_highway_player.stop()
+		else:
+			if not _distant_highway_player.playing:
+				_distant_highway_player.play()
+			var night_drop := -4.5 if is_night else 0.0
+			_distant_highway_player.volume_db = linear_to_db(gain * trans) - 25.0 + night_drop
 
 
 ## Überlast-Kulisse: Während der Hauptschalter über der Leistungsgrenze läuft, wird das
@@ -345,15 +490,21 @@ func play_typing_key(volume_db: float = -10.5) -> void:
 	play("key_type", volume_db, randf_range(0.88, 1.16))
 
 
-## Spielt eine zufällige Schritt-Variante, nie zweimal dieselbe hintereinander.
-func play_footstep(sprinting: bool = false) -> void:
+## Spielt eine zufällige Schritt-Variante passend zum Untergrund (Beton / Doppelboden / nasser Asphalt).
+func play_footstep(sprinting: bool = false, surface: String = "concrete") -> void:
+	var vol := -9.5 if sprinting else -13.0
+	var pitch := randf_range(0.95, 1.09) if sprinting else randf_range(0.91, 1.05)
+	if surface == "raised_floor" and _sounds.has("step_raised"):
+		play("step_raised", vol + randf_range(-1.0, 0.8), pitch)
+		return
+	if surface == "wet" and _sounds.has("step_wet"):
+		play("step_wet", vol + randf_range(-0.8, 0.8), pitch)
+		return
 	var count := maxi(1, _footstep_count)
 	var idx := randi() % count
 	if count > 1 and idx == _last_footstep:
 		idx = (idx + 1) % count
 	_last_footstep = idx
-	var vol := -9.5 if sprinting else -13.0
-	var pitch := randf_range(0.95, 1.09) if sprinting else randf_range(0.91, 1.05)
 	play("footstep_%d" % idx, vol + randf_range(-1.0, 1.0), pitch)
 
 
@@ -390,6 +541,12 @@ func _update_extinguisher_spray(delta: float) -> void:
 func get_loop_stream(loop_name: String) -> AudioStreamWAV:
 	if _loops.has(loop_name):
 		return _loops[loop_name] as AudioStreamWAV
+	return null
+
+
+func get_sound_stream(sfx_name: String) -> AudioStream:
+	if _sounds.has(sfx_name):
+		return _sounds[sfx_name] as AudioStream
 	return null
 
 
@@ -1326,12 +1483,328 @@ func _gen_thunder_roll() -> AudioStreamWAV:
 	return _make_wav(samples)
 
 
+## Mehrschichtiger realistischer Regen draussen: warmes Rosa-Rauschen + feines Prasseln + 180 weiche Tropfen-Platscher!
 func _gen_rain_loop(duration: float) -> AudioStreamWAV:
 	var count := int(MIX_RATE * duration)
-	var fade := int(MIX_RATE * 0.45)
-	var soft := _make_seamless_noise(count, fade, 0.22, 0.06, 0.55, 0.45)
+	var fade := int(MIX_RATE * 0.55)
+	var deep_body := _make_seamless_noise(count, fade, 0.11, 0.025, 0.28, 0.86)
+	var fine_spray := _make_seamless_noise(count, fade, 0.20, 0.055, 0.58, 0.42)
 	var samples := PackedFloat32Array()
 	samples.resize(count)
 	for i in range(count):
-		samples[i] = clampf(soft[i] * 0.55, -0.95, 0.95)
+		var t := float(i) / float(count)
+		var gust := 0.88 + 0.12 * sin(TAU * 2.0 * t)
+		samples[i] = (deep_body[i] * 0.42 + fine_spray[i] * 0.24) * gust
+	# 180 weiche, kurze Wasser-Tropfen- & Pfuetzen-Platscher (gefilterter Rausch-Impuls statt Sinus!)
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 4412
+	for _d in range(180):
+		var start := rng.randi_range(0, count - 1)
+		var d_len := int(MIX_RATE * rng.randf_range(0.006, 0.018))
+		var amp := rng.randf_range(0.04, 0.13)
+		var lp := 0.0
+		var alpha := rng.randf_range(0.22, 0.52)
+		for k in range(d_len):
+			var idx := (start + k) % count
+			var u := float(k) / float(maxi(1, d_len))
+			var env := sin(PI * u) * exp(-u * 3.8)
+			lp = lerpf(lp, rng.randf_range(-1.0, 1.0), alpha)
+			samples[idx] = clampf(samples[idx] + lp * env * amp, -0.95, 0.95)
 	return _make_wav(samples, true)
+
+
+## Gemuetliches, warmes Blech-/Industriedach-Regentrommeln (drinnen hoerbar — KEINE schrillen Sinus-Pings!)
+func _gen_rain_roof_loop(duration: float) -> AudioStreamWAV:
+	var count := int(MIX_RATE * duration)
+	var fade := int(MIX_RATE * 0.55)
+	var warm_wash := _make_seamless_noise(count, fade, 0.085, 0.018, 0.24, 0.90)
+	var samples := PackedFloat32Array()
+	samples.resize(count)
+	for i in range(count):
+		samples[i] = warm_wash[i] * 0.40
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 7721
+	for _d in range(150):
+		var start := rng.randi_range(0, count - 1)
+		var freq := rng.randf_range(135.0, 340.0)
+		var amp := rng.randf_range(0.035, 0.095)
+		var d_len := int(MIX_RATE * rng.randf_range(0.014, 0.032))
+		var lp := 0.0
+		for k in range(d_len):
+			var idx := (start + k) % count
+			var t := float(k) / float(MIX_RATE)
+			var u := float(k) / float(maxi(1, d_len))
+			var env := sin(PI * u) * exp(-u * 4.5)
+			lp = lerpf(lp, rng.randf_range(-1.0, 1.0), 0.18)
+			var thud := (sin(TAU * freq * t) * 0.55 + lp * 0.45) * env * amp
+			samples[idx] = clampf(samples[idx] + thud, -0.95, 0.95)
+	return _make_wav(samples, true)
+
+
+## Tagsueber draussen (14 s Loop): organisches Blaetterrauschen & nur 3 entfernte, weiche Vogelrufe mit langen Pausen!
+func _gen_outdoor_day_loop(duration: float) -> AudioStreamWAV:
+	var count := int(MIX_RATE * duration)
+	var fade := int(MIX_RATE * 0.80)
+	var leaves := _make_seamless_noise(count, fade, 0.068, 0.016, 0.26, 0.86)
+	var air := _make_seamless_noise(count, fade, 0.022, 0.008, 0.16, 0.94)
+	var samples := PackedFloat32Array()
+	samples.resize(count)
+	for i in range(count):
+		var t := float(i) / float(count)
+		var swell := 0.65 + 0.35 * sin(TAU * 1.0 * t)
+		samples[i] = leaves[i] * 0.25 * swell + air[i] * 0.16
+	# Nur 3 weit entfernte, natuerliche Amsel-/Singdrossel-Phrasen ueber 14 Sek. (weich, leise, lange Pausen!)
+	var calls: Array = [
+		# [start_s, f_start, f_mid, f_end, dur_s, amp]
+		[1.40, 2180.0, 2680.0, 2340.0, 0.24, 0.024],
+		[1.72, 2450.0, 2890.0, 2220.0, 0.28, 0.020],
+		[6.85, 2550.0, 2120.0, 2420.0, 0.26, 0.022],
+		[11.30, 2040.0, 2620.0, 2180.0, 0.30, 0.019],
+	]
+	for ch in calls:
+		var s0 := int(float(ch[0]) * MIX_RATE)
+		var f0: float = float(ch[1])
+		var fm: float = float(ch[2])
+		var f1: float = float(ch[3])
+		var clen := int(float(ch[4]) * MIX_RATE)
+		var amp: float = float(ch[5])
+		var phase := 0.0
+		for k in range(clen):
+			var idx := (s0 + k) % count
+			var u := float(k) / float(maxi(1, clen))
+			# Sanfte natuerliche Glockenhuelle (kein hartes Klicken!)
+			var env := pow(sin(PI * u), 2.4)
+			var f := lerpf(f0, fm, u * 2.0) if u < 0.5 else lerpf(fm, f1, (u - 0.5) * 2.0)
+			f += 42.0 * sin(TAU * 14.0 * u)
+			phase += TAU * f / float(MIX_RATE)
+			var tone := (sin(phase) * 0.82 + sin(phase * 2.0) * 0.12) * env * amp
+			samples[idx] = clampf(samples[idx] + tone, -0.95, 0.95)
+	return _make_wav(samples, true)
+
+
+## Nachts draussen: ruhige kuehle Nachtluft & ganz dezentes fernes Grillen-Zirpen
+func _gen_outdoor_night_loop(duration: float) -> AudioStreamWAV:
+	var count := int(MIX_RATE * duration)
+	var fade := int(MIX_RATE * 0.65)
+	var air := _make_seamless_noise(count, fade, 0.032, 0.010, 0.16, 0.93)
+	var samples := PackedFloat32Array()
+	samples.resize(count)
+	for i in range(count):
+		var t := float(i) / float(count)
+		var sec := float(i) / float(MIX_RATE)
+		# Dezentes fernes Grillen-Zirpen (sanft gepulst)
+		var chirp_gate := clampf(sin(TAU * 0.55 * sec) * 1.8 - 0.85, 0.0, 1.0)
+		var trill := 0.5 + 0.5 * sin(TAU * 22.0 * sec)
+		var cricket := sin(TAU * 4120.0 * sec) * chirp_gate * trill * 0.012
+		samples[i] = clampf(air[i] * 0.22 * (0.80 + 0.20 * sin(TAU * t)) + cricket, -0.95, 0.95)
+	return _make_wav(samples, true)
+
+
+## Dumpfes, sattes 2-MVA Notstrom-Dieselgenerator-Brummen (50 Hz + 100 Hz + leichter mechanischer Takt)
+func _gen_diesel_gen_loop(duration: float) -> AudioStreamWAV:
+	var count := int(MIX_RATE * duration)
+	var fade := int(MIX_RATE * 0.35)
+	var rumble := _make_seamless_noise(count, fade, 0.055, 0.014, 0.22, 0.92)
+	var samples := PackedFloat32Array()
+	samples.resize(count)
+	var f50 := roundf(50.0 * duration)
+	var f100 := roundf(100.0 * duration)
+	var f150 := roundf(150.0 * duration)
+	var f_takt := roundf(12.5 * duration)
+	for i in range(count):
+		var u := float(i) / float(count)
+		var mod := 0.82 + 0.18 * sin(TAU * f_takt * u)
+		var hum := (sin(TAU * f50 * u) * 0.42 + sin(TAU * f100 * u) * 0.26 + sin(TAU * f150 * u) * 0.10) * mod
+		samples[i] = clampf(hum * 0.55 + rumble[i] * 0.28, -0.95, 0.95)
+	return _make_wav(samples, true)
+
+
+## Dumpfes, leicht hohles Doppelboden-Trittgeraeusch (Halle Nord)
+func _gen_step_raised_floor() -> AudioStreamWAV:
+	var count := int(MIX_RATE * 0.13)
+	var samples := PackedFloat32Array()
+	samples.resize(count)
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 3301
+	var lp := 0.0
+	for i in range(count):
+		var t := float(i) / float(MIX_RATE)
+		var env := exp(-t * 34.0)
+		var hollow := (sin(TAU * 118.0 * t) * 0.55 + sin(TAU * 245.0 * t) * 0.25) * env
+		lp = lerpf(lp, rng.randf_range(-1.0, 1.0), 0.24)
+		samples[i] = clampf((hollow + lp * 0.28 * exp(-t * 48.0)) * 0.62, -0.95, 0.95)
+	return _make_wav(samples)
+
+
+## Leicht nasses Asphalt-Schrittgeraeusch bei Regen/Gewitter
+func _gen_step_wet_asphalt() -> AudioStreamWAV:
+	var count := int(MIX_RATE * 0.14)
+	var samples := PackedFloat32Array()
+	samples.resize(count)
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 3309
+	var lp := 0.0
+	for i in range(count):
+		var t := float(i) / float(MIX_RATE)
+		var env := exp(-t * 26.0)
+		var thud := sin(TAU * 92.0 * t) * exp(-t * 42.0) * 0.35
+		lp = lerpf(lp, rng.randf_range(-1.0, 1.0), 0.55)
+		var splash := lp * env * 0.45
+		samples[i] = clampf((thud + splash) * 0.60, -0.95, 0.95)
+	return _make_wav(samples)
+
+
+## Sturm-Windboeen (schwellen langsam an und ab)
+func _gen_wind_gust_loop(duration: float) -> AudioStreamWAV:
+	var count := int(MIX_RATE * duration)
+	var fade := int(MIX_RATE * 0.65)
+	var wind := _make_seamless_noise(count, fade, 0.095, 0.018, 0.35, 0.86)
+	var howl := _make_seamless_noise(count, fade, 0.16, 0.045, 0.50, 0.72)
+	var samples := PackedFloat32Array()
+	samples.resize(count)
+	for i in range(count):
+		var t := float(i) / float(count)
+		var gust := 0.55 + 0.45 * sin(TAU * t)
+		samples[i] = clampf((wind[i] * 0.45 + howl[i] * 0.22) * gust, -0.95, 0.95)
+	return _make_wav(samples, true)
+
+
+## 3D-Fahrzeug-Loop fuer vorbeifahrende Autos (PKW/SUV/Van vs. 40t-LKW Diesel + Reifenabrollgeraeusch!)
+func _gen_car_pass_loop(duration: float, is_truck: bool) -> AudioStreamWAV:
+	var count := int(MIX_RATE * duration)
+	var fade := int(MIX_RATE * 0.35)
+	var tire := _make_seamless_noise(count, fade, 0.18 if not is_truck else 0.12, 0.045, 0.48, 0.62)
+	var rumble := _make_seamless_noise(count, fade, 0.045, 0.015, 0.25, 0.88)
+	var samples := PackedFloat32Array()
+	samples.resize(count)
+	var f_base := roundf((44.0 if is_truck else 86.0) * duration)
+	var f_pulse := roundf((16.0 if is_truck else 28.0) * duration)
+	for i in range(count):
+		var t := float(i) / float(count)
+		var ph := TAU * t
+		var pulse := (0.72 + 0.28 * sin(ph * f_pulse)) if is_truck else (0.86 + 0.14 * sin(ph * f_pulse))
+		var eng := (
+			sin(ph * f_base) * (0.34 if is_truck else 0.22)
+			+ sin(ph * f_base * 2.0 + 0.5) * (0.20 if is_truck else 0.14)
+			+ sin(ph * f_base * 3.0 + 1.1) * (0.10 if is_truck else 0.06)
+		) * pulse
+		var road := tire[i] * (0.38 if is_truck else 0.46) + rumble[i] * (0.30 if is_truck else 0.16)
+		samples[i] = clampf(eng + road, -0.95, 0.95)
+	return _make_wav(samples, true)
+
+
+## Nasses Reifen-Zischen auf regenfeuchtem Asphalt
+func _gen_tire_wet_loop(duration: float) -> AudioStreamWAV:
+	var count := int(MIX_RATE * duration)
+	var fade := int(MIX_RATE * 0.35)
+	var spray := _make_seamless_noise(count, fade, 0.48, 0.18, 0.72, 0.30)
+	var samples := PackedFloat32Array()
+	samples.resize(count)
+	for i in range(count):
+		samples[i] = clampf(spray[i] * 0.56, -0.95, 0.95)
+	return _make_wav(samples, true)
+
+
+## Elektrischer Kettenantrieb + Laufrollen fuer das Sektional-Garagentor
+func _gen_garage_door_motor_loop(duration: float) -> AudioStreamWAV:
+	var count := int(MIX_RATE * duration)
+	var fade := int(MIX_RATE * 0.25)
+	var rattle := _make_seamless_noise(count, fade, 0.15, 0.04, 0.42, 0.68)
+	var samples := PackedFloat32Array()
+	samples.resize(count)
+	var c_hum := roundf(100.0 * duration)
+	var c_gear := roundf(240.0 * duration)
+	var c_chain := roundf(14.0 * duration)
+	for i in range(count):
+		var t := float(i) / float(count)
+		var ph := TAU * t
+		var motor := sin(ph * c_hum) * 0.18 + sin(ph * c_gear) * 0.09
+		var chain := (0.70 + 0.30 * sin(ph * c_chain)) * rattle[i] * 0.34
+		samples[i] = clampf(motor + chain, -0.95, 0.95)
+	return _make_wav(samples, true)
+
+
+## Authentisches LKW-/Lieferwagen-Rueckfahrpiepen (europaeischer 1240-Hz-Piezo-Intervallton)
+func _gen_backup_beep() -> AudioStreamWAV:
+	var duration := 0.34
+	var count := int(MIX_RATE * duration)
+	var samples := PackedFloat32Array()
+	samples.resize(count)
+	for i in range(count):
+		var t := float(i) / float(MIX_RATE)
+		if t > 0.26:
+			samples[i] = 0.0
+			continue
+		var env := clampf(t / 0.008, 0.0, 1.0) * clampf((0.26 - t) / 0.012, 0.0, 1.0)
+		var s := sin(TAU * 1240.0 * t) * 0.55 + sin(TAU * 2480.0 * t) * 0.14
+		samples[i] = clampf(s * env * 0.52, -0.95, 0.95)
+	return _make_wav(samples)
+
+
+## Druckluft-Bremszischen ("pssshhh!") fuer 7,5t/18t/40t LKW beim Anhalten
+func _gen_air_brake_hiss() -> AudioStreamWAV:
+	var duration := 0.58
+	var count := int(MIX_RATE * duration)
+	var samples := PackedFloat32Array()
+	samples.resize(count)
+	var lp := 0.0
+	for i in range(count):
+		var t := float(i) / float(MIX_RATE)
+		var atk := clampf(t / 0.025, 0.0, 1.0)
+		var dec := exp(-t * 5.8)
+		var raw := randf_range(-1.0, 1.0)
+		lp = lerpf(lp, raw, 0.22)
+		var hi := raw - lp * 0.75
+		samples[i] = clampf(hi * atk * dec * 0.65, -0.95, 0.95)
+	return _make_wav(samples)
+
+
+## Fernes weiches Autobahn- & Industriegebiets-Rauschen (tiefe Horizon-Kulisse)
+func _gen_distant_highway_loop(duration: float) -> AudioStreamWAV:
+	var count := int(MIX_RATE * duration)
+	var fade := int(MIX_RATE * 0.65)
+	var wash := _make_seamless_noise(count, fade, 0.038, 0.011, 0.22, 0.92)
+	var air := _make_seamless_noise(count, fade, 0.085, 0.025, 0.34, 0.84)
+	var samples := PackedFloat32Array()
+	samples.resize(count)
+	for i in range(count):
+		var t := float(i) / float(count)
+		var swell := 0.78 + 0.22 * sin(TAU * t + 0.4 * sin(TAU * 2.0 * t))
+		samples[i] = clampf((wash[i] * 0.44 + air[i] * 0.18) * swell, -0.95, 0.95)
+	return _make_wav(samples, true)
+
+
+## Leiser, tief gefilterter Linienflugzeug-Ueberflug in grosser Hoehe (5.2 s)
+func _gen_distant_jet_pass() -> AudioStreamWAV:
+	var duration := 5.2
+	var count := int(MIX_RATE * duration)
+	var samples := PackedFloat32Array()
+	samples.resize(count)
+	var lp1 := 0.0
+	var lp2 := 0.0
+	for i in range(count):
+		var u := float(i) / float(count)
+		var env := sin(PI * u)
+		env = env * env
+		var raw := randf_range(-1.0, 1.0)
+		lp1 = lerpf(lp1, raw, 0.055)
+		lp2 = lerpf(lp2, lp1, 0.032)
+		var turbine := sin(TAU * (138.0 - 24.0 * u) * (float(i) / float(MIX_RATE))) * 0.06
+		samples[i] = clampf((lp2 * 2.1 + turbine) * env * 0.48, -0.95, 0.95)
+	return _make_wav(samples)
+
+
+## Gedaempftes fernes Gabelstapler-Piepen vom Nachbar-Logistikhof
+func _gen_distant_yard_beep() -> AudioStreamWAV:
+	var duration := 0.28
+	var count := int(MIX_RATE * duration)
+	var samples := PackedFloat32Array()
+	samples.resize(count)
+	for i in range(count):
+		var t := float(i) / float(MIX_RATE)
+		if t > 0.20:
+			samples[i] = 0.0
+			continue
+		var env := clampf(t / 0.015, 0.0, 1.0) * clampf((0.20 - t) / 0.025, 0.0, 1.0)
+		samples[i] = clampf(sin(TAU * 980.0 * t) * env * 0.24, -0.95, 0.95)
+	return _make_wav(samples)

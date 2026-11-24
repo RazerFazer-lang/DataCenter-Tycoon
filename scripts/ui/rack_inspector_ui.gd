@@ -1615,10 +1615,16 @@ func _build_side_column(side: VBoxContainer, slot: Dictionary, itype: String) ->
 			hint.add_theme_color_override("font_color", UIStyle.COL_AMBER)
 			side.add_child(hint)
 		elif faulty_cat != "":
+			var diag := GameState.get_fault_diagnosis_info(slot)
 			var found := Label.new()
-			found.text = tr("Defekt: %s — ziehe den Server-Schlitten heraus und repariere ihn mit dem passenden Kit an der Werkbank!") % GameState.get_component_label(faulty_cat)
+			found.text = tr("[%s] %s (%s)\nEmpfohlen: %s — Server herausziehen & an Werkbank oder direkt mit Kit reparieren!") % [
+				str(diag.get("code", "ERR")),
+				GameState.get_component_label(faulty_cat),
+				str(diag.get("cause", "")),
+				str(diag.get("tool", "Wartungs-Kit")),
+			]
 			found.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-			found.add_theme_font_size_override("font_size", 12)
+			found.add_theme_font_size_override("font_size", 11.5)
 			found.add_theme_color_override("font_color", UIStyle.COL_RED)
 			side.add_child(found)
 		elif str(slot.get("state", "")) == "crashed":
@@ -1628,6 +1634,26 @@ func _build_side_column(side: VBoxContainer, slot: Dictionary, itype: String) ->
 			crashed_l.add_theme_font_size_override("font_size", 12)
 			crashed_l.add_theme_color_override("font_color", UIStyle.COL_AMBER)
 			side.add_child(crashed_l)
+		elif str(slot.get("state", "")) == "ok":
+			var dust_pct := int(roundf(float(slot.get("dust_level", 0.0))))
+			var th_pct := int(roundf(float(slot.get("thermal_health", 100.0))))
+			var m_row := HBoxContainer.new()
+			m_row.add_theme_constant_override("separation", 8)
+			side.add_child(m_row)
+			var ml := Label.new()
+			ml.text = tr("Staub: %d %%  •  Wärmeleitpaste/Lüfter: %d %%") % [dust_pct, th_pct]
+			ml.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+			ml.add_theme_font_size_override("font_size", 11.5)
+			ml.add_theme_color_override("font_color", UIStyle.COL_AMBER if (dust_pct >= 55 or th_pct <= 45) else UIStyle.COL_TEXT_SUB)
+			m_row.add_child(ml)
+			if dust_pct >= 15 or th_pct <= 85:
+				var mbtn := Button.new()
+				mbtn.text = tr("🧹 Warten (%d Kits)") % GameState.maint_kits
+				mbtn.custom_minimum_size = Vector2(148, 26)
+				mbtn.pressed.connect(func():
+					GameState.request_maintain_slot(_entity_id, _selected_slot)
+				)
+				m_row.add_child(mbtn)
 	else:
 		_update_3d_preview("", {})
 		var ph := PanelContainer.new()

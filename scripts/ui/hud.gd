@@ -236,7 +236,13 @@ func _process(delta: float) -> void:
 			_is_night = night
 			_set_icon(_clock_icon, "moon" if night else "sun", Color(0.70, 0.76, 0.92) if night else UIStyle.COL_GOLD_TEXT)
 		_clock_lbl.text = GameState.get_time_string()
-		_day_lbl.text = (tr("TAG %d") % GameState.day_number) + "  •  " + GameState.get_weather_label()
+		var af_b := int(roundf(GameState.airflow_bonus * 100.0))
+		var cm_b := int(roundf(GameState.cable_mgmt_bonus * 100.0))
+		var bonus_str := ""
+		if af_b > 0: bonus_str += "  •  Airflow +%d%%" % af_b
+		if cm_b > 0: bonus_str += "  •  Kabel +%d%%" % cm_b
+		var site_str := ("  •  [T] Halle Nord" if GameState.halle_nord_owned else "")
+		_day_lbl.text = (tr("TAG %d") % GameState.day_number) + ("  •  Lv.%d" % GameState.get_company_level()) + "  •  " + GameState.get_weather_label() + bonus_str + site_str
 
 	_refresh_player_hud(delta)
 	_refresh_slot_bar()
@@ -1013,6 +1019,9 @@ func _build_right_column() -> void:
 		["RMB", tr("Trennen / Ausbauen")],
 		["R", tr("Drehen")],
 		["Q", tr("Ablegen")],
+		["G / MMB", tr("3D-Ping / Wegpunkt im Team setzen")],
+		["B / N", tr("Emotes: Winken & Daumen hoch")],
+		["E", tr("Garagentor-Taster (öffnet/schließt Tor & dämpft Lärm)")],
 		["ESC", "Pause"],
 	]
 	for item in rows:
@@ -1056,6 +1065,16 @@ func _build_key_hints() -> void:
 	var gap := Control.new()
 	gap.custom_minimum_size = Vector2(10, 0)
 	hints.add_child(gap)
+	hints.add_child(_make_keycap("G"))
+	hints.add_child(_hint_label("Ping"))
+	var gap_em := Control.new()
+	gap_em.custom_minimum_size = Vector2(8, 0)
+	hints.add_child(gap_em)
+	hints.add_child(_make_keycap("B/N"))
+	hints.add_child(_hint_label("Emotes"))
+	var gap_p := Control.new()
+	gap_p.custom_minimum_size = Vector2(8, 0)
+	hints.add_child(gap_p)
 	hints.add_child(_make_keycap("ESC"))
 	hints.add_child(_hint_label("Pause"))
 
