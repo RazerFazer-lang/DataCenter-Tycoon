@@ -147,15 +147,9 @@ func _process(delta: float) -> void:
 	if want_tier != _active_tier:
 		_switch_vehicle_tier(want_tier)
 
-	# Bei Ankunft: Garagentor automatisch oeffnen + Druckluft-Bremszischen bei 7,5t/18t LKW!
+	# Bei Ankunft: Druckluft-Bremszischen bei 7,5t/18t LKW (Garagentor oeffnet der Server in GameState!)
 	if phase != _prev_van_phase:
-		if phase == "arriving":
-			var world := get_parent()
-			if world != null:
-				var garage := world.get_node_or_null("Garage")
-				if garage != null and garage.has_method("ensure_garage_door_open"):
-					garage.call("ensure_garage_door_open")
-		elif phase == "unloading" and _active_tier >= 2 and _sfx_audio != null:
+		if phase == "unloading" and _active_tier >= 2 and _sfx_audio != null:
 			var ab := SfxManager.get_sound_stream("air_brake")
 			var g_gain := SettingsManager.get_effective_sfx_gain()
 			if ab != null and g_gain > 0.005:
@@ -165,23 +159,6 @@ func _process(delta: float) -> void:
 				_sfx_audio.play()
 		_prev_van_phase = phase
 
-	# Authentisches Rueckfahr-/Rangier-Piepen beim Einparken (letzte 2.2 s) & Ausparken (erste 2.2 s)!
-	var beeping_now := (phase == "arriving" and pt > GameState.VAN_ARRIVE_DURATION - 2.4) \
-		or (phase == "departing" and pt < 2.2)
-	if beeping_now and _sfx_audio != null:
-		_backup_beep_accum += delta
-		if _backup_beep_accum >= 0.72:
-			_backup_beep_accum = 0.0
-			var bp := SfxManager.get_sound_stream("backup_beep")
-			var g_gain := SettingsManager.get_effective_sfx_gain()
-			if bp != null and g_gain > 0.005:
-				_sfx_audio.stream = bp
-				_sfx_audio.volume_db = linear_to_db(g_gain * SfxManager.get_outdoor_transmission()) - 6.5
-				_sfx_audio.pitch_scale = 1.0 if _active_tier <= 2 else 0.94
-				_sfx_audio.play()
-	else:
-		_backup_beep_accum = 0.55
-
 	visible = true
 	var lane_z := LANE_Z + (0.28 if _active_tier == 2 else (0.58 if _active_tier == 3 else 0.0))
 	var target_x := STOP_X
@@ -189,9 +166,20 @@ func _process(delta: float) -> void:
 
 	match phase:
 		"arriving":
+			# Realistische Rückwärtslogistik: erst kurz über die Einfahrt hinaus vorfahren,
+			# dann kurz anhalten (Rückwärtsgang) und rückwärts in die Halteposition rangieren!
 			var u := clampf(pt / GameState.VAN_ARRIVE_DURATION, 0.0, 1.0)
-			var eased := 1.0 - pow(1.0 - u, 2.6)
-			target_x = lerpf(START_X, STOP_X, eased)
+			var overshoot_x := STOP_X + 3.6
+			if u < 0.62:
+				var f := u / 0.62
+				var eased := 1.0 - pow(1.0 - f, 2.4)
+				target_x = lerpf(START_X, overshoot_x, eased)
+			elif u < 0.70:
+				target_x = overshoot_x
+			else:
+				var r := (u - 0.70) / 0.30
+				var r_eased := r * r * (3.0 - 2.0 * r)
+				target_x = lerpf(overshoot_x, STOP_X, r_eased)
 			target_door = 0.0
 		"unloading":
 			target_x = STOP_X
@@ -205,6 +193,22 @@ func _process(delta: float) -> void:
 	var dx := target_x - _prev_x
 	_prev_x = target_x
 	position = Vector3(target_x, 0.0, lane_z)
+
+	# Rückfahr-Piepen NUR wenn das Fahrzeug tatsächlich rückwärts fährt (dx < 0) — niemals beim Vorwärtsfahren!
+	var is_reversing := (phase == "arriving" and dx < -0.0008)
+	if is_reversing and _sfx_audio != null:
+		_backup_beep_accum += delta
+		if _backup_beep_accum >= 0.68:
+			_backup_beep_accum = 0.0
+			var bp := SfxManager.get_sound_stream("backup_beep")
+			var g_gain := SettingsManager.get_effective_sfx_gain()
+			if bp != null and g_gain > 0.005:
+				_sfx_audio.stream = bp
+				_sfx_audio.volume_db = linear_to_db(g_gain * SfxManager.get_outdoor_transmission()) - 6.5
+				_sfx_audio.pitch_scale = 1.0 if _active_tier <= 2 else 0.94
+				_sfx_audio.play()
+	else:
+		_backup_beep_accum = 0.55
 
 	# Alle Raeder (4 bzw. 6 beim Schwerlast-LKW) passend zum Radradius drehen
 	var wheel_spin := -dx / maxf(_wheel_radius, 0.25)

@@ -11,6 +11,7 @@ extends Node3D
 var decor_id: String = ""
 var item_type: String = ""
 var _shelf_crate_nodes: Array[Node3D] = []
+var _socket_local_positions: Array[Vector3] = []
 var _temp_lbl: Label3D
 var _cctv_cam: Node3D
 var _anim_t: float = 0.0
@@ -34,7 +35,24 @@ func setup(did: String, itype: String, data: Dictionary) -> void:
 			_build_vending_lounge()
 		"prop_cctv_monitor":
 			_build_cctv_monitor()
+		"prop_power_strip":
+			_build_power_strip()
+		"prop_lan_strip":
+			_build_lan_strip()
 	apply_data(data)
+
+
+func get_socket_world_positions() -> Array[Vector3]:
+	var out: Array[Vector3] = []
+	for lp in _socket_local_positions:
+		out.append(to_global(lp))
+	return out
+
+
+func get_port_world_pos() -> Vector3:
+	if not _socket_local_positions.is_empty():
+		return to_global(_socket_local_positions[0])
+	return global_position + Vector3(0.0, 0.06, 0.0)
 
 
 func apply_data(data: Dictionary) -> void:
@@ -242,6 +260,56 @@ func _build_cctv_monitor() -> void:
 	else:
 		_box(_cctv_cam, Vector3(0.0, 0.0, 0.10), Vector3(0.12, 0.10, 0.24), _mat(Color(0.72, 0.76, 0.80), 0.28, 0.86))
 	_add_collider(Vector3(0.0, 1.15, 0.0), Vector3(0.72, 2.30, 0.48))
+
+
+# ---------------------------------------------------------------- 7. Platzierbare 6-fach Industrie-Stromleiste
+
+func _build_power_strip() -> void:
+	var mdl := ModelLoader.instantiate_custom_model("power_strip")
+	if mdl != null:
+		add_child(mdl)
+	else:
+		_box(self, Vector3(0.0, 0.025, 0.0), Vector3(0.60, 0.050, 0.110), _mat(Color(0.72, 0.75, 0.79), 0.35, 0.80))
+		_box(self, Vector3(0.0, 0.052, 0.0), Vector3(0.54, 0.008, 0.082), _mat(Color(0.14, 0.16, 0.19), 0.55, 0.20))
+
+	_socket_local_positions.clear()
+	for i in range(6):
+		var sx := -0.20 + float(i) * 0.08
+		var spos := Vector3(sx, 0.058, 0.0)
+		_socket_local_positions.append(spos)
+		var area := _make_interact_area(Vector3(0.074, 0.095, 0.135), {
+			"interact_type": "power_port",
+			"entity_id": decor_id,
+			"slot_idx": i,
+		})
+		area.position = Vector3(sx, 0.068, 0.0)
+		add_child(area)
+	_add_collider(Vector3(0.0, 0.028, 0.0), Vector3(0.66, 0.056, 0.13))
+
+
+# ---------------------------------------------------------------- 8. Platzierbare 8-Port LAN-Verteilerleiste
+
+func _build_lan_strip() -> void:
+	var mdl := ModelLoader.instantiate_custom_model("lan_strip")
+	if mdl != null:
+		add_child(mdl)
+	else:
+		_box(self, Vector3(0.0, 0.025, 0.0), Vector3(0.56, 0.048, 0.125), _mat(Color(0.16, 0.19, 0.24), 0.38, 0.75))
+		_box(self, Vector3(0.0, 0.050, 0.054), Vector3(0.54, 0.005, 0.010), _mat(Color(0.14, 0.46, 0.86), 0.35, 0.15))
+
+	_socket_local_positions.clear()
+	for i in range(8):
+		var px := -0.21 + float(i) * 0.06
+		var ppos := Vector3(px, 0.056, 0.0)
+		_socket_local_positions.append(ppos)
+		var area := _make_interact_area(Vector3(0.056, 0.095, 0.140), {
+			"interact_type": "net_port",
+			"entity_id": decor_id,
+			"slot_idx": i,
+		})
+		area.position = Vector3(px, 0.066, 0.0)
+		add_child(area)
+	_add_collider(Vector3(0.0, 0.028, 0.0), Vector3(0.62, 0.056, 0.14))
 
 
 # ---------------------------------------------------------------- Helfer

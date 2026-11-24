@@ -375,8 +375,28 @@ func _update_day_night_atmosphere() -> void:
 	# Etwas weniger Grundhelligkeit, damit Lampen und Schatten das Bild formen statt flachem Einheitslicht.
 	env.ambient_light_energy = lerpf(0.20, 0.45, day_factor)
 
-	# Dynamische Nebel-Atmosphäre & nasser spiegelnder Asphalt bei Regen/Gewitter!
+	# Dynamische Nebel-Atmosphäre, volumetrische Wolken-Dichte & nasser spiegelnder Asphalt bei Regen/Gewitter!
 	var w_now: String = GameState.weather_state if GameState.is_active else "clear"
+	if sky_sh != null:
+		var target_cov := 0.46
+		var target_dark := 0.0
+		match w_now:
+			"heatwave":
+				target_cov = 0.24
+				target_dark = 0.0
+			"cloudy":
+				target_cov = 0.68
+				target_dark = 0.28
+			"rain":
+				target_cov = 0.82
+				target_dark = 0.62
+			"storm":
+				target_cov = 0.92
+				target_dark = 0.85
+		var cur_cov := float(sky_sh.get_shader_parameter("cloud_coverage"))
+		var cur_dark := float(sky_sh.get_shader_parameter("cloud_darkness"))
+		sky_sh.set_shader_parameter("cloud_coverage", lerpf(cur_cov, target_cov, 0.03))
+		sky_sh.set_shader_parameter("cloud_darkness", lerpf(cur_dark, target_dark, 0.03))
 	var is_wet := (w_now == "rain" or w_now == "storm")
 	env.fog_density = 0.0062 if w_now == "storm" else (0.0044 if w_now == "rain" else 0.0022)
 	var day_fog := Color(0.58, 0.64, 0.72) if is_wet else Color(0.70, 0.78, 0.88)
@@ -550,6 +570,9 @@ func get_port_world_pos(cable_type: String, endpoint_id: String) -> Variant:
 	if _ups_nodes.has(endpoint_id):
 		var up: UpsProp = _ups_nodes[endpoint_id]
 		return up.get_power_port_global_pos()
+	if _decor_nodes.has(endpoint_id):
+		var dp: DecorProp = _decor_nodes[endpoint_id]
+		return dp.get_port_world_pos()
 	return null
 
 
@@ -650,6 +673,7 @@ func _sync_decor_items() -> void:
 			_decor_nodes[did] = dp
 		else:
 			(_decor_nodes[did] as DecorProp).apply_data(d)
+	_sync_cables()
 
 
 func _sync_carts() -> void:
@@ -756,6 +780,10 @@ func get_socket_positions(cable_type: String, endpoint_id: String) -> Array[Vect
 		return _garage.get_hall_c_socket_positions()
 	if cable_type == "network" and endpoint_id == GameState.WALL_ROUTER_ID:
 		return _garage.get_router_jack_positions()
+	if _decor_nodes.has(endpoint_id):
+		var dp: DecorProp = _decor_nodes[endpoint_id]
+		if is_instance_valid(dp):
+			return dp.get_socket_world_positions()
 	return []
 
 
@@ -784,6 +812,8 @@ func get_port_world_dir(_cable_type: String, endpoint_id: String) -> Variant:
 		var up: UpsProp = _ups_nodes[endpoint_id]
 		if is_instance_valid(up) and up.is_inside_tree():
 			return up.global_transform.basis.z
+	if _decor_nodes.has(endpoint_id):
+		return Vector3.UP
 	return null
 
 

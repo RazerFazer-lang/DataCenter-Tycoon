@@ -408,9 +408,7 @@ func _to_van_local(world_pos: Vector3) -> Vector3:
 	var local := world_pos - VAN_STOP_FALLBACK
 	var van := get_parent() as Node3D
 	if van != null and van.is_inside_tree():
-		var root3d := van.get_parent() as Node3D
-		var global_pos: Vector3 = root3d.to_global(world_pos) if root3d != null else world_pos
-		local = van.to_local(global_pos)
+		local = van.to_local(world_pos)
 	local.y = 0.0
 	return local
 

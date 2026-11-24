@@ -43,6 +43,18 @@
       "items": [
         {
           "tag": "neu",
+          "version": "v2.4",
+          "title": "Volumetrische Wolken, Einzel-Ports, Strom-/LAN-Leisten & Lieferfenster",
+          "desc": "Raymarched 3D-Wolken, gezielte Einzel-Port-Steuerung an Router/Sicherungskasten, frei platzierbare 6-fach Stromleiste & 8-Port LAN-Leiste (Blender 5.2), Lieferkosten + feste Lieferzeiten, serverseitiges Garagentor & Rückwärtslogistik."
+        },
+        {
+          "tag": "neu",
+          "version": "v2.3",
+          "title": "High-Poly Hallen-Overhaul, Halle Nord Campus & Live-Bautrupp",
+          "desc": "25 neue 2K-ORM-PBR Blender-5.2-Modelle, Großstandort Halle Nord (240 m²), 6 Gebäude-Upgrades mit Live-Bautrupp, 6 Shop-Dekos, 4K-Mixamo-NPCs & Realismus-Audio."
+        },
+        {
+          "tag": "neu",
           "version": "v2.2",
           "title": "Außenwelt 2.0, Wetter, Karriere, Gebrauchtmarkt & Co-op Pings",
           "desc": "360°-Gewerbegebiet mit Verkehr & Nachbarhallen, Regen/Gewitter/Hitzewelle, 5 Karriere-Meilensteine, Gebrauchtmarkt (B-Ware), Kalt-/Warmgang-Airflow, Firmen-Whiteboard, 3D-Pings, Team-Aufträge & Emotes."

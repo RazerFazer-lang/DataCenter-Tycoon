@@ -29,6 +29,8 @@ signal inventory_changed
 signal fuses_changed
 ## Türen, Seitenwände und Antenne (Racks, Sicherungskasten, Router) wurden geöffnet/geschlossen.
 signal panel_states_changed
+## Motorisiertes Sektional-Garagentor (server-autoritativ synchronisiert).
+signal garage_door_changed(is_open: bool)
 signal cart_changed
 signal shelf_changed
 signal workbench_changed
@@ -39,6 +41,8 @@ signal daily_deals_changed
 
 ## Wenn aktiv, darf nur der Host (peer 1) Racks/Geräte verkaufen, Kredite aufnehmen, Mitarbeiter entlassen & Hallen ausbauen.
 var host_only_destructive: bool = false
+## Server-autoritativer Zustand des motorisierten Garagentors (true = offen, false = geschlossen).
+var garage_door_open: bool = true
 
 ## Meilensteine A–D: Wetter, Kalt-/Warmgang-Airflow, Kabelmanagement, Karriere, Gebrauchtmarkt & Team-Aufträge
 var weather_state: String = "clear" # "clear" | "cloudy" | "rain" | "storm" | "heatwave"
@@ -152,6 +156,10 @@ const VAN_DEPART_DURATION := 4.4
 # Mengen-Kisten & Lieferzonen-Limit (v2.1):
 const BULK_PACK_MAX := 6
 const DELIVERY_ZONE_MAX_CRATES := 16
+# Lieferkosten je Fahrzeug-Kategorie + optionaler Sofort-Express + feste Lieferfenster (Uhrzeit im Spieltag):
+const DELIVERY_FEES := {1: 15, 2: 45, 3: 95}
+const DELIVERY_EXPRESS_SURCHARGE := 35
+const DELIVERY_SLOTS_HOURS: Array[int] = [8, 12, 16, 20]
 # 3 Liefer-Kategorien: Stufe 1 (Sprinter, 1 Fahrer), Stufe 2 (Kastenwagen 7,5t, 2 Mitarbeiter), Stufe 3 (LKW 18t, 3 Mitarbeiter)
 const DELIVERY_TIER_META := {
 	1: {
@@ -620,6 +628,28 @@ const ITEM_CATALOG := {
 		"color": Color(0.22, 0.76, 0.50),
 		"desc": "Überwachungskamera, Live-Temperaturanzeige & Feuerlöscher-Station • +4 % Ruf & Frühwarnung!",
 	},
+	"prop_power_strip": {
+		"name": "Industrie-Stromleiste (6-fach)",
+		"category": "placeable",
+		"is_decor": true,
+		"price": 75,
+		"watts": 0,
+		"compute": 0,
+		"heat": 0.0,
+		"color": Color(0.92, 0.72, 0.14),
+		"desc": "Frei platzierbare 6-fach Steckdosenleiste (Alu-Profil) • 1 Zuleitung vom Sicherungskasten + 5 freie Strom-Ports!",
+	},
+	"prop_lan_strip": {
+		"name": "LAN-Verteilerleiste (8-Port)",
+		"category": "placeable",
+		"is_decor": true,
+		"price": 110,
+		"watts": 10,
+		"compute": 0,
+		"heat": 0.05,
+		"color": Color(0.18, 0.52, 0.90),
+		"desc": "Frei platzierbare 8-Port RJ45-Netzwerkleiste • 1 Uplink vom Router + 7 einzeln steckbare LAN-Ports!",
+	},
 	"slot_build_box": {
 		"name": "Server-Bausatz",
 		"category": "workshop_box",
@@ -1026,6 +1056,10 @@ var van_cargo_count: int = 0
 var van_delivery_tier: int = 1
 var _van_empty_accum: float = 0.0
 var pending_delivery_count: int = 0
+## Geplantes Lieferfenster (Tag & Stunde) für reguläre Bestellungen; Express liefert sofort.
+var scheduled_delivery_day: int = 0
+var scheduled_delivery_hour: int = -1
+var pending_delivery_express: bool = false
 
 # Abladefahrten des Fahrers (der Server rechnet, Clients spielen nur ab)
 var van_trip_phase: String = "" # "" | exit | load | walk_in | drop | walk_back | enter
@@ -1107,15 +1141,59 @@ func is_world_paused_for_empty_server() -> bool:
 	return NetworkManager.is_dedicated and NetworkManager.players.is_empty()
 
 
+func get_delivery_fee(tier: int, express: bool = false) -> int:
+	var base := int(DELIVERY_FEES.get(clampi(tier, 1, 3), 15))
+	return base + (DELIVERY_EXPRESS_SURCHARGE if express else 0)
+
+
+func get_next_delivery_slot() -> Dictionary:
+	var cur_h := time_of_day * 24.0
+	for h in DELIVERY_SLOTS_HOURS:
+		if float(h) > cur_h + 0.12:
+			return {"day": day_number, "hour": h, "tomorrow": false}
+	return {"day": day_number + 1, "hour": DELIVERY_SLOTS_HOURS[0], "tomorrow": true}
+
+
+func get_next_delivery_slot_label() -> String:
+	var s := get_next_delivery_slot()
+	if bool(s["tomorrow"]):
+		return "Morgen %02d:00 Uhr" % int(s["hour"])
+	return "%02d:00 Uhr" % int(s["hour"])
+
+
+func get_scheduled_delivery_label() -> String:
+	if pending_delivery_express:
+		return "Sofort-Express"
+	if scheduled_delivery_hour < 0:
+		return get_next_delivery_slot_label()
+	if scheduled_delivery_day > day_number:
+		return "Morgen %02d:00 Uhr" % scheduled_delivery_hour
+	return "%02d:00 Uhr" % scheduled_delivery_hour
+
+
+func _is_delivery_window_due() -> bool:
+	if pending_delivery_express:
+		return true
+	if scheduled_delivery_hour < 0:
+		return true
+	if day_number > scheduled_delivery_day:
+		return true
+	return day_number == scheduled_delivery_day and (time_of_day * 24.0) >= float(scheduled_delivery_hour)
+
+
 func _update_delivery_van(delta: float) -> void:
 	match van_phase:
 		"idle":
-			if not pending_delivery_items.is_empty():
+			if not pending_delivery_items.is_empty() and _is_delivery_window_due():
 				van_cargo = _pack_van_cargo(pending_delivery_items)
 				pending_delivery_items.clear()
+				pending_delivery_express = false
+				scheduled_delivery_hour = -1
+				scheduled_delivery_day = 0
 				van_delivery_tier = compute_delivery_tier(van_cargo)
 				van_phase = "arriving"
 				van_phase_time = 0.0
+				set_garage_door_open_server(true)
 				_reset_van_trip()
 				_broadcast_van_state()
 		"arriving":
@@ -1614,6 +1692,9 @@ func _broadcast_van_state() -> void:
 		"done": van_trip_done,
 		"total": van_trip_total,
 		"tier": van_delivery_tier,
+		"sched_day": scheduled_delivery_day,
+		"sched_hour": scheduled_delivery_hour,
+		"express": pending_delivery_express,
 	}
 	_rpc_sync_van_state.rpc(van_phase, van_phase_time, van_cargo_count, pending_delivery_count, trip)
 
@@ -1637,6 +1718,9 @@ func _rpc_sync_van_state(phase: String, phase_t: float, cargo_n: int, pending_n:
 		van_trip_done = maxi(int(trip.get("done", 0)), 0)
 		van_trip_total = maxi(int(trip.get("total", 0)), 0)
 		van_delivery_tier = clampi(int(trip.get("tier", 1)), 1, 3)
+		scheduled_delivery_day = int(trip.get("sched_day", 0))
+		scheduled_delivery_hour = int(trip.get("sched_hour", -1))
+		pending_delivery_express = bool(trip.get("express", false))
 	van_updated.emit()
 
 
@@ -1851,6 +1935,7 @@ func clear_local_state() -> void:
 	power_strips = 0
 	net_hubs = 0
 	shared_open_panels.clear()
+	garage_door_open = true
 	support_tickets.clear()
 	active_call.clear()
 	total_rental_income_per_cycle = 0.0
@@ -1864,6 +1949,9 @@ func clear_local_state() -> void:
 	checklist_ordered_anything = false
 	checklist_dismissed = false
 	pending_delivery_items.clear()
+	scheduled_delivery_day = 0
+	scheduled_delivery_hour = -1
+	pending_delivery_express = false
 	van_cargo.clear()
 	van_phase = "idle"
 	van_phase_time = 0.0
@@ -2077,6 +2165,7 @@ func build_snapshot() -> Dictionary:
 		"checklist_opened_pc": checklist_opened_pc,
 		"checklist_ordered_anything": checklist_ordered_anything,
 		"open_panels": shared_open_panels.duplicate(),
+		"garage_door_open": garage_door_open,
 		"storage_shelf_slots": storage_shelf_slots.duplicate(true),
 		"workbench_state": workbench_state.duplicate(true),
 		"pending_build_orders": pending_build_orders.duplicate(true),
@@ -2179,6 +2268,8 @@ func _apply_snapshot(snap: Dictionary) -> void:
 	extinguisher_held_slot = clampi(int(snap.get("extinguisher_held_slot", 1)), 1, SLOT_COUNT)
 	shared_open_panels = _sanitize_open_panels(snap.get("open_panels", {}))
 	panel_states_changed.emit()
+	garage_door_open = bool(snap.get("garage_door_open", true))
+	garage_door_changed.emit(garage_door_open)
 	if snap.has("storage_shelf_slots") and snap["storage_shelf_slots"] is Dictionary:
 		storage_shelf_slots = (snap["storage_shelf_slots"] as Dictionary).duplicate(true)
 	else:
@@ -2782,6 +2873,29 @@ func pick_free_slot(cable_type: String, endpoint_id: String, wanted: int) -> int
 const CLUSTER_PORTS_PER_RACK := 2
 
 
+## Physische RJ45-Port-Anzahl je Router-Stufe (0=DSL, 1=VDSL, 2=Gateway, 3=Core10G, 4=Core100G).
+const ROUTER_TIER_JACK_COUNTS: Array[int] = [2, 3, 5, 6, 6]
+
+
+func is_power_strip_decor(eid: String) -> bool:
+	return decor_items.has(eid) and str((decor_items[eid] as Dictionary).get("item_type", "")) == "prop_power_strip"
+
+
+func is_lan_strip_decor(eid: String) -> bool:
+	return decor_items.has(eid) and str((decor_items[eid] as Dictionary).get("item_type", "")) == "prop_lan_strip"
+
+
+## Liefert das Kabel an genau dieser Buchse (slot_idx), oder {} wenn der Port frei ist.
+func get_cable_on_slot(cable_type: String, endpoint_id: String, slot_idx: int) -> Dictionary:
+	if slot_idx < 0:
+		return {}
+	var smap := get_cable_slot_map(cable_type, endpoint_id)
+	for cid in smap.keys():
+		if int(smap[cid]) == slot_idx and cables.has(cid):
+			return cables[cid] as Dictionary
+	return {}
+
+
 func get_max_ports(cable_type: String, endpoint_id: String) -> int:
 	if cable_type == "cluster":
 		return CLUSTER_PORTS_PER_RACK if racks.has(endpoint_id) else 0
@@ -2792,6 +2906,8 @@ func get_max_ports(cable_type: String, endpoint_id: String) -> int:
 			return 6 + power_tier * 2
 		if endpoint_id == HALL_NORD_BREAKER_ID:
 			return 16
+		if is_power_strip_decor(endpoint_id):
+			return 6
 		if racks.has(endpoint_id):
 			return 2
 		if coolers.has(endpoint_id):
@@ -2802,11 +2918,14 @@ func get_max_ports(cable_type: String, endpoint_id: String) -> int:
 		return 0
 	else:
 		if endpoint_id == WALL_ROUTER_ID:
-			return ROUTER_BASE_PORTS + net_hubs * NET_HUB_EXTRA
+			var base_jacks: int = ROUTER_TIER_JACK_COUNTS[clampi(router_tier, 0, ROUTER_TIER_JACK_COUNTS.size() - 1)]
+			return base_jacks + net_hubs * NET_HUB_EXTRA
 		if endpoint_id == HALL_C_ROUTER_ID:
 			return 4
 		if endpoint_id == HALL_NORD_ROUTER_ID:
 			return 16
+		if is_lan_strip_decor(endpoint_id):
+			return 8
 		if racks.has(endpoint_id):
 			return 1 + _count_rack_switches(endpoint_id) * 3
 		return 0
@@ -4121,7 +4240,7 @@ func _recalculate_networks_and_metrics() -> void:
 			if ups_units.has(other):
 				ups_units[other]["connected"] = true
 				bus_queue.append(other)
-			elif racks.has(other):
+			elif racks.has(other) or is_power_strip_decor(other):
 				bus_queue.append(other)
 
 	# Determine if UPS backup is keeping the power bus alive during a breaker outage
@@ -4160,7 +4279,7 @@ func _recalculate_networks_and_metrics() -> void:
 					p_queue.append(other)
 				elif coolers.has(other):
 					coolers[other]["powered"] = true
-				elif ups_units.has(other):
+				elif ups_units.has(other) or is_power_strip_decor(other):
 					p_queue.append(other)
 
 		# Goldis Innengeräte laufen, sobald mindestens ein Außengerät Strom hat.
@@ -4190,6 +4309,7 @@ func _recalculate_networks_and_metrics() -> void:
 				curr == WALL_ROUTER_ID
 				or curr == HALL_C_ROUTER_ID
 				or curr == HALL_NORD_ROUTER_ID
+				or is_lan_strip_decor(curr)
 				or (racks.has(curr) and bool(racks[curr]["powered"]) and _count_rack_switches(curr) > 0)
 			)
 			if not can_forward:
@@ -4208,6 +4328,8 @@ func _recalculate_networks_and_metrics() -> void:
 				n_visited[other] = true
 				if racks.has(other):
 					racks[other]["networked"] = true
+					n_queue.append(other)
+				elif is_lan_strip_decor(other):
 					n_queue.append(other)
 
 	# Aggregate real hardware & network bandwidth metrics (GB RAM, TB Storage, CPU, GPU, Mbit/s, Watts)
@@ -4335,8 +4457,8 @@ func request_buy_item(item_type: String) -> void:
 	_rpc_req_buy_item.rpc_id(1, item_type)
 
 
-func request_checkout_cart(entries: Array) -> void:
-	_rpc_req_checkout_cart.rpc_id(1, entries)
+func request_checkout_cart(entries: Array, express: bool = false) -> void:
+	_rpc_req_checkout_cart.rpc_id(1, entries, express)
 
 
 ## Kauft ein Bauteil direkt am Rack und baut es sofort ein (kein Lieferwagen).
@@ -4431,6 +4553,10 @@ func request_disconnect_cables_on(cable_type: String, endpoint_id: String) -> vo
 	_rpc_req_disconnect_cables_on.rpc_id(1, cable_type, endpoint_id)
 
 
+func request_disconnect_cable_slot(cable_type: String, endpoint_id: String, slot_idx: int) -> void:
+	_rpc_req_disconnect_cable_slot.rpc_id(1, cable_type, endpoint_id, slot_idx)
+
+
 func request_toggle_breaker() -> void:
 	_rpc_req_toggle_breaker.rpc_id(1)
 
@@ -4514,6 +4640,44 @@ func _rpc_sync_panel(key: String, opened: bool) -> void:
 		else:
 			shared_open_panels.erase(key)
 	panel_states_changed.emit()
+
+
+func request_toggle_garage_door() -> void:
+	_rpc_req_set_garage_door.rpc_id(1, not garage_door_open)
+
+
+func request_set_garage_door(open: bool) -> void:
+	if garage_door_open == open:
+		return
+	_rpc_req_set_garage_door.rpc_id(1, open)
+
+
+func set_garage_door_open_server(open: bool) -> void:
+	if not multiplayer.is_server():
+		return
+	if garage_door_open == open:
+		return
+	garage_door_open = open
+	_rpc_sync_garage_door.rpc(open)
+
+
+@rpc("any_peer", "call_local", "reliable")
+func _rpc_req_set_garage_door(open: bool) -> void:
+	if not multiplayer.is_server():
+		return
+	var peer_id := _get_sender_id()
+	if not SecurityGuard.check_rate_limit(peer_id, "garage_door", 8, 4.0):
+		return
+	if garage_door_open == open:
+		return
+	garage_door_open = open
+	_rpc_sync_garage_door.rpc(open)
+
+
+@rpc("authority", "call_local", "reliable")
+func _rpc_sync_garage_door(open: bool) -> void:
+	garage_door_open = open
+	garage_door_changed.emit(open)
 
 
 func request_extinguish_slot(rack_id: String, slot_idx: int, amount: float) -> void:
@@ -4708,6 +4872,9 @@ func _rpc_req_buy_item(item_type: String) -> void:
 		if van_phase == "idle":
 			van_cargo = _pack_van_cargo(pending_delivery_items)
 			pending_delivery_items.clear()
+			scheduled_delivery_day = 0
+			scheduled_delivery_hour = -1
+			pending_delivery_express = false
 			van_delivery_tier = compute_delivery_tier(van_cargo)
 			van_phase = "arriving"
 			van_phase_time = 0.0
@@ -5260,7 +5427,7 @@ func _rpc_req_buy_install_module(rack_id: String, slot_idx: int, item_type: Stri
 
 
 @rpc("any_peer", "call_local", "reliable")
-func _rpc_req_checkout_cart(entries: Array) -> void:
+func _rpc_req_checkout_cart(entries: Array, express: bool = false) -> void:
 	if not multiplayer.is_server() or entries.is_empty() or entries.size() > 40:
 		return
 	var peer_id := _get_sender_id()
@@ -5332,14 +5499,23 @@ func _rpc_req_checkout_cart(entries: Array) -> void:
 			for _q in range(qty):
 				queue_items.append("acc:" + aid)
 
-	if queue_items.is_empty() or money < total_cost:
+	var added_parcels: Array = []
+	var packed_now := _pack_items_preview(queue_items, added_parcels)
+	var order_tier := compute_delivery_tier(packed_now)
+	var shipping_fee := float(get_delivery_fee(order_tier, express))
+	var grand_total := total_cost + shipping_fee
+
+	if queue_items.is_empty() or money < grand_total:
+		for qi in queue_items:
+			var qstr := str(qi)
+			if qstr.begins_with("build:"):
+				pending_build_orders.erase(qstr.substr(6))
 		_rpc_play_sfx.rpc_id(peer_id, "error")
 		return
 
 	# Lieferflächen-Limit (max. DELIVERY_ZONE_MAX_CRATES physische Kisten inkl. laufender Lieferungen)
-	var packed_preview := _pack_items_preview(queue_items)
 	var needed_slots := 0
-	for pe in packed_preview:
+	for pe in packed_now:
 		if str(pe) != VAN_PARCEL_ITEM:
 			needed_slots += 1
 	var free_slots := get_delivery_zone_free_slots()
@@ -5355,13 +5531,10 @@ func _rpc_req_checkout_cart(entries: Array) -> void:
 		], "warn")
 		return
 
-	money -= total_cost
+	money -= grand_total
 	if not checklist_ordered_anything:
 		checklist_ordered_anything = true
 		_broadcast_checklist()
-	var added_parcels: Array = []
-	var packed_now := _pack_items_preview(queue_items, added_parcels)
-	var order_tier := compute_delivery_tier(packed_now)
 	if van_phase == "arriving":
 		for ap in added_parcels:
 			_van_parcel_parts.append(str(ap))
@@ -5375,15 +5548,29 @@ func _rpc_req_checkout_cart(entries: Array) -> void:
 	else:
 		for qi in queue_items:
 			pending_delivery_items.append(str(qi))
+		if express:
+			pending_delivery_express = true
+			scheduled_delivery_hour = -1
+			scheduled_delivery_day = 0
+		elif scheduled_delivery_hour < 0:
+			var next_slot := get_next_delivery_slot()
+			scheduled_delivery_day = int(next_slot["day"])
+			scheduled_delivery_hour = int(next_slot["hour"])
 
 	_broadcast_van_state()
 	_broadcast_sim_tick()
 	_rpc_play_sfx.rpc("cash")
 	var tmeta: Dictionary = DELIVERY_TIER_META.get(order_tier, DELIVERY_TIER_META[1])
-	post_event_f("🛒 %s bestellte %d Artikel → %d Pakete ($%.0f) — %s %s ist unterwegs!", [
-		NetworkManager.get_player_name(peer_id), queue_items.size(), packed_now.size(), total_cost,
-		str(tmeta["icon"]), str(tmeta["name"])
-	], "good")
+	if express or van_phase == "arriving":
+		post_event_f("🛒 %s bestellte %d Artikel ($%.0f + $%.0f Express-Lieferung) — %s %s ist sofort unterwegs!", [
+			NetworkManager.get_player_name(peer_id), queue_items.size(), total_cost, shipping_fee,
+			str(tmeta["icon"]), str(tmeta["name"])
+		], "good")
+	else:
+		post_event_f("🛒 %s bestellte %d Artikel ($%.0f + $%.0f Versand) — %s %s kommt im Lieferfenster %s!", [
+			NetworkManager.get_player_name(peer_id), queue_items.size(), total_cost, shipping_fee,
+			str(tmeta["icon"]), str(tmeta["name"]), get_scheduled_delivery_label()
+		], "good")
 
 
 @rpc("any_peer", "call_local", "reliable")
@@ -5776,7 +5963,7 @@ func _is_valid_cable_endpoint(cable_type: String, endpoint_id: String) -> bool:
 		if endpoint_id == HALL_NORD_BREAKER_ID and halle_nord_owned:
 			return true
 		# Das Goldis Innengerät hat keine Strombuchse.
-		return racks.has(endpoint_id) or (coolers.has(endpoint_id) and not is_indoor_unit(endpoint_id)) or ups_units.has(endpoint_id)
+		return racks.has(endpoint_id) or (coolers.has(endpoint_id) and not is_indoor_unit(endpoint_id)) or ups_units.has(endpoint_id) or is_power_strip_decor(endpoint_id)
 	else:
 		if endpoint_id == WALL_ROUTER_ID:
 			return true
@@ -5784,7 +5971,31 @@ func _is_valid_cable_endpoint(cable_type: String, endpoint_id: String) -> bool:
 			return true
 		if endpoint_id == HALL_NORD_ROUTER_ID and halle_nord_owned:
 			return true
-		return racks.has(endpoint_id)
+		return racks.has(endpoint_id) or is_lan_strip_decor(endpoint_id)
+
+
+@rpc("any_peer", "call_local", "reliable")
+func _rpc_req_disconnect_cable_slot(cable_type: String, endpoint_id: String, slot_idx: int) -> void:
+	if not multiplayer.is_server():
+		return
+	var target_cid := ""
+	if slot_idx >= 0:
+		var smap := get_cable_slot_map(cable_type, endpoint_id)
+		for cid in smap.keys():
+			if int(smap[cid]) == slot_idx and cables.has(cid):
+				target_cid = str(cid)
+				break
+	if target_cid == "":
+		_rpc_req_disconnect_cables_on(cable_type, endpoint_id)
+		return
+	cables.erase(target_cid)
+	_recalculate_networks_and_metrics()
+	_broadcast_cables()
+	_broadcast_racks()
+	_broadcast_coolers()
+	_broadcast_ups()
+	_broadcast_sim_tick()
+	_rpc_play_sfx.rpc("cable_cut")
 
 
 @rpc("any_peer", "call_local", "reliable")
@@ -7673,6 +7884,9 @@ func _rpc_req_buy_daily_deal(deal_id: String) -> void:
 		if van_phase == "idle":
 			van_cargo = _pack_van_cargo(pending_delivery_items)
 			pending_delivery_items.clear()
+			scheduled_delivery_day = 0
+			scheduled_delivery_hour = -1
+			pending_delivery_express = false
 			van_delivery_tier = compute_delivery_tier(van_cargo)
 			van_phase = "arriving"
 			van_phase_time = 0.0

@@ -1,9 +1,21 @@
 {
-  "version": "2.3.0",
-  "launcher_version": "2.3.0",
-  "codename": "v2.3.0 High-Poly Hallen-Overhaul, Halle Nord Campus, Bautrupp & Realismus-Audio",
+  "version": "2.4.0",
+  "launcher_version": "2.4.0",
+  "codename": "v2.4.0 Volumetrische Wolken, Einzel-Ports, Strom- & LAN-Leisten, Lieferfenster & Logistik-Fixes",
   "release_date": "2026-11-24",
   "changelog": [
+    {
+      "version": "v2.4.0",
+      "date": "2026-11-24",
+      "title": "Update 2.4: Volumetrische 3D-Wolken, Einzel-Port-Steuerung, Blender Strom- & LAN-Leisten, Lieferkosten/-zeiten & Logistik-Fixes",
+      "items": [
+        "[GRAFIK] Echte volumetrische 3D-Wolken im Sky-Shader: 20-Step-Raymarching mit 4-Step-Sonnen-Shadow-March, Beer-Lambert-Selbstabschattung, Henyey-Greenstein Silver-Lining, Sonnenuntergangs-/Nacht-Beleuchtung und wetterabhängiger Bewölkungsdichte.",
+        "[NEU / 3D] Einzelne Router- & Sicherungskasten-Ports + frei platzierbare Strom- & LAN-Leisten: Jede physische RJ45-Buchse des Routers (2/3/5/6/6 Ports) sowie die 230V-Buchse sind gezielt anvisier-, steck- und abziehbar. Neu im Shop: 6-fach Industrie-Stromleiste ($75) & 8-Port LAN-Verteilerleiste ($110) als echte 2K-ORM-PBR Blender-5.2-Modelle.",
+        "[NEU / LOGISTIK] Lieferkosten & feste Lieferzeiten: Fahrzeugabhängige Versandkosten (Sprinter $15, 7,5t $45, 18t LKW $95), feste tägliche Lieferfenster (08:00 / 12:00 / 16:00 / 20:00 Uhr) sowie optionaler Sofort-Express (+$35) im Warenkorb.",
+        "[CO-OP] Motorisiertes Garagentor vollständig server-autoritativ & Co-op-synchronisiert (inkl. Snapshot & automatischer Öffnung bei Lieferung).",
+        "[FIX] Lieferanten-Ausstieg & Laufweg korrigiert (laufen jetzt korrekt zur Garagenseite), echte Rückwärtslogistik beim Einparken (Rückfahr-Piepen nur noch bei echter Rückwärtsfahrt), kein Feuerlöscher-Sprühgeräusch mehr beim Aufnehmen und Whiteboard an der Nordwand entfernt."
+      ]
+    },
     {
       "version": "v2.3.0",
       "date": "2026-11-24",

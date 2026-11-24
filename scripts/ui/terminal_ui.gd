@@ -687,14 +687,19 @@ func _get_cart_item_count() -> int:
 	return GameState.get_cart_count()
 
 
+var _cart_express_delivery: bool = false
+
+
 func _checkout_cart() -> void:
 	if GameState.shopping_cart.is_empty():
 		return
-	var total := _get_cart_total()
+	var preview := GameState.preview_cart_delivery(GameState.shopping_cart)
+	var cart_tier := int(preview["tier"])
+	var shipping_fee := GameState.get_delivery_fee(cart_tier, _cart_express_delivery)
+	var total := _get_cart_total() + shipping_fee
 	if GameState.money < float(total):
 		SfxManager.play("error", -8.0)
 		return
-	var preview := GameState.preview_cart_delivery(GameState.shopping_cart)
 	if int(preview["crates"]) > GameState.get_delivery_zone_free_slots():
 		SfxManager.play("error", -8.0)
 		return
@@ -715,7 +720,7 @@ func _checkout_cart() -> void:
 			payload.append({"kind": str(d["kind"]), "id": str(d["id"]), "cat": str(d["cat"]), "qty": int(d["qty"])})
 	GameState.cart_clear()
 	SfxManager.play_typing_key(-9.0)
-	GameState.request_checkout_cart(payload)
+	GameState.request_checkout_cart(payload, _cart_express_delivery)
 	_refresh_all()
 
 
@@ -1098,6 +1103,7 @@ func _render_shop_app() -> void:
 		_add_shop_section(left_list, tr("Einrichtung, Lagerregale & Technik-Props"), tr("Frei in allen Hallen platzierbar! Echte Lagerplätze, Werkbänke, Kaltgang-Türen & Deko."))
 		_populate_physical_shop_list(left_list, [
 			"prop_storage_shelf", "prop_esd_workbench", "prop_parts_cabinet",
+			"prop_power_strip", "prop_lan_strip",
 			"prop_cold_aisle_gate", "prop_vending_lounge", "prop_cctv_monitor",
 		])
 	elif _shop_tab == "deals":
@@ -1304,7 +1310,64 @@ func _render_shop_app() -> void:
 	zpb.add_theme_stylebox_override("fill", zfill)
 	zone_box.add_child(zpb)
 
-	var tot := _get_cart_total()
+	var subtotal := _get_cart_total()
+	var shipping_fee := 0 if GameState.shopping_cart.is_empty() else GameState.get_delivery_fee(cart_tier, _cart_express_delivery)
+	var tot := subtotal + shipping_fee
+
+	# Lieferzeit-Auswahl (Feste Lieferfenster 08:00/12:00/16:00/20:00 vs. Sofort-Express)
+	if not GameState.shopping_cart.is_empty():
+		var slot_row := HBoxContainer.new()
+		slot_row.add_theme_constant_override("separation", 6)
+		cv.add_child(slot_row)
+		var btn_std := Button.new()
+		btn_std.text = tr("Zeitfenster %s ($%d)") % [GameState.get_next_delivery_slot_label(), GameState.get_delivery_fee(cart_tier, false)]
+		btn_std.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		btn_std.custom_minimum_size = Vector2(0, 28)
+		btn_std.add_theme_font_size_override("font_size", 10.5)
+		_style_win_btn(
+			btn_std,
+			Color(0.14, 0.50, 0.84) if not _cart_express_delivery else Color(0.92, 0.94, 0.96),
+			Color(0.10, 0.40, 0.72),
+			Color.WHITE if not _cart_express_delivery else Color(0.24, 0.28, 0.36)
+		)
+		btn_std.pressed.connect(func():
+			_cart_express_delivery = false
+			_refresh_all()
+		)
+		slot_row.add_child(btn_std)
+
+		var btn_exp := Button.new()
+		btn_exp.text = tr("⚡ Sofort-Express (+$%d)") % GameState.DELIVERY_EXPRESS_SURCHARGE
+		btn_exp.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		btn_exp.custom_minimum_size = Vector2(0, 28)
+		btn_exp.add_theme_font_size_override("font_size", 10.5)
+		_style_win_btn(
+			btn_exp,
+			Color(0.86, 0.46, 0.08) if _cart_express_delivery else Color(0.92, 0.94, 0.96),
+			Color(0.72, 0.36, 0.06),
+			Color.WHITE if _cart_express_delivery else Color(0.24, 0.28, 0.36)
+		)
+		btn_exp.pressed.connect(func():
+			_cart_express_delivery = true
+			_refresh_all()
+		)
+		slot_row.add_child(btn_exp)
+
+		var fee_lbl := Label.new()
+		fee_lbl.text = tr("Warenwert: $%d  •  Lieferkosten: $%d  •  Lieferzeiten: 08 / 12 / 16 / 20 Uhr") % [subtotal, shipping_fee]
+		fee_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		fee_lbl.add_theme_font_size_override("font_size", 10.5)
+		fee_lbl.modulate = Color(0.32, 0.38, 0.48)
+		cv.add_child(fee_lbl)
+
+	if GameState.pending_delivery_count > 0 and GameState.van_phase == "idle":
+		var wait_lbl := Label.new()
+		wait_lbl.text = tr("🕒 %d Paket(e) geplant für Lieferfenster: %s") % [GameState.pending_delivery_count, GameState.get_scheduled_delivery_label()]
+		wait_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		wait_lbl.add_theme_font_size_override("font_size", 11)
+		wait_lbl.modulate = Color(0.14, 0.44, 0.72)
+		cv.add_child(wait_lbl)
+
 	var tot_lbl := Label.new()
 	tot_lbl.text = tr("Gesamtsumme:  $%d") % tot
 	tot_lbl.add_theme_font_size_override("font_size", 14)

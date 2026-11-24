@@ -100,7 +100,6 @@ var _breaker_sparks: CPUParticles3D
 var _prev_breaker_on: bool = true
 var _company_sign_lbl: Label3D
 var _exterior_sign_lbl: Label3D
-var _live_kpi_lbl: Label3D
 var _kpi_refresh_accum: float = 0.0
 var _district: ExteriorDistrict
 
@@ -134,8 +133,11 @@ func _ready() -> void:
 	add_child(AmbientNpcSystem.new())
 	apply_graphics_quality(SettingsManager.graphics_quality)
 	GameState.panel_states_changed.connect(_on_panel_states_changed)
+	GameState.garage_door_changed.connect(_on_garage_door_changed)
 	GameState.halle_nord_changed.connect(_sync_halle_nord_visibility)
 	GameState.building_upgrades_changed.connect(_sync_building_upgrades_visuals)
+	_garage_door_target = 1.0 if GameState.garage_door_open else 0.0
+	_garage_door_open_t = _garage_door_target
 	_sync_halle_nord_visibility()
 	_sync_building_upgrades_visuals()
 
@@ -146,18 +148,24 @@ func _process(delta: float) -> void:
 	_update_dynamic_visuals()
 
 
+func _on_garage_door_changed(is_open: bool) -> void:
+	var new_target := 1.0 if is_open else 0.0
+	if absf(new_target - _garage_door_target) > 0.01 and GameState.is_active:
+		SfxManager.play("click", -7.0, 1.05 if is_open else 0.90)
+	_garage_door_target = new_target
+
+
 func toggle_garage_door() -> void:
-	_garage_door_target = 0.0 if _garage_door_target > 0.5 else 1.0
-	SfxManager.play("click", -7.0, 1.05 if _garage_door_target > 0.5 else 0.90)
+	GameState.request_toggle_garage_door()
 
 
 func ensure_garage_door_open() -> void:
-	if _garage_door_target < 0.5:
-		_garage_door_target = 1.0
+	if not GameState.garage_door_open:
+		GameState.request_set_garage_door(true)
 
 
 func is_garage_door_open() -> bool:
-	return _garage_door_target > 0.5
+	return GameState.garage_door_open
 
 
 func _update_garage_door(delta: float) -> void:
@@ -1195,6 +1203,7 @@ func _build_breaker_box() -> void:
 	var port_area := _make_interact_area(Vector3(0.30, 0.30, 0.42), {
 		"interact_type": "power_port",
 		"entity_id": GameState.WALL_BREAKER_ID,
+		"slot_idx": 0,
 	})
 	port_area.position = Vector3(0.0, -0.37, 0.12)
 	root.add_child(port_area)
@@ -1781,11 +1790,21 @@ func _rebuild_router_visuals(tier: int) -> void:
 	const ROUTER_JACK_PITCH: Array[float] = [0.08, 0.14, 0.09, 0.104, 0.104]
 	var jt := clampi(tier, 0, ROUTER_JACK_COUNTS.size() - 1)
 	_router_jack_pos.clear()
+	var jack_w := minf(0.074, ROUTER_JACK_PITCH[jt] * 0.88)
 	for j in range(ROUTER_JACK_COUNTS[jt]):
-		_router_jack_pos.append(_router_root.position + Vector3(
+		var local_jack := Vector3(
 			ROUTER_JACK_FIRST_X[jt] + ROUTER_JACK_PITCH[jt] * float(j),
 			ROUTER_JACK_OFFSETS[jt].y,
-			ROUTER_JACK_OFFSETS[jt].z))
+			ROUTER_JACK_OFFSETS[jt].z)
+		_router_jack_pos.append(_router_root.position + local_jack)
+		# Einzel-Port-Hitbox für jede physische RJ45-Buchse des Routers (liegt leicht vor der Haupt-Hitbox!)
+		var j_area := _make_interact_area(Vector3(jack_w, 0.11, 0.14), {
+			"interact_type": "net_port",
+			"entity_id": GameState.WALL_ROUTER_ID,
+			"slot_idx": j,
+		})
+		j_area.position = local_jack + Vector3(0.0, 0.0, 0.11)
+		_router_mesh_holder.add_child(j_area)
 
 	var h := _router_mesh_holder
 	var model_ids: Array[String] = ["router_t0_dsl", "router_t1_vdsl", "router_t2_gateway", "router_t3_core10g", "router_t4_core100g"]
@@ -2120,28 +2139,7 @@ func _build_wall_decor() -> void:
 	_exterior_sign_lbl.modulate = Color(0.96, 0.78, 0.30)
 	add_child(_exterior_sign_lbl)
 
-	# 2. Professionelles Blender Alu-Whiteboard (prop_whiteboard.glb) an der Nordwand
-	var wb_model := ModelLoader.instantiate_custom_model("prop_whiteboard")
-	if wb_model != null:
-		wb_model.position = Vector3(3.0, 1.94, -4.45)
-		add_child(wb_model)
-	else:
-		var wb_frame := _mat(Color(0.32, 0.35, 0.38), 0.45, 0.5)
-		var wb_board := _mat(Color(0.94, 0.95, 0.96), 0.20, 0.0)
-		_add_box_visual(self, Vector3(3.0, 1.94, -4.45), Vector3(1.88, 1.14, 0.04), wb_frame)
-		_add_box_visual(self, Vector3(3.0, 1.94, -4.425), Vector3(1.78, 1.04, 0.02), wb_board)
-	_live_kpi_lbl = Label3D.new()
-	_live_kpi_lbl.text = "BETRIEBS-BOARD\nLade Daten..."
-	_live_kpi_lbl.font_size = 24
-	_live_kpi_lbl.pixel_size = 0.0032
-	_live_kpi_lbl.outline_size = 0
-	_live_kpi_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
-	_live_kpi_lbl.vertical_alignment = VERTICAL_ALIGNMENT_TOP
-	_live_kpi_lbl.position = Vector3(2.22, 2.36, -4.415)
-	_live_kpi_lbl.modulate = Color(0.10, 0.14, 0.20)
-	add_child(_live_kpi_lbl)
-
-	# 3. Blender Kaffeevollautomat + Tassen auf Beistelltisch RECHTS neben dem PC-Schreibtisch (X = 4.48, 0 % Clipping!)
+	# 2. Blender Kaffeevollautomat + Tassen auf Beistelltisch RECHTS neben dem PC-Schreibtisch (X = 4.48, 0 % Clipping!)
 	var coffee_station := ModelLoader.instantiate_custom_model("prop_coffee_machine")
 	if coffee_station != null:
 		coffee_station.position = Vector3(4.48, 0.0, -4.02)
@@ -2189,20 +2187,6 @@ func _refresh_company_decor() -> void:
 	for tl in _hn_aisle_temp_lbls:
 		if is_instance_valid(tl):
 			tl.text = "KALT-GANG  •  %.1f °C  •  AIRFLOW +%d%%" % [GameState.room_temp, int(roundf(GameState.airflow_bonus * 100.0))]
-	if _live_kpi_lbl != null and GameState.is_active:
-		var w_lbl: String = GameState.get_weather_label()
-		var af_pct := int(roundf(GameState.airflow_bonus * 100.0))
-		var cm_pct := int(roundf(GameState.cable_mgmt_bonus * 100.0))
-		_live_kpi_lbl.text = "LIVE-KENNZAHLEN  •  TAG %d\nKonto:   $%d\nLast:    %d / %d W\nTemp:    %.1f °C (%s)\nAirflow: +%d%% Kühlung\nKabel:   +%d%% Ruf-Bonus" % [
-			GameState.day_number,
-			int(roundf(GameState.money)),
-			GameState.total_watts,
-			GameState.max_watts,
-			GameState.room_temp,
-			w_lbl,
-			af_pct,
-			cm_pct,
-		]
 
 
 func _build_workshop_props() -> void:

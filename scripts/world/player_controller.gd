@@ -996,18 +996,28 @@ func _handle_primary_interact() -> void:
 				cable_start_slot = _aimed_socket_idx("network", eid)
 				SfxManager.play("cable", -8.0, 1.15)
 		"power_port":
-			# Die Einspeisung unten am Stromkasten ist auch bei geschlossener Tür erreichbar.
+			# Die Einspeisung unten am Stromkasten oder an einer Stromleiste: exakten anvisierten Port nehmen!
 			if hands_empty:
-				cable_active_type = "power"
-				cable_start_id = eid
-				cable_start_slot = _aimed_socket_idx("power", eid)
-				SfxManager.play("cable", -8.0, 1.05)
+				var p_slot := _get_target_slot_idx(target, "power", eid)
+				if p_slot >= 0 and not GameState.get_cable_on_slot("power", eid, p_slot).is_empty():
+					# Port ist belegt -> direkt aus diesem Port abziehen!
+					_unplug_into_hand("power", eid, p_slot)
+				else:
+					cable_active_type = "power"
+					cable_start_id = eid
+					cable_start_slot = p_slot if p_slot >= 0 else _aimed_socket_idx("power", eid)
+					SfxManager.play("cable", -8.0, 1.05)
 		"net_port":
 			if hands_empty:
-				cable_active_type = "network"
-				cable_start_id = eid
-				cable_start_slot = _aimed_socket_idx("network", eid)
-				SfxManager.play("cable", -8.0, 1.15)
+				var n_slot := _get_target_slot_idx(target, "network", eid)
+				if n_slot >= 0 and not GameState.get_cable_on_slot("network", eid, n_slot).is_empty():
+					# Port ist belegt -> direkt aus diesem Port abziehen!
+					_unplug_into_hand("network", eid, n_slot)
+				else:
+					cable_active_type = "network"
+					cable_start_id = eid
+					cable_start_slot = n_slot if n_slot >= 0 else _aimed_socket_idx("network", eid)
+					SfxManager.play("cable", -8.0, 1.15)
 		"cluster_port":
 			if hands_empty:
 				cable_active_type = "cluster"
@@ -1128,15 +1138,15 @@ func _handle_secondary_action() -> void:
 			return
 		elif itype == "power_port":
 			if not GameState.is_player_holding_anything(peer_id):
-				_unplug_into_hand("power", eid)
+				_unplug_into_hand("power", eid, _get_target_slot_idx(target, "power", eid))
 			return
 		elif itype == "net_port" or itype == "wall_router":
 			if not GameState.is_player_holding_anything(peer_id):
-				_unplug_into_hand("network", eid)
+				_unplug_into_hand("network", eid, _get_target_slot_idx(target, "network", eid))
 			return
 		elif itype == "cluster_port":
 			if not GameState.is_player_holding_anything(peer_id):
-				_unplug_into_hand("cluster", eid)
+				_unplug_into_hand("cluster", eid, -1)
 			return
 
 	# Im freien Raum legt Rechtsklick wie gewohnt ab (alternativ [Q]).
@@ -1144,12 +1154,31 @@ func _handle_secondary_action() -> void:
 		_handle_drop()
 
 
+var _ext_require_release: bool = false
+var _was_holding_ext: bool = false
+
+
 func _update_continuous_actions(delta: float) -> void:
 	_is_spraying_local = false
 	var target := _get_aimed_interactable()
 	var holding_ext := GameState.is_player_holding_extinguisher(peer_id)
+	var pressing_spray := Input.is_action_pressed("primary_action") or Input.is_action_pressed("interact")
 
-	if holding_ext and (Input.is_action_pressed("primary_action") or Input.is_action_pressed("interact")):
+	# Beim Aufnehmen (oder Slot-Wechsel auf den Feuerlöscher) erst warten, bis [E]/Maustaste losgelassen wurde,
+	# damit der Feuerlöscher niemals sofort beim Aufheben lossprüht!
+	if holding_ext and not _was_holding_ext:
+		_ext_require_release = true
+	_was_holding_ext = holding_ext
+
+	if _ext_require_release:
+		if not pressing_spray:
+			_ext_require_release = false
+		_action_tick_accum = 0.0
+		return
+
+	# Beim Zurückhängen an der Station ebenfalls nicht sprühen
+	var aiming_station := (target != null and str(target.get_meta("interact_type", "")) == "extinguisher_station")
+	if holding_ext and pressing_spray and not (aiming_station and Input.is_action_pressed("interact")):
 		_is_spraying_local = true
 		SfxManager.keep_extinguisher_spraying()
 		_action_tick_accum += delta
@@ -1169,10 +1198,25 @@ func _update_continuous_actions(delta: float) -> void:
 var cable_start_slot: int = -1
 
 
+## Liefert den explizit anvisierten Port-Index (slot_idx) einer Einzelport-Hitbox, sonst -1.
+func _get_target_slot_idx(target: Area3D, cable_type: String, eid: String) -> int:
+	if target != null and target.has_meta("slot_idx"):
+		var s := int(target.get_meta("slot_idx", -1))
+		if s >= 0 and s < GameState.get_max_ports(cable_type, eid):
+			return s
+	return -1
+
+
 ## Freie Buchse am Anschluss, die dem Fadenkreuz am nächsten liegt. -1 = nur ein Steckpunkt oder alles belegt.
 func _aimed_socket_idx(cable_type: String, eid: String) -> int:
 	if eid == "" or _world == null or _camera == null or not _world.has_method("get_socket_positions"):
 		return -1
+	var target := _get_aimed_interactable()
+	if target != null and str(target.get_meta("entity_id", "")) == eid and target.has_meta("slot_idx"):
+		var aimed_s := int(target.get_meta("slot_idx", -1))
+		if aimed_s >= 0 and aimed_s < GameState.get_max_ports(cable_type, eid):
+			if GameState.get_cable_on_slot(cable_type, eid, aimed_s).is_empty():
+				return aimed_s
 	var socks: Array = _world.get_socket_positions(cable_type, eid)
 	if socks.is_empty():
 		return -1
@@ -1205,7 +1249,7 @@ func _resolve_aimed_cable_endpoint(cable_type: String) -> String:
 		if itype == "wall_breaker":
 			return eid
 		if itype == "power_port" or itype == "rack_slot" or itype == "cooler_unit" or itype == "ups_unit":
-			if eid == GameState.WALL_BREAKER_ID or eid == GameState.HALL_C_BREAKER_ID or GameState.racks.has(eid) or (GameState.coolers.has(eid) and not GameState.is_indoor_unit(eid)) or GameState.ups_units.has(eid):
+			if eid == GameState.WALL_BREAKER_ID or eid == GameState.HALL_C_BREAKER_ID or eid == GameState.HALL_NORD_BREAKER_ID or GameState.racks.has(eid) or (GameState.coolers.has(eid) and not GameState.is_indoor_unit(eid)) or GameState.ups_units.has(eid) or GameState.is_power_strip_decor(eid):
 				return eid
 	elif cable_type == "cluster":
 		if (itype == "cluster_port" or itype == "rack_slot") and GameState.racks.has(eid):
@@ -1214,7 +1258,7 @@ func _resolve_aimed_cable_endpoint(cable_type: String) -> String:
 		if itype == "wall_router":
 			return eid
 		if itype == "net_port" or itype == "rack_slot":
-			if eid == GameState.WALL_ROUTER_ID or eid == GameState.HALL_C_ROUTER_ID or GameState.racks.has(eid):
+			if eid == GameState.WALL_ROUTER_ID or eid == GameState.HALL_C_ROUTER_ID or eid == GameState.HALL_NORD_ROUTER_ID or GameState.racks.has(eid) or GameState.is_lan_strip_decor(eid):
 				return eid
 	return _find_assisted_port(cable_type)
 
@@ -1537,9 +1581,25 @@ func _cable_target_state(endpoint: String) -> int:
 	return CableRenderer.TARGET_VALID
 
 
-## Zieht das zuletzt gesteckte Kabel an diesem Port ab (wie der Server) und nimmt das freie Ende in die Hand.
-func _unplug_into_hand(cable_type: String, endpoint_id: String) -> void:
+## Zieht das Kabel am anvisierten Port (slot_idx) oder zuletzt gesteckte Kabel ab und nimmt das freie Ende in die Hand.
+func _unplug_into_hand(cable_type: String, endpoint_id: String, slot_idx: int = -1) -> void:
 	var other := ""
+	var other_slot := -1
+	if slot_idx >= 0:
+		var slot_cab := GameState.get_cable_on_slot(cable_type, endpoint_id, slot_idx)
+		if not slot_cab.is_empty():
+			if str(slot_cab.get("from_id", "")) == endpoint_id:
+				other = str(slot_cab.get("to_id", ""))
+				other_slot = int(slot_cab.get("to_slot", -1))
+			else:
+				other = str(slot_cab.get("from_id", ""))
+				other_slot = int(slot_cab.get("from_slot", -1))
+			GameState.request_disconnect_cable_slot(cable_type, endpoint_id, slot_idx)
+			if other != "":
+				cable_start_id = other
+				cable_start_slot = other_slot
+				cable_active_type = cable_type
+			return
 	for cid in GameState.cables.keys():
 		var c: Dictionary = GameState.cables[cid]
 		if str(c.get("cable_type", "")) != cable_type:
@@ -1548,11 +1608,14 @@ func _unplug_into_hand(cable_type: String, endpoint_id: String) -> void:
 		var b := str(c.get("to_id", ""))
 		if a == endpoint_id:
 			other = b
+			other_slot = int(c.get("to_slot", -1))
 		elif b == endpoint_id:
 			other = a
+			other_slot = int(c.get("from_slot", -1))
 	GameState.request_disconnect_cables_on(cable_type, endpoint_id)
 	if other != "":
 		cable_start_id = other
+		cable_start_slot = other_slot
 		cable_active_type = cable_type
 
 
@@ -1709,15 +1772,39 @@ func _update_context_prompt() -> void:
 		"power_port":
 			var used_p := GameState.count_cables_on("power", eid)
 			var max_p := GameState.get_max_ports("power", eid)
-			current_prompt = tr("[E] Verlängerungskabel ziehen (%s • %d/%d Steckdosen)") % [eid.to_upper(), used_p, max_p]
-			if used_p > 0:
-				current_sub_prompt = tr("[Rechtsklick] Letztes Stromkabel hier abziehen")
+			var p_slot := _get_target_slot_idx(target, "power", eid)
+			var p_lbl := tr("Stromleiste") if GameState.is_power_strip_decor(eid) else eid.to_upper()
+			if p_slot >= 0:
+				var occ_p := GameState.get_cable_on_slot("power", eid, p_slot)
+				if not occ_p.is_empty():
+					var peer_p := str(occ_p.get("to_id", "")) if str(occ_p.get("from_id", "")) == eid else str(occ_p.get("from_id", ""))
+					current_prompt = tr("[E / Rechtsklick] Stromkabel aus Steckdose %d/%d ziehen (%s ↔ %s)") % [p_slot + 1, max_p, p_lbl, peer_p.to_upper()]
+					current_sub_prompt = tr("Belegt: %d/%d Steckdosen") % [used_p, max_p]
+				else:
+					current_prompt = tr("[E] Stromkabel an Steckdose %d/%d anstecken (%s • frei)") % [p_slot + 1, max_p, p_lbl]
+					current_sub_prompt = tr("Belegt: %d/%d Steckdosen") % [used_p, max_p]
+			else:
+				current_prompt = tr("[E] Verlängerungskabel ziehen (%s • %d/%d Steckdosen)") % [p_lbl, used_p, max_p]
+				if used_p > 0:
+					current_sub_prompt = tr("[Rechtsklick] Letztes Stromkabel hier abziehen")
 		"net_port":
 			var used_np := GameState.count_cables_on("network", eid)
 			var max_np := GameState.get_max_ports("network", eid)
-			current_prompt = tr("[E] Blaues Netzwerkkabel ziehen (%s • %d/%d Ports)") % [eid.to_upper(), used_np, max_np]
-			if used_np > 0:
-				current_sub_prompt = tr("[Rechtsklick] Letztes Netzwerkkabel hier abziehen")
+			var n_slot := _get_target_slot_idx(target, "network", eid)
+			var n_lbl := tr("LAN-Leiste") if GameState.is_lan_strip_decor(eid) else (tr("Router") if eid == GameState.WALL_ROUTER_ID else eid.to_upper())
+			if n_slot >= 0:
+				var occ_n := GameState.get_cable_on_slot("network", eid, n_slot)
+				if not occ_n.is_empty():
+					var peer_n := str(occ_n.get("to_id", "")) if str(occ_n.get("from_id", "")) == eid else str(occ_n.get("from_id", ""))
+					current_prompt = tr("[E / Rechtsklick] LAN-Kabel aus Port %d/%d ziehen (%s ↔ %s)") % [n_slot + 1, max_np, n_lbl, peer_n.to_upper()]
+					current_sub_prompt = tr("Belegt: %d/%d Ports") % [used_np, max_np]
+				else:
+					current_prompt = tr("[E] Netzwerkkabel an Port %d/%d anstecken (%s • frei)") % [n_slot + 1, max_np, n_lbl]
+					current_sub_prompt = tr("Belegt: %d/%d Ports") % [used_np, max_np]
+			else:
+				current_prompt = tr("[E] Blaues Netzwerkkabel ziehen (%s • %d/%d Ports)") % [n_lbl, used_np, max_np]
+				if used_np > 0:
+					current_sub_prompt = tr("[Rechtsklick] Letztes Netzwerkkabel hier abziehen")
 		"cluster_port":
 			var used_cp := GameState.count_cables_on("cluster", eid)
 			var max_cp := GameState.get_max_ports("cluster", eid)

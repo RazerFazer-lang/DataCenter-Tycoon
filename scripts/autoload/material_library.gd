@@ -349,7 +349,7 @@ func _build_all_materials() -> void:
 
 
 func _build_custom_shaders() -> void:
-	# 1. Natural Realistic Day/Night Sky Shader (Soft Sunlight, Natural Clouds, Subtle Stars)
+	# 1. AAA Raymarched Volumetric Clouds + Atmospheric Day/Night Sky Shader
 	var sky_sh := Shader.new()
 	sky_sh.code = """
 shader_type sky;
@@ -358,6 +358,8 @@ uniform vec3 sun_dir = vec3(0.3, 0.6, -0.5);
 uniform float day_factor : hint_range(0.0, 1.0) = 0.8;
 uniform float sunset_factor : hint_range(0.0, 1.0) = 0.0;
 uniform float power_glow : hint_range(0.0, 1.0) = 1.0;
+uniform float cloud_coverage : hint_range(0.0, 1.0) = 0.48;
+uniform float cloud_darkness : hint_range(0.0, 1.0) = 0.0;
 
 float hash21(vec2 p) {
 	p = fract(p * vec2(123.34, 456.21));
@@ -365,76 +367,122 @@ float hash21(vec2 p) {
 	return fract(p.x * p.y);
 }
 
-float noise2d(vec2 p) {
-	vec2 i = floor(p);
-	vec2 f = fract(p);
-	vec2 u = f * f * (3.0 - 2.0 * f);
-	float a = hash21(i);
-	float b = hash21(i + vec2(1.0, 0.0));
-	float c = hash21(i + vec2(0.0, 1.0));
-	float d = hash21(i + vec2(1.0, 1.0));
-	return mix(mix(a, b, u.x), mix(c, d, u.x), u.y);
+float hash31(vec3 p) {
+	p = fract(p * 0.1031);
+	p += dot(p, p.yzx + 33.33);
+	return fract((p.x + p.y) * p.z);
 }
 
-float fbm(vec2 p) {
+float noise3d(vec3 p) {
+	vec3 i = floor(p);
+	vec3 f = fract(p);
+	vec3 u = f * f * (3.0 - 2.0 * f);
+	float n000 = hash31(i + vec3(0.0, 0.0, 0.0));
+	float n100 = hash31(i + vec3(1.0, 0.0, 0.0));
+	float n010 = hash31(i + vec3(0.0, 1.0, 0.0));
+	float n110 = hash31(i + vec3(1.0, 1.0, 0.0));
+	float n001 = hash31(i + vec3(0.0, 0.0, 1.0));
+	float n101 = hash31(i + vec3(1.0, 0.0, 1.0));
+	float n011 = hash31(i + vec3(0.0, 1.0, 1.0));
+	float n111 = hash31(i + vec3(1.0, 1.0, 1.0));
+	float nx00 = mix(n000, n100, u.x);
+	float nx10 = mix(n010, n110, u.x);
+	float nx01 = mix(n001, n101, u.x);
+	float nx11 = mix(n011, n111, u.x);
+	float nxy0 = mix(nx00, nx10, u.y);
+	float nxy1 = mix(nx01, nx11, u.y);
+	return mix(nxy0, nxy1, u.z);
+}
+
+float fbm3d(vec3 p) {
 	float v = 0.0;
-	float amp = 0.5;
+	float amp = 0.52;
 	for (int i = 0; i < 4; i++) {
-		v += amp * noise2d(p);
-		p *= 2.05;
-		amp *= 0.5;
+		v += amp * noise3d(p);
+		p = p * 2.04 + vec3(13.7, 7.1, 19.3);
+		amp *= 0.48;
 	}
 	return v;
+}
+
+float hg_phase(float cos_theta, float g) {
+	float g2 = g * g;
+	return (1.0 - g2) / (4.0 * 3.14159265 * pow(max(1.0 + g2 - 2.0 * g * cos_theta, 0.001), 1.5));
+}
+
+// 3D volumetric cloud density in normalized altitude layer y in [0.0, 1.0]
+float sample_cloud_density(vec3 p, float height_frac, float coverage) {
+	// Cumulus vertical profile: crisp flat base, billowing rounded top
+	float h_profile = smoothstep(0.0, 0.18, height_frac) * smoothstep(1.0, 0.58, height_frac);
+	if (h_profile <= 0.001) {
+		return 0.0;
+	}
+	vec3 wind = vec3(TIME * 0.018, 0.0, TIME * 0.007);
+	vec3 q = p * 0.00055 + wind;
+	float base_shape = fbm3d(q);
+	// Billowy high-frequency erosion along upper edges
+	float detail = fbm3d(q * 2.85 - wind * 1.4 + vec3(4.2, height_frac * 1.5, 9.1));
+	float threshold = mix(0.66, 0.34, coverage);
+	float d = (base_shape * 0.78 + detail * 0.22) * h_profile;
+	d = smoothstep(threshold * 0.62, threshold * 0.62 + 0.30, d);
+	// Carve crisp wispy edges with detail noise
+	d = max(d - (1.0 - detail) * 0.24 * smoothstep(0.25, 0.95, height_frac), 0.0);
+	return d;
 }
 
 void sky() {
 	vec3 dir = normalize(EYEDIR);
 	float h = clamp(dir.y, 0.0, 1.0);
 
-	vec3 top_day = vec3(0.24, 0.48, 0.78);
-	vec3 top_sunset = vec3(0.26, 0.26, 0.42);
-	vec3 top_night = vec3(0.018, 0.028, 0.055);
+	vec3 top_day = vec3(0.11, 0.31, 0.68);
+	vec3 mid_day = vec3(0.32, 0.55, 0.84);
+	vec3 hor_day = vec3(0.75, 0.85, 0.94);
 
-	vec3 hor_day = vec3(0.72, 0.82, 0.90);
-	vec3 hor_sunset = vec3(0.92, 0.56, 0.34);
-	vec3 hor_night = vec3(0.05, 0.07, 0.12);
+	vec3 top_sunset = vec3(0.22, 0.22, 0.40);
+	vec3 hor_sunset = vec3(0.95, 0.54, 0.30);
 
-	// Dreistufiger Verlauf: kräftiges Blau oben, helleres Blau in der Mitte, Dunst am Horizont
-	top_day = vec3(0.13, 0.33, 0.68);
-	vec3 mid_day = vec3(0.34, 0.56, 0.84);
-	hor_day = vec3(0.76, 0.85, 0.93);
-	vec3 top_col = mix(mix(top_night, top_day, day_factor), top_sunset, sunset_factor * 0.70);
-	vec3 mid_col = mix(mix(top_night * 1.3, mid_day, day_factor), mix(top_sunset, hor_sunset, 0.45), sunset_factor * 0.75);
-	vec3 hor_col = mix(mix(hor_night, hor_day, day_factor), hor_sunset, sunset_factor * 0.82);
-	vec3 col = mix(hor_col, mid_col, smoothstep(0.0, 0.28, h));
-	col = mix(col, top_col, smoothstep(0.22, 0.95, h));
+	vec3 top_night = vec3(0.016, 0.026, 0.054);
+	vec3 hor_night = vec3(0.045, 0.068, 0.12);
+
+	vec3 top_col = mix(mix(top_night, top_day, day_factor), top_sunset, sunset_factor * 0.72);
+	vec3 mid_col = mix(mix(top_night * 1.35, mid_day, day_factor), mix(top_sunset, hor_sunset, 0.45), sunset_factor * 0.76);
+	vec3 hor_col = mix(mix(hor_night, hor_day, day_factor), hor_sunset, sunset_factor * 0.85);
+
+	// Weather overcast desaturation
+	vec3 storm_sky = mix(vec3(0.06, 0.08, 0.11), vec3(0.42, 0.47, 0.54), day_factor);
+	top_col = mix(top_col, storm_sky * 0.85, cloud_darkness * 0.55);
+	mid_col = mix(mid_col, storm_sky, cloud_darkness * 0.55);
+	hor_col = mix(hor_col, storm_sky * 1.15, cloud_darkness * 0.55);
+
+	vec3 col = mix(hor_col, mid_col, smoothstep(0.0, 0.26, h));
+	col = mix(col, top_col, smoothstep(0.20, 0.94, h));
 
 	vec3 sdir = normalize(sun_dir);
 	float sun_raw = dot(dir, sdir);
 	float sun_dot = max(sun_raw, 0.0);
-	vec3 sun_tint = mix(vec3(1.0, 0.97, 0.90), vec3(1.0, 0.62, 0.36), sunset_factor);
+	vec3 sun_tint = mix(vec3(1.0, 0.96, 0.88), vec3(1.0, 0.58, 0.30), sunset_factor);
 
-	// Unter dem Horizont: gedämpfter Grünton statt Betongrau (wirkt auch aufs Umgebungslicht)
 	if (dir.y < 0.0) {
-		vec3 ground_col = mix(vec3(0.02, 0.025, 0.03), vec3(0.24, 0.28, 0.22), day_factor);
+		vec3 ground_col = mix(vec3(0.02, 0.025, 0.03), vec3(0.22, 0.27, 0.21), day_factor);
 		col = mix(hor_col * 0.85, ground_col, clamp(-dir.y * 4.0, 0.0, 1.0));
 	}
 
-	// Helleres Leuchten am Horizont auf der Sonnenseite
-	float mie = pow(sun_dot, 5.0) * (1.0 - h) * 0.28 * (day_factor + sunset_factor);
+	// Atmospheric Mie glow + Sun disc
+	float mie = pow(sun_dot, 5.0) * (1.0 - h) * 0.30 * (day_factor + sunset_factor) * (1.0 - cloud_darkness * 0.6);
 	col += sun_tint * mie;
 
-	float sun_disc = smoothstep(0.9988, 0.9996, sun_dot) * day_factor;
-	float sun_halo = pow(sun_dot, 22.0) * 0.38 * (day_factor + sunset_factor * 0.6);
-	sun_halo += pow(sun_dot, 180.0) * 0.6 * day_factor;
-	col += sun_tint * (sun_disc * 2.2 + sun_halo);
+	float sun_disc = smoothstep(0.9988, 0.9996, sun_dot) * day_factor * (1.0 - cloud_darkness * 0.75);
+	float sun_halo = pow(sun_dot, 22.0) * 0.36 * (day_factor + sunset_factor * 0.6) * (1.0 - cloud_darkness * 0.55);
+	sun_halo += pow(sun_dot, 180.0) * 0.55 * day_factor * (1.0 - cloud_darkness * 0.7);
+	col += sun_tint * (sun_disc * 2.4 + sun_halo);
 
+	// Moon + twinkling stars at night
 	vec3 mdir = normalize(vec3(-sdir.x, max(abs(sdir.y), 0.32), -sdir.z));
 	float night_vis = clamp(1.0 - day_factor * 1.4, 0.0, 1.0);
 	float moon_dot = max(dot(dir, mdir), 0.0);
 	float moon_disc = smoothstep(0.9990, 0.9997, moon_dot) * night_vis;
 	float moon_halo = pow(moon_dot, 28.0) * 0.16 * night_vis;
-	col += vec3(0.84, 0.88, 0.96) * (moon_disc * 1.5 + moon_halo);
+	col += vec3(0.84, 0.89, 0.98) * (moon_disc * 1.6 + moon_halo);
 
 	if (dir.y > 0.04 && night_vis > 0.05) {
 		vec2 suv = dir.xz / (dir.y + 0.35) * 90.0;
@@ -445,32 +493,92 @@ void sky() {
 			float d = length(local);
 			float twinkle = 0.70 + 0.30 * sin(TIME * (2.0 + rnd * 5.0) + rnd * 40.0);
 			float star = smoothstep(0.15, 0.01, d) * twinkle * night_vis * smoothstep(0.04, 0.22, dir.y);
-			col += vec3(0.90, 0.93, 0.98) * star * 1.1;
+			col += vec3(0.90, 0.94, 1.0) * star * 1.1;
 		}
 	}
 
-	// Haufenwolken: zwei Rauschebenen für die Form, eine zur Sonne versetzte Probe für die Schattenseite
-	if (dir.y > 0.02) {
-		vec2 cuv = dir.xz / (dir.y + 0.18) * 1.25 + vec2(TIME * 0.012, TIME * 0.004);
-		float n = fbm(cuv);
-		float n2 = fbm(cuv * 2.3 + vec2(7.1, 3.7));
-		float dens = n * 0.75 + n2 * 0.25;
-		float cloud_mask = smoothstep(0.47, 0.72, dens) * smoothstep(0.02, 0.20, dir.y);
-		float ns = fbm(cuv + sdir.xz * 0.15) * 0.75 + n2 * 0.25;
-		float shade = clamp((dens - ns) * 3.5 + 0.65, 0.30, 1.0);
-		vec3 cloud_lit = mix(vec3(1.0, 0.99, 0.97), vec3(1.0, 0.78, 0.58), sunset_factor * 0.80);
-		vec3 cloud_shadow = mix(vec3(0.60, 0.66, 0.75), vec3(0.52, 0.40, 0.45), sunset_factor * 0.70);
-		vec3 cloud_day = mix(cloud_shadow, cloud_lit, shade);
-		// Heller Rand an dünnen Stellen nahe der Sonne
-		cloud_day += sun_tint * pow(sun_dot, 10.0) * 0.35 * (1.0 - smoothstep(0.55, 0.8, dens));
-		vec3 cloud_night = vec3(0.09, 0.11, 0.16);
-		vec3 cloud_col = mix(cloud_night, cloud_day, day_factor);
-		col = mix(col, cloud_col, cloud_mask * 0.88);
+	// =========================================================================
+	// VOLUMETRIC 3D RAYMARCHED CLOUDS (Beer-Lambert + Dual-Lobe HG Scattering)
+	// =========================================================================
+	if (dir.y > 0.015) {
+		// Virtual curved atmosphere slab: base = 1350m, top = 3150m
+		float elev = max(dir.y, 0.045);
+		float t_bot = 1350.0 / elev;
+		float t_top = 3150.0 / elev;
+		float march_dist = min(t_top - t_bot, 7500.0);
+
+		const int STEPS = 20;
+		float step_len = march_dist / float(STEPS);
+
+		// Subtle blue-noise-like jitter to eliminate raymarching banding
+		float jitter = hash21(dir.xz * 713.3 + vec2(dir.y * 211.7));
+		float t = t_bot + step_len * jitter;
+
+		float transmittance = 1.0;
+		vec3 light_energy = vec3(0.0);
+
+		// Dual-lobe Henyey-Greenstein phase for realistic silver lining & soft back-scatter
+		float phase_fwd = hg_phase(sun_raw, 0.68);
+		float phase_back = hg_phase(sun_raw, -0.25);
+		float phase = mix(phase_back, phase_fwd, 0.72) * 3.8 + 0.35;
+
+		vec3 sun_col = mix(vec3(1.06, 1.02, 0.96), vec3(1.15, 0.62, 0.34), sunset_factor);
+		sun_col *= mix(1.0, 0.42, cloud_darkness);
+		vec3 amb_top = mix(vec3(0.08, 0.11, 0.18), mix(vec3(0.56, 0.68, 0.86), vec3(0.76, 0.50, 0.44), sunset_factor * 0.7), day_factor);
+		vec3 amb_bot = mix(vec3(0.03, 0.04, 0.07), mix(vec3(0.32, 0.38, 0.48), vec3(0.36, 0.25, 0.30), sunset_factor * 0.7), day_factor);
+		amb_top *= mix(1.0, 0.55, cloud_darkness);
+		amb_bot *= mix(1.0, 0.45, cloud_darkness);
+
+		vec3 light_dir = (day_factor > 0.12) ? sdir : mdir;
+		vec3 direct_light = mix(vec3(0.18, 0.22, 0.32), sun_col, smoothstep(0.05, 0.35, day_factor));
+
+		for (int i = 0; i < STEPS; i++) {
+			if (transmittance < 0.025) {
+				break;
+			}
+			vec3 pos = dir * t;
+			float h_frac = clamp((pos.y - 1350.0) / 1800.0, 0.0, 1.0);
+			float dens = sample_cloud_density(pos, h_frac, cloud_coverage);
+
+			if (dens > 0.008) {
+				// 4-step shadow raymarch toward sun/moon for crisp 3D self-shadowing
+				float shadow_od = 0.0;
+				vec3 sp = pos;
+				float s_step = 260.0;
+				for (int s = 0; s < 4; s++) {
+					sp += light_dir * s_step;
+					float sh_frac = clamp((sp.y - 1350.0) / 1800.0, 0.0, 1.0);
+					shadow_od += sample_cloud_density(sp, sh_frac, cloud_coverage) * s_step * 0.0014;
+					s_step *= 1.45;
+				}
+				// Beer-Lambert + multi-scattering approximation + powder effect
+				float beer = exp(-shadow_od * 1.85);
+				float multi_scatter = exp(-shadow_od * 0.42) * 0.55;
+				float powder = 1.0 - exp(-dens * 3.5);
+				float sun_atten = max(beer, multi_scatter) * (0.55 + 0.45 * powder);
+
+				vec3 ambient = mix(amb_bot, amb_top, clamp(h_frac * 1.15, 0.0, 1.0));
+				vec3 sample_col = ambient + direct_light * sun_atten * phase;
+
+				float sigma = dens * step_len * 0.00165;
+				float step_trans = exp(-sigma);
+				light_energy += transmittance * (1.0 - step_trans) * sample_col;
+				transmittance *= step_trans;
+			}
+			t += step_len;
+		}
+
+		// Aerial perspective fade near the horizon so distant volumetric clouds blend naturally
+		float horizon_fade = smoothstep(0.015, 0.16, dir.y);
+		float cloud_alpha = (1.0 - transmittance) * horizon_fade;
+		vec3 final_cloud = light_energy / max(1.0 - transmittance, 0.001);
+		final_cloud = mix(hor_col, final_cloud, smoothstep(0.015, 0.22, dir.y));
+		col = mix(col, final_cloud, clamp(cloud_alpha, 0.0, 0.96));
 	}
 
-	// Dunstschleier direkt über dem Horizont, blendet in die Baumreihe über
-	float haze = exp(-max(dir.y, 0.0) * 16.0) * step(0.0, dir.y);
-	col = mix(col, hor_col, haze * 0.40);
+	// Horizon haze blending seamlessly into distant treeline
+	float haze = exp(-max(dir.y, 0.0) * 15.0) * step(0.0, dir.y);
+	col = mix(col, hor_col, haze * 0.42);
 
 	COLOR = col;
 }
