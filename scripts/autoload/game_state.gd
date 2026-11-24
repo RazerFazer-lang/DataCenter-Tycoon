@@ -1022,6 +1022,8 @@ var shopping_cart: Array = []
 var pending_build_orders: Dictionary = {}
 ## Freie Stellplätze im 3D-Lagerregal: "shelf_0:0" .. "shelf_0:11" -> crate_data Dictionary.
 const STORAGE_SHELF_SLOTS := 12
+const MAINTAIN_MIN_DUST := 15.0
+const MAINTAIN_MAX_THERMAL := 85.0
 var storage_shelf_slots: Dictionary = {}
 ## Aktiver Zustand der IT-Werkbank (leer oder build_box / assembly / repair / ready_tray).
 var workbench_state: Dictionary = {}
@@ -1824,6 +1826,11 @@ func export_save_data() -> Dictionary:
 	for item in pending_delivery_items:
 		all_pending.append(str(item))
 	data["pending_delivery_items"] = all_pending
+	# Ware, die schon unterwegs war, kommt nach dem Laden sofort statt erst im nächsten Lieferfenster.
+	if not van_cargo.is_empty() or not _van_parcel_parts.is_empty():
+		data["scheduled_delivery_day"] = 0
+		data["scheduled_delivery_hour"] = -1
+		data["pending_delivery_express"] = false
 	data["finance"] = FinanceManager.export_data()
 	data["checklist_dismissed"] = checklist_dismissed
 	var history := get_node_or_null("/root/StatsHistory")
@@ -2162,6 +2169,9 @@ func build_snapshot() -> Dictionary:
 		"van_cargo_count": van_cargo.size(),
 		"van_delivery_tier": van_delivery_tier,
 		"pending_delivery_count": pending_delivery_items.size(),
+		"scheduled_delivery_day": scheduled_delivery_day,
+		"scheduled_delivery_hour": scheduled_delivery_hour,
+		"pending_delivery_express": pending_delivery_express,
 		"checklist_opened_pc": checklist_opened_pc,
 		"checklist_ordered_anything": checklist_ordered_anything,
 		"open_panels": shared_open_panels.duplicate(),
@@ -2297,6 +2307,9 @@ func _apply_snapshot(snap: Dictionary) -> void:
 	host_permissions_changed.emit()
 	daily_deals_changed.emit()
 	pending_delivery_count = int(snap.get("pending_delivery_count", 0))
+	scheduled_delivery_day = maxi(0, int(snap.get("scheduled_delivery_day", 0)))
+	scheduled_delivery_hour = clampi(int(snap.get("scheduled_delivery_hour", -1)), -1, 23)
+	pending_delivery_express = bool(snap.get("pending_delivery_express", false))
 	# Ältere Spielstände haben diese Felder nicht. Die übrigen Schritte leitet die Checkliste aus Racks/Kisten ab.
 	checklist_opened_pc = bool(snap.get("checklist_opened_pc", false))
 	checklist_ordered_anything = bool(snap.get("checklist_ordered_anything", false))
@@ -4918,22 +4931,29 @@ func _rpc_req_drop_crate(drop_pos: Vector3) -> void:
 	if held.is_empty():
 		return
 	var cid := str(held["id"])
-	var clamped: Vector3
-	if halle_nord_owned and drop_pos.z < -100.0:
-		clamped = Vector3(clampf(drop_pos.x, -9.5, 9.5), 0.0, clampf(drop_pos.z, HALLE_NORD_ORIGIN.z - 5.5, HALLE_NORD_ORIGIN.z + 12.5))
-		clamped = _push_drop_outside_obstacles(clamped, 9.5)
-	else:
-		var max_x := 5.0 if room_level == 0 else (11.8 if room_level == 1 else 20.8)
-		clamped = Vector3(clampf(drop_pos.x, -5.0, max_x), 0.0, clampf(drop_pos.z, -4.0, 8.8))
-		# Verhindert, dass abgelegte Items in einem Server-Rack oder Gerät verschwinden!
-		clamped = _push_drop_outside_obstacles(clamped, max_x)
 	crates[cid]["held_by"] = 0
-	crates[cid]["pos"] = clamped
+	crates[cid]["pos"] = _clamp_drop_pos(drop_pos)
 	_broadcast_crates()
 	_rpc_play_sfx.rpc_id(peer_id, "drop")
 
 
-func _push_drop_outside_obstacles(pos: Vector3, max_x: float) -> Vector3:
+## Hält eine Ablageposition im begehbaren Bereich (Garage/Hallen bzw. Halle Nord) und außerhalb von Geräten.
+func _clamp_drop_pos(drop_pos: Vector3) -> Vector3:
+	var min_x := -5.0
+	var max_x := 5.0 if room_level == 0 else (11.8 if room_level == 1 else 20.8)
+	var min_z := -4.0
+	var max_z := 8.8
+	if halle_nord_owned and drop_pos.z < -100.0:
+		min_x = -9.5
+		max_x = 9.5
+		min_z = HALLE_NORD_ORIGIN.z - 5.5
+		max_z = HALLE_NORD_ORIGIN.z + 12.5
+	var clamped := Vector3(clampf(drop_pos.x, min_x, max_x), 0.0, clampf(drop_pos.z, min_z, max_z))
+	# Verhindert, dass abgelegte Items in einem Server-Rack oder Gerät verschwinden!
+	return _push_drop_outside_obstacles(clamped, min_x, max_x, min_z, max_z)
+
+
+func _push_drop_outside_obstacles(pos: Vector3, min_x: float, max_x: float, min_z: float, max_z: float) -> Vector3:
 	var out := pos
 	var obstacles: Array[Vector3] = []
 	for rk in racks.values():
@@ -4954,8 +4974,8 @@ func _push_drop_outside_obstacles(pos: Vector3, max_x: float) -> Vector3:
 					dir = Vector2(0.0, 1.0)
 				else:
 					dir = dir.normalized()
-				out.x = clampf(ob.x + dir.x * min_r, -5.0, max_x)
-				out.z = clampf(ob.z + dir.y * min_r, -4.0, 8.8)
+				out.x = clampf(ob.x + dir.x * min_r, min_x, max_x)
+				out.z = clampf(ob.z + dir.y * min_r, min_z, max_z)
 	return out
 
 
@@ -8230,6 +8250,12 @@ func _tick_constructions(dt: float) -> void:
 		_rpc_play_sfx.rpc("save")
 
 
+## Wartung lohnt sich erst ab sichtbarem Staub bzw. gealterter Wärmeleitpaste.
+func is_slot_maintainable(slot: Dictionary) -> bool:
+	return roundf(float(slot.get("dust_level", 0.0))) >= MAINTAIN_MIN_DUST \
+		or roundf(float(slot.get("thermal_health", 100.0))) <= MAINTAIN_MAX_THERMAL
+
+
 func request_maintain_slot(rack_id: String, slot_idx: int) -> void:
 	_rpc_req_maintain_slot.rpc_id(1, rack_id, slot_idx)
 
@@ -8239,6 +8265,8 @@ func _rpc_req_maintain_slot(rack_id: String, slot_idx: int) -> void:
 	if not multiplayer.is_server():
 		return
 	var peer_id := _get_sender_id()
+	if not SecurityGuard.check_rate_limit(peer_id, "maintain", 10, 5.0):
+		return
 	if not racks.has(rack_id):
 		return
 	var slots: Array = racks[rack_id]["slots"]
@@ -8247,8 +8275,14 @@ func _rpc_req_maintain_slot(rack_id: String, slot_idx: int) -> void:
 	var slot: Dictionary = slots[slot_idx]
 	if str(slot.get("item_type", "")) == "" or str(slot.get("state", "ok")) != "ok":
 		return
-	if maint_kits > 0:
-		maint_kits -= 1
+	if not is_slot_maintainable(slot):
+		_rpc_play_sfx.rpc_id(peer_id, "error")
+		return
+	if maint_kits <= 0:
+		_rpc_play_sfx.rpc_id(peer_id, "error")
+		post_event("Keine Wartungs-Kits mehr! Am PC im Shop oder am Ersatzteil-Schrank auffüllen.", "warn")
+		return
+	maint_kits -= 1
 	slot["dust_level"] = 0.0
 	slot["thermal_health"] = 100.0
 	racks[rack_id]["temp"] = maxf(22.0, float(racks[rack_id].get("temp", 35.0)) - 3.0)
@@ -8297,14 +8331,40 @@ func _rpc_req_sell_decor(decor_id: String) -> void:
 	if not multiplayer.is_server():
 		return
 	var peer_id := _get_sender_id()
+	if not SecurityGuard.check_rate_limit(peer_id, "sell", 6, 5.0):
+		return
+	if not is_destructive_action_allowed(peer_id):
+		_deny_destructive_action(peer_id, "Einrichtung verkaufen")
+		return
 	if not decor_items.has(decor_id):
 		return
 	var d: Dictionary = decor_items[decor_id]
 	var itype := str(d.get("item_type", ""))
 	var refund := int(roundf(float((ITEM_CATALOG.get(itype, {}) as Dictionary).get("price", 0)) * SELL_REFUND_RATIO))
+	_disconnect_all_cables_of(decor_id)
+	# Eingelagerte Kisten bleiben am Standort des Regals stehen.
+	var base_pos: Vector3 = d.get("pos", Vector3.ZERO) as Vector3
+	var stored_v: Variant = d.get("stored_items", [])
+	if stored_v is Array:
+		var dropped := 0
+		for item_v in (stored_v as Array):
+			if not (item_v is Dictionary):
+				continue
+			var crate: Dictionary = (item_v as Dictionary).duplicate(true)
+			var cid := _alloc_id("crate")
+			crate["id"] = cid
+			crate["held_by"] = 0
+			crate["pos"] = _clamp_drop_pos(base_pos + Vector3(-0.6 + float(dropped) * 0.4, 0.0, 0.0))
+			crates[cid] = crate
+			dropped += 1
 	decor_items.erase(decor_id)
 	money += float(refund)
 	_recalculate_networks_and_metrics()
+	_broadcast_cables()
+	_broadcast_racks()
+	_broadcast_coolers()
+	_broadcast_ups()
+	_broadcast_crates()
 	_broadcast_decor_items()
 	_broadcast_sim_tick()
 	_rpc_play_sfx.rpc("sell")
@@ -8344,12 +8404,13 @@ func _rpc_req_decor_shelf_interact(decor_id: String, slot_idx: int) -> void:
 		_broadcast_decor_items()
 		_rpc_play_sfx.rpc("place")
 	else:
-		if stored[slot_idx] == null:
+		if stored[slot_idx] == null or is_player_holding_anything(peer_id):
 			return
 		var item_d: Dictionary = (stored[slot_idx] as Dictionary).duplicate(true)
 		var new_cid := _alloc_id("crate")
 		item_d["id"] = new_cid
 		item_d["held_by"] = peer_id
+		item_d["held_slot"] = get_active_slot(peer_id)
 		crates[new_cid] = item_d
 		stored[slot_idx] = null
 		d["stored_items"] = stored

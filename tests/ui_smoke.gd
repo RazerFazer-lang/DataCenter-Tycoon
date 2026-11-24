@@ -1,9 +1,33 @@
 extends Node
 ## Rauchtest für die UI: lädt die Hauptszene, öffnet HUD, Meldungen, Pause-Menü
-## und Rack-/Geräte-Menü und beendet sich. Fehler erscheinen als SCRIPT ERROR im Log.
+## und Rack-/Geräte-Menü und beendet sich. Exit-Code 1 bei Skriptfehlern oder fehlenden Knoten.
+
+
+## Zählt Skript- und Shaderfehler mit (auch aus Threads).
+class ErrorCounter extends Logger:
+	var _mutex := Mutex.new()
+	var _count := 0
+
+	func _log_error(_function: String, _file: String, _line: int, _code: String, _rationale: String, _editor_notify: bool, error_type: int, _script_backtraces: Array[ScriptBacktrace]) -> void:
+		if error_type != ERROR_TYPE_SCRIPT and error_type != ERROR_TYPE_SHADER:
+			return
+		_mutex.lock()
+		_count += 1
+		_mutex.unlock()
+
+	func get_count() -> int:
+		_mutex.lock()
+		var n := _count
+		_mutex.unlock()
+		return n
+
+
+var _errors := ErrorCounter.new()
+var _missing := 0
 
 
 func _ready() -> void:
+	OS.add_logger(_errors)
 	print("SMOKE: start")
 	var packed := load("res://scenes/main.tscn") as PackedScene
 	if packed == null:
@@ -17,6 +41,7 @@ func _ready() -> void:
 	var hud := main.get_node_or_null("UI/HUD") as GameHUD
 	if hud == null:
 		print("SMOKE: HUD-Knoten fehlt")
+		_missing += 1
 	else:
 		hud.visible = true
 		hud.show_toast("Test-Meldung")
@@ -33,6 +58,7 @@ func _ready() -> void:
 	var rack := main.get_node_or_null("UI/RackInspectorUI") as RackInspectorUI
 	if rack == null:
 		print("SMOKE: RackInspectorUI-Knoten fehlt")
+		_missing += 1
 	else:
 		if GameState.racks.is_empty():
 			var rid: String = GameState._alloc_id("rack")
@@ -65,6 +91,7 @@ func _ready() -> void:
 	var term := _find_terminal(main)
 	if term == null:
 		print("SMOKE: TerminalUI-Knoten fehlt")
+		_missing += 1
 	else:
 		term.visible = true
 		for aid in TerminalUI.APP_ORDER:
@@ -84,8 +111,10 @@ func _ready() -> void:
 		term.visible = false
 		print("SMOKE: PC fertig")
 
-	print("SMOKE: Ende")
-	get_tree().quit()
+	var failures := _errors.get_count() + _missing
+	print("SMOKE: Ende, %d Fehler" % failures)
+	OS.remove_logger(_errors)
+	get_tree().quit(1 if failures > 0 else 0)
 
 
 func _find_terminal(n: Node) -> TerminalUI:

@@ -347,6 +347,8 @@ func _make_interact_area(sz: Vector3, meta: Dictionary) -> Area3D:
 	bs.size = sz
 	col.shape = bs
 	area.add_child(col)
+	# Der Spieler-Controller liest bei jedem Ziel "entity_id".
+	area.set_meta("entity_id", decor_id)
 	for k in meta.keys():
 		area.set_meta(k, meta[k])
 	return area

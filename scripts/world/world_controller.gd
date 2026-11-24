@@ -309,6 +309,9 @@ func _apply_graphics_quality() -> void:
 var _sky_sun_dir_sent: Vector3 = Vector3.ZERO
 var _sky_day_sent: float = -1.0
 var _sky_sunset_sent: float = -1.0
+# Startwerte wie im Sky-Shader: get_shader_parameter() liefert null, solange nie ein Wert gesetzt wurde.
+var _cloud_coverage: float = 0.48
+var _cloud_darkness: float = 0.0
 
 
 func _update_day_night_atmosphere() -> void:
@@ -393,10 +396,10 @@ func _update_day_night_atmosphere() -> void:
 			"storm":
 				target_cov = 0.92
 				target_dark = 0.85
-		var cur_cov := float(sky_sh.get_shader_parameter("cloud_coverage"))
-		var cur_dark := float(sky_sh.get_shader_parameter("cloud_darkness"))
-		sky_sh.set_shader_parameter("cloud_coverage", lerpf(cur_cov, target_cov, 0.03))
-		sky_sh.set_shader_parameter("cloud_darkness", lerpf(cur_dark, target_dark, 0.03))
+		_cloud_coverage = lerpf(_cloud_coverage, target_cov, 0.03)
+		_cloud_darkness = lerpf(_cloud_darkness, target_dark, 0.03)
+		sky_sh.set_shader_parameter("cloud_coverage", _cloud_coverage)
+		sky_sh.set_shader_parameter("cloud_darkness", _cloud_darkness)
 	var is_wet := (w_now == "rain" or w_now == "storm")
 	env.fog_density = 0.0062 if w_now == "storm" else (0.0044 if w_now == "rain" else 0.0022)
 	var day_fog := Color(0.58, 0.64, 0.72) if is_wet else Color(0.70, 0.78, 0.88)

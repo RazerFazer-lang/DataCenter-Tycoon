@@ -8,6 +8,8 @@ const SAVE_FORMAT_VERSION := 2
 const BACKUPS_SUBDIR := "backups"
 ## So viele Sicherungen bleiben pro Welt erhalten.
 const MAX_BACKUPS := 5
+## Bereiche mit (auch verschachtelten) "pos"-Feldern, die JSON nicht als Vector3 speichern kann.
+const NESTED_POS_KEYS: Array[String] = ["decor_items", "storage_shelf_slots"]
 
 
 func _ensure_saves_dir() -> bool:
@@ -282,6 +284,9 @@ func _serialize_state(data: Dictionary) -> Dictionary:
 			k["pos"] = _vec3_to_arr(k.get("pos", Vector3.ZERO))
 		crates_out[kid] = k
 	out["crates"] = crates_out
+	for key in NESTED_POS_KEYS:
+		if out.has(key):
+			out[key] = _convert_nested_pos(out[key], true)
 	out["extinguisher_held_by"] = 0
 	return out
 
@@ -308,8 +313,30 @@ func _deserialize_state(data: Dictionary) -> Dictionary:
 		k["held_by"] = 0
 		crates_out[kid] = k
 	out["crates"] = crates_out
+	for key in NESTED_POS_KEYS:
+		if out.has(key):
+			out[key] = _convert_nested_pos(out[key], false)
 	out["extinguisher_held_by"] = 0
 	return out
+
+
+## Wandelt alle "pos"-Felder in verschachtelten Daten um (z. B. eingelagerte Kisten in einem Deko-Regal).
+func _convert_nested_pos(value: Variant, to_array: bool) -> Variant:
+	if value is Dictionary:
+		var d_out: Dictionary = {}
+		for k in (value as Dictionary).keys():
+			var v: Variant = value[k]
+			if str(k) == "pos":
+				d_out[k] = _vec3_to_arr(v) if to_array else _arr_to_vec3(v)
+			else:
+				d_out[k] = _convert_nested_pos(v, to_array)
+		return d_out
+	if value is Array:
+		var a_out: Array = []
+		for item in (value as Array):
+			a_out.append(_convert_nested_pos(item, to_array))
+		return a_out
+	return value
 
 
 func _vec3_to_arr(v: Variant) -> Array:
@@ -326,4 +353,11 @@ func _arr_to_vec3(v: Variant) -> Vector3:
 		return v
 	if v is Array and v.size() >= 3:
 		return Vector3(float(v[0]), float(v[1]), float(v[2]))
+	# Spielstände bis v2.4.1 enthalten Deko-Positionen als Text: "(x, y, z)".
+	if v is String:
+		var parts: PackedStringArray = (v as String).trim_prefix("(").trim_suffix(")").split(",")
+		if parts.size() == 3:
+			var vec := Vector3(parts[0].strip_edges().to_float(), parts[1].strip_edges().to_float(), parts[2].strip_edges().to_float())
+			if SecurityGuard.is_finite_vec3(vec):
+				return vec
 	return Vector3.ZERO

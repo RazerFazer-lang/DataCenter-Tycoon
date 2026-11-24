@@ -1646,7 +1646,7 @@ func _build_side_column(side: VBoxContainer, slot: Dictionary, itype: String) ->
 			ml.add_theme_font_size_override("font_size", 11.5)
 			ml.add_theme_color_override("font_color", UIStyle.COL_AMBER if (dust_pct >= 55 or th_pct <= 45) else UIStyle.COL_TEXT_SUB)
 			m_row.add_child(ml)
-			if dust_pct >= 15 or th_pct <= 85:
+			if GameState.is_slot_maintainable(slot):
 				var mbtn := Button.new()
 				mbtn.text = tr("🧹 Warten (%d Kits)") % GameState.maint_kits
 				mbtn.custom_minimum_size = Vector2(148, 26)

@@ -1,9 +1,23 @@
 {
-  "version": "2.4.1",
-  "launcher_version": "2.4.1",
-  "codename": "v2.4.1 Hotfix: PC-Teleport-Kamera-Lock behoben",
+  "version": "2.4.2",
+  "launcher_version": "2.4.2",
+  "codename": "v2.4.2 Hotfix: Deko & Leisten im Spielstand, Launcher ohne .NET-Installation",
   "release_date": "2026-11-24",
   "changelog": [
+    {
+      "version": "v2.4.2",
+      "date": "2026-11-24",
+      "title": "Hotfix 2.4.2: Spielstand-Fix für Deko & Leisten, eigenständiger Launcher",
+      "items": [
+        "[FIX / SPIELSTAND] Einrichtung, Strom- und LAN-Leisten stehen nach dem Laden wieder am richtigen Platz. Betroffene Spielstände aus v2.4.0/v2.4.1 werden beim Laden automatisch repariert.",
+        "[FIX / LAUNCHER] Der Launcher bringt .NET wieder selbst mit und startet ohne zusätzliche Installation.",
+        "[FIX] Gebuchte Lieferfenster bleiben beim Speichern erhalten; Ware, die schon unterwegs war, kommt nach dem Laden sofort.",
+        "[FIX] In Halle Nord neben einem Rack abgelegte Kisten springen nicht mehr in die Start-Garage.",
+        "[FIX] Wartung verbraucht jetzt immer ein Kit und ist nur bei Bedarf möglich.",
+        "[FIX] Wolken-, Nebel- und Nässe-Effekte aktualisieren sich wieder fehlerfrei; Deko-Regal legt Entnommenes in den aktiven Slot.",
+        "[CO-OP] Einrichtungs-Verkauf beachtet Host-Schutz, trennt Kabel und erhält eingelagerte Kisten."
+      ]
+    },
     {
       "version": "v2.4.1",
       "date": "2026-11-24",
