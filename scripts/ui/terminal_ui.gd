@@ -2177,7 +2177,7 @@ func _render_upgrades_app() -> void:
 		_style_win_btn(hn_btn, Color(0.12, 0.54, 0.34), Color(0.08, 0.42, 0.26), Color.WHITE)
 		hn_btn.pressed.connect(func():
 			SfxManager.play("click", -10.0)
-			close_terminal()
+			close_requested.emit()
 			var lp := get_tree().get_first_node_in_group("local_player")
 			if lp != null and lp.has_method("teleport_between_sites"):
 				lp.call("teleport_between_sites")

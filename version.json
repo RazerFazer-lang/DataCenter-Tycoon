@@ -1,9 +1,17 @@
 {
-  "version": "2.4.0",
-  "launcher_version": "2.4.0",
-  "codename": "v2.4.0 Volumetrische Wolken, Einzel-Ports, Strom- & LAN-Leisten, Lieferfenster & Logistik-Fixes",
+  "version": "2.4.1",
+  "launcher_version": "2.4.1",
+  "codename": "v2.4.1 Hotfix: PC-Teleport-Kamera-Lock behoben",
   "release_date": "2026-11-24",
   "changelog": [
+    {
+      "version": "v2.4.1",
+      "date": "2026-11-24",
+      "title": "Hotfix 2.4.1: PC-Teleport zu Halle Nord",
+      "items": [
+        "[FIX] Teleport über den PC nach Halle Nord beendet jetzt sauber den PC-Sitzmodus, entsperrt Kamera/Steuerung sofort und verhindert den Aufsteh-Rückblend zur Start-Garage."
+      ]
+    },
     {
       "version": "v2.4.0",
       "date": "2026-11-24",

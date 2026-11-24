@@ -2463,6 +2463,13 @@ func teleport_between_sites() -> void:
 		SfxManager.play("error", -10.0)
 		GameState.post_event("Großstandort Halle Nord ist noch nicht gekauft (ab Firmenstufe 3 unter Upgrades & Standorte).", "warn")
 		return
+	# Falls der Teleport vom PC-Sitz aus gestartet wurde: Sitzmodus & Aufsteh-Blend sofort beenden,
+	# damit die Kamera weder am Monitor klebt noch zur Start-Garage zurückblendet!
+	is_seated_at_pc = false
+	is_typing_at_pc = false
+	_stand_blend_timer = 0.0
+	set_ui_locked(false)
+	Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
 	# Ein gerade halb gezogenes Kabel sauber abbrechen; getragene Items (Kisten/Server/Kits/Feuerlöscher) bleiben in der Hand!
 	if not cable_start_id.is_empty():
 		cable_start_id = ""
