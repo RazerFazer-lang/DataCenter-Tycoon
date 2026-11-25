@@ -37,6 +37,12 @@
       "items": [
         {
           "tag": "neu",
+          "version": "v2.9",
+          "title": "Lagerregale, Einrichtung mit Funktion & neue Lieferung",
+          "desc": "Drei Regalgrößen mit echten Maßen, zehn Einrichtungsstücke mit Nutzen, zweite Werkbank, Kamera-App, nächtliche Diebe und drei neue Lieferfahrzeuge mit Sackkarre, Hubwagen und Stapler."
+        },
+        {
+          "tag": "neu",
           "version": "v2.8",
           "title": "Konkurrenz, Verion OS, Postfach & neuer Arbeitsplatz",
           "desc": "Fünf Konkurrenzfirmen mit Marktanteilen, Preise, Werbung und Abwerben, neue PC-Oberfläche mit Fenstern, E-Mail-Postfach mit Betrugsmails, echte Rechnungsfolgen und ein Schreibtisch mit zwei Monitoren."

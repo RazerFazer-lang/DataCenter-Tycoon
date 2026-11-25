@@ -320,17 +320,17 @@ func _aim_smooth(piece: Node, p_local: Vector3) -> void:
 ## Regeln auf dem Host: Reihenfolge, Belegung, kein Abkürzen per Aufnehmen, Speichern.
 func _check_rules(comps: Dictionary) -> void:
 	gs.workbench_state = {"mode": "assembly", "label": "Regeln", "mainboard_id": "web_server", "components": comps, "done": {}, "worker": 0, "rack_id": "", "slot_idx": 0}
-	gs._rpc_req_workbench_task("mb_place", 1.0)
+	gs._do_workbench_task("mb_place", 1.0)
 	chk("ohne Arbeitsplatz kein Handgriff", gs.get_workbench_done().is_empty())
-	gs._rpc_req_workbench_enter()
+	gs._do_workbench_enter()
 	chk("Arbeitsplatz belegt", gs.get_workbench_worker() == 1)
-	gs._rpc_req_workbench_task("lid_on", 1.0)
+	gs._do_workbench_task("lid_on", 1.0)
 	chk("falsche Reihenfolge abgelehnt", gs.get_workbench_done().is_empty())
-	gs._rpc_req_workbench_task("mb_place", 1.0)
+	gs._do_workbench_task("mb_place", 1.0)
 	chk("richtiger Handgriff zählt", gs.get_workbench_done().has("mb_place"))
-	gs._rpc_req_workbench_leave()
+	gs._do_workbench_leave()
 	var n0: int = gs.crates.size()
-	gs._rpc_req_workbench_pickup()
+	gs._do_workbench_pickup()
 	chk("angefangener Bau lässt sich nicht mitnehmen", gs.crates.size() == n0 and not gs.workbench_state.is_empty())
 	var sm := root.get_node("SaveManager")
 	sm.save_world("wbtest", "wbtest", gs.export_save_data())
@@ -338,7 +338,7 @@ func _check_rules(comps: Dictionary) -> void:
 	gs.load_from_save_data(l["state"], "wbtest", "wbtest")
 	chk("Stand nach Laden erhalten", gs.get_workbench_done().has("mb_place") and gs.get_workbench_worker() == 0)
 	gs.workbench_state["done"] = {}
-	gs._rpc_req_workbench_pickup()
+	gs._do_workbench_pickup()
 	var got := ""
 	for c in gs.crates.values():
 		if int(c.get("held_by", 0)) == 1:
@@ -347,34 +347,34 @@ func _check_rules(comps: Dictionary) -> void:
 
 	# Reparatur: Auswahl, Reihenfolge, Verbrauchsmaterial
 	gs.workbench_state = {"mode": "repair", "state": "crashed", "faulty_part": "ram", "fault_hidden": true, "label": "Regeln", "mainboard_id": "web_server", "components": _all_tier(2), "done": {}, "worker": 1, "rack_id": "", "slot_idx": 0}
-	gs._rpc_req_workbench_choose("kit")
+	gs._do_workbench_choose("kit")
 	chk("ohne Diagnose keine Auswahl", not gs.get_workbench_done().has("choose"))
-	gs._rpc_req_workbench_task("meas_ram", 1.0)
+	gs._do_workbench_task("meas_ram", 1.0)
 	chk("ohne Strom keine Messung", not gs.get_workbench_done().has("meas_ram"))
 	for t in ["diag_plug", "power_on", "lid_out0", "lid_out1", "lid_off", "meas_cpu", "meas_ram"]:
-		gs._rpc_req_workbench_task(t, 1.0)
-	gs._rpc_req_workbench_task("ram_open", 1.0)
+		gs._do_workbench_task(t, 1.0)
+	gs._do_workbench_task("ram_open", 1.0)
 	chk("unter Strom wird nichts ausgebaut", gs.get_workbench_done().has("meas_ram") and not gs.get_workbench_done().has("ram_open"))
-	gs._rpc_req_workbench_choose("gibt_es_nicht")
-	gs._rpc_req_workbench_choose(_part_of_tier("cpu", 2))
+	gs._do_workbench_choose("gibt_es_nicht")
+	gs._do_workbench_choose(_part_of_tier("cpu", 2))
 	chk("falsches Ersatzteil abgelehnt", not gs.get_workbench_done().has("choose"))
 	gs.storage_shelf_slots["test:0"] = {"id": "k", "item_type": "kit_ram", "pos": Vector3.ZERO, "held_by": 0}
-	gs._rpc_req_workbench_choose("kit")
+	gs._do_workbench_choose("kit")
 	var p3 := _part_of_tier("ram", 3)
 	gs.parts_inventory[p3] = 1
-	gs._rpc_req_workbench_choose(p3)
+	gs._do_workbench_choose(p3)
 	chk("Auswahl lässt sich ändern", str(gs.workbench_state["spare"]["id"]) == p3 and gs.get_workbench_done().has("meas_ram"))
-	gs._rpc_req_workbench_task("power_off", 1.0)
-	gs._rpc_req_workbench_task("ram_open", 1.0)
-	gs._rpc_req_workbench_choose("kit")
+	gs._do_workbench_task("power_off", 1.0)
+	gs._do_workbench_task("ram_open", 1.0)
+	gs._do_workbench_choose("kit")
 	chk("nach dem ersten Handgriff ist die Wahl fest", str(gs.workbench_state["spare"]["id"]) == p3)
 	var s0: int = gs.bench_screws
 	gs.workbench_state = {"mode": "assembly", "label": "R", "mainboard_id": "web_server", "components": comps, "done": {}, "worker": 1, "rack_id": "", "slot_idx": 0}
-	gs._rpc_req_workbench_task("mb_place", 1.0)
-	gs._rpc_req_workbench_task("mb_in0", 1.0)
+	gs._do_workbench_task("mb_place", 1.0)
+	gs._do_workbench_task("mb_in0", 1.0)
 	chk("Schraube verbraucht", gs.bench_screws == s0 - 1)
 	gs.bench_screws = 0
-	gs._rpc_req_workbench_task("mb_in1", 1.0)
+	gs._do_workbench_task("mb_in1", 1.0)
 	chk("ohne Schrauben geht es nicht weiter", not gs.get_workbench_done().has("mb_in1"))
 	gs._van_parcel_parts.append("acc:screw_box")
 	gs._van_parcel_parts.append("acc:paste_tube")
@@ -410,10 +410,10 @@ func _auto(skip: Array, until: String = "", screw: float = 1.0, paste: float = 1
 			return
 		if str(pick["kind"]) == "choose":
 			gs.storage_shelf_slots["test:0"] = {"id": "k", "item_type": gs.get_workbench_kit_id(), "pos": Vector3.ZERO, "held_by": 0}
-			gs._rpc_req_workbench_choose("kit")
+			gs._do_workbench_choose("kit")
 			continue
 		var n: int = gs.get_workbench_done().size()
-		gs._rpc_req_workbench_task(str(pick["id"]), paste if str(pick["kind"]) == "paste" else screw)
+		gs._do_workbench_task(str(pick["id"]), paste if str(pick["kind"]) == "paste" else screw)
 		if gs.get_workbench_done().size() == n and gs.is_workbench_job():
 			return
 
@@ -444,7 +444,7 @@ func _check_mistakes() -> void:
 	_job("assembly")
 	_auto(["pwm_plug"], "test_off")
 	chk("Testlauf meldet fehlendes Lüfterkabel", str(gs.workbench_state["test"]["code"]) == "F1", gs.workbench_state.get("test"))
-	gs._rpc_req_workbench_task("test_off", 1.0)
+	gs._do_workbench_task("test_off", 1.0)
 	chk("nach dem Fehltest geht es weiter", not gs.get_workbench_done().has("test_on") and str(gs.workbench_state["mode"]) == "assembly")
 	_auto([])
 	chk("nach dem Nachstecken bestanden", str(gs.workbench_state["mode"]) == "ready_tray" and gs.workbench_state["build_quality"] == 100)
@@ -455,41 +455,41 @@ func _check_mistakes() -> void:
 	_job("assembly")
 	_auto(["paste"], "test_off")
 	chk("ohne Paste brennt die CPU durch", str(gs.workbench_state["test"]["kind"]) == "cpu")
-	gs._rpc_req_workbench_task("test_off", 1.0)
+	gs._do_workbench_task("test_off", 1.0)
 	chk("wird zur CPU-Reparatur", str(gs.workbench_state["mode"]) == "repair" and str(gs.workbench_state["faulty_part"]) == "cpu" and gs.get_workbench_done().has("lid_off"))
 	_auto([])
 	chk("CPU ersetzt, Server fertig", str(gs.workbench_state["mode"]) == "ready_tray", gs.workbench_state.get("build_quality"))
 
 	_job("repair", {"state": "crashed", "faulty_part": "ram", "fault_hidden": true})
 	_auto(["power_off"], "ram_open")
-	gs._rpc_req_workbench_task("ram_open", 1.0)
-	gs._rpc_req_workbench_task("ram_out2", 1.0)
+	gs._do_workbench_task("ram_open", 1.0)
+	gs._do_workbench_task("ram_out2", 1.0)
 	chk("unter Strom: Kurzschluss", str(gs.workbench_state.get("extra_fault", "")) == "mainboard" and gs.get_workbench_done().has("power_off"))
 	_auto([], "test_off")
 	chk("Testlauf zeigt Mainboard-Schaden", str((gs.workbench_state.get("test", {}) as Dictionary).get("code", "")) == "b2", gs.workbench_state.get("test"))
-	gs._rpc_req_workbench_task("test_off", 1.0)
+	gs._do_workbench_task("test_off", 1.0)
 	chk("wird zur Mainboard-Reparatur", str(gs.workbench_state["faulty_part"]) == "mainboard" and str(gs.workbench_state["mode"]) == "repair")
 	_auto([])
 	chk("Mainboard ersetzt, Kurzschluss kostet Qualität", str(gs.workbench_state["mode"]) == "ready_tray" and int(gs.workbench_state["build_quality"]) < 100, gs.workbench_state.get("build_quality"))
 
 	_job("assembly")
 	_auto(["cpu_place", "paste"], "diag_plug")
-	gs._rpc_req_workbench_break("cpu_place")
-	gs._rpc_req_workbench_task("cpu_place", 1.0)
+	gs._do_workbench_break("cpu_place")
+	gs._do_workbench_task("cpu_place", 1.0)
 	chk("verbogene CPU ist zerstört", gs.needs_workbench_replacement() and not gs.get_workbench_done().has("cpu_place"))
 	var cpu3 := _part_of_tier("cpu", 3)
 	gs.parts_inventory[cpu3] = 1
-	gs._rpc_req_workbench_choose(cpu3)
+	gs._do_workbench_choose(cpu3)
 	chk("neue CPU aus dem Lager", not gs.needs_workbench_replacement() and str(gs.workbench_state["components"]["cpu"]) == cpu3 and not gs.parts_inventory.has(cpu3))
 	_auto([])
 	chk("mit neuer CPU fertig", str(gs.workbench_state["mode"]) == "ready_tray")
 
 	_job("repair", {"state": "crashed", "faulty_part": "cpu", "fault_hidden": true})
 	_auto([], "cpu_place")
-	gs._rpc_req_workbench_break("cpu_place")
+	gs._do_workbench_break("cpu_place")
 	chk("Ersatz-CPU zerstört: neu wählen", gs.needs_workbench_replacement())
 	gs.storage_shelf_slots["test:0"] = {"id": "k", "item_type": "kit_cpu", "pos": Vector3.ZERO, "held_by": 0}
-	gs._rpc_req_workbench_choose("kit")
+	gs._do_workbench_choose("kit")
 	_auto([])
 	chk("Reparatur danach fertig", str(gs.workbench_state["mode"]) == "ready_tray", gs.workbench_state.get("mode"))
 
@@ -514,13 +514,13 @@ func _check_mistakes() -> void:
 			gs.crates.erase(c)
 	gs.workbench_state = {}
 	gs._rpc_req_pull_server_tray(rid, 0)
-	gs._rpc_req_workbench_place()
+	gs._do_workbench_place()
 	chk("Schlitten auf der Werkbank mit 50 %", gs.can_workbench_service() and gs.get_build_quality(gs.workbench_state) == 50, gs.workbench_state)
-	gs._rpc_req_workbench_service()
+	gs._do_workbench_service()
 	gs.workbench_state["worker"] = 1
 	_auto([])
 	chk("Überholt auf 100 %", gs.workbench_state.get("build_quality") == 100, gs.workbench_state.get("build_quality"))
-	gs._rpc_req_workbench_pickup()
+	gs._do_workbench_pickup()
 	gs._rpc_req_insert_server_tray(rid, 0)
 	chk("Qualität kommt im Rack an", gs.get_build_quality(gs.racks[rid]["slots"][0]) == 100 and str(gs.racks[rid]["slots"][0]["item_type"]) == "web_server")
 	var sm := root.get_node("SaveManager")

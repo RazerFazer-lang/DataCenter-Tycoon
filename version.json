@@ -1,9 +1,27 @@
 {
-  "version": "2.8.0",
-  "launcher_version": "2.8.0",
-  "codename": "v2.8.0 Konkurrenz, Verion OS, Postfach & neuer Arbeitsplatz",
+  "version": "2.9.0",
+  "launcher_version": "2.9.0",
+  "codename": "v2.9.0 Lagerregale, Einrichtung mit Funktion & neue Lieferung",
   "release_date": "2026-11-25",
   "changelog": [
+    {
+      "version": "v2.9.0",
+      "date": "2026-11-25",
+      "title": "Update 2.9: Drei Lagerregale, Einrichtung mit Funktion, zweite Werkbank, Kameras, Diebe & neue Lieferung",
+      "items": [
+        "[NEU / REGALE] Drei Größen: Kleinteile, Schwerlast und Paletten. Ware braucht ihren echten Platz, große Geräte kommen auf Paletten. Regale rasten an Wänden und aneinander ein, das Garagenregal lässt sich jetzt umstellen.",
+        "[NEU / EINRICHTUNG] Fünf Stücke neu gebaut und fünf neue: Sofa-Ecke, Wasserspender, Werkzeugwagen, Luftentfeuchter und Leucht-Firmenschild. Benutzbar mit [E] und mit kleinen festen Boni.",
+        "[NEU / CO-OP] Die ESD-Werkbank ist eine echte zweite Werkbank: Zwei Spieler können gleichzeitig bauen und reparieren.",
+        "[GAMEPLAY] Kaltgang-Portale öffnen von selbst. Racks zwischen zwei Portalen bleiben 6 °C kühler.",
+        "[NEU / KAMERAS] Kamera-App am PC mit Live-Bildern. Kameras warnen früh bei Hitze und Rauch und halten Wasserschäden kleiner.",
+        "[GAMEPLAY] Ab Firmenstufe 2 können nachts Diebe in die Lieferzone kommen. Kameras und ein geschlossenes Tor schützen, und wer hinläuft, verjagt sie.",
+        "[NEU / LIEFERUNG] E-Transporter, 7,5-Tonner mit Ladebordwand und 18-Tonner mit Mitnahmestapler setzen rückwärts ans Tor und laden hinten aus. Halle Nord wird wirklich angefahren.",
+        "[GAMEPLAY] Das Personal trägt echte Kartons, fährt Sackkarre, Hubwagen und Stapler, weicht Hindernissen aus und sortiert die Ware in der Lieferzone. Unterschreibe auf dem Tablet für etwas Ruf und $8.",
+        "[GAMEPLAY] Bestellungen während des Abladens kommen mit der nächsten Tour.",
+        "[FIX] Regale und andere hohe Möbel lassen sich nicht mehr vor Stromkasten, Router oder Feuerlöscher stellen.",
+        "[CO-OP] Alle Mitspieler brauchen v2.9.0."
+      ]
+    },
     {
       "version": "v2.8.0",
       "date": "2026-11-25",

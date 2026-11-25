@@ -1066,12 +1066,17 @@ func _build_ambient_traffic() -> void:
 
 
 func _update_traffic(delta: float) -> void:
+	# Lieferfahrzeug: beim Rangieren hält alles an, sonst nur die Spur, in die es hineinragt.
 	var van_busy := false
-	var world := get_parent().get_parent() if get_parent() != null else null
-	if world != null:
-		var van := world.get_node_or_null("DeliveryVan") as Node3D
-		if van != null and van.visible and absf(van.position.x) < 16.0:
-			van_busy = true
+	var van_far := false
+	var van_x := -999.0
+	if GameState.is_active and GameState.van_phase != "idle" and GameState.van_site == "garage":
+		var vp := DeliveryPlan.vehicle_pose("garage", GameState.van_delivery_tier, GameState.van_phase, GameState.van_phase_time)
+		var vpos: Vector3 = vp["pos"]
+		if vpos.z > 16.0:
+			van_x = vpos.x
+		van_busy = absf(vpos.x) < 12.0 and not (GameState.van_phase == "arriving" and GameState.van_phase_time < 2.5)
+		van_far = van_busy and (GameState.van_phase != "unloading" or GameState.van_delivery_tier == 3)
 
 	var tod := GameState.time_of_day if GameState.is_active else 0.36
 	var w: String = GameState.weather_state if GameState.is_active else "clear"
@@ -1090,13 +1095,21 @@ func _update_traffic(delta: float) -> void:
 		var target_spd := base_spd
 		var is_braking := false
 
-		if van_busy and float(car["lane_z"]) < 14.5:
-			if d < 0.0 and n.position.x > 6.5 and n.position.x < 19.0:
+		var stop_here := van_busy if float(car["lane_z"]) < 14.5 else van_far
+		if stop_here:
+			if d < 0.0 and n.position.x > 9.5 and n.position.x < 24.0:
 				target_spd = 0.0
 				is_braking = true
-			elif d > 0.0 and n.position.x < -6.5 and n.position.x > -19.0:
+			elif d > 0.0 and n.position.x < -6.5 and n.position.x > -24.0:
 				target_spd = 0.0
 				is_braking = true
+		if van_x > -900.0 and d > 0.0 and float(car["lane_z"]) > 14.5:
+			var vgap := van_x - n.position.x
+			if vgap > 0.0 and vgap < 15.0:
+				target_spd = 0.0
+				is_braking = true
+			elif vgap <= 0.0 and vgap > -26.0:
+				target_spd = base_spd * 1.7
 
 		for j in range(_traffic_cars.size()):
 			if j == idx:

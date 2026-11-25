@@ -12,8 +12,12 @@ var _work_holder: Node3D
 var _status_lbl: Label3D
 
 
-func setup(p_id: String = "wb_main") -> void:
+var model_id: String = "workshop_workbench"
+
+
+func setup(p_id: String = "wb_main", p_model: String = "workshop_workbench") -> void:
 	workbench_id = p_id
+	model_id = p_model
 	add_to_group("workbench")
 	_build_bench()
 	GameState.workbench_changed.connect(_refresh_workpiece)
@@ -23,12 +27,14 @@ func setup(p_id: String = "wb_main") -> void:
 	GameState.inventory_changed.connect(_on_kits_changed)
 	GameState.bench_supplies_changed.connect(func(): piece.refresh_tools())
 	GameState.workbench_hand_moved.connect(_on_hand_moved)
-	GameState.workbench_task_rejected.connect(func(task_id: String): piece.reject(task_id))
+	GameState.workbench_task_rejected.connect(func(task_id: String):
+		if workbench_id == GameState.local_bench:
+			piece.reject(task_id))
 	_refresh_workpiece()
 
 
 func _build_bench() -> void:
-	var model := ModelLoader.instantiate_custom_model("workshop_workbench")
+	var model := ModelLoader.instantiate_custom_model(model_id)
 	if model != null:
 		add_child(model)
 	else:
@@ -49,6 +55,7 @@ func _build_bench() -> void:
 	add_child(_work_holder)
 
 	piece = WorkbenchPiece.new()
+	piece.bench_id = workbench_id
 	piece.name = "Piece"
 	piece.position = Vector3(0.0, MAT_TOP, 0.0)
 	add_child(piece)
@@ -87,14 +94,24 @@ func _on_kits_changed() -> void:
 
 
 func _on_hand_moved(data: Dictionary) -> void:
+	if str(data.get("b", "wb_main")) != workbench_id:
+		return
 	# Wer selbst arbeitet, bewegt die Teile direkt.
-	if GameState.get_workbench_worker() != multiplayer.get_unique_id():
-		piece.apply_remote_hand(data)
+	var own := data.duplicate()
+	own.erase("b")
+	if int((GameState.bench_states.get(workbench_id, {}) as Dictionary).get("worker", 0)) != multiplayer.get_unique_id():
+		piece.apply_remote_hand(own)
 
 
 func _refresh_workpiece() -> void:
 	if _work_holder == null:
 		return
+	var prev: String = GameState.set_bench_ctx(workbench_id)
+	_show_workpiece()
+	GameState.set_bench_ctx(prev)
+
+
+func _show_workpiece() -> void:
 	for c in _work_holder.get_children():
 		c.queue_free()
 

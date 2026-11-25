@@ -868,7 +868,6 @@ func _build_exterior_environment() -> void:
 func _build_delivery_zone() -> void:
 	var yellow_mat := _mat(Color(0.95, 0.74, 0.12), 0.55, 0.05)
 	var dark_mat := _mat(Color(0.14, 0.16, 0.18), 0.6, 0.2)
-	var wood_pallet_mat := MatLib.get_mat("wood_desk")
 
 	_add_box_visual(self, Vector3(0.0, 0.012, 5.1), Vector3(4.2, 0.015, 0.10), yellow_mat)
 	_add_box_visual(self, Vector3(0.0, 0.012, 7.9), Vector3(4.2, 0.015, 0.10), yellow_mat)
@@ -895,7 +894,12 @@ func _build_delivery_zone() -> void:
 		b_cap.position = Vector3(float(bx), 0.76, 4.95)
 		add_child(b_cap)
 
-	_add_box_visual(self, Vector3(-1.3, 0.025, 7.35), Vector3(1.15, 0.04, 0.82), wood_pallet_mat)
+	# Zwei feste Paletten für kleine Kartons
+	for sp in DeliveryPlan.SMALL_PALLETS:
+		var pal := ModelLoader.instantiate_custom_model("euro_pallet")
+		if pal != null:
+			pal.position = Vector3(sp.x, 0.0, sp.y)
+			add_child(pal)
 
 	var sign_in := Label3D.new()
 	sign_in.text = "▼ LIEFERZONE (BESTELLUNGEN) ▼"
@@ -2334,16 +2338,8 @@ func _refresh_company_decor() -> void:
 
 
 func _build_workshop_props() -> void:
-	# 1. Funktionales 3D-Schwerlast-Lagerregal (2K PBR aus Blender, 12 freie Stellplaetze mit 3D-Etiketten!)
-	var shelf := StorageShelfProp.new()
-	shelf.position = Vector3(-5.12, 0.0, -2.2)
-	shelf.rotation_degrees.y = 90.0
-	add_child(shelf)
-	shelf.setup("shelf_0")
-	# Kollisionswand nur im hinteren Regalrahmen, damit die 12 vorderen Fach-Hitboxen (Layer 4) niemals blockiert werden!
-	_add_invisible_wall(Vector3(-5.30, 1.08, -2.2), Vector3(0.24, 2.16, 1.56))
-
-	# 2. Funktionale industrielle 3D-IT-Werkbank (2K PBR aus Blender, fuer Zusammenbau & Reparatur!)
+	# Das Lagerregal ist seit v2.9 ein normales Einrichtungsstück (GameState._make_start_shelf).
+	# Funktionale industrielle 3D-IT-Werkbank (2K PBR aus Blender, fuer Zusammenbau & Reparatur!)
 	var bench := WorkbenchProp.new()
 	bench.position = Vector3(-4.95, 0.0, 2.25)
 	bench.rotation_degrees.y = 90.0
@@ -2690,6 +2686,11 @@ func _build_halle_nord_site() -> void:
 	_halle_nord_root.position = GameState.HALLE_NORD_ORIGIN
 	add_child(_halle_nord_root)
 	var hn := _halle_nord_root
+	for sp in DeliveryPlan.SMALL_PALLETS:
+		var pal_n := ModelLoader.instantiate_custom_model("euro_pallet")
+		if pal_n != null:
+			pal_n.position = DeliveryPlan.NORD_OFFSET - GameState.HALLE_NORD_ORIGIN + Vector3(sp.x, 0.0, sp.y)
+			hn.add_child(pal_n)
 
 	# ---------------------------------------------------------------- MATERIALIEN (dunkel, edel, Tier-4)
 	# Anthrazit-Doppelboden statt blendend weißer Fliesen

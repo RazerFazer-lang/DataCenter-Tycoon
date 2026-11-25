@@ -127,6 +127,10 @@ func bind_world(world_ref: WorldController) -> void:
 	_world = world_ref
 
 
+var _buff_row: HBoxContainer
+var _buff_cells: Dictionary = {}
+
+
 func _ready() -> void:
 	set_anchors_preset(Control.PRESET_FULL_RECT)
 	mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -249,6 +253,7 @@ func _process(delta: float) -> void:
 
 	_refresh_player_hud(delta)
 	_refresh_slot_bar()
+	_refresh_buff_row()
 	_refresh_alert_banner()
 	_refresh_van_badge()
 	if _toast_timer > 0.0:
@@ -443,7 +448,7 @@ func _refresh_van_badge() -> void:
 		"unloading":
 			var total_n := maxi(GameState.van_trip_total, 1)
 			var done_n := mini(GameState.van_trip_done, total_n)
-			_van_lbl.text = tr("Fahrer lädt aus  •  %d / %d") % [done_n, total_n]
+			_van_lbl.text = tr("Fahrer wartet auf Unterschrift [E]") if GameState.van_trip_phase == "sign" else tr("Fahrer lädt aus  •  %d / %d") % [done_n, total_n]
 			_van_lbl.add_theme_color_override("font_color", UIStyle.COL_TEXT_MAIN)
 			_van_bar.value = float(done_n) / float(total_n) * 100.0
 			_set_bar_color(_van_bar, UIStyle.COL_GREEN)
@@ -649,6 +654,7 @@ func _build_ui() -> void:
 	_build_right_column()
 	_build_key_hints()
 	_build_slot_bar()
+	_build_buff_row()
 	_build_crosshair_and_prompt()
 	# Alles außer dem Pause-Menü lässt Mausklicks durch
 	for child in get_children():
@@ -1193,6 +1199,55 @@ func _build_slot_bar() -> void:
 
 		_slot_styles.append(sb)
 		_slot_item_lbls.append(name_lbl)
+
+
+## Kleine Anzeige über der Slot-Leiste: Kaffee, Wasser und Pause mit Restzeit.
+const BUFF_META := {
+	"coffee": ["cup", "Kaffee", Color(0.93, 0.70, 0.38)],
+	"water": ["drop", "Erfrischt", Color(0.45, 0.78, 1.0)],
+	"rest": ["sofa", "Ausgeruht", Color(0.62, 0.92, 0.60)],
+}
+
+
+func _build_buff_row() -> void:
+	_buff_row = HBoxContainer.new()
+	_buff_row.anchor_left = 0.5
+	_buff_row.anchor_right = 0.5
+	_buff_row.anchor_top = 1.0
+	_buff_row.anchor_bottom = 1.0
+	_buff_row.offset_top = -EDGE - 46.0
+	_buff_row.offset_bottom = -EDGE - 46.0
+	_buff_row.grow_horizontal = Control.GROW_DIRECTION_BOTH
+	_buff_row.grow_vertical = Control.GROW_DIRECTION_BEGIN
+	_buff_row.add_theme_constant_override("separation", 6)
+	add_child(_buff_row)
+	for k in BUFF_META.keys():
+		var cell := PanelContainer.new()
+		cell.add_theme_stylebox_override("panel", UIStyle.make_panel(HUD_BG, HUD_BORDER, 4, 1, 8, 4))
+		cell.visible = false
+		_buff_row.add_child(cell)
+		var h := HBoxContainer.new()
+		h.add_theme_constant_override("separation", 6)
+		cell.add_child(h)
+		h.add_child(_make_icon(str(BUFF_META[k][0]), BUFF_META[k][2], 14))
+		var l := Label.new()
+		UIStyle.style_label(l, 11, UIStyle.COL_TEXT_MAIN)
+		h.add_child(l)
+		_buff_cells[k] = [cell, l]
+
+
+func _refresh_buff_row() -> void:
+	if _buff_row == null:
+		return
+	var b: Dictionary = {}
+	if _world != null and _world.local_player != null and not _world.local_player.ui_locked:
+		b = DecorManager.get_buffs(_world.local_player.peer_id)
+	for k in _buff_cells.keys():
+		var left := float(b.get(k, 0.0))
+		var cell: PanelContainer = _buff_cells[k][0]
+		cell.visible = left > 0.0
+		if left > 0.0:
+			(_buff_cells[k][1] as Label).text = "%s %d:%02d" % [tr(str(BUFF_META[k][1])), int(left) / 60, int(left) % 60]
 
 
 ## Liest pro Frame, was in welchem Slot liegt, und baut die Leiste nur bei Änderungen neu auf.

@@ -88,6 +88,10 @@ func _ready() -> void:
 	_garage.router_visuals_rebuilt.connect(_on_router_visuals_rebuilt, CONNECT_DEFERRED)
 	GameState.extinguisher_changed.connect(_sync_extinguisher)
 	GameState.unpack_started.connect(_on_unpack_started)
+	DecorManager.world = self
+	var thief_npc := ThiefNpc.new()
+	thief_npc.name = "ThiefNpc"
+	add_child(thief_npc)
 	GameState.room_level_changed.connect(_sync_room_level)
 	GameState.state_updated.connect(_on_state_updated)
 	GameState.world_ping_received.connect(_on_world_ping_received)

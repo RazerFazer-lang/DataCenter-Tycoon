@@ -129,12 +129,15 @@ func _market() -> void:
 		gs._update_service_users(svc, 95.0, true, 0.5, 1.0, 20.0)
 	chk("zufriedene Kunden gehen nicht", float(svc["users"]) >= 40.0, svc["users"])
 	gs.reputation = 50.0
-	# Werbung
+	# Werbung (erst alle einmaligen Prämien abholen, die im nächsten Takt fällig wären)
+	for i in 3:
+		gs._run_simulation_step(0.5)
+	gs._sim_accum = -5.0
 	var m0: float = gs.money
 	var g0: float = mk.growth_factor("web")
 	mk.request_campaign("online")
 	await wait(2)
-	chk("Werbung kostet und wirkt", is_equal_approx(gs.money, m0 - 1200.0) and mk.growth_factor("web") > g0 * 1.3, mk.growth_factor("web") / g0)
+	chk("Werbung kostet und wirkt", is_equal_approx(gs.money, m0 - 1200.0) and mk.growth_factor("web") > g0 * 1.3, [mk.growth_factor("web") / g0, gs.money - m0])
 	mk.request_campaign("online")
 	mk.request_campaign("flyer")
 	mk.request_campaign("tv")

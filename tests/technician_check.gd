@@ -117,12 +117,12 @@ func _initialize() -> void:
 	# --- Spieler übernimmt
 	t = _run(func(): return gs.get_workbench_worker() == -1 and gs.get_workbench_done().size() > 6, 200.0)
 	chk("Techniker baut", t > 0.0)
-	gs._rpc_req_workbench_enter()
+	gs._do_workbench_enter()
 	var n: int = gs.get_workbench_done().size()
 	chk("Spieler übernimmt den Platz", gs.get_workbench_worker() == 1 and n > 6)
 	_run(func(): return false, 10.0)
 	chk("Techniker wartet solange", gs.get_workbench_done().size() == n and gs.get_workbench_worker() == 1, tm.view.get("text"))
-	gs._rpc_req_workbench_leave()
+	gs._do_workbench_leave()
 	t = _run(func(): return str(gs.racks[rid]["slots"][1]["item_type"]) != "", 400.0)
 	chk("danach baut der Techniker weiter", t > 0.0)
 	_run(func(): return tm._phase == "idle" and tm._job.is_empty(), 60.0)
@@ -215,6 +215,12 @@ func _kit(item: String) -> void:
 
 
 func _clear_kits() -> void:
+	for d in gs.decor_items.values():
+		for key in ["stored_items", "kits"]:
+			var list: Array = d.get(key, [])
+			for i in list.size():
+				if list[i] is Dictionary and gs.is_repair_kit(str(list[i].get("item_type", ""))):
+					list[i] = null
 	for k in gs.storage_shelf_slots.keys():
 		if gs.is_repair_kit(str(gs.storage_shelf_slots[k].get("item_type", ""))):
 			gs.storage_shelf_slots.erase(k)

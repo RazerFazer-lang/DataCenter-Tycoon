@@ -10,6 +10,8 @@ var _label: Label3D
 var _area: Area3D
 var _visual_holder: Node3D
 var _cached_pack_count: int = 1
+var _settle: Tween
+var _pallet: Node3D
 
 
 func setup(id: String, p_item_type: String, p_data: Dictionary = {}) -> void:
@@ -34,11 +36,32 @@ func apply_data(data: Dictionary) -> void:
 		_set_interactable(false)
 	else:
 		visible = true
-		position = data["pos"]
+		# Nachrutschen im Stapel sieht man, statt dass der Karton springt.
+		var np: Vector3 = data["pos"]
+		if _settle != null and _settle.is_valid():
+			_settle.kill()
+		if is_inside_tree() and np.y < position.y - 0.02 and Vector2(np.x - position.x, np.z - position.z).length() < 0.05:
+			_settle = create_tween()
+			_settle.tween_property(self, "position", np, 0.22).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
+		else:
+			position = np
 		_set_interactable(true)
+	_show_pallet(held_by == 0 and bool(data.get("pal", false)))
 	var disp := GameState.get_crate_display_label(data)
 	if _label != null:
 		_label.text = disp
+
+
+## Große Geräte kommen auf einer Palette. Wer das Gerät nimmt, räumt sie mit weg.
+func _show_pallet(on: bool) -> void:
+	if on and _pallet == null:
+		_pallet = ModelLoader.instantiate_custom_model("euro_pallet")
+		if _pallet != null:
+			_pallet.position.y = -DeliveryPlan.PALLET_H
+			add_child(_pallet)
+	elif not on and _pallet != null:
+		_pallet.queue_free()
+		_pallet = null
 
 
 func _set_interactable(enabled: bool) -> void:

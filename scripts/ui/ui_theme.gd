@@ -419,6 +419,23 @@ static func draw_icon(ci: CanvasItem, kind: String, r: Rect2, col: Color) -> voi
 			ci.draw_arc(pc, s * 0.34, PI * 0.5, PI, 12, col, s * 0.14, true)
 			ci.draw_circle(pc + Vector2(0.0, 0.34) * s, s * 0.12, col)
 			ci.draw_circle(pc + Vector2(-0.34, 0.0) * s, s * 0.12, col)
+		"camera":
+			ci.draw_rect(Rect2(c + Vector2(-0.44, -0.20) * s, Vector2(0.58, 0.40) * s), col, true)
+			ci.draw_colored_polygon(PackedVector2Array([c + Vector2(0.18, -0.04) * s, c + Vector2(0.44, -0.20) * s, c + Vector2(0.44, 0.20) * s, c + Vector2(0.18, 0.06) * s]), col)
+			ci.draw_line(c + Vector2(-0.30, 0.36) * s, c + Vector2(0.02, 0.36) * s, col, w)
+		"cup":
+			ci.draw_rect(Rect2(c + Vector2(-0.30, -0.10) * s, Vector2(0.46, 0.44) * s), col, true)
+			ci.draw_arc(c + Vector2(0.18, 0.10) * s, s * 0.15, -PI * 0.5, PI * 0.5, 10, col, w, true)
+			for ki in range(2):
+				ci.draw_line(c + Vector2(-0.18 + 0.20 * ki, -0.20) * s, c + Vector2(-0.12 + 0.20 * ki, -0.42) * s, col, w * 0.8)
+		"drop":
+			ci.draw_circle(c + Vector2(0.0, 0.14) * s, s * 0.27, col)
+			ci.draw_colored_polygon(PackedVector2Array([c + Vector2(-0.24, 0.04) * s, c + Vector2(0.0, -0.44) * s, c + Vector2(0.24, 0.04) * s]), col)
+		"sofa":
+			ci.draw_rect(Rect2(c + Vector2(-0.30, -0.26) * s, Vector2(0.60, 0.30) * s), col, true)
+			ci.draw_rect(Rect2(c + Vector2(-0.46, -0.06) * s, Vector2(0.13, 0.36) * s), col, true)
+			ci.draw_rect(Rect2(c + Vector2(0.33, -0.06) * s, Vector2(0.13, 0.36) * s), col, true)
+			ci.draw_rect(Rect2(c + Vector2(-0.30, 0.10) * s, Vector2(0.60, 0.20) * s), col, true)
 		"mail":
 			ci.draw_rect(Rect2(c + Vector2(-0.44, -0.30) * s, Vector2(0.88, 0.60) * s), col, false, w)
 			ci.draw_polyline(PackedVector2Array([c + Vector2(-0.42, -0.26) * s, c + Vector2(0.0, 0.08) * s, c + Vector2(0.42, -0.26) * s]), col, w, true)

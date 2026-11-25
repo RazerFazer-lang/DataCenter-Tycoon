@@ -161,8 +161,8 @@ const ELECTRICITY_RATE_DAILY_SWING := 0.18
 const ELECTRICITY_RATE_REVERSION := 0.3
 const SELL_REFUND_RATIO := 0.70
 const CART_MAX_ITEMS := 4
-const VAN_ARRIVE_DURATION := 4.4
-const VAN_DEPART_DURATION := 4.4
+const VAN_ARRIVE_DURATION := DeliveryPlan.ARRIVE_TIME
+const VAN_DEPART_DURATION := DeliveryPlan.DEPART_TIME
 # Mengen-Kisten & Lieferzonen-Limit (v2.1):
 const BULK_PACK_MAX := 6
 const DELIVERY_ZONE_MAX_CRATES := 16
@@ -173,7 +173,7 @@ const DELIVERY_SLOTS_HOURS: Array[int] = [8, 12, 16, 20]
 # 3 Liefer-Kategorien: Stufe 1 (Lieferwagen, 1 Fahrer), Stufe 2 (Kastenwagen 7,5t, 2 Mitarbeiter), Stufe 3 (LKW 18t, 3 Mitarbeiter)
 const DELIVERY_TIER_META := {
 	1: {
-		"name": "Express-Lieferwagen",
+		"name": "E-Transporter",
 		"staff": 1,
 		"max_per_trip": 4,
 		"speed_mult": 1.0,
@@ -185,7 +185,7 @@ const DELIVERY_TIER_META := {
 		"staff": 2,
 		"max_per_trip": 6,
 		"speed_mult": 1.30,
-		"method": "Ausklapp-Rampe & 2 Sackkarren (2 Mitarbeiter)",
+		"method": "Ladebordwand & Hubwagen (2 Mitarbeiter)",
 		"icon": "🚚",
 	},
 	3: {
@@ -193,26 +193,16 @@ const DELIVERY_TIER_META := {
 		"staff": 3,
 		"max_per_trip": 9,
 		"speed_mult": 1.55,
-		"method": "Hydraulik-Ladebordwand & 3 Logistiker",
+		"method": "Mitnahmestapler & 3 Logistiker",
 		"icon": "🚛",
 	},
 }
-# Abladen in Fahrten: Der Fahrer trägt 1 Karton von Hand oder bis zu 4/6/9 auf Sackkarren/Hubwagen.
-const VAN_TRIP_MAX_CRATES := 9
-const VAN_DRIVER_EXIT_TIME := 2.2 # Fahrertür auf, aussteigen, zur Schiebetür gehen
-const VAN_DRIVER_ENTER_TIME := 2.8 # Sackkarre verstauen bzw. Schiebetür zu, zur Fahrertür gehen, einsteigen
-const VAN_LOAD_TIME_PER_CRATE := 1.2
-const VAN_TRUCK_FETCH_TIME := 0.8 # Sackkarre aus dem Laderaum holen
-const VAN_DROP_TIME_HAND := 0.9
-const VAN_TRUCK_TILT_TIME := 0.6
-const VAN_DROP_TIME_PER_CRATE_TRUCK := 0.8
-const VAN_DRIVER_WALK_SPEED := 1.4
-const VAN_DRIVER_TURN_TIME := 0.3
-const VAN_CARGO_DOOR_POS := Vector3(0.1, 0.0, 10.9) # vor der Schiebetür des haltenden Wagens (Welt)
-const VAN_DROP_STAND_OFFSET := 0.65 # Fahrer steht so weit vor den Ablageplätzen (Richtung Straße)
-const VAN_DROP_STAND_OFFSET_TRUCK := 1.4 # mit Sackkarre: die Kartons auf der Schaufel stehen dann über den Plätzen
+# Nach dem Abladen wartet der Fahrer so lange auf eine Unterschrift.
+const VAN_SIGN_TIME := 20.0
+const VAN_ENTER_TIME := 9.0
+const VAN_SIGN_REPUTATION := 0.4
+const VAN_SIGN_TIP := 8.0
 const VAN_PARCEL_ITEM := "parts_parcel" # Sammelpaket für bestellte Bauteile
-const VAN_PARCEL_DROP_POS := Vector3(-1.3, 0.0, 7.35) # Holzpalette in der Lieferzone
 
 const HALL_B_COST := 1800
 const HALL_C_COST := 4800
@@ -652,16 +642,93 @@ const ITEM_CATALOG := {
 		"desc": "Enthält je 1 Reparatur-Kit für alle 7 Kategorien (18 % günstiger!).",
 	},
 	# --- Kaufbare & frei platzierbare Einrichtung, Lagerregale & Technik-Props ---
-	"prop_storage_shelf": {
-		"name": "Schwerlast-Lagerregal (4 Plätze)",
+	"prop_shelf_small": {
+		"name": "Kleinteile-Regal (16 Plätze)",
 		"category": "placeable",
 		"is_decor": true,
-		"price": 220,
+		"price": 140,
+		"watts": 0,
+		"compute": 0,
+		"heat": 0.0,
+		"color": Color(0.36, 0.58, 0.72),
+		"desc": "Schmales Regal für Reparatur-Kits, Bausätze, Leisten und kleine Pakete.",
+	},
+	"prop_pallet_rack": {
+		"name": "Palettenregal (6 Paletten)",
+		"category": "placeable",
+		"is_decor": true,
+		"price": 690,
+		"watts": 0,
+		"compute": 0,
+		"heat": 0.0,
+		"color": Color(0.92, 0.46, 0.14),
+		"desc": "3 m breit, zwei Ebenen. Nur hier passen große Geräte wie Racks, USV-Schränke und Kühlgeräte hinein.",
+	},
+	"prop_sofa": {
+		"name": "Sofa-Ecke",
+		"category": "placeable",
+		"is_decor": true,
+		"price": 540,
+		"watts": 0,
+		"compute": 0,
+		"heat": 0.0,
+		"color": Color(0.30, 0.36, 0.48),
+		"desc": "Hinsetzen mit [E]: Nach einer kurzen Pause arbeitest du 4 Minuten lang schneller. Mitarbeiter sind motivierter.",
+	},
+	"prop_water": {
+		"name": "Wasserspender",
+		"category": "placeable",
+		"is_decor": true,
+		"price": 180,
+		"watts": 20,
+		"compute": 0,
+		"heat": 0.0,
+		"color": Color(0.34, 0.70, 0.92),
+		"desc": "Kostenloses Wasser mit [E]: 90 Sekunden schneller zu Fuß.",
+	},
+	"prop_tool_cart": {
+		"name": "Werkzeugwagen",
+		"category": "placeable",
+		"is_decor": true,
+		"price": 420,
+		"watts": 0,
+		"compute": 0,
+		"heat": 0.0,
+		"color": Color(0.80, 0.18, 0.16),
+		"desc": "Sechs Schubladen für Reparatur-Kits. In 4 m Umkreis gehen Handgriffe 15 % schneller.",
+	},
+	"prop_dehumidifier": {
+		"name": "Luftentfeuchter",
+		"category": "placeable",
+		"is_decor": true,
+		"price": 390,
+		"watts": 150,
+		"compute": 0,
+		"heat": 0.1,
+		"color": Color(0.72, 0.76, 0.80),
+		"desc": "Weniger Staub in 6 m Umkreis und halb so viele Wasserschäden. Der Tank muss ab und zu mit [E] geleert werden.",
+	},
+	"prop_logo_sign": {
+		"name": "Leucht-Firmenschild",
+		"category": "placeable",
+		"is_decor": true,
+		"price": 460,
+		"watts": 60,
+		"compute": 0,
+		"heat": 0.0,
+		"color": Color(0.24, 0.62, 1.0),
+		"desc": "Hängt an der Wand und zeigt deinen Firmennamen. Mit [E] Farbe wechseln. +6 % neue Kunden, solange es leuchtet.",
+	},
+	"prop_storage_shelf": {
+		"name": "Schwerlast-Lagerregal (20 Plätze)",
+		"category": "placeable",
+		"is_decor": true,
+		"price": 260,
 		"watts": 0,
 		"compute": 0,
 		"heat": 0.0,
 		"color": Color(0.28, 0.42, 0.56),
-		"desc": "Frei platzierbares 3D-Lagerregal mit 4 echten Ablageplätzen für Bauteile, Kits & Kartons!",
+		"desc": "Vier Ebenen mit je fünf Plätzen. Kartons belegen so viel Platz, wie sie wirklich breit sind.",
 	},
 	"prop_esd_workbench": {
 		"name": "ESD-Diagnose-Werkbank",
@@ -672,7 +739,7 @@ const ITEM_CATALOG := {
 		"compute": 0,
 		"heat": 0.2,
 		"color": Color(0.20, 0.62, 0.72),
-		"desc": "Professionelle Elektronik-Werkbank mit Oszilloskop • +35 % Reparatur- & Diagnose-Tempo!",
+		"desc": "Echte zweite Werkbank: Hier kann ein Mitspieler gleichzeitig bauen und reparieren. +35 % Reparatur- und Diagnose-Tempo.",
 	},
 	"prop_parts_cabinet": {
 		"name": "Ersatzteil-Schrank & Kabeltrommeln",
@@ -683,7 +750,7 @@ const ITEM_CATALOG := {
 		"compute": 0,
 		"heat": 0.0,
 		"color": Color(0.84, 0.60, 0.16),
-		"desc": "Interaktiver Ersatzteil-Schrank [E] • Füllt Wartungs- & Reinigungs-Kits direkt vor Ort auf!",
+		"desc": "Mit [E] Wartungs-Kits für $20 auffüllen (sonst $45). Rüstet Schrauben und Wärmeleitpaste an der Werkbank täglich etwas nach.",
 	},
 	"prop_cold_aisle_gate": {
 		"name": "Kaltgang-Schiebetür-Portal",
@@ -694,10 +761,10 @@ const ITEM_CATALOG := {
 		"compute": 0,
 		"heat": 0.0,
 		"color": Color(0.16, 0.64, 0.94),
-		"desc": "Glas-/Alu-Kaltgang-Portal mit digitaler Temperatur-Anzeige • +6 % Kühleffizienz (bis +18 %)!",
+		"desc": "Glastüren öffnen von selbst. Zwei Portale gegenüber bilden einen Kaltgang: Racks dazwischen bleiben 6 °C kühler. Dazu +6 % Kühlleistung je Portal (bis +18 %).",
 	},
 	"prop_vending_lounge": {
-		"name": "Getränkeautomat & Kaffee-Lounge",
+		"name": "Getränke- & Kaffeeautomat",
 		"category": "placeable",
 		"is_decor": true,
 		"price": 320,
@@ -705,10 +772,10 @@ const ITEM_CATALOG := {
 		"compute": 0,
 		"heat": 0.4,
 		"color": Color(0.76, 0.26, 0.24),
-		"desc": "Beleuchteter Snack-/Getränkeautomat mit Lounge-Deko • +5 % Firmen-Ruf!",
+		"desc": "Kaffee für $4 mit [E]: 3 Minuten lang 15 % schneller laufen und 20 % schneller arbeiten. Dazu etwas mehr Ruf.",
 	},
 	"prop_cctv_monitor": {
-		"name": "CCTV- & Temperatur-Stele",
+		"name": "Kamera-Stele",
 		"category": "placeable",
 		"is_decor": true,
 		"price": 290,
@@ -716,7 +783,7 @@ const ITEM_CATALOG := {
 		"compute": 0,
 		"heat": 0.1,
 		"color": Color(0.22, 0.76, 0.50),
-		"desc": "Überwachungskamera, Live-Temperaturanzeige & Feuerlöscher-Station • +4 % Ruf & Frühwarnung!",
+		"desc": "Live-Bild in der Kamera-App am PC, frühe Warnung bei Hitze, Brand und Lecks. Schreckt Diebe ab.",
 	},
 	"prop_power_strip": {
 		"name": "Industrie-Stromleiste (6-fach)",
@@ -1152,7 +1219,20 @@ const MAINTAIN_MIN_DUST := 15.0
 const MAINTAIN_MAX_THERMAL := 85.0
 var storage_shelf_slots: Dictionary = {}
 ## Aktiver Zustand der IT-Werkbank (leer oder build_box / assembly / repair / ready_tray).
-var workbench_state: Dictionary = {}
+const MAIN_BENCH := "wb_main"
+## Alle Werkbänke: ID -> Zustand. Die ESD-Werkbänke heißen wie ihr Einrichtungsstück.
+var bench_states: Dictionary = {MAIN_BENCH: {}}
+## Die Werkbank, an der dieser Spieler gerade steht.
+var local_bench: String = MAIN_BENCH
+## Die Werkbank, auf die sich die Werkbank-Funktionen gerade beziehen. Außerhalb von Anfragen = local_bench.
+var bench_ctx: String = MAIN_BENCH
+var workbench_state: Dictionary:
+	get:
+		if not bench_states.has(bench_ctx):
+			bench_states[bench_ctx] = {}
+		return bench_states[bench_ctx]
+	set(v):
+		bench_states[bench_ctx] = v
 var support_tickets: Dictionary = {}
 var active_call: Dictionary = {}
 var total_rental_income_per_cycle: float = 0.0
@@ -1195,17 +1275,15 @@ var scheduled_delivery_hour: int = -1
 var pending_delivery_express: bool = false
 
 # Abladefahrten des Fahrers (der Server rechnet, Clients spielen nur ab)
-var van_trip_phase: String = "" # "" | exit | load | walk_in | drop | walk_back | enter
+var van_trip_phase: String = "" # "" | work | sign | enter
 var van_trip_time: float = 0.0
-var van_trip_duration: float = 0.0
-var van_trip_step: int = 0 # zählt jeden Schrittwechsel, damit Clients ihre Animation neu starten
-var van_trip_count: int = 0
-var van_trip_kind: String = "hand" # hand | truck
-var van_trip_target: Vector3 = Vector3.ZERO
-var van_trip_dropped: int = 0
 var van_trip_done: int = 0
 var van_trip_total: int = 0
-var _van_trip_items: Array = []
+## Wohin dieses Fahrzeug fährt und wie es abgeladen wird (DeliveryPlan.build).
+var van_site: String = "garage"
+var van_plan: Dictionary = {}
+var _van_drop_i: int = 0
+var _van_spot: Dictionary = {}
 var _van_parcel_parts: Array = []
 
 var current_save_id: String = "mein_datacenter"
@@ -1238,6 +1316,7 @@ func _process(delta: float) -> void:
 		time_of_day = fposmod(time_of_day + delta * clock_scale / DAY_LENGTH_SECONDS + corr, 1.0)
 		if van_phase != "idle":
 			van_phase_time += delta
+			van_trip_time += delta
 		# Ticket-Alter lokal weiterzählen, damit der SLA-Countdown läuft. Jeder Sync vom Host korrigiert den Wert.
 		for ctid in support_tickets.keys():
 			var ct: Dictionary = support_tickets[ctid]
@@ -1326,26 +1405,11 @@ func _update_delivery_van(delta: float) -> void:
 				pending_delivery_express = false
 				scheduled_delivery_hour = -1
 				scheduled_delivery_day = 0
-				van_delivery_tier = compute_delivery_tier(van_cargo)
-				van_phase = "arriving"
-				van_phase_time = 0.0
-				set_garage_door_open_server(true)
-				_reset_van_trip()
-				_broadcast_van_state()
+				_start_delivery_van()
 		"arriving":
 			van_phase_time += delta
 			if van_phase_time >= VAN_ARRIVE_DURATION:
-				van_phase = "unloading"
-				van_phase_time = 0.0
-				van_trip_total = van_cargo.size()
-				van_trip_done = 0
-				_rpc_play_sfx.rpc("van_horn")
-				_rpc_play_sfx.rpc("van_door")
-				var tmeta: Dictionary = DELIVERY_TIER_META.get(van_delivery_tier, DELIVERY_TIER_META[1])
-				post_event_f("%s %s ist angekommen (%d Pakete · %s)!", [
-					str(tmeta["icon"]), str(tmeta["name"]), van_trip_total, str(tmeta["method"])
-				], "good")
-				_begin_van_trip_step("exit", VAN_DRIVER_EXIT_TIME)
+				_begin_unloading()
 		"unloading":
 			van_phase_time += delta
 			van_trip_time += delta
@@ -1355,148 +1419,178 @@ func _update_delivery_van(delta: float) -> void:
 			if van_phase_time >= VAN_DEPART_DURATION:
 				van_phase = "idle"
 				van_phase_time = 0.0
+				_reset_van_trip()
 				_broadcast_van_state()
 
 
-func _tier_speed_mult() -> float:
+## Das Fahrzeug fährt los (van_cargo ist schon gepackt).
+func _start_delivery_van() -> void:
+	_reset_van_trip()
+	van_site = "halle_nord" if halle_nord_owned and delivery_target_site == "halle_nord" else "garage"
+	van_delivery_tier = compute_delivery_tier(van_cargo)
+	van_phase = "arriving"
+	van_phase_time = 0.0
+	_van_unload_accum = 0.0
+	if van_site == "garage":
+		set_garage_door_open_server(true)
+	_clear_van_bay()
+	_broadcast_van_state()
+
+
+## Kisten, die genau da stehen, wo gleich das Fahrzeug parkt, rücken zur Seite.
+func _clear_van_bay() -> void:
+	var o := DeliveryPlan.offset(van_site)
+	var moved := false
+	for cid in crates.keys():
+		var c: Dictionary = crates[cid]
+		if int(c.get("held_by", 0)) != 0:
+			continue
+		var p: Vector3 = (c["pos"] as Vector3) - o
+		if absf(p.x) > 1.75 or p.z < DeliveryPlan.clear_z(van_delivery_tier) or p.z > 16.0:
+			continue
+		c["held_by"] = -1
+		var sp := DeliveryPlan.assign(DeliveryPlan.survey(van_site), c, DeliveryPlan.spot_limit(van_delivery_tier))
+		c["held_by"] = 0
+		_apply_spot(c, sp, van_site)
+		moved = true
+	for cid in carts.keys():
+		var ct: Dictionary = carts[cid]
+		var cp: Vector3 = (ct["pos"] as Vector3) - o
+		if int(ct.get("pushed_by", 0)) == 0 and absf(cp.x) < 1.9 and cp.z > DeliveryPlan.clear_z(van_delivery_tier) and cp.z < 16.0:
+			var ds := DeliveryPlan.assign(DeliveryPlan.survey(van_site), {"item_type": "cart"})
+			ct["pos"] = (ds["pos"] as Vector3) + o
+			_broadcast_carts()
+	if moved:
+		_broadcast_crates()
+
+
+func _apply_spot(c: Dictionary, sp: Dictionary, site: String) -> void:
+	c["pos"] = (sp["pos"] as Vector3) + DeliveryPlan.offset(site)
+	c.erase("stk")
+	c.erase("pal")
+	if str(sp.get("stk", "")) != "":
+		c["stk"] = str(sp["stk"])
+	if bool(sp.get("pal", false)):
+		c["pal"] = true
+
+
+func _begin_unloading() -> void:
+	_clear_van_bay()
+	van_phase = "unloading"
+	van_phase_time = 0.0
+	van_trip_phase = "work"
+	van_trip_time = 0.0
+	van_trip_total = van_cargo.size()
+	van_trip_done = 0
+	_van_drop_i = 0
+	van_plan = DeliveryPlan.build(van_site, van_delivery_tier, van_cargo)
+	for e in van_plan["items"]:
+		var it := str((e as Dictionary)["it"])
+		if it.begins_with("build:"):
+			var bd: Dictionary = pending_build_orders.get(it.substr(6), {})
+			e["label"] = "%s · Slot %d" % [str(bd.get("rack_label", "Rack")), int(bd.get("slot_idx", 0)) + 1]
+	_rpc_sync_van_plan.rpc(van_plan)
+	_rpc_play_sfx.rpc("van_horn")
 	var tmeta: Dictionary = DELIVERY_TIER_META.get(van_delivery_tier, DELIVERY_TIER_META[1])
-	return maxf(1.0, float(tmeta.get("speed_mult", 1.0)))
+	post_event_f("%s %s ist angekommen (%d Pakete · %s)!", [
+		str(tmeta["icon"]), str(tmeta["name"]), van_trip_total, str(tmeta["method"])
+	], "good")
+	_broadcast_van_state()
 
 
-func _tier_max_per_trip() -> int:
-	var tmeta: Dictionary = DELIVERY_TIER_META.get(van_delivery_tier, DELIVERY_TIER_META[1])
-	return clampi(int(tmeta.get("max_per_trip", 4)), 1, VAN_TRIP_MAX_CRATES)
+@rpc("authority", "call_remote", "reliable")
+func _rpc_sync_van_plan(plan: Dictionary) -> void:
+	van_plan = plan.duplicate(true)
 
 
-## Schrittfolge pro Lieferung: exit, dann je Fahrt load → walk_in → drop → walk_back, zuletzt enter.
+## Abladen läuft nach Plan. Danach wartet der Fahrer auf die Unterschrift und steigt wieder ein.
 func _update_van_trip() -> void:
 	match van_trip_phase:
-		"exit":
-			if van_trip_time >= van_trip_duration:
-				_start_next_van_trip()
-		"load":
-			if van_trip_time >= van_trip_duration:
-				_begin_van_trip_step("walk_in", _van_trip_walk_time())
-		"walk_in":
-			if van_trip_time >= van_trip_duration:
-				var spd := _tier_speed_mult()
-				var drop_t := VAN_DROP_TIME_HAND / spd
-				if van_trip_kind == "truck":
-					drop_t = (VAN_TRUCK_TILT_TIME + float(_van_trip_items.size()) * VAN_DROP_TIME_PER_CRATE_TRUCK) / spd
-				_begin_van_trip_step("drop", drop_t)
-		"drop":
-			_drop_due_van_trip_items()
-			if van_trip_time >= van_trip_duration:
-				_begin_van_trip_step("walk_back", _van_trip_walk_time())
-		"walk_back":
-			if van_trip_time >= van_trip_duration:
-				_start_next_van_trip()
+		"work":
+			var drops: Array = van_plan.get("drops", [])
+			var dropped := false
+			while _van_drop_i < drops.size() and van_phase_time >= float(drops[_van_drop_i][0]):
+				_drop_planned(int(drops[_van_drop_i][1]))
+				_van_drop_i += 1
+				dropped = true
+			if dropped:
+				_broadcast_van_state()
+			if _van_drop_i >= drops.size() and van_phase_time >= float(van_plan.get("end", 0.0)):
+				_set_van_trip("sign")
+		"sign":
+			if van_trip_time >= VAN_SIGN_TIME:
+				post_event("📝 Niemand da zum Unterschreiben: Der Fahrer hat die Lieferung abgestellt.", "info")
+				_set_van_trip("enter")
 		"enter":
-			if van_trip_time >= van_trip_duration:
+			if van_trip_time >= VAN_ENTER_TIME:
 				van_phase = "departing"
 				van_phase_time = 0.0
+				van_trip_phase = ""
 				MailManager.on_delivery_done(van_trip_total)
-				_reset_van_trip()
-				_rpc_play_sfx.rpc("van_door")
 				_broadcast_van_state()
 		_:
-			# z. B. nach dem Laden eines Spielstands mitten im Abladen
-			_start_next_van_trip()
+			_begin_unloading()
 
 
-func _start_next_van_trip() -> void:
-	if van_cargo.is_empty():
-		_van_trip_items.clear()
-		van_trip_count = 0
-		_begin_van_trip_step("enter", VAN_DRIVER_ENTER_TIME)
-		return
-	_van_trip_items = _take_van_trip_items()
-	van_trip_count = _van_trip_items.size()
-	van_trip_dropped = 0
-	var is_cart := str(_van_trip_items[0]) == "cart"
-	van_trip_kind = "hand" if van_trip_count == 1 and not is_cart and van_delivery_tier == 1 else "truck"
-	var stand_offset := VAN_DROP_STAND_OFFSET_TRUCK if van_trip_kind == "truck" else VAN_DROP_STAND_OFFSET
-	van_trip_target = _van_trip_stand_pos(_van_trip_items, stand_offset)
-	var spd := _tier_speed_mult()
-	var load_t := (float(van_trip_count) * VAN_LOAD_TIME_PER_CRATE) / spd
-	if van_trip_kind == "truck":
-		load_t += VAN_TRUCK_FETCH_TIME / spd
-	_begin_van_trip_step("load", load_t)
-
-
-## Nimmt die Kartons der nächsten Fahrt aus dem Laderaum. Ein Rollwagen fährt immer allein.
-func _take_van_trip_items() -> Array:
-	var items: Array = [van_cargo.pop_front()]
-	if str(items[0]) == "cart":
-		return items
-	var limit := _tier_max_per_trip()
-	while not van_cargo.is_empty() and items.size() < limit and str(van_cargo[0]) != "cart":
-		items.append(van_cargo.pop_front())
-	return items
-
-
-## Liefert die Kartons ab, deren Zeitpunkt im Schritt "drop" erreicht ist.
-func _drop_due_van_trip_items() -> void:
-	var n := _van_trip_items.size()
-	var due := 0
-	var spd := _tier_speed_mult()
-	if van_trip_time >= van_trip_duration:
-		due = n
-	elif van_trip_kind == "truck":
-		due = clampi(floori((van_trip_time - VAN_TRUCK_TILT_TIME / spd) / (VAN_DROP_TIME_PER_CRATE_TRUCK / spd)), 0, n)
-	if due <= van_trip_dropped:
-		return
-	while van_trip_dropped < due:
-		var item := str(_van_trip_items[van_trip_dropped])
-		van_trip_dropped += 1
-		van_trip_done += 1
-		if item == VAN_PARCEL_ITEM:
-			_deliver_parts_parcel()
-		else:
-			_deliver_item_to_zone(item)
-	_broadcast_van_state()
-
-
-## Stellt fest, wo der Fahrer stehen bleibt: vor der Mitte der Plätze, die diese Fahrt belegt.
-func _van_trip_stand_pos(items: Array, stand_offset: float) -> Vector3:
-	var sum := Vector3.ZERO
-	var slot := _delivery_slot_cursor
-	var cart_n := carts.size()
-	for entry in items:
-		var s := str(entry)
-		if s == "cart":
-			sum += _cart_drop_pos(cart_n)
-			cart_n += 1
-		elif s == VAN_PARCEL_ITEM:
-			sum += VAN_PARCEL_DROP_POS
-		else:
-			sum += _delivery_slot_pos(slot)
-			slot += 1
-	var avg := sum / float(maxi(items.size(), 1))
-	return Vector3(avg.x, 0.0, avg.z + stand_offset)
-
-
-func _van_trip_walk_time() -> float:
-	return VAN_CARGO_DOOR_POS.distance_to(van_trip_target) / VAN_DRIVER_WALK_SPEED + VAN_DRIVER_TURN_TIME
-
-
-func _begin_van_trip_step(step: String, duration: float) -> void:
+func _set_van_trip(step: String) -> void:
 	van_trip_phase = step
 	van_trip_time = 0.0
-	van_trip_duration = maxf(duration, 0.1)
-	van_trip_step += 1
 	_broadcast_van_state()
+
+
+func _drop_planned(idx: int) -> void:
+	var items: Array = van_plan.get("items", [])
+	if idx < 0 or idx >= items.size():
+		return
+	var e: Dictionary = items[idx]
+	var item := str(e["it"])
+	van_cargo.erase(item)
+	van_trip_done += 1
+	if item == VAN_PARCEL_ITEM:
+		_deliver_parts_parcel()
+		return
+	_van_spot = e if _spot_still_free(e) else {}
+	_deliver_item_to_zone(item)
+	_van_spot = {}
+
+
+## Hat inzwischen jemand etwas auf den geplanten Platz gestellt?
+func _spot_still_free(e: Dictionary) -> bool:
+	if str(e.get("cls", "")) == "cart" or str(e.get("stk", "")) != "":
+		return true
+	var p: Vector3 = (e["pos"] as Vector3) + DeliveryPlan.offset(van_site)
+	for c in crates.values():
+		var cp: Vector3 = (c as Dictionary)["pos"]
+		if int((c as Dictionary).get("held_by", 0)) == 0 and Vector2(cp.x - p.x, cp.z - p.z).length() < 0.42:
+			return false
+	return true
+
+
+## Unterschrift auf dem Tablet des Fahrers.
+func request_sign_delivery() -> void:
+	_rpc_sign_delivery.rpc_id(1)
+
+
+@rpc("any_peer", "call_local", "reliable")
+func _rpc_sign_delivery() -> void:
+	if not multiplayer.is_server() or van_phase != "unloading" or van_trip_phase != "sign":
+		return
+	var peer_id := _get_sender_id()
+	reputation = minf(100.0, reputation + VAN_SIGN_REPUTATION)
+	FinanceManager.credit_public(VAN_SIGN_TIP, "Lieferbonus")
+	_rpc_play_sfx.rpc("sign_pen")
+	post_event_f("📝 %s hat die Lieferung unterschrieben. Alles da! (+$%d, etwas mehr Ruf)", [NetworkManager.get_player_name(peer_id), int(VAN_SIGN_TIP)], "good")
+	_set_van_trip("enter")
+	_broadcast_sim_tick()
 
 
 func _reset_van_trip() -> void:
 	van_trip_phase = ""
 	van_trip_time = 0.0
-	van_trip_duration = 0.0
-	van_trip_count = 0
-	van_trip_dropped = 0
 	van_trip_done = 0
 	van_trip_total = 0
-	_van_trip_items.clear()
+	_van_drop_i = 0
+	van_plan = {}
 
 
 ## Welche Artikel bei Mehrfachbestellung automatisch in Mengen-Kisten (bis 6 Stück/Kiste) gebündelt werden.
@@ -1578,8 +1672,10 @@ func _pack_van_cargo(items: Array) -> Array:
 	return _pack_items_preview(items, _van_parcel_parts)
 
 
+## Lieferzone des gewählten Standorts (Garage oder Halle Nord).
 func is_pos_in_delivery_zone(pos: Vector3) -> bool:
-	return pos.z >= 4.4 and pos.z <= 9.2 and absf(pos.x) <= 3.4
+	var p := pos - DeliveryPlan.offset("halle_nord" if halle_nord_owned and delivery_target_site == "halle_nord" else "garage")
+	return p.z >= 4.4 and p.z <= 9.2 and absf(p.x) <= 3.4
 
 
 func get_delivery_zone_ground_crates() -> int:
@@ -1601,10 +1697,6 @@ func get_incoming_delivery_crates() -> int:
 		for e in van_cargo:
 			if str(e) != VAN_PARCEL_ITEM:
 				n += 1
-		for e in _van_trip_items:
-			if str(e) != VAN_PARCEL_ITEM:
-				n += 1
-		n -= mini(van_trip_dropped, _van_trip_items.size())
 		var pend_packed := _pack_items_preview(pending_delivery_items)
 		for e in pend_packed:
 			if str(e) != VAN_PARCEL_ITEM:
@@ -1744,45 +1836,12 @@ func _deliver_parts_parcel() -> void:
 	_broadcast_sim_tick()
 
 
-func _cart_drop_pos(cart_count: int) -> Vector3:
-	return Vector3(-1.1 + float(cart_count % 3) * 0.95, 0.0, 6.4)
-
-
-func _delivery_slot_pos(index: int) -> Vector3:
-	# 4x4 Raster = 16 saubere Stellplätze innerhalb der gelben Lieferzonen-Markierung
-	var idx := index % DELIVERY_ZONE_MAX_CRATES
-	var col := idx % 4
-	var row := idx / 4
-	var base := Vector3(-1.35 + float(col) * 0.90, 0.0, 5.45 + float(row) * 0.78)
-	if halle_nord_owned and delivery_target_site == "halle_nord":
-		return HALLE_NORD_ORIGIN + Vector3(0.0, 0.0, 2.5) + base
-	return base
-
-
-func _find_free_delivery_slot_pos() -> Vector3:
-	for offset in range(DELIVERY_ZONE_MAX_CRATES):
-		var slot_idx := (_delivery_slot_cursor + offset) % DELIVERY_ZONE_MAX_CRATES
-		var cand := _delivery_slot_pos(slot_idx)
-		var occupied := false
-		for c in crates.values():
-			var cd: Dictionary = c as Dictionary
-			if int(cd.get("held_by", 0)) == 0:
-				var cp: Vector3 = cd.get("pos", Vector3.ZERO) as Vector3
-				if Vector2(cp.x - cand.x, cp.z - cand.z).length() < 0.48:
-					occupied = true
-					break
-		if not occupied:
-			_delivery_slot_cursor = (slot_idx + 1) % DELIVERY_ZONE_MAX_CRATES
-			return cand
-	var fallback := _delivery_slot_pos(_delivery_slot_cursor)
-	_delivery_slot_cursor = (_delivery_slot_cursor + 1) % DELIVERY_ZONE_MAX_CRATES
-	return fallback
-
-
 func _deliver_item_to_zone(item_type: String) -> void:
 	if item_type == "cart":
 		var cid := _alloc_id("cart")
-		var cart_pos := _cart_drop_pos(carts.size())
+		var csite := van_site if van_phase == "unloading" else delivery_target_site
+		var csp: Dictionary = _van_spot if not _van_spot.is_empty() else DeliveryPlan.assign(DeliveryPlan.survey(csite), {"item_type": "cart"})
+		var cart_pos: Vector3 = (csp["pos"] as Vector3) + DeliveryPlan.offset(csite)
 		carts[cid] = {
 			"id": cid,
 			"pos": cart_pos,
@@ -1824,12 +1883,7 @@ func _broadcast_van_state() -> void:
 	var trip := {
 		"phase": van_trip_phase,
 		"t": van_trip_time,
-		"dur": van_trip_duration,
-		"step": van_trip_step,
-		"n": van_trip_count,
-		"kind": van_trip_kind,
-		"target": van_trip_target,
-		"dropped": van_trip_dropped,
+		"site": van_site,
 		"done": van_trip_done,
 		"total": van_trip_total,
 		"tier": van_delivery_tier,
@@ -1849,13 +1903,7 @@ func _rpc_sync_van_state(phase: String, phase_t: float, cargo_n: int, pending_n:
 		pending_delivery_count = pending_n
 		van_trip_phase = str(trip.get("phase", ""))
 		van_trip_time = float(trip.get("t", 0.0))
-		van_trip_duration = float(trip.get("dur", 0.0))
-		van_trip_step = int(trip.get("step", 0))
-		van_trip_count = clampi(int(trip.get("n", 0)), 0, VAN_TRIP_MAX_CRATES)
-		van_trip_kind = "truck" if str(trip.get("kind", "hand")) == "truck" else "hand"
-		var target: Variant = trip.get("target", Vector3.ZERO)
-		van_trip_target = target if target is Vector3 else Vector3.ZERO
-		van_trip_dropped = clampi(int(trip.get("dropped", 0)), 0, VAN_TRIP_MAX_CRATES)
+		van_site = "halle_nord" if str(trip.get("site", "garage")) == "halle_nord" else "garage"
 		van_trip_done = maxi(int(trip.get("done", 0)), 0)
 		van_trip_total = maxi(int(trip.get("total", 0)), 0)
 		van_delivery_tier = clampi(int(trip.get("tier", 1)), 1, 3)
@@ -1990,9 +2038,11 @@ func load_from_save_data(data: Dictionary, save_id: String, display_name: String
 	_autosave_accum = 0.0
 
 	_apply_snapshot(data)
-	if not workbench_state.is_empty():
-		workbench_state["worker"] = 0
-		workbench_state["done"] = AssemblyPlan.sanitize_done(AssemblyPlan.build(workbench_state), workbench_state.get("done", {}))
+	for bid in bench_states.keys():
+		var wbs: Dictionary = bench_states[bid]
+		if not wbs.is_empty():
+			wbs["worker"] = 0
+			wbs["done"] = AssemblyPlan.sanitize_done(AssemblyPlan.build(wbs), wbs.get("done", {}))
 	var saved_finance: Variant = data.get("finance", {})
 	FinanceManager.import_data(saved_finance if saved_finance is Dictionary else {})
 	var saved_market: Variant = data.get("market", {})
@@ -2005,6 +2055,7 @@ func load_from_save_data(data: Dictionary, save_id: String, display_name: String
 		for item in saved_pending:
 			pending_delivery_items.append(str(item))
 	_migrate_mounted_strips(data)
+	_migrate_shelves()
 	# Upgrade older v0.2/v0.3 saves cleanly with a starter cart
 	if not data.has("carts"):
 		var cid := _alloc_id("cart")
@@ -2087,6 +2138,7 @@ func clear_local_state() -> void:
 	FinanceManager.reset()
 	MarketManager.reset()
 	MailManager.reset()
+	DecorManager.reset()
 	racks.clear()
 	coolers.clear()
 	ups_units.clear()
@@ -2098,7 +2150,10 @@ func clear_local_state() -> void:
 	shopping_cart.clear()
 	pending_build_orders.clear()
 	storage_shelf_slots.clear()
-	workbench_state.clear()
+	bench_states = {MAIN_BENCH: {}}
+	local_bench = MAIN_BENCH
+	bench_ctx = MAIN_BENCH
+	start_shelf_done = false
 	bench_screws = BENCH_SCREWS_START
 	bench_paste = BENCH_PASTE_START
 	bench_tools = {}
@@ -2256,14 +2311,17 @@ func _ensure_loaded_compat() -> void:
 
 func _spawn_crate_internal(item_type: String, pack_count: int = 1) -> String:
 	var cid := _alloc_id("crate")
-	var pos := _find_free_delivery_slot_pos()
-	crates[cid] = {
+	var site := van_site if van_phase == "unloading" else ("halle_nord" if halle_nord_owned and delivery_target_site == "halle_nord" else "garage")
+	var c := {
 		"id": cid,
 		"item_type": item_type,
-		"pos": pos,
+		"pos": Vector3.ZERO,
 		"held_by": 0,
 		"pack_count": maxi(1, pack_count),
 	}
+	var lim := DeliveryPlan.spot_limit(van_delivery_tier) if van_phase != "idle" else 8.2
+	_apply_spot(c, _van_spot if not _van_spot.is_empty() else DeliveryPlan.assign(DeliveryPlan.survey(site), c, lim), site)
+	crates[cid] = c
 	return cid
 
 
@@ -2335,6 +2393,12 @@ func build_snapshot() -> Dictionary:
 		"van_phase_time": van_phase_time,
 		"van_cargo_count": van_cargo.size(),
 		"van_delivery_tier": van_delivery_tier,
+		"van_site": van_site,
+		"van_trip_phase": van_trip_phase,
+		"van_trip_time": van_trip_time,
+		"van_trip_done": van_trip_done,
+		"van_trip_total": van_trip_total,
+		"van_plan": van_plan.duplicate(true),
 		"pending_delivery_count": pending_delivery_items.size(),
 		"scheduled_delivery_day": scheduled_delivery_day,
 		"scheduled_delivery_hour": scheduled_delivery_hour,
@@ -2344,7 +2408,9 @@ func build_snapshot() -> Dictionary:
 		"open_panels": shared_open_panels.duplicate(),
 		"garage_door_open": garage_door_open,
 		"storage_shelf_slots": storage_shelf_slots.duplicate(true),
-		"workbench_state": workbench_state.duplicate(true),
+		"start_shelf_done": start_shelf_done,
+		"workbench_state": (bench_states[MAIN_BENCH] as Dictionary).duplicate(true),
+		"bench_states": _extra_benches(),
 		"bench_screws": bench_screws,
 		"bench_paste": bench_paste,
 		"bench_tools": bench_tools.duplicate(),
@@ -2453,8 +2519,13 @@ func _apply_snapshot(snap: Dictionary) -> void:
 		storage_shelf_slots = (snap["storage_shelf_slots"] as Dictionary).duplicate(true)
 	else:
 		storage_shelf_slots.clear()
-		_ensure_starter_shelf_kits()
-	workbench_state = (snap.get("workbench_state", {}) as Dictionary).duplicate(true) if snap.get("workbench_state", {}) is Dictionary else {}
+	start_shelf_done = bool(snap.get("start_shelf_done", false))
+	bench_states = {MAIN_BENCH: (snap.get("workbench_state", {}) as Dictionary).duplicate(true) if snap.get("workbench_state", {}) is Dictionary else {}}
+	var more_v: Variant = snap.get("bench_states", {})
+	if more_v is Dictionary:
+		for bid in (more_v as Dictionary).keys():
+			if more_v[bid] is Dictionary:
+				bench_states[str(bid)] = (more_v[bid] as Dictionary).duplicate(true)
 	bench_screws = clampi(int(snap.get("bench_screws", BENCH_SCREWS_START)), 0, BENCH_SCREWS_MAX)
 	bench_paste = clampf(float(snap.get("bench_paste", BENCH_PASTE_START)), 0.0, BENCH_PASTE_MAX)
 	bench_tools = _sanitize_bench_tools(snap.get("bench_tools", {}))
@@ -2465,6 +2536,12 @@ func _apply_snapshot(snap: Dictionary) -> void:
 	van_phase_time = float(snap.get("van_phase_time", 0.0))
 	van_cargo_count = int(snap.get("van_cargo_count", 0))
 	van_delivery_tier = clampi(int(snap.get("van_delivery_tier", 1)), 1, 3)
+	van_site = "halle_nord" if str(snap.get("van_site", "garage")) == "halle_nord" else "garage"
+	van_trip_phase = str(snap.get("van_trip_phase", ""))
+	van_trip_time = float(snap.get("van_trip_time", 0.0))
+	van_trip_done = int(snap.get("van_trip_done", 0))
+	van_trip_total = int(snap.get("van_trip_total", 0))
+	van_plan = (snap.get("van_plan", {}) as Dictionary).duplicate(true) if snap.get("van_plan", {}) is Dictionary else {}
 	host_only_destructive = bool(snap.get("host_only_destructive", false))
 	weather_state = str(snap.get("weather_state", "clear"))
 	airflow_bonus = clampf(float(snap.get("airflow_bonus", 0.0)), 0.0, 0.35)
@@ -2522,9 +2599,10 @@ func handle_player_disconnect(peer_id: int) -> void:
 	if changed_carts:
 		_broadcast_carts()
 	player_active_slot.erase(peer_id)
-	if not workbench_state.is_empty() and get_workbench_worker() == peer_id:
-		workbench_state["worker"] = 0
-		_broadcast_workbench()
+	for bid in bench_states.keys():
+		if int((bench_states[bid] as Dictionary).get("worker", 0)) == peer_id:
+			bench_states[bid]["worker"] = 0
+			_rpc_sync_workbench.rpc(str(bid), (bench_states[bid] as Dictionary).duplicate(true))
 	for ext_id in extinguishers.keys():
 		var ext: Dictionary = extinguishers[ext_id]
 		if int(ext["held_by"]) == peer_id:
@@ -2910,7 +2988,8 @@ func _trigger_water_leak() -> void:
 	ok_idx.shuffle()
 
 	var hit := PackedStringArray()
-	for j in range(mini(WATER_LEAK_MAX_SLOTS, ok_idx.size())):
+	var seen := DecorManager.has_camera(racks[target]["pos"])
+	for j in range(mini(1 if seen else WATER_LEAK_MAX_SLOTS, ok_idx.size())):
 		var slot: Dictionary = slots[ok_idx[j]]
 		slot["state"] = "crashed"
 		slot["repair_progress"] = 0.0
@@ -3394,9 +3473,29 @@ func can_place_item_at(item_type: String, pos: Vector3, rot_y: float = 0.0, igno
 		if pos.y >= STRIP_WALL_MIN_Y:
 			return can_place_strip_on_wall(pos, rot_y, ignore_rack_id)
 		return can_place_strip_at(pos, ignore_rack_id)
-	if item_type == "ups_container":
-		return can_place_at(pos, ignore_rack_id) and _is_wide_spot_free(pos)
-	return can_place_at(pos, ignore_rack_id)
+	if DecorSpec.is_wall_sign(item_type):
+		return DecorSpec.can_place_sign(pos, rot_y, ignore_rack_id)
+	if DecorSpec.SIZES.has(item_type):
+		return DecorSpec.can_place(item_type, pos, rot_y, ignore_rack_id)
+	if item_type == "ups_container" and not _is_wide_spot_free(pos):
+		return false
+	if not can_place_at(pos, ignore_rack_id):
+		return false
+	# Geräte dürfen nicht in Regale und andere Einrichtung hineinragen.
+	var half := Vector2(0.45, 0.49)
+	if UpsProp.SIZES.has(item_type):
+		half = Vector2(UpsProp.SIZES[item_type].x, UpsProp.SIZES[item_type].z) * 0.5
+	elif CoolerProp.GHOST_SIZES.has(item_type):
+		half = Vector2(CoolerProp.GHOST_SIZES[item_type].x, CoolerProp.GHOST_SIZES[item_type].z) * 0.5
+	for did in decor_items.keys():
+		var d: Dictionary = decor_items[did]
+		var dt := str(d.get("item_type", ""))
+		if not DecorSpec.SIZES.has(dt) or DecorSpec.is_wall_sign(dt):
+			continue
+		var dp: Vector3 = d["pos"]
+		if DecorSpec.rects_overlap(Vector2(pos.x, pos.z), half, rot_y, Vector2(dp.x, dp.z), DecorSpec.footprint(dt) * 0.5, float(d.get("rot_y", 0.0))):
+			return false
+	return true
 
 
 ## Der Batterie-Container ist 2 m breit und braucht rundum Platz.
@@ -3602,6 +3701,9 @@ func can_place_strip_on_wall(pos: Vector3, rot_y: float, ignore_id: String = "")
 func snap_place_pos(item_type: String, pos: Vector3) -> Vector3:
 	if is_strip_type(item_type) and pos.y >= STRIP_WALL_MIN_Y:
 		return pos
+	# Einrichtung rastet schon in der Vorschau ein (DecorSpec.snap_pose).
+	if DecorSpec.SIZES.has(item_type):
+		return pos if DecorSpec.is_wall_sign(item_type) else Vector3(pos.x, 0.0, pos.z)
 	var f := 4.0 if is_strip_type(item_type) else 2.0
 	return Vector3(roundf(pos.x * f) / f, 0.0, roundf(pos.z * f) / f)
 
@@ -4190,7 +4292,7 @@ func _run_simulation_step(dt: float) -> void:
 				active_modules += 1
 		var effective_rack_heat := maxf(0.0, rack_heat - rack_passive_cool)
 		total_heat_gen += effective_rack_heat
-		var local_hot_spot := float(maxi(0, active_modules - 1)) * 2.2 - rack_passive_cool * 0.6 - _get_floor_cooler_relief(rack["pos"])
+		var local_hot_spot := float(maxi(0, active_modules - 1)) * 2.2 - rack_passive_cool * 0.6 - _get_floor_cooler_relief(rack["pos"]) - DecorManager.aisle_relief(rack["pos"])
 		var target_rack_temp := clampf(room_temp + local_hot_spot + (14.0 if _rack_has_fire(rack) else 0.0), 16.0, 105.0)
 		rack["temp"] = move_toward(float(rack["temp"]), target_rack_temp, dt * 3.0)
 
@@ -4241,7 +4343,7 @@ func _run_simulation_step(dt: float) -> void:
 				money = maxf(0.0, money - 3.0 * dt)
 			elif is_slot_on(slot) and bool(rack["powered"]):
 				# Staub sammelt sich sehr langsam an; vorbeugende Wartung drückt Ausfallrisiko auf nahezu 0 %!
-				var dust := clampf(float(slot.get("dust_level", 0.0)) + dt * 0.048, 0.0, 100.0)
+				var dust := clampf(float(slot.get("dust_level", 0.0)) + dt * 0.048 * DecorManager.dust_factor(rack["pos"]), 0.0, 100.0)
 				var th_hp := clampf(float(slot.get("thermal_health", 100.0)) - dt * 0.022 * (1.0 + 1.5 * get_slot_sloppiness(slot)), 0.0, 100.0)
 				slot["dust_level"] = dust
 				slot["thermal_health"] = th_hp
@@ -4301,7 +4403,7 @@ func _run_simulation_step(dt: float) -> void:
 	if has_power and get_active_contract_count() >= 1:
 		water_leak_cooldown -= dt
 		if water_leak_cooldown <= 0.0:
-			water_leak_cooldown = randf_range(WATER_LEAK_MIN_S, WATER_LEAK_MAX_S)
+			water_leak_cooldown = randf_range(WATER_LEAK_MIN_S, WATER_LEAK_MAX_S) * DecorManager.leak_factor()
 			_trigger_water_leak()
 
 	# 5b. Rack Rentals, Active Users, Resource Load & Support Tickets/Calls
@@ -5731,10 +5833,8 @@ func _rpc_req_buy_item(item_type: String) -> void:
 	money -= price
 
 	# Add to Delivery Vehicle! If vehicle is currently approaching, toss right into its cargo hold.
-	if van_phase == "arriving" or van_phase == "unloading":
+	if van_phase == "arriving":
 		van_cargo.append(item_type)
-		if van_phase == "arriving":
-			van_delivery_tier = maxi(van_delivery_tier, compute_delivery_tier(van_cargo))
 	else:
 		pending_delivery_items.append(item_type)
 		if van_phase == "idle":
@@ -5743,11 +5843,7 @@ func _rpc_req_buy_item(item_type: String) -> void:
 			scheduled_delivery_day = 0
 			scheduled_delivery_hour = -1
 			pending_delivery_express = false
-			van_delivery_tier = compute_delivery_tier(van_cargo)
-			van_phase = "arriving"
-			van_phase_time = 0.0
-			_van_unload_accum = 0.0
-			_reset_van_trip()
+			_start_delivery_van()
 
 	_broadcast_van_state()
 	_broadcast_sim_tick()
@@ -5912,8 +6008,6 @@ func _rpc_req_place_held_structure(pos: Vector3, rot_y: float) -> void:
 		var did := _alloc_id("decor")
 		new_id = did
 		var stored: Array = []
-		if item_type == "prop_storage_shelf":
-			stored = [null, null, null, null]
 		decor_items[did] = {
 			"id": did,
 			"item_type": item_type,
@@ -6535,7 +6629,6 @@ func _rpc_req_checkout_cart(entries: Array, express: bool = false) -> void:
 		for pn in packed_now:
 			if str(pn) != VAN_PARCEL_ITEM:
 				van_cargo.append(str(pn))
-		van_delivery_tier = maxi(van_delivery_tier, compute_delivery_tier(van_cargo))
 		order_tier = van_delivery_tier
 	else:
 		for qi in queue_items:
@@ -7735,6 +7828,7 @@ func _rpc_sync_carts(data: Dictionary) -> void:
 
 
 func _broadcast_crates() -> void:
+	DeliveryPlan.settle(crates)
 	_rpc_sync_crates.rpc(crates)
 
 
@@ -8225,18 +8319,74 @@ func calculate_slot_build_price(mainboard_id: String, comps: Dictionary) -> int:
 
 
 func _ensure_starter_shelf_kits() -> void:
-	if not storage_shelf_slots.is_empty():
+	if start_shelf_done:
 		return
+	start_shelf_done = true
+	var d := _make_start_shelf()
+	var arr := ShelfSpec.units(d)
 	var starters: Array[String] = ["kit_ram", "kit_cpu", "kit_cooling", "kit_psu"]
 	for i in range(starters.size()):
 		var kid := starters[i]
-		storage_shelf_slots["shelf_0:%d" % i] = {
+		arr[5 + i] = {
 			"id": _alloc_id("crate"),
 			"item_type": kid,
 			"label": str(ITEM_CATALOG[kid].get("short_label", kid)),
 			"pos": Vector3.ZERO,
 			"held_by": 0,
 		}
+
+
+const START_SHELF_POS := Vector3(-5.12, 0.0, -2.0)
+const START_SHELF_ID := "decor_start"
+## Das Startregal wurde schon aufgestellt (danach gehört es dem Spieler wie jedes andere).
+var start_shelf_done := false
+
+
+func _make_start_shelf() -> Dictionary:
+	decor_items[START_SHELF_ID] = {
+		"id": START_SHELF_ID, "item_type": "prop_storage_shelf", "pos": START_SHELF_POS, "rot_y": PI * 0.5, "wall": false, "stored_items": [],
+	}
+	return decor_items[START_SHELF_ID]
+
+
+## Spielstände vor v2.9: festes Regal und 4er-Regale auf das neue System umstellen.
+func _migrate_shelves() -> void:
+	for did in decor_items.keys():
+		var d: Dictionary = decor_items[did]
+		if str(d.get("item_type", "")) != "prop_storage_shelf":
+			continue
+		var old: Array = _decor_list(did, "stored_items")
+		if old.size() != 4:
+			continue
+		d["stored_items"] = []
+		var arr := ShelfSpec.units(d)
+		for i in 4:
+			if old[i] is Dictionary:
+				arr[i * 5 + 1] = old[i]
+	if start_shelf_done:
+		return
+	start_shelf_done = true
+	var left: Array = []
+	var d0 := _make_start_shelf()
+	for k in storage_shelf_slots.keys():
+		if not str(k).begins_with("shelf_0:"):
+			continue
+		var item: Dictionary = (storage_shelf_slots[k] as Dictionary).duplicate(true)
+		item["held_by"] = 0
+		item["pos"] = Vector3.ZERO
+		var at := ShelfSpec.first_fit(d0, item)
+		if at >= 0:
+			ShelfSpec.units(d0)[at] = item
+		else:
+			left.append(item)
+		storage_shelf_slots.erase(k)
+	# Was nicht ins Regal passt (große Geräte), steht davor.
+	for i in left.size():
+		var c: Dictionary = left[i]
+		var cid := _alloc_id("crate")
+		c["id"] = cid
+		c["pos"] = Vector3(-3.6 + float(i / 3) * 0.75, 0.0, -2.9 + float(i % 3) * 0.75)
+		crates[cid] = c
 
 
 ## --- Gemeinsamer Warenkorb (Rack-Konfigurator + PC-Shop) ---
@@ -8533,7 +8683,17 @@ func count_repair_kits(cat: String) -> int:
 		var sd := s as Dictionary
 		if str(sd.get("item_type", "")) == kid:
 			total += maxi(1, int(sd.get("pack_count", 1)))
+	for did in decor_items.keys():
+		for key in ["stored_items", "kits"]:
+			for e in _decor_list(did, key):
+				if e is Dictionary and str((e as Dictionary).get("item_type", "")) == kid:
+					total += maxi(1, int((e as Dictionary).get("pack_count", 1)))
 	return total
+
+
+func _decor_list(did: String, key: String) -> Array:
+	var v: Variant = (decor_items.get(did, {}) as Dictionary).get(key, [])
+	return v if v is Array else []
 
 
 func _consume_repair_kit_server(peer_id: int, cat: String) -> bool:
@@ -8562,6 +8722,20 @@ func _consume_repair_kit_server(peer_id: int, cat: String) -> bool:
 				storage_shelf_slots.erase(key)
 			_broadcast_shelf()
 			return true
+	for did in decor_items.keys():
+		for lkey in ["stored_items", "kits"]:
+			var list := _decor_list(did, lkey)
+			for i in list.size():
+				if not (list[i] is Dictionary) or str((list[i] as Dictionary).get("item_type", "")) != kid:
+					continue
+				var n := maxi(1, int((list[i] as Dictionary).get("pack_count", 1)))
+				if n > 1:
+					(list[i] as Dictionary)["pack_count"] = n - 1
+				else:
+					list[i] = null
+				_broadcast_decor_items()
+				shelf_changed.emit()
+				return true
 	# 3. Zuletzt freiliegende Kit-Koffer / Mengen-Kisten am Boden
 	for cid in crates.keys():
 		var c: Dictionary = crates[cid]
@@ -8578,30 +8752,87 @@ func _consume_repair_kit_server(peer_id: int, cat: String) -> bool:
 
 ## --- Interaktive 3D-Werkbank (Zusammenbau & Reparatur) ---
 
+## Werkbank auswählen, an der dieser Spieler steht (nur lokal).
+func select_bench(bid: String) -> void:
+	local_bench = bid
+	bench_ctx = bid
+
+
+func bench_exists(bid: String) -> bool:
+	return bid == MAIN_BENCH or str((decor_items.get(bid, {}) as Dictionary).get("item_type", "")) == "prop_esd_workbench"
+
+
+## Werkbank-Funktionen kurz auf eine andere Bank richten. Danach set_bench_ctx(alter Wert) aufrufen.
+func set_bench_ctx(bid: String) -> String:
+	var prev := bench_ctx
+	bench_ctx = bid
+	return prev
+
+
+func bench_pos(bid: String) -> Vector3:
+	return Vector3(-4.95, 0.0, 2.25) if bid == MAIN_BENCH else (decor_items.get(bid, {}) as Dictionary).get("pos", Vector3.ZERO)
+
+
+func _extra_benches() -> Dictionary:
+	var out := {}
+	for bid in bench_states.keys():
+		if str(bid) != MAIN_BENCH and bench_exists(str(bid)) and not (bench_states[bid] as Dictionary).is_empty():
+			out[bid] = (bench_states[bid] as Dictionary).duplicate(true)
+	return out
+
+
+## Alle Werkbank-Anfragen laufen hier zusammen. Die Bank kommt vom Spieler, geprüft wird auf dem Host.
+@rpc("any_peer", "call_local", "reliable")
+func _rpc_workbench(bid: String, op: String, arg: Variant = null, amount: float = 1.0) -> void:
+	if not multiplayer.is_server() or not bench_exists(bid):
+		return
+	var prev := set_bench_ctx(bid)
+	match op:
+		"place":
+			_do_workbench_place()
+		"unpack":
+			_do_workbench_unpack()
+		"pickup":
+			_do_workbench_pickup()
+		"enter":
+			_do_workbench_enter()
+		"leave":
+			_do_workbench_leave()
+		"service":
+			_do_workbench_service()
+		"task":
+			_do_workbench_task(str(arg), amount)
+		"break":
+			_do_workbench_break(str(arg))
+		"choose":
+			_do_workbench_choose(str(arg))
+	set_bench_ctx(prev)
+
+
 func request_workbench_place() -> void:
-	_rpc_req_workbench_place.rpc_id(1)
+	_rpc_workbench.rpc_id(1, local_bench, "place")
 
 
 func request_workbench_unpack() -> void:
-	_rpc_req_workbench_unpack.rpc_id(1)
+	_rpc_workbench.rpc_id(1, local_bench, "unpack")
 
 
 func request_workbench_pickup() -> void:
-	_rpc_req_workbench_pickup.rpc_id(1)
+	_rpc_workbench.rpc_id(1, local_bench, "pickup")
 
 
 ## Arbeitsplatz an der Werkbank belegen bzw. freigeben (immer nur ein Spieler gleichzeitig).
 func request_workbench_enter() -> void:
-	_rpc_req_workbench_enter.rpc_id(1)
+	_rpc_workbench.rpc_id(1, local_bench, "enter")
 
 
 func request_workbench_leave() -> void:
-	_rpc_req_workbench_leave.rpc_id(1)
+	_rpc_workbench.rpc_id(1, local_bench, "leave")
 
 
 ## Ein Handgriff ist fertig. amount ist nur bei der Wärmeleitpaste wichtig (1.0 = genau richtig).
 func request_workbench_task(task_id: String, amount: float = 1.0) -> void:
-	_rpc_req_workbench_task.rpc_id(1, task_id, amount)
+	_rpc_workbench.rpc_id(1, local_bench, "task", task_id, amount)
 
 
 ## Liegt gerade etwas auf der Werkbank, an dem gearbeitet werden kann?
@@ -8611,15 +8842,14 @@ func is_workbench_job() -> bool:
 
 ## Fertigen Server überholen: Schrauben nachziehen, Paste erneuern.
 func request_workbench_service() -> void:
-	_rpc_req_workbench_service.rpc_id(1)
+	_rpc_workbench.rpc_id(1, local_bench, "service")
 
 
 func can_workbench_service() -> bool:
 	return str(workbench_state.get("mode", "")) == "ready_tray" and get_build_quality(workbench_state) < 100 and AssemblyPlan.can_service(workbench_state)
 
 
-@rpc("any_peer", "call_local", "reliable")
-func _rpc_req_workbench_service() -> void:
+func _do_workbench_service() -> void:
 	if not multiplayer.is_server() or not can_workbench_service() or get_workbench_worker() != 0:
 		return
 	workbench_state["mode"] = "service"
@@ -8631,11 +8861,10 @@ func _rpc_req_workbench_service() -> void:
 
 ## CPU mit Gewalt verkehrt herum eingesetzt: Pins verbogen, Teil zerstört.
 func request_workbench_break(task_id: String) -> void:
-	_rpc_req_workbench_break.rpc_id(1, task_id)
+	_rpc_workbench.rpc_id(1, local_bench, "break", task_id)
 
 
-@rpc("any_peer", "call_local", "reliable")
-func _rpc_req_workbench_break(task_id: String) -> void:
+func _do_workbench_break(task_id: String) -> void:
 	if not multiplayer.is_server():
 		return
 	var peer_id := _get_sender_id()
@@ -8683,13 +8912,15 @@ func is_workbench_started() -> bool:
 func send_workbench_hand(data: Dictionary) -> void:
 	if not NetworkManager.is_in_session:
 		return
+	var out := data.duplicate()
+	out["b"] = bench_ctx
 	if multiplayer.is_server():
-		_rpc_workbench_hand.rpc(data)
+		_rpc_workbench_hand.rpc(out)
 		# Technikerbewegungen sieht auch der Host selbst.
 		if data.is_empty() or data.has("auto"):
-			workbench_hand_moved.emit(data)
+			workbench_hand_moved.emit(out)
 	else:
-		_rpc_submit_workbench_hand.rpc_id(1, data)
+		_rpc_submit_workbench_hand.rpc_id(1, out)
 
 
 @rpc("any_peer", "call_remote", "unreliable_ordered")
@@ -8697,11 +8928,13 @@ func _rpc_submit_workbench_hand(data: Dictionary) -> void:
 	if not multiplayer.is_server():
 		return
 	var sid := multiplayer.get_remote_sender_id()
-	if get_workbench_worker() != sid or data.size() > 6:
+	var bid := str(data.get("b", MAIN_BENCH))
+	if not bench_exists(bid) or int((bench_states.get(bid, {}) as Dictionary).get("worker", 0)) != sid or data.size() > 7:
 		return
 	if not SecurityGuard.check_rate_limit(sid, "wb_hand", 40, 1.0):
 		return
 	var clean := _sanitize_workbench_hand(data)
+	clean["b"] = bid
 	workbench_hand_moved.emit(clean)
 	for pid in multiplayer.get_peers():
 		if pid != sid:
@@ -8729,8 +8962,7 @@ func _rpc_workbench_hand(data: Dictionary) -> void:
 	workbench_hand_moved.emit(data)
 
 
-@rpc("any_peer", "call_local", "reliable")
-func _rpc_req_workbench_place() -> void:
+func _do_workbench_place() -> void:
 	if not multiplayer.is_server():
 		return
 	var peer_id := _get_sender_id()
@@ -8785,14 +9017,13 @@ func _put_crate_on_bench(held: Dictionary) -> bool:
 	return false
 
 
-@rpc("any_peer", "call_local", "reliable")
-func _rpc_req_workbench_unpack() -> void:
+func _do_workbench_unpack() -> void:
 	if not multiplayer.is_server():
 		return
 	if str(workbench_state.get("mode", "")) != "build_box":
 		return
 	server_workbench_unpack()
-	_spawn_empty_carton("build", Vector3(-3.7, 0.0, 3.1))
+	_spawn_empty_carton("build", Vector3(-3.7, 0.0, 3.1) if bench_ctx == MAIN_BENCH else _carton_drop_pos(bench_pos(bench_ctx), float((decor_items[bench_ctx] as Dictionary).get("rot_y", 0.0))))
 	_rpc_play_sfx.rpc("carton_open")
 
 
@@ -8912,6 +9143,10 @@ func has_bench_tool(tool_id: String) -> bool:
 
 ## Zeitfaktor eines Handgriffs durch gekauftes Werkzeug.
 func get_tool_time_mult(kind: String) -> float:
+	return _tool_mult(kind) * DecorManager.work_mult(multiplayer.get_unique_id(), bench_pos(local_bench))
+
+
+func _tool_mult(kind: String) -> float:
 	match kind:
 		"screw", "unscrew":
 			return 0.55 if has_bench_tool("akku") else 1.0
@@ -8922,8 +9157,7 @@ func get_tool_time_mult(kind: String) -> float:
 	return 1.0
 
 
-@rpc("any_peer", "call_local", "reliable")
-func _rpc_req_workbench_enter() -> void:
+func _do_workbench_enter() -> void:
 	if not multiplayer.is_server():
 		return
 	var peer_id := _get_sender_id()
@@ -8931,14 +9165,13 @@ func _rpc_req_workbench_enter() -> void:
 		return
 	if get_workbench_worker() > 0:
 		# Schon besetzt: dem Anfragenden den echten Stand schicken. Ein Techniker macht dagegen Platz.
-		_rpc_sync_workbench.rpc_id(peer_id, workbench_state.duplicate(true))
+		_rpc_sync_workbench.rpc_id(peer_id, bench_ctx, workbench_state.duplicate(true))
 		return
 	workbench_state["worker"] = peer_id
 	_broadcast_workbench()
 
 
-@rpc("any_peer", "call_local", "reliable")
-func _rpc_req_workbench_leave() -> void:
+func _do_workbench_leave() -> void:
 	if not multiplayer.is_server():
 		return
 	if workbench_state.is_empty() or get_workbench_worker() != _get_sender_id():
@@ -8947,8 +9180,7 @@ func _rpc_req_workbench_leave() -> void:
 	_broadcast_workbench()
 
 
-@rpc("any_peer", "call_local", "reliable")
-func _rpc_req_workbench_task(task_id: String, amount: float) -> void:
+func _do_workbench_task(task_id: String, amount: float) -> void:
 	if not multiplayer.is_server():
 		return
 	var peer_id := _get_sender_id()
@@ -9020,11 +9252,10 @@ func _run_workbench_task(peer_id: int, task_id: String, amount: float) -> void:
 
 ## Ersatzteil für die laufende Reparatur festlegen: "kit" oder die ID eines Teils aus dem Teile-Lager.
 func request_workbench_choose(spare_id: String) -> void:
-	_rpc_req_workbench_choose.rpc_id(1, spare_id)
+	_rpc_workbench.rpc_id(1, local_bench, "choose", spare_id)
 
 
-@rpc("any_peer", "call_local", "reliable")
-func _rpc_req_workbench_choose(spare_id: String) -> void:
+func _do_workbench_choose(spare_id: String) -> void:
 	if not multiplayer.is_server():
 		return
 	var peer_id := _get_sender_id()
@@ -9189,7 +9420,7 @@ func _reject_workbench_task(peer_id: int, task_id: String) -> void:
 	if peer_id <= 0:
 		return
 	_rpc_workbench_rejected.rpc_id(peer_id, task_id)
-	_rpc_sync_workbench.rpc_id(peer_id, workbench_state.duplicate(true))
+	_rpc_sync_workbench.rpc_id(peer_id, bench_ctx, workbench_state.duplicate(true))
 
 
 @rpc("authority", "call_local", "reliable")
@@ -9284,8 +9515,7 @@ func _finish_workbench_job(peer_id: int) -> void:
 		post_event_f("   Mangel: " + str(n[0]), n[1], "info")
 
 
-@rpc("any_peer", "call_local", "reliable")
-func _rpc_req_workbench_pickup() -> void:
+func _do_workbench_pickup() -> void:
 	if not multiplayer.is_server():
 		return
 	var peer_id := _get_sender_id()
@@ -9352,13 +9582,16 @@ func _crate_from_bench(peer_id: int) -> String:
 func _broadcast_workbench() -> void:
 	if not multiplayer.is_server():
 		return
-	_rpc_sync_workbench.rpc(workbench_state.duplicate(true))
+	_rpc_sync_workbench.rpc(bench_ctx, workbench_state.duplicate(true))
 
 
 @rpc("authority", "call_local", "reliable")
-func _rpc_sync_workbench(data: Dictionary) -> void:
-	workbench_state = data.duplicate(true)
+func _rpc_sync_workbench(bid: String, data: Dictionary) -> void:
+	bench_states[bid] = data.duplicate(true)
+	# Anzeigen lesen immer die eigene Werkbank, auch wenn der Host gerade eine andere bearbeitet.
+	var prev := set_bench_ctx(local_bench)
 	workbench_changed.emit()
+	set_bench_ctx(prev)
 
 
 # ==============================================================================
@@ -9563,10 +9796,8 @@ func _rpc_req_buy_daily_deal(deal_id: String) -> void:
 		return
 	money -= price
 	deal["sold"] = true
-	if van_phase == "arriving" or van_phase == "unloading":
+	if van_phase == "arriving":
 		van_cargo.append(item_type)
-		if van_phase == "arriving":
-			van_delivery_tier = maxi(van_delivery_tier, compute_delivery_tier(van_cargo))
 	else:
 		pending_delivery_items.append(item_type)
 		if van_phase == "idle":
@@ -9575,11 +9806,7 @@ func _rpc_req_buy_daily_deal(deal_id: String) -> void:
 			scheduled_delivery_day = 0
 			scheduled_delivery_hour = -1
 			pending_delivery_express = false
-			van_delivery_tier = compute_delivery_tier(van_cargo)
-			van_phase = "arriving"
-			van_phase_time = 0.0
-			_van_unload_accum = 0.0
-			_reset_van_trip()
+			_start_delivery_van()
 	_rpc_sync_daily_deals.rpc(daily_deals.duplicate(true))
 	_broadcast_van_state()
 	_broadcast_sim_tick()
@@ -10010,6 +10237,10 @@ func _rpc_req_relocate_decor(decor_id: String, pos: Vector3, rot_y: float) -> vo
 		return
 	var d: Dictionary = decor_items[decor_id]
 	var itype := str(d.get("item_type", ""))
+	# An der zweiten Werkbank arbeitet gerade jemand: stehen lassen.
+	if int((bench_states.get(decor_id, {}) as Dictionary).get("worker", 0)) != 0:
+		_rpc_play_sfx.rpc_id(peer_id, "error")
+		return
 	var snapped := snap_place_pos(itype, pos)
 	if not can_place_item_at(itype, snapped, rot_y, decor_id):
 		_rpc_play_sfx.rpc_id(peer_id, "error")
@@ -10042,11 +10273,22 @@ func _rpc_req_sell_decor(decor_id: String) -> void:
 		return
 	var d: Dictionary = decor_items[decor_id]
 	var itype := str(d.get("item_type", ""))
+	if itype == "prop_esd_workbench" and bench_states.has(decor_id):
+		if int((bench_states[decor_id] as Dictionary).get("worker", 0)) != 0:
+			_rpc_play_sfx.rpc_id(peer_id, "error")
+			return
+		if not (bench_states[decor_id] as Dictionary).is_empty():
+			var prev_b := set_bench_ctx(decor_id)
+			var bc := _crate_from_bench(0)
+			set_bench_ctx(prev_b)
+			crates[bc]["held_by"] = 0
+			crates[bc]["pos"] = _clamp_drop_pos((d.get("pos", Vector3.ZERO) as Vector3) + Vector3(0.6, 0.0, 0.0))
+		bench_states.erase(decor_id)
 	var refund := int(roundf(float((ITEM_CATALOG.get(itype, {}) as Dictionary).get("price", 0)) * SELL_REFUND_RATIO))
 	_disconnect_all_cables_of(decor_id)
 	# Eingelagerte Kisten bleiben am Standort des Regals stehen.
 	var base_pos: Vector3 = d.get("pos", Vector3.ZERO) as Vector3
-	var stored_v: Variant = d.get("stored_items", [])
+	var stored_v: Variant = _decor_list(decor_id, "stored_items") + _decor_list(decor_id, "kits")
 	if stored_v is Array:
 		var dropped := 0
 		for item_v in (stored_v as Array):
@@ -10056,7 +10298,7 @@ func _rpc_req_sell_decor(decor_id: String) -> void:
 			var cid := _alloc_id("crate")
 			crate["id"] = cid
 			crate["held_by"] = 0
-			crate["pos"] = _clamp_drop_pos(base_pos + Vector3(-0.6 + float(dropped) * 0.4, 0.0, 0.0))
+			crate["pos"] = _clamp_drop_pos(base_pos + Vector3(-0.9 + float(dropped % 4) * 0.62, 0.0, -0.4 + float(dropped / 4) * 0.62))
 			crates[cid] = crate
 			dropped += 1
 	decor_items.erase(decor_id)
@@ -10087,26 +10329,29 @@ func _rpc_req_decor_shelf_interact(decor_id: String, slot_idx: int) -> void:
 	if not decor_items.has(decor_id):
 		return
 	var d: Dictionary = decor_items[decor_id]
-	if str(d.get("item_type", "")) != "prop_storage_shelf":
+	if not ShelfSpec.is_shelf(str(d.get("item_type", ""))):
 		return
-	var stored: Array = d.get("stored_items", [null, null, null, null])
-	if slot_idx < 0 or slot_idx >= stored.size():
+	var stored := ShelfSpec.units(d)
+	if slot_idx < 0 or slot_idx >= stored.size() or not SecurityGuard.check_rate_limit(peer_id, "shelf", 20, 4.0):
 		return
 	var held := get_player_held_crate(peer_id)
 	if not held.is_empty():
-		if stored[slot_idx] != null:
+		var start := ShelfSpec.fit(d, slot_idx, held)
+		if start < 0:
 			_rpc_play_sfx.rpc_id(peer_id, "error")
 			return
 		var cid := str(held["id"])
-		stored[slot_idx] = crates[cid].duplicate(true)
-		(stored[slot_idx] as Dictionary)["held_by"] = 0
+		stored[start] = crates[cid].duplicate(true)
+		(stored[start] as Dictionary)["held_by"] = 0
+		(stored[start] as Dictionary)["pos"] = Vector3.ZERO
 		crates.erase(cid)
 		d["stored_items"] = stored
 		_broadcast_crates()
 		_broadcast_decor_items()
 		_rpc_play_sfx.rpc("place")
 	else:
-		if stored[slot_idx] == null or is_player_holding_anything(peer_id):
+		slot_idx = ShelfSpec.owner_of(d, slot_idx)
+		if slot_idx < 0 or is_player_holding_anything(peer_id):
 			return
 		var item_d: Dictionary = (stored[slot_idx] as Dictionary).duplicate(true)
 		var new_cid := _alloc_id("crate")

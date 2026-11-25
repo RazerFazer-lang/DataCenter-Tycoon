@@ -381,7 +381,7 @@ func growth_factor(service: String) -> float:
 	var price_f := clampf(pow(get_price(service) / maxf(0.3, ref), -1.1), 0.30, 1.90)
 	var own := player_users(service)
 	var sat := clampf(1.2 - own / maxf(1.0, demand(service)), 0.4, 1.0)
-	return lerpf(1.0, comp, lw * 0.7) * price_f * (1.0 + ad_boost()) * lerpf(1.0, sat, lw)
+	return lerpf(1.0, comp, lw * 0.7) * price_f * (1.0 + ad_boost() + DecorManager.growth_bonus()) * lerpf(1.0, sat, lw)
 
 
 ## Wie growth_factor, aber je Dienst nur einmal pro Sekunde berechnet (Aufruf im Spieltakt für jedes Rack).

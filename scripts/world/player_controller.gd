@@ -193,6 +193,7 @@ func _ready() -> void:
 
 	_head_pivot = Node3D.new()
 	_head_pivot.position = Vector3(0.0, 1.56, 0.0)
+	add_to_group("player_body")
 	add_child(_head_pivot)
 
 	_build_avatar_visuals()
@@ -292,6 +293,48 @@ func exit_workbench() -> void:
 	visible = true
 	if _camera != null:
 		_camera.make_current()
+
+
+var _sofa_id := ""
+var _sofa_time := 0.0
+var _sofa_rested := false
+
+
+## Auf das Sofa setzen. Jede Bewegungstaste steht wieder auf.
+func sit_on_sofa(did: String) -> void:
+	if not is_local or _sofa_id != "" or not GameState.decor_items.has(did):
+		return
+	_sofa_id = did
+	_sofa_time = 0.0
+	_sofa_rested = false
+	_pre_seat_pos = position
+	SfxManager.play("chair_sit", -8.0, 0.85)
+
+
+func _process_sofa(delta: float) -> void:
+	var d: Dictionary = GameState.decor_items.get(_sofa_id, {})
+	var moving := Input.get_vector("move_left", "move_right", "move_forward", "move_back").length() > 0.2 or Input.is_action_just_pressed("jump")
+	if d.is_empty() or ui_locked or (moving and _sofa_time > 0.4):
+		_sofa_id = ""
+		_stand_blend_timer = 0.30
+		SfxManager.play("chair_sit", -12.0, 1.2)
+		return
+	_sofa_time += delta
+	var ry := float(d.get("rot_y", 0.0))
+	var fwd := Vector3(sin(ry), 0.0, cos(ry))
+	var side := Vector3(cos(ry), 0.0, -sin(ry))
+	# Auf die Seite setzen, von der man kommt: so haben zwei Platz.
+	var off := clampf((_pre_seat_pos - (d["pos"] as Vector3)).dot(side), -0.45, 0.45)
+	var target: Vector3 = (d["pos"] as Vector3) + fwd * 0.10 + side * (0.45 if off >= 0.0 else -0.45)
+	position = position.lerp(Vector3(target.x, 0.0, target.z), clampf(delta * 8.0, 0.0, 1.0))
+	if _sofa_time < 0.7:
+		rotation.y = lerp_angle(rotation.y, ry + PI, clampf(delta * 8.0, 0.0, 1.0))
+	_head_pivot.position.y = lerpf(_head_pivot.position.y, 1.10, clampf(delta * 8.0, 0.0, 1.0))
+	velocity = Vector3.ZERO
+	if _sofa_time >= DecorManager.REST_SIT_TIME and not _sofa_rested:
+		_sofa_rested = true
+		DecorManager.request_rest(_sofa_id)
+		SfxManager.play("save", -12.0, 1.1)
 
 
 func set_typing_at_pc(active: bool) -> void:
@@ -440,8 +483,11 @@ func _handle_inspect() -> void:
 	if itype == "wall_router":
 		_world.open_device_inspector("router", eid)
 	elif itype == "workbench":
+		GameState.select_bench(eid)
 		if GameState.can_workbench_service():
 			GameState.request_workbench_service()
+		elif GameState.decor_items.has(eid):
+			_world.open_device_inspector("decor", eid)
 	elif itype == "rack_slot" and GameState.racks.has(eid):
 		_world.open_rack_inspector(eid, int(target.get_meta("slot_index", 0)))
 	elif itype == "cooler_unit" and GameState.coolers.has(eid):
@@ -539,6 +585,8 @@ func _physics_process(delta: float) -> void:
 		_head_pivot.position.y = lerpf(_head_pivot.position.y, 1.22, clampf(delta * 9.0, 0.0, 1.0))
 		_head_pivot.rotation.x = lerpf(_head_pivot.rotation.x, -0.04, clampf(delta * 9.0, 0.0, 1.0))
 		velocity = Vector3.ZERO
+	elif _sofa_id != "":
+		_process_sofa(delta)
 	elif _stand_blend_timer > 0.0:
 		_stand_blend_timer = maxf(0.0, _stand_blend_timer - delta)
 		position = position.lerp(_pre_seat_pos, clampf(delta * 10.0, 0.0, 1.0))
@@ -566,6 +614,7 @@ func _physics_process(delta: float) -> void:
 				speed = CROUCH_SPEED
 			elif Input.is_action_pressed("sprint"):
 				speed = sprint_spd
+			speed *= DecorManager.walk_mult(peer_id)
 			if move_dir.length_squared() > 0.001:
 				velocity.x = move_dir.x * speed
 				velocity.z = move_dir.z * speed
@@ -589,7 +638,7 @@ func _physics_process(delta: float) -> void:
 	# Subtle first-person walk bob + realistic concrete/floor footsteps + heavy placement weight dip
 	_cam_weight_dip = lerpf(_cam_weight_dip, 0.0, clampf(delta * 9.5, 0.0, 1.0))
 	var flat_speed := Vector2(velocity.x, velocity.z).length()
-	if not is_seated_at_pc and _stand_blend_timer <= 0.0:
+	if not is_seated_at_pc and _sofa_id == "" and _stand_blend_timer <= 0.0:
 		if is_on_floor() and flat_speed > 0.6 and not ui_locked:
 			_walk_cycle += delta * (7.5 + flat_speed * 0.7)
 			_head_pivot.position.y = lerpf(_head_pivot.position.y, _head_y() + sin(_walk_cycle) * 0.030 - _cam_weight_dip, clampf(delta * 12.0, 0.0, 1.0))
@@ -631,7 +680,7 @@ func _physics_process(delta: float) -> void:
 	if _net_send_accum >= 0.05:
 		_net_send_accum = 0.0
 		if _world != null and _world.has_method("send_local_pose"):
-			var pose_flag := 2 if is_typing_at_pc else (1 if is_seated_at_pc else (3 if is_crouching else 0))
+			var pose_flag := 2 if is_typing_at_pc else (1 if is_seated_at_pc or _sofa_id != "" else (3 if is_crouching else 0))
 			_world.send_local_pose(position, rotation.y, _head_pivot.rotation.x, pose_flag, _is_spraying_local)
 			if not pushed_cart.is_empty():
 				_world.send_cart_pose(str(pushed_cart["id"]), _compute_pushed_cart_pos(), rotation.y)
@@ -997,7 +1046,7 @@ func _handle_primary_interact() -> void:
 	# Wenn man direkt ein Lagerfach, eine Werkbank oder einen Rollwagen anvisiert, hat Einlagern Vorrang vor Boden-Platzierung!
 	var target := _get_aimed_interactable()
 	var target_type := str(target.get_meta("interact_type")) if target != null else ""
-	var prioritize_target := (target_type == "storage_shelf_slot" or target_type == "workbench" or target_type == "cart")
+	var prioritize_target := (target_type == "decor_shelf_slot" or target_type == "workbench" or target_type == "cart" or target_type == "decor_use")
 
 	var held := GameState.get_player_held_crate(peer_id)
 	if not prioritize_target and not held.is_empty():
@@ -1117,10 +1166,18 @@ func _handle_primary_interact() -> void:
 		"ups_unit":
 			if hands_empty and _world != null and _world.has_method("open_device_inspector"):
 				_world.open_device_inspector("ups", eid)
-		"storage_shelf_slot":
-			var s_idx := int(target.get_meta("slot_index", 0))
-			GameState.request_shelf_interact(eid, s_idx)
+		"decor_use":
+			if str((GameState.decor_items.get(eid, {}) as Dictionary).get("item_type", "")) == "prop_sofa":
+				if not hands_empty:
+					SfxManager.play("error")
+				else:
+					sit_on_sofa(eid)
+			else:
+				DecorManager.request_use(eid)
+		"delivery_sign":
+			GameState.request_sign_delivery()
 		"workbench":
+			GameState.select_bench(eid)
 			var wb := GameState.workbench_state
 			var wb_mode := str(wb.get("mode", ""))
 			if wb.is_empty():
@@ -1193,9 +1250,10 @@ func _handle_secondary_action() -> void:
 			if is_instance_valid(rp_node) and (rp_node as Object).has_method("toggle_panel"):
 				(rp_node as Object).call("toggle_panel", str(target.get_meta("panel_id", "")))
 			return
-		elif itype == "storage_shelf_slot":
+		elif itype == "decor_shelf_slot":
 			return # Im Lagerregal nicht versehentlich per Rechtsklick auf den Boden werfen!
 		elif itype == "workbench":
+			GameState.select_bench(eid)
 			if not GameState.is_player_holding_anything(peer_id) and not GameState.workbench_state.is_empty():
 				GameState.request_workbench_pickup()
 			return
@@ -1495,9 +1553,9 @@ func _update_placement_preview(delta: float) -> void:
 	# Zuerst Lagerregal-Hover aktualisieren: wenn man ein Fach anvisiert, übernimmt das Regal die Vorschau!
 	var held := GameState.get_player_held_crate(peer_id)
 	var aimed := _get_aimed_interactable()
-	if aimed != null and str(aimed.get_meta("interact_type", "")) == "storage_shelf_slot":
+	if aimed != null and relocating_rack_id == "" and str(aimed.get_meta("interact_type", "")) == "decor_shelf_slot":
 		var shelf_obj: Variant = aimed.get_meta("shelf_prop", null)
-		var s_idx := int(aimed.get_meta("slot_index", -1))
+		var s_idx := int(aimed.get_meta("slot_idx", -1))
 		if is_instance_valid(shelf_obj) and (shelf_obj as Object).has_method("set_hovered_slot"):
 			if _hovered_shelf != null and _hovered_shelf != shelf_obj:
 				_clear_shelf_hover()
@@ -1571,6 +1629,29 @@ func _update_placement_preview(delta: float) -> void:
 			_ghost_pos = spot["pos"]
 			_ghost_rot_y = float(spot["rot_y"])
 			_ghost_valid = true
+	elif DecorSpec.is_wall_sign(item_type):
+		var lspot := DecorSpec.sign_spot(hpos, hnormal)
+		if lspot.is_empty():
+			_ghost_pos = hpos + hnormal * 0.06
+			_ghost_rot_y = atan2(hnormal.x, hnormal.z) if absf(hnormal.y) < 0.3 else place_rot_y
+			_ghost_valid = false
+		else:
+			_ghost_pos = lspot["pos"]
+			_ghost_rot_y = float(lspot["rot_y"])
+			_ghost_valid = GameState.can_place_item_at(item_type, _ghost_pos, _ghost_rot_y, ignore_rid)
+	elif DecorSpec.SIZES.has(item_type):
+		# Zielt man auf eine Wand, zählt der Fußpunkt davor: so rastet das Stück sauber an.
+		var floor_hit := hpos
+		if hnormal.y < 0.7:
+			if absf(hnormal.y) > 0.3 or not DecorSpec.WALL_SNAP.has(item_type):
+				_ghost_root.visible = false
+				_ghost_has_visual_pose = false
+				return
+			floor_hit = hpos + hnormal * DecorSpec.footprint(item_type).y * 0.5
+		var pose := DecorSpec.snap_pose(item_type, Vector3(floor_hit.x, 0.0, floor_hit.z), place_rot_y, ignore_rid)
+		_ghost_pos = pose["pos"]
+		_ghost_rot_y = float(pose["rot_y"])
+		_ghost_valid = GameState.can_place_item_at(item_type, _ghost_pos, _ghost_rot_y, ignore_rid)
 	elif GameState.is_strip_type(item_type) and absf(hnormal.y) < 0.3:
 		wall_strip = true
 		var sspot: Dictionary = GameState.get_strip_wall_spot(hpos, hnormal)
@@ -1759,7 +1840,7 @@ func _update_context_prompt() -> void:
 	var held := GameState.get_player_held_crate(peer_id)
 	var target := _get_aimed_interactable()
 	var target_type := str(target.get_meta("interact_type")) if target != null else ""
-	var prioritize_target := (target_type == "storage_shelf_slot" or target_type == "workbench" or target_type == "cart")
+	var prioritize_target := (target_type == "decor_shelf_slot" or target_type == "workbench" or target_type == "cart" or target_type == "decor_use")
 
 	if not prioritize_target and not held.is_empty():
 		var item_type := str(held["item_type"])
@@ -1821,20 +1902,36 @@ func _update_context_prompt() -> void:
 				current_prompt = tr("[E] Nach HALLE NORD (240 m²) teleportieren (oder Taste [T])")
 		"decor_shelf_slot":
 			var s_idx := int(target.get_meta("slot_idx", 0))
-			var has_crate := not GameState.get_player_held_crate(multiplayer.get_unique_id()).is_empty()
-			if has_crate:
-				current_prompt = tr("[E] Karton ins Lagerregal (Fach %d) stellen") % (s_idx + 1)
+			var sd: Dictionary = GameState.decor_items.get(eid, {})
+			var stype := str(sd.get("item_type", ""))
+			var at := ShelfSpec.owner_of(sd, s_idx)
+			if not held.is_empty():
+				if ShelfSpec.fit(sd, s_idx, held) >= 0:
+					current_prompt = tr("[E] %s hier einlagern") % GameState.get_crate_display_label(held)
+				elif ShelfSpec.span(stype, held) <= 0:
+					current_prompt = tr("Passt nicht in dieses Regal")
+					if ShelfSpec.needs_pallet(held):
+						current_sub_prompt = tr("Große Geräte passen nur ins Palettenregal")
+				else:
+					current_prompt = tr("Hier ist kein Platz mehr (braucht %d Plätze nebeneinander)") % ShelfSpec.span(stype, held)
+			elif at >= 0:
+				current_prompt = tr("[E] %s nehmen") % GameState.get_crate_display_label((sd["stored_items"] as Array)[at])
 			else:
-				current_prompt = tr("[E] Gegenstand aus Lagerregal (Fach %d) nehmen") % (s_idx + 1)
-			current_sub_prompt = tr("[F] Umsetzen oder verkaufen")
+				current_prompt = tr(GameState.get_decor_name(eid))
+			if current_sub_prompt == "":
+				current_sub_prompt = tr("[F] Umsetzen oder verkaufen")
+		"decor_use":
+			var dp: Array = DecorManager.prompt_for(eid)
+			current_prompt = str(dp[0])
+			current_sub_prompt = str(dp[1])
+		"delivery_sign":
+			current_prompt = tr("[E] Lieferung unterschreiben")
 		"parts_cabinet":
 			current_prompt = tr("[E] +3 Wartungs- & Ersatzteil-Kits auffüllen ($20 • Vorrat: %d/12)") % GameState.maint_kits
 			current_sub_prompt = tr("[F] Umsetzen oder verkaufen")
 		"decor_info":
-			var d_itype := str(target.get_meta("item_type", ""))
-			current_prompt = tr(GameState.get_decor_name(eid))
-			if d_itype == "prop_esd_workbench":
-				current_prompt = tr("ESD-Diagnose-Werkbank aktiv (+35 % Reparatur- & Diagnose-Tempo)")
+			var ip: Array = DecorManager.prompt_for(eid)
+			current_prompt = str(ip[0])
 			current_sub_prompt = tr("[F] Umsetzen oder verkaufen")
 		"wall_breaker":
 			if GameState.grid_outage_left > 0.0:
@@ -2003,28 +2100,19 @@ func _update_context_prompt() -> void:
 				var ups_state := tr("NOTSTROM!") if bool(GameState.ups_units[eid].get("discharging", false)) else (tr("LÄDT/BEREIT") if bool(GameState.ups_units[eid].get("connected", false)) else tr("KEIN KABEL"))
 				current_prompt = tr("[E / F] USV-Batterie %s (%.0f%%, %s) — Umsetzen / Verkaufen") % [eid.to_upper(), ch, ups_state]
 				current_sub_prompt = tr("Auf die gelbe Buchse unten zielen für Stromkabel")
-		"storage_shelf_slot":
-			var s_idx := int(target.get_meta("slot_index", 0))
-			var skey := "%s:%d" % [eid, s_idx]
-			var has_item := GameState.storage_shelf_slots.has(skey)
-			if not held.is_empty():
-				if has_item:
-					current_prompt = tr("Lagerfach %d belegt (%s)") % [s_idx + 1, GameState.get_crate_display_label(GameState.storage_shelf_slots[skey] as Dictionary)]
-				else:
-					current_prompt = tr("[E] %s in Lagerfach %d abstellen") % [GameState.get_crate_display_label(held), s_idx + 1]
-			elif has_item:
-				current_prompt = tr("[E] %s aus Lagerfach %d nehmen") % [GameState.get_crate_display_label(GameState.storage_shelf_slots[skey] as Dictionary), s_idx + 1]
-			else:
-				current_prompt = tr("Lagerfach %d (frei)") % (s_idx + 1)
 		"workbench":
+			GameState.select_bench(eid)
 			var wb := GameState.workbench_state
 			var wb_mode := str(wb.get("mode", ""))
+			if wb.is_empty() and GameState.decor_items.has(eid):
+				current_sub_prompt = tr("[F] Umsetzen oder verkaufen")
 			if wb.is_empty():
 				if not held.is_empty() and (str(held["item_type"]) == "slot_build_box" or str(held["item_type"]) == "server_tray"):
 					current_prompt = tr("[E] %s auf Werkbank ablegen") % GameState.get_crate_display_label(held)
 				else:
 					current_prompt = tr("IT-Werkbank (frei)")
-					current_sub_prompt = tr("Bausatz-Karton oder defekten Server-Schlitten herbringen")
+					if current_sub_prompt == "":
+						current_sub_prompt = tr("Bausatz-Karton oder defekten Server-Schlitten herbringen")
 			elif wb_mode == "build_box":
 				current_prompt = tr("[E] Bausatz auspacken (%s)") % str(wb.get("label", "Server"))
 				current_sub_prompt = tr("[Rechtsklick] Karton wieder aufnehmen")
@@ -2736,12 +2824,6 @@ void fragment() {
 
 
 const DECOR_GHOSTS := {
-	"prop_storage_shelf": ["decor_storage_shelf", Vector2(1.56, 0.58)],
-	"prop_esd_workbench": ["decor_esd_workbench", Vector2(1.58, 0.84)],
-	"prop_parts_cabinet": ["decor_parts_cabinet", Vector2(1.16, 0.60)],
-	"prop_cold_aisle_gate": ["decor_cold_aisle_gate", Vector2(2.28, 0.24)],
-	"prop_vending_lounge": ["decor_vending_lounge", Vector2(1.50, 0.76)],
-	"prop_cctv_monitor": ["decor_cctv_monitor", Vector2(0.74, 0.50)],
 	"prop_power_strip": ["power_strip", Vector2(0.70, 0.16)],
 	"prop_lan_strip": ["lan_strip", Vector2(0.66, 0.18)],
 }
@@ -2775,6 +2857,9 @@ func _rebuild_ghost_model(item_type: String, held: Dictionary, is_drop_preview: 
 		model = ModelLoader.instantiate_custom_model(str(UpsProp.MODELS[item_type]))
 		var us: Vector3 = UpsProp.SIZES[item_type]
 		fp_size = Vector2(us.x, us.z)
+	elif DecorSpec.MODELS.has(item_type):
+		model = ModelLoader.instantiate_custom_model(str(DecorSpec.MODELS[item_type]))
+		fp_size = DecorSpec.footprint(item_type)
 	elif DECOR_GHOSTS.has(item_type):
 		model = ModelLoader.instantiate_custom_model(str(DECOR_GHOSTS[item_type][0]))
 		fp_size = DECOR_GHOSTS[item_type][1]

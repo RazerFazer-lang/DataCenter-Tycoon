@@ -24,6 +24,7 @@ const APP_INFO := {
 	"market": {"icon": "market", "name": "Markt & Konkurrenz", "short": "Markt"},
 	"upgrades": {"icon": "building", "name": "Upgrades", "short": "Upgrades"},
 	"monitor": {"icon": "chart", "name": "Task-Manager", "short": "Monitor"},
+	"cams": {"icon": "camera", "name": "Kameras", "short": "Kameras"},
 	"staff": {"icon": "people", "name": "Personalverwaltung", "short": "Personal"},
 	"bank": {"icon": "bank", "name": "Hanse Direktbank", "short": "Bank"},
 	"bills": {"icon": "invoice", "name": "Rechnungen & Zahlungen", "short": "Rechnungen"},
@@ -37,7 +38,7 @@ const SHOP_TABS := {
 const SUPPORT_TABS := {"tickets": "Tickets", "contracts": "Verträge", "ai": "KI-Plattform"}
 
 const FINANCE_APPS: Array[String] = ["staff", "bank", "bills"]
-const LIVE_APPS: Array[String] = ["shop", "support", "upgrades", "monitor"]
+const LIVE_APPS: Array[String] = ["shop", "support", "upgrades", "monitor", "cams"]
 
 ## Shader-Material des alten Monitors. Die Garage setzt dort jedes Frame "power_on",
 ## daran erkennt der Spiegel, ob der Strom da ist.
@@ -399,6 +400,8 @@ func _rebuild_body(app: String, detail: String) -> void:
 			_render_upgrades()
 		"monitor":
 			_render_monitor()
+		"cams":
+			_render_cams()
 
 
 func _render_shop(tab: String) -> void:
@@ -479,6 +482,28 @@ func _render_upgrades() -> void:
 	room_card.add_child(FinanceApps._label(tr("Raumausbau  •  Stufe %d") % int(GameState.room_level), 15, FinanceApps.COL_TEXT))
 	var ai_card := FinanceApps._card(body)
 	ai_card.add_child(FinanceApps._label(tr("KI-Plattform  •  Stufe %d") % int(GameState.ai_platform_level), 15, FinanceApps.COL_TEXT))
+
+
+func _render_cams() -> void:
+	var body := FinanceApps._scroll_body(_win_body)
+	var ids := CameraApp.cam_ids()
+	FinanceApps._header(body, "camera", "Kameras", tr("%d Kameras") % ids.size() if ids.size() != 1 else tr("1 Kamera"))
+	var grid := GridContainer.new()
+	grid.columns = 2
+	grid.add_theme_constant_override("h_separation", 12)
+	grid.add_theme_constant_override("v_separation", 12)
+	body.add_child(grid)
+	var power: bool = DecorManager.has_power()
+	for i in mini(4, ids.size()):
+		var pic := ColorRect.new()
+		pic.color = Color(0.10, 0.16, 0.17) if power else Color(0.03, 0.03, 0.04)
+		pic.custom_minimum_size = Vector2(300, 168)
+		pic.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		grid.add_child(pic)
+		var p: Vector3 = (GameState.decor_items[ids[i]] as Dictionary).get("pos", Vector3.ZERO)
+		var l := FinanceApps._label((tr("KAM %d  %s") % [i + 1, CameraApp.place_name(p)]) if power else tr("KEIN STROM"), 14, Color(0.80, 0.95, 0.88))
+		l.position = Vector2(10, 8)
+		pic.add_child(l)
 
 
 func _render_monitor() -> void:

@@ -8,7 +8,7 @@ const MIX_RATE := 44100
 # Erzeugte Klänge werden hier gespeichert, damit nur der erste Start rechnen muss (~870 ms gemessen).
 const SFX_CACHE_DIR := "user://sfx_cache"
 # Erhöhen, wenn sich ein Generator oder seine Parameter ändern, sonst bleiben die alten Klänge im Cache.
-const SFX_CACHE_VERSION := 17
+const SFX_CACHE_VERSION := 18
 const EXTERNAL_AUDIO_DIR := "res://assets/audio"
 
 var _sounds: Dictionary = {}
@@ -70,6 +70,14 @@ func _generate_sounds() -> void:
 	_sounds["strip_switch"] = _gen_click_burst([[0.0, 1500.0, 0.46, 170.0], [0.016, 620.0, 0.40, 90.0]], 0.09, 0.26)
 	_sounds["ups_transfer"] = _gen_click_burst([[0.0, 130.0, 0.70, 26.0], [0.010, 760.0, 0.40, 80.0], [0.085, 150.0, 0.55, 30.0], [0.092, 1100.0, 0.26, 120.0]], 0.42, 0.34)
 	_sounds["ups_alarm"] = _gen_soft_chime([2093.0], 0.10, 0.13)
+	# Einrichtung: Kaffee, Wasser, Schublade, Pfiff, Schiebetür, Signatur
+	_sounds["coffee"] = _gen_click_burst([[0.0, 320.0, 0.40, 30.0], [0.12, 240.0, 0.30, 14.0], [0.30, 260.0, 0.28, 12.0], [0.52, 230.0, 0.24, 12.0], [0.80, 1400.0, 0.20, 90.0]], 1.05, 0.20)
+	_sounds["water_pour"] = _gen_soft_squish(0.55)
+	_sounds["drawer"] = _gen_friction_slide(0.30)
+	_sounds["whistle"] = _gen_soft_chime([2350.0, 2480.0], 0.42, 0.30)
+	_sounds["glass_door"] = _gen_friction_slide(0.55)
+	_sounds["sign_pen"] = _gen_friction_slide(0.36)
+	_sounds["forklift_beep"] = _gen_soft_chime([1320.0], 0.14, 0.18)
 	# Werkbank: Schraubendreher, Clips, Steckplätze, Paste
 	_sounds["screw_tick"] = _gen_click_burst([[0.0, 2300.0, 0.30, 260.0], [0.006, 1500.0, 0.20, 210.0]], 0.035, 0.30)
 	_sounds["screw_tight"] = _gen_click_burst([[0.0, 900.0, 0.36, 60.0], [0.045, 1650.0, 0.42, 120.0], [0.052, 520.0, 0.30, 50.0]], 0.16, 0.26)

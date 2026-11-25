@@ -19,6 +19,7 @@ var _mouse_down := false
 var _idle_accum := 0.0
 var _mail_state: Dictionary = {"folder": "all", "mail": "", "msg": "", "ok": true}
 var _market_state: Dictionary = {"tab": "overview", "msg": "", "ok": true}
+var _cams_state: Dictionary = {"big": "", "page": 0}
 
 var _active_app: String = "" # "" | "shop" | "support" | "upgrades" | "monitor"
 var _shop_tab: String = "chassis" # "chassis" | "infra" | "cpu" | "ram" | "gpu" | "storage" | "cooling" | "psu" | "warehouse"
@@ -57,7 +58,7 @@ const OPEN_FADE_TIME := 0.25
 var _boot_started_msec: int = -1
 
 const FINANCE_APPS: Array[String] = ["staff", "bank", "bills"]
-const APP_ORDER: Array[String] = ["mail", "shop", "support", "market", "upgrades", "monitor", "staff", "bank", "bills"]
+const APP_ORDER: Array[String] = ["mail", "shop", "support", "market", "upgrades", "monitor", "cams", "staff", "bank", "bills"]
 ## Diese Apps zeigen laufende Werte und werden im Spieltakt neu gezeichnet.
 const LIVE_APPS: Array[String] = ["support", "upgrades", "monitor"]
 const REFRESH_ACTIVE := 0.2
@@ -70,6 +71,7 @@ const APP_META := {
 	"support": {"icon": "headset", "name": "Support", "title": "ServiceDesk & Kunden-Hub — Tickets, Verträge & AI"},
 	"upgrades": {"icon": "building", "name": "Gebäude", "title": "Gebäude & Anschlüsse — Router, Strom und Hallen-Ausbau"},
 	"monitor": {"icon": "chart", "name": "Monitor", "title": "Verion OS Systemmonitor — Live Rechenzentrum-Monitor"},
+	"cams": {"icon": "camera", "name": "Kameras", "title": "Verion SecureView — Live-Bilder der Überwachungsstelen"},
 	"staff": {"icon": "people", "name": "Personal", "title": "Personalverwaltung — Team, Löhne & Bewerbungen"},
 	"bank": {"icon": "bank", "name": "Bank", "title": "Hanse Direktbank — Geschäftskonto, Kredite & Kontoauszug"},
 	"bills": {"icon": "invoice", "name": "Rechnungen", "title": "Rechnungen — Strom, Garagenmiete, Internet & Versicherung"},
@@ -520,6 +522,8 @@ func _render_window(app: String) -> void:
 			_render_upgrades_app()
 		"monitor":
 			_render_monitor_app()
+		"cams":
+			CameraApp.render(w.body, _cams_state)
 		"staff":
 			FinanceApps.render_staff(w.body, _fin_msg, _fin_msg_ok)
 		"bank":
@@ -550,6 +554,7 @@ func _refresh_dock() -> void:
 	_desktop.set_badge("support", maxi(open_t, 1 if has_call else 0), "phone" if has_call else "headset")
 	_desktop.set_badge("shop", cart_n)
 	_desktop.set_badge("mail", MailManager.get_unread_count())
+	_desktop.set_badge("cams", 1 if not DecorManager.thief.is_empty() and DecorManager.has_camera(Vector3(0.0, 0.0, 6.0)) else 0)
 	_desktop.set_badge("bills", FinanceManager.get_dunning_count())
 	_desktop.set_badge("market", MarketManager.leads.size() + (1 if not MarketManager.poach.is_empty() else 0))
 
@@ -1076,11 +1081,14 @@ func _render_shop_app() -> void:
 		_add_fuse_shop_card(left_list)
 		_add_shop_section(left_list, tr("Netzwerk-Zubehör"), tr("Mehr Netzwerkdosen über LAN-Leisten."))
 		_populate_physical_shop_list(left_list, ["prop_lan_strip"])
-		_add_shop_section(left_list, tr("Einrichtung, Lagerregale & Technik-Props"), tr("Frei in allen Hallen platzierbar! Echte Lagerplätze, Werkbänke, Kaltgang-Türen & Deko."))
+		_add_shop_section(left_list, tr("Lagerregale"), tr("Drei Größen. Regale rasten an Wänden und aneinander ein, jede Ware braucht ihren echten Platz."))
+		_populate_physical_shop_list(left_list, ["prop_shelf_small", "prop_storage_shelf", "prop_pallet_rack"])
+		_add_shop_section(left_list, tr("Werkstatt & Technik"), tr("Zweite Werkbank, Ersatzteile, Kaltgang, Kameras und Luftentfeuchter."))
 		_populate_physical_shop_list(left_list, [
-			"prop_storage_shelf", "prop_esd_workbench", "prop_parts_cabinet",
-			"prop_cold_aisle_gate", "prop_vending_lounge", "prop_cctv_monitor",
+			"prop_esd_workbench", "prop_parts_cabinet", "prop_tool_cart", "prop_cold_aisle_gate", "prop_cctv_monitor", "prop_dehumidifier",
 		])
+		_add_shop_section(left_list, tr("Pausenraum & Außenwirkung"), tr("Mit [E] benutzen. Macht dich und dein Team schneller und hebt den Ruf."))
+		_populate_physical_shop_list(left_list, ["prop_vending_lounge", "prop_water", "prop_sofa", "prop_logo_sign"])
 	elif _shop_tab == "deals":
 		_add_shop_section(left_list, tr("Gebrauchtmarkt & Firmenauflösungen (Tag %d)") % GameState.day_number, tr("Täglich wechselnde B-Ware mit 35–45 % Rabatt! Nur einmal pro Angebot verfügbar."))
 		if GameState.daily_deals.is_empty():

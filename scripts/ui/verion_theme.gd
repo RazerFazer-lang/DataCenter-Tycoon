@@ -26,7 +26,7 @@ const L_TITLE := Color(0.90, 0.92, 0.95)
 const APP_COLORS := {
 	"shop": Color(0.96, 0.55, 0.16), "support": Color(0.10, 0.66, 0.66), "upgrades": Color(0.56, 0.40, 0.90),
 	"monitor": Color(0.22, 0.70, 0.36), "staff": Color(0.26, 0.50, 0.92), "bank": Color(0.82, 0.62, 0.16),
-	"bills": Color(0.86, 0.28, 0.30), "mail": Color(0.14, 0.58, 0.96), "market": Color(0.84, 0.26, 0.60),
+	"bills": Color(0.86, 0.28, 0.30), "mail": Color(0.14, 0.58, 0.96), "market": Color(0.84, 0.26, 0.60), "cams": Color(0.18, 0.60, 0.46),
 }
 
 static var dark := true

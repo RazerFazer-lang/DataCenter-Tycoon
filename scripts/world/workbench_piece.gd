@@ -48,6 +48,8 @@ class Item:
 	var cable: MeshInstance3D
 
 
+## Zu welcher Werkbank dieses Werkstück gehört.
+var bench_id: String = "wb_main"
 var plan: Dictionary = {}
 var done: Dictionary = {}
 var items: Dictionary = {}
@@ -487,7 +489,7 @@ func run_result() -> Dictionary:
 	if is_fault_run():
 		var p: Dictionary = AssemblyPlan.POST.get(str(plan["repair_cat"]), AssemblyPlan.POST["mainboard"])
 		return {"ok": false, "code": p["code"], "msg": p["msg"], "leds": p["leds"], "kind": "", "beeps": p["beeps"]}
-	var t: Variant = GameState.workbench_state.get("test", {})
+	var t: Variant = (GameState.bench_states.get(bench_id, {}) as Dictionary).get("test", {})
 	if t is Dictionary and not (t as Dictionary).is_empty():
 		var d: Dictionary = (t as Dictionary).duplicate()
 		d["beeps"] = 1 if bool(d.get("ok", true)) else 4
@@ -742,7 +744,10 @@ func _set_done(new_done: Dictionary) -> void:
 
 
 func _kit_available() -> bool:
-	return GameState.is_workbench_spare_ready()
+	var prev: String = GameState.set_bench_ctx(bench_id)
+	var ok: bool = GameState.is_workbench_spare_ready()
+	GameState.set_bench_ctx(prev)
+	return ok
 
 
 func _refresh_visibility() -> void:

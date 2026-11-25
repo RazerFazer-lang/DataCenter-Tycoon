@@ -1,16 +1,15 @@
 class_name DecorProp
 extends Node3D
-## Frei platzierbare, kaufbare 2K-ORM-PBR Einrichtungs- & Technik-Items aus Blender 5.2:
-## - prop_storage_shelf   (decor_storage_shelf.glb — 4 echte Ablageplätze)
-## - prop_esd_workbench   (decor_esd_workbench.glb — Eichenplatte, ESD-Matte, 2-Ch-Oszilloskop, Lochwand)
-## - prop_parts_cabinet   (decor_parts_cabinet.glb — Stahlschrank mit Echtglastüren & Sichtlagerkästen)
-## - prop_cold_aisle_gate (decor_cold_aisle_gate.glb — Alu-Kaltgang-Portal mit Echtglas-Schiebetüren)
-## - prop_vending_lounge  (decor_vending_lounge.glb — Getränkeautomat mit 3D-Dosen hinter Glas + Pflanze)
-## - prop_cctv_monitor    (decor_cctv_monitor.glb + decor_cctv_cam_head.glb — Telemetrie-Stele & PTZ-Kamera)
+## Frei platzierbare Einrichtung (Modelle aus tools/blender/build_paket_c.py, Maße in DecorSpec):
+## drei Lagerregale, ESD-Werkbank, Ersatzteil-Schrank, Kaltgang-Portal, Automat, Kamera-Stele, Sofa,
+## Wasserspender, Werkzeugwagen, Luftentfeuchter, Leuchtschild sowie Strom- und LAN-Leisten.
+## Was man damit tun kann, steht in DecorManager.
+
+const GATE_OPEN_DIST := 1.9
+const GATE_SLIDE := 0.50
 
 var decor_id: String = ""
 var item_type: String = ""
-var _shelf_crate_nodes: Array[Node3D] = []
 var _socket_local_positions: Array[Vector3] = []
 var _temp_lbl: Label3D
 var _cctv_cam: Node3D
@@ -27,32 +26,44 @@ var _strip_accum: float = 1.0
 ## Je Buchse: 0 leer, 1 gesteckt, 2 gesteckt und in Betrieb.
 var _port_state: PackedInt32Array = PackedInt32Array()
 
+var _shelf: ShelfProp
+var _bench: WorkbenchProp
+var _doors: Array[Node3D] = []
+var _door_base: Array[float] = []
+var _door_t := 0.0
+var _door_want := false
+var _fans: Array[Node3D] = []
+var _tank: Node3D
+var _glow: OmniLight3D
+var _live_mats: Dictionary = {}
+var _sign_lbl: Label3D
+var _drawers: Array[Node3D] = []
+var _info_lbl: Label3D
+var _slow := 0.0
+
 
 func setup(did: String, itype: String, data: Dictionary) -> void:
 	decor_id = did
 	item_type = itype
 	_apply_pose(data)
 	match itype:
-		"prop_storage_shelf":
-			_build_storage_shelf()
-		"prop_esd_workbench":
-			_build_esd_workbench()
-		"prop_parts_cabinet":
-			_build_parts_cabinet()
-		"prop_cold_aisle_gate":
-			_build_cold_aisle_gate()
-		"prop_vending_lounge":
-			_build_vending_lounge()
-		"prop_cctv_monitor":
-			_build_cctv_monitor()
 		"prop_power_strip":
 			_build_power_strip()
 		"prop_lan_strip":
 			_build_lan_strip()
+		"prop_esd_workbench":
+			_build_esd_workbench()
+		"prop_cold_aisle_gate":
+			_build_gate()
+		_:
+			if ShelfSpec.is_shelf(itype):
+				_build_shelf()
+			else:
+				_build_generic()
 	apply_data(data)
 
 
-## Am Boden liegend oder an der Wand (Oberseite zeigt dann in den Raum).
+## Am Boden liegend oder an der Wand (Leisten: Oberseite zeigt dann in den Raum).
 func _apply_pose(data: Dictionary) -> void:
 	position = data.get("pos", position) as Vector3
 	_wall = bool(data.get("wall", false))
@@ -81,8 +92,18 @@ func apply_data(data: Dictionary) -> void:
 	_apply_pose(data)
 	_on = bool(data.get("on", true))
 	_tripped = bool(data.get("tripped", false))
-	if item_type == "prop_storage_shelf":
-		_sync_shelf_slots(data.get("stored_items", [null, null, null, null]) as Array)
+	if _shelf != null:
+		_shelf.sync()
+	match item_type:
+		"prop_logo_sign":
+			_apply_sign(data)
+		"prop_dehumidifier":
+			if _tank != null:
+				_tank.scale.y = maxf(0.02, float(data.get("tank", 0.0)))
+				_tank.visible = float(data.get("tank", 0.0)) > 0.01
+		"prop_tool_cart":
+			if _info_lbl != null:
+				_info_lbl.text = "%d/%d" % [DecorManager.kit_count(data), DecorManager.TOOL_CART_SLOTS]
 
 
 func _process(delta: float) -> void:
@@ -91,200 +112,211 @@ func _process(delta: float) -> void:
 		_cctv_cam.rotation_degrees.y = sin(_anim_t * 0.75) * 38.0
 	if _switch_node != null and GameState.is_active:
 		_process_strip(delta)
-	if _temp_lbl != null and GameState.is_active:
-		_temp_lbl.text = "%.1f °C  •  OK" % GameState.room_temp
+	if not _doors.is_empty():
+		_process_gate(delta)
+	for f in _fans:
+		if GameState.is_active and DecorManager.is_dehum_running(GameState.decor_items.get(decor_id, {})):
+			f.rotate_object_local(Vector3.BACK, delta * 9.0)
+	_slow += delta
+	if _slow < 0.5:
+		return
+	_slow = 0.0
+	if not GameState.is_active:
+		return
+	var power := DecorManager.has_power()
+	if _temp_lbl != null:
+		_temp_lbl.text = "%.1f °C" % GameState.room_temp if power else ""
+	if _glow != null and item_type != "prop_logo_sign":
+		_glow.visible = power
+	for k in _live_mats.keys():
+		(_live_mats[k] as StandardMaterial3D).emission_energy_multiplier = float((_live_mats[k] as StandardMaterial3D).get_meta("e", 1.0)) if power else 0.0
+	if item_type == "prop_logo_sign":
+		_apply_sign(GameState.decor_items.get(decor_id, {}))
 
 
-# ---------------------------------------------------------------- 1. Schwerlast-Lagerregal (4 echte Ablageplätze!)
+# ---------------------------------------------------------------- Bausteine
 
-func _build_storage_shelf() -> void:
-	var mdl := ModelLoader.instantiate_custom_model("decor_storage_shelf")
+func _model() -> Node3D:
+	var mdl := ModelLoader.instantiate_custom_model(str(DecorSpec.MODELS[item_type]))
 	if mdl != null:
 		add_child(mdl)
+		_bind_live(mdl)
 	else:
-		var steel := MatLib.make_brushed_metal(Color(0.20, 0.23, 0.28), 0.40, 0.70)
-		var wood := MatLib.get_mat("wood_desk")
-		for sx in [-0.74, 0.74]:
-			for sz in [-0.25, 0.25]:
-				_box(self, Vector3(float(sx), 1.08, float(sz)), Vector3(0.045, 2.16, 0.045), steel)
-		for sy_f in [0.22, 0.78, 1.34, 1.90]:
-			_box(self, Vector3(0.0, float(sy_f), 0.0), Vector3(1.52, 0.035, 0.52), wood)
-
-	var shelf_ys := [0.22, 0.78, 1.34, 1.90]
-	_shelf_crate_nodes.clear()
-	for idx in range(4):
-		var sy: float = shelf_ys[idx]
-		var holder := Node3D.new()
-		holder.position = Vector3(0.0, sy + 0.02, 0.0)
-		add_child(holder)
-		_shelf_crate_nodes.append(holder)
-		var area := _make_interact_area(Vector3(1.42, 0.48, 0.62), {
-			"interact_type": "decor_shelf_slot",
-			"decor_id": decor_id,
-			"slot_idx": idx,
-		})
-		area.position = Vector3(0.0, sy + 0.26, 0.05)
-		add_child(area)
-	_add_collider(Vector3(0.0, 1.08, 0.0), Vector3(1.56, 2.16, 0.56))
+		var s: Vector3 = DecorSpec.SIZES[item_type]
+		_box(self, Vector3(0.0, s.y * 0.5, 0.0), s, _mat(Color(0.22, 0.25, 0.30), 0.4, 0.5))
+	return mdl
 
 
-func _sync_shelf_slots(stored: Array) -> void:
-	for i in range(mini(stored.size(), _shelf_crate_nodes.size())):
-		var h := _shelf_crate_nodes[i]
-		for c in h.get_children():
-			c.queue_free()
-		if stored[i] == null or not (stored[i] is Dictionary):
-			continue
-		var sd: Dictionary = stored[i]
-		var itype := str(sd.get("item_type", ""))
-		var col := Color(0.72, 0.56, 0.38)
-		var ilbl := itype
-		if GameState.ITEM_CATALOG.has(itype):
-			var cat: Dictionary = GameState.ITEM_CATALOG[itype]
-			col = cat.get("color", col)
-			ilbl = str(cat.get("label", itype))
-		var box_mdl := StorageShelfProp.build_stored_visual(sd)
-		h.add_child(box_mdl)
-		var tag := Label3D.new()
-		tag.text = ilbl.left(18)
-		tag.font_size = 20
-		tag.pixel_size = 0.0015
-		tag.outline_size = 2
-		tag.modulate = col.lerp(Color.WHITE, 0.45)
-		tag.position = Vector3(0.0, 0.14, 0.22)
-		h.add_child(tag)
+## Leuchtende Materialien (Name beginnt mit LIVE_) je Stück eigenständig machen, damit sie mit dem Strom aus- und angehen.
+func _bind_live(root: Node) -> void:
+	for n in root.find_children("*", "MeshInstance3D", true, false):
+		var mi := n as MeshInstance3D
+		for s in mi.mesh.get_surface_count():
+			var src := mi.mesh.surface_get_material(s) as StandardMaterial3D
+			if src == null or not src.resource_name.begins_with("LIVE_"):
+				continue
+			if not _live_mats.has(src.resource_name):
+				var d := src.duplicate() as StandardMaterial3D
+				d.resource_name = src.resource_name
+				d.set_meta("e", d.emission_energy_multiplier)
+				_live_mats[src.resource_name] = d
+			mi.set_surface_override_material(s, _live_mats[src.resource_name])
 
 
-# ---------------------------------------------------------------- 2. ESD-Diagnose-Werkbank
+func _area(itype: String, pos: Vector3, sz: Vector3) -> void:
+	var area := _make_interact_area(sz, {"interact_type": itype, "decor_id": decor_id, "entity_id": decor_id, "item_type": item_type})
+	area.position = pos
+	add_child(area)
+
+
+func _light(pos: Vector3, col: Color, energy: float, rng: float) -> OmniLight3D:
+	var l := OmniLight3D.new()
+	l.position = pos
+	l.light_color = col
+	l.light_energy = energy
+	l.omni_range = rng
+	l.shadow_enabled = false
+	add_child(l)
+	return l
+
+
+func _small_label(pos: Vector3, px: int, size_m: float, col: Color) -> Label3D:
+	var l := Label3D.new()
+	l.font_size = px
+	l.pixel_size = size_m
+	l.outline_size = 0
+	l.shaded = false
+	l.double_sided = false
+	l.modulate = col
+	l.position = pos
+	l.visibility_range_end = 10.0
+	add_child(l)
+	return l
+
+
+# ---------------------------------------------------------------- Regale
+
+func _build_shelf() -> void:
+	_shelf = ShelfProp.new()
+	add_child(_shelf)
+	_shelf.setup(decor_id, item_type)
+	var s: Vector3 = DecorSpec.SIZES[item_type]
+	# Nur hinten ein durchgehender Körper: die Fächer davor bleiben frei anvisierbar.
+	_add_collider(Vector3(0.0, s.y * 0.5, -s.z * 0.18), Vector3(s.x, s.y, s.z * 0.62))
+	for sx in [-0.5, 0.5]:
+		_add_collider(Vector3((s.x - 0.06) * float(sx), s.y * 0.5, 0.0), Vector3(0.06, s.y, s.z))
+
+
+# ---------------------------------------------------------------- ESD-Werkbank (echte zweite Werkbank)
 
 func _build_esd_workbench() -> void:
-	var mdl := ModelLoader.instantiate_custom_model("decor_esd_workbench")
+	_bench = WorkbenchProp.new()
+	add_child(_bench)
+	_bench.setup(decor_id, str(DecorSpec.MODELS[item_type]))
+	_add_collider(Vector3(0.0, 0.44, 0.0), Vector3(1.58, 0.88, 0.82))
+	_bind_live(_bench)
+
+
+# ---------------------------------------------------------------- Kaltgang-Portal mit Automatiktür
+
+func _build_gate() -> void:
+	var mdl := _model()
 	if mdl != null:
-		add_child(mdl)
-		var hw_disp := HardwareMeshFactory.build_workbench_display()
-		hw_disp.position = Vector3(-0.04, 0.880, 0.06)
-		add_child(hw_disp)
-	else:
-		add_child(BuildingPropFactory.build_hardware_workbench())
-
-	var task_light := OmniLight3D.new()
-	task_light.position = Vector3(0.0, 1.68, -0.05)
-	task_light.light_color = Color(0.98, 0.97, 0.94)
-	task_light.light_energy = 0.75
-	task_light.omni_range = 2.8
-	add_child(task_light)
-
-	_add_collider(Vector3(0.0, 0.65, 0.0), Vector3(1.56, 1.30, 0.82))
-	var area := _make_interact_area(Vector3(1.5, 1.3, 0.9), {
-		"interact_type": "decor_info",
-		"decor_id": decor_id,
-		"item_type": item_type,
-	})
-	area.position = Vector3(0.0, 0.9, 0.1)
-	add_child(area)
-
-
-# ---------------------------------------------------------------- 3. Ersatzteil-Schrank & Kabeltrommel-Ständer
-
-func _build_parts_cabinet() -> void:
-	var mdl := ModelLoader.instantiate_custom_model("decor_parts_cabinet")
-	if mdl != null:
-		add_child(mdl)
-	else:
-		_box(self, Vector3(0.0, 1.02, 0.0), Vector3(1.12, 2.04, 0.56), _mat(Color(0.14, 0.16, 0.20), 0.38, 0.68))
-
-	var lbl := Label3D.new()
-	lbl.text = "ERSATZTEIL-SCHRANK\n[E] +3 Wartungs-Kits ($20)"
-	lbl.font_size = 20
-	lbl.pixel_size = 0.0020
-	lbl.outline_size = 0
-	lbl.position = Vector3(0.0, 1.98, 0.315)
-	lbl.modulate = Color(0.98, 0.86, 0.38)
-	add_child(lbl)
-	var area := _make_interact_area(Vector3(1.16, 1.9, 0.7), {
-		"interact_type": "parts_cabinet",
-		"decor_id": decor_id,
-	})
-	area.position = Vector3(0.0, 1.0, 0.15)
-	add_child(area)
-	_add_collider(Vector3(0.0, 1.02, 0.0), Vector3(1.14, 2.04, 0.58))
-
-
-# ---------------------------------------------------------------- 4. Kaltgang-Schiebetür-Portal
-
-func _build_cold_aisle_gate() -> void:
-	var mdl := ModelLoader.instantiate_custom_model("decor_cold_aisle_gate")
-	if mdl != null:
-		add_child(mdl)
-	else:
-		var dark := _mat(Color(0.12, 0.15, 0.19), 0.36, 0.72)
-		_box(self, Vector3(-1.05, 1.28, 0.0), Vector3(0.14, 2.56, 0.18), dark)
-		_box(self, Vector3( 1.05, 1.28, 0.0), Vector3(0.14, 2.56, 0.18), dark)
-		_box(self, Vector3(0.0, 2.48, 0.0), Vector3(2.24, 0.20, 0.20), dark)
-
-	_temp_lbl = Label3D.new()
-	_temp_lbl.text = "22.0 °C  •  OK"
-	_temp_lbl.font_size = 26
-	_temp_lbl.pixel_size = 0.0024
-	_temp_lbl.outline_size = 0
-	_temp_lbl.position = Vector3(0.0, 2.49, 0.118)
-	_temp_lbl.modulate = Color(0.58, 0.90, 1.0)
-	add_child(_temp_lbl)
-	# Nur die beiden Seitenpfosten blockieren — Spieler läuft frei durch die Mitte!
-	_add_collider(Vector3(-1.05, 1.28, 0.0), Vector3(0.18, 2.56, 0.20))
-	_add_collider(Vector3( 1.05, 1.28, 0.0), Vector3(0.18, 2.56, 0.20))
+		for n in ["Door_L", "Door_R"]:
+			var dn := mdl.find_child(str(n), true, false) as Node3D
+			if dn != null:
+				_doors.append(dn)
+				_door_base.append(dn.position.x)
+	_temp_lbl = _small_label(Vector3(0.0, 2.485, 0.1335), 30, 0.0024, Color(0.58, 0.90, 1.0))
 	for gx in [-1.05, 1.05]:
-		_add_info_area(Vector3(float(gx), 1.28, 0.0), Vector3(0.26, 2.5, 0.28))
+		_add_collider(Vector3(float(gx), 1.28, 0.0), Vector3(0.18, 2.56, 0.22))
+		_area("decor_info", Vector3(float(gx), 1.28, 0.0), Vector3(0.28, 2.5, 0.34))
 
 
-# ---------------------------------------------------------------- 5. Getränkeautomat & Kaffee-Lounge
+func _process_gate(delta: float) -> void:
+	var want := false
+	var nodes := get_tree().get_nodes_in_group("player_body")
+	for p in nodes:
+		var lp := to_local((p as Node3D).global_position)
+		if absf(lp.x) < 1.15 and absf(lp.z) < GATE_OPEN_DIST:
+			want = true
+			break
+	if not DecorManager.has_power():
+		want = true
+	if want != _door_want:
+		_door_want = want
+		var cam := get_viewport().get_camera_3d()
+		if cam != null and cam.global_position.distance_to(global_position) < 12.0 and DecorManager.has_power():
+			SfxManager.play("glass_door", -12.0, 1.1 if want else 0.95)
+	_door_t = move_toward(_door_t, 1.0 if want else 0.0, delta * 1.9)
+	var e := smoothstep(0.0, 1.0, _door_t)
+	for i in _doors.size():
+		_doors[i].position.x = _door_base[i] + (-GATE_SLIDE if i == 0 else GATE_SLIDE) * e
 
-func _build_vending_lounge() -> void:
-	var mdl := ModelLoader.instantiate_custom_model("decor_vending_lounge")
-	if mdl != null:
-		add_child(mdl)
+
+# ---------------------------------------------------------------- Alles andere
+
+func _build_generic() -> void:
+	var mdl := _model()
+	var s: Vector3 = DecorSpec.SIZES.get(item_type, Vector3(0.6, 1.0, 0.6))
+	var use := "decor_use"
+	match item_type:
+		"prop_parts_cabinet":
+			use = "parts_cabinet"
+			_glow = _light(Vector3(0.0, 1.55, 0.10), Color(1.0, 0.97, 0.90), 0.35, 1.2)
+		"prop_vending_lounge":
+			_glow = _light(Vector3(-0.10, 1.25, 0.62), Color(0.92, 0.96, 1.0), 0.45, 2.2)
+		"prop_cctv_monitor":
+			use = "decor_info"
+			_temp_lbl = _small_label(Vector3(0.0, 1.655, 0.1215), 30, 0.0022, Color(0.75, 0.95, 1.0))
+			_cctv_cam = Node3D.new()
+			_cctv_cam.position = Vector3(0.0, 2.40, 0.06)
+			add_child(_cctv_cam)
+			_cctv_cam.add_to_group("cctv_cam")
+			_cctv_cam.set_meta("decor_id", decor_id)
+			var head := ModelLoader.instantiate_custom_model("decor_cctv_cam_head")
+			if head != null:
+				_cctv_cam.add_child(head)
+		"prop_logo_sign":
+			_sign_lbl = _small_label(Vector3(0.0, 0.0, 0.066), 64, 0.0030, Color.WHITE)
+			_sign_lbl.visibility_range_end = 40.0
+			_glow = _light(Vector3(0.0, 0.0, 0.45), Color(0.3, 0.6, 1.0), 0.7, 2.6)
+		"prop_dehumidifier":
+			if mdl != null:
+				_tank = mdl.find_child("Tank_Level", true, false) as Node3D
+				for f in mdl.find_children("Fan_*", "Node3D", true, false):
+					if not (f.get_parent() is MeshInstance3D):
+						_fans.append(f as Node3D)
+		"prop_tool_cart":
+			_info_lbl = _small_label(Vector3(0.255, 0.925, 0.2565), 22, 0.0016, Color(0.95, 0.95, 0.92))
+	if item_type == "prop_logo_sign":
+		_area(use, Vector3(0.0, 0.0, 0.06), Vector3(s.x, s.y, 0.2))
+		return
+	_add_collider(Vector3(0.0, s.y * 0.5, 0.0), s)
+	if item_type == "prop_sofa":
+		_area(use, Vector3(0.0, 0.45, 0.08), Vector3(s.x, 0.9, s.z))
 	else:
-		_box(self, Vector3(-0.22, 0.98, 0.0), Vector3(0.96, 1.96, 0.72), _mat(Color(0.14, 0.16, 0.20), 0.36, 0.45))
-
-	var vend_glow := OmniLight3D.new()
-	vend_glow.position = Vector3(-0.34, 1.15, 0.55)
-	vend_glow.light_color = Color(0.92, 0.96, 1.0)
-	vend_glow.light_energy = 0.45
-	vend_glow.omni_range = 2.4
-	add_child(vend_glow)
-	_add_collider(Vector3(0.05, 0.98, 0.0), Vector3(1.48, 1.96, 0.74))
-	_add_info_area(Vector3(0.05, 0.98, 0.0), Vector3(1.56, 1.98, 0.82))
+		_area(use, Vector3(0.0, s.y * 0.5, 0.06), Vector3(s.x + 0.04, s.y, s.z + 0.10))
 
 
-# ---------------------------------------------------------------- 6. CCTV- & Temperatur-Stele
-
-func _build_cctv_monitor() -> void:
-	var mdl := ModelLoader.instantiate_custom_model("decor_cctv_monitor")
-	if mdl != null:
-		add_child(mdl)
-	else:
-		_box(self, Vector3(0.0, 1.18, 0.0), Vector3(0.46, 2.24, 0.22), _mat(Color(0.13, 0.15, 0.19), 0.34, 0.75))
-
-	_temp_lbl = Label3D.new()
-	_temp_lbl.text = "22.0 °C  •  OK"
-	_temp_lbl.font_size = 24
-	_temp_lbl.pixel_size = 0.0020
-	_temp_lbl.outline_size = 0
-	_temp_lbl.position = Vector3(0.0, 1.56, 0.136)
-	_temp_lbl.modulate = Color(0.92, 0.98, 1.0)
-	add_child(_temp_lbl)
-
-	# Schwenkender High-Poly PTZ-Kamerakopf ganz oben
-	_cctv_cam = Node3D.new()
-	_cctv_cam.position = Vector3(0.0, 2.38, 0.06)
-	add_child(_cctv_cam)
-	var cam_head := ModelLoader.instantiate_custom_model("decor_cctv_cam_head")
-	if cam_head != null:
-		_cctv_cam.add_child(cam_head)
-	else:
-		_box(_cctv_cam, Vector3(0.0, 0.0, 0.10), Vector3(0.12, 0.10, 0.24), _mat(Color(0.72, 0.76, 0.80), 0.28, 0.86))
-	_add_collider(Vector3(0.0, 1.15, 0.0), Vector3(0.72, 2.30, 0.48))
-	_add_info_area(Vector3(0.0, 1.15, 0.0), Vector3(0.80, 2.32, 0.56))
+func _apply_sign(d: Dictionary) -> void:
+	if _sign_lbl == null:
+		return
+	var on := DecorManager.has_power() and not bool(d.get("off", false))
+	var col: Color = DecorManager.SIGN_COLORS[clampi(int(d.get("color_i", 0)), 0, DecorManager.SIGN_COLORS.size() - 1)]
+	var txt: String = GameState.current_save_name.to_upper().left(22)
+	if _sign_lbl.text != txt:
+		_sign_lbl.text = txt
+		var w := ThemeDB.fallback_font.get_string_size(txt, HORIZONTAL_ALIGNMENT_LEFT, -1, 64).x
+		_sign_lbl.pixel_size = minf(0.0036, 1.56 / maxf(1.0, w))
+	_sign_lbl.modulate = col.lerp(Color.WHITE, 0.55) if on else Color(0.35, 0.37, 0.40)
+	_glow.visible = on
+	_glow.light_color = col
+	var m: StandardMaterial3D = _live_mats.get("LIVE_Sign")
+	if m != null:
+		m.emission = col
+		m.set_meta("e", 2.4 if on else 0.0)
+		m.emission_energy_multiplier = 2.4 if on else 0.0
 
 
 # ---------------------------------------------------------------- 7. Platzierbare 6-fach Industrie-Stromleiste

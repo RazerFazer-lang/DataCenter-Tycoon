@@ -92,7 +92,10 @@ func open_workbench() -> void:
 	var who := GameState.get_workbench_worker()
 	if who > 0 and who != multiplayer.get_unique_id():
 		return
-	prop = get_tree().get_first_node_in_group("workbench") as WorkbenchProp
+	prop = null
+	for n in get_tree().get_nodes_in_group("workbench"):
+		if (n as WorkbenchProp).workbench_id == GameState.local_bench:
+			prop = n as WorkbenchProp
 	if prop == null or prop.piece.is_empty():
 		return
 	piece = prop.piece

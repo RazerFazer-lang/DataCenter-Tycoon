@@ -749,11 +749,22 @@ func _update_turbines(delta: float) -> void:
 			r.rotation.z -= float(tr_d["speed"]) * mult * delta
 
 
+## Steht das Lieferfahrzeug im Weg? Dann halten die Autos davor an.
+func _van_blocks(node: Node3D, dir: float) -> bool:
+	if not GameState.is_active or GameState.van_phase == "idle" or GameState.van_site != "halle_nord" or GameState.van_phase == "unloading":
+		return false
+	var vp := DeliveryPlan.vehicle_pose("halle_nord", GameState.van_delivery_tier, GameState.van_phase, GameState.van_phase_time)
+	var gap := ((vp["pos"] as Vector3).x - node.position.x) * dir
+	return gap > 0.0 and gap < 15.0
+
+
 func _update_traffic(delta: float) -> void:
 	for c in _traffic_cars:
 		var node: Node3D = c["node"]
 		var dir: float = float(c["dir"])
 		var spd: float = float(c["speed"])
+		if _van_blocks(node, dir):
+			spd = 0.0
 		node.position.x += dir * spd * delta
 		if dir > 0.0 and node.position.x > CAMPUS_TRAFFIC_MAX:
 			node.position.x = CAMPUS_TRAFFIC_MIN

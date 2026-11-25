@@ -2068,7 +2068,25 @@ func _render_device_view(kind: String) -> void:
 					var lw := GameState.get_strip_load(_entity_id)
 					_add_kpi("STROMLAST", "%d / %d W" % [lw, lim], "", UIStyle.COL_RED if lw > lim else (UIStyle.COL_AMBER if float(lw) > float(lim) * 0.85 else UIStyle.COL_GREEN), float(lw) / float(maxi(lim, 1)))
 			else:
-				note = tr("Umsetzen ist kostenlos. Eingelagerte Kisten bleiben im Regal.")
+				var di: Dictionary = GameState.decor_items[_entity_id]
+				var dtype := str(di.get("item_type", ""))
+				note = tr(str((GameState.ITEM_CATALOG.get(dtype, {}) as Dictionary).get("desc", "")))
+				if ShelfSpec.is_shelf(dtype):
+					var used_s := 0
+					var n_s := ShelfSpec.unit_count(dtype)
+					for ui in n_s:
+						if ShelfSpec.owner_of(di, ui) >= 0:
+							used_s += 1
+					_add_kpi("BELEGUNG", tr("%d / %d Plätze") % [used_s, n_s], "", UIStyle.COL_AMBER if used_s >= n_s else UIStyle.COL_BLUE, float(used_s) / float(maxi(1, n_s)))
+					note += "\n" + tr("Umsetzen ist kostenlos. Eingelagerte Kisten bleiben im Regal.")
+				elif dtype == "prop_dehumidifier":
+					var tk := float(di.get("tank", 0.0))
+					_add_kpi("TANK", "%d %%" % int(tk * 100.0), "", UIStyle.COL_RED if tk >= 1.0 else (UIStyle.COL_AMBER if tk > 0.8 else UIStyle.COL_BLUE), tk)
+				elif dtype == "prop_tool_cart":
+					var kc := DecorManager.kit_count(di)
+					_add_kpi("KITS", "%d / %d" % [kc, DecorManager.TOOL_CART_SLOTS], "", UIStyle.COL_BLUE, float(kc) / float(DecorManager.TOOL_CART_SLOTS))
+				elif dtype == "prop_cold_aisle_gate":
+					_add_kpi("KALTGÄNGE", str(DecorManager.get_aisles().size()), "", UIStyle.COL_GREEN if not DecorManager.get_aisles().is_empty() else UIStyle.COL_AMBER, 0.0 if DecorManager.get_aisles().is_empty() else 1.0)
 
 	var refund := GameState.get_device_sell_value(kind, _entity_id)
 	_subtitle_lbl.text = tr("Guthaben: $%.0f   •   Restwert: $%d") % [GameState.money, refund]

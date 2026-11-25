@@ -155,7 +155,10 @@ func _process(delta: float) -> void:
 		return
 	if not multiplayer.is_server() or GameState.is_world_paused_for_empty_server():
 		return
-	tick(delta)
+	# Der Techniker arbeitet immer an der großen Werkbank, egal wo der Host gerade steht.
+	var prev: String = GameState.set_bench_ctx(GameState.MAIN_BENCH)
+	tick(delta * DecorManager.staff_speed())
+	GameState.set_bench_ctx(prev)
 
 
 func tick(delta: float) -> void:
