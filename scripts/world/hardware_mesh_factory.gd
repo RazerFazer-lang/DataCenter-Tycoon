@@ -3,7 +3,7 @@ extends RefCounted
 ## Builds authentic, realistic, non-neon 3D PC & Enterprise Server hardware assemblies:
 ## Motherboards (green/black PCB with capacitors, VRM heatsinks, CMOS battery, rear I/O),
 ## Real 3D CPUs (silver IHS + LGA socket + finned aluminum/copper heatpipe coolers),
-## Real 3D GPUs (PCIe gold fingers, matte shroud, copper pipes, dual fans / Tesla AI accelerators),
+## Real 3D GPUs (PCIe gold fingers, matte shroud, copper pipes, dual fans / AI accelerators),
 ## Real 3D RAM DIMM banks, M.2 NVMe SSDs, Hot-Swap PSUs, High-RPM Server Fan Walls,
 ## Workbench loose parts, and Handheld 3D Hardware Items!
 
@@ -493,7 +493,7 @@ static func build_gpu_card(tier: int, out_fans: Array = [], broken: bool = false
 				_box(card, Vector3(0.012, card_h + 0.006, pz), Vector3(0.016, 0.012, 0.022), plastic)
 				_box(card, Vector3(0.012, card_h + 0.0125, pz), Vector3(0.010, 0.001, 0.016), ic)
 
-	# NVLink-Brücke zwischen den beiden KI-Karten
+	# GPU-Brücke zwischen den beiden KI-Karten
 	if tier >= 3:
 		_box(root, Vector3(0.038, 0.114, 0.06), Vector3(0.072, 0.012, 0.058), steel)
 		_box(root, Vector3(0.038, 0.121, 0.06), Vector3(0.050, 0.002, 0.036), label_mat)

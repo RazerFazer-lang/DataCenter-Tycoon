@@ -786,7 +786,7 @@ static func _assembly_tasks(tasks: Array, v: Dictionary) -> void:
 		_task(tasks, "gpu_in%d" % c, "place", "gpu%d" % c, "Grafikkarte in den PCIe-Slot drücken", mb, {"gpu%d" % c: "seat"}, {"hold": 0.55, "click": "clip"})
 		_task(tasks, "gpu_screw%d" % c, "screw", "gpu_s%d" % c, LBL_SCREW, ["gpu_in%d" % c], {"gpu_s%d" % c: "in"}, _soft({"label_arg": "Grafikkarte", "qgroup": "gpu"}))
 	if cards >= 2:
-		_task(tasks, "bridge_in", "place", "bridge", "NVLink-Brücke aufstecken", ["gpu_in0", "gpu_in1"], {"bridge": "seat"}, {"click": "clip"})
+		_task(tasks, "bridge_in", "place", "bridge", "GPU-Brücke aufstecken", ["gpu_in0", "gpu_in1"], {"bridge": "seat"}, {"click": "clip"})
 	if int(v["psu"]) >= 0:
 		_task(tasks, "psu_place", "place", "psu", "Netzteil einschieben", [], {"psu": "seat"}, {"hold": 0.55})
 		_screws(tasks, "psu_in", "psu_s", 2, "Netzteil", ["psu_place"])
@@ -873,7 +873,7 @@ static func _repair_tasks(tasks: Array, ctx: Dictionary) -> void:
 					un.append("gpu_unplug%d" % c)
 				first = un
 			if cards >= 2:
-				_task(tasks, "bridge_off", "remove", "bridge", "NVLink-Brücke abziehen", first, {"bridge": "rest"})
+				_task(tasks, "bridge_off", "remove", "bridge", "GPU-Brücke abziehen", first, {"bridge": "rest"})
 				first = ["bridge_off"]
 			var outs: Array = []
 			for c in range(old_n):
@@ -886,7 +886,7 @@ static func _repair_tasks(tasks: Array, ctx: Dictionary) -> void:
 				_task(tasks, "gpu_screw%d" % c, "screw", "gpu_s%d" % c, LBL_SCREW, ["gpu_in%d" % c], {"gpu_s%d" % c: "in"}, _soft({"label_arg": "Grafikkarte", "qgroup": "gpu"}))
 				ins.append("gpu_in%d" % c)
 			if (full and new_n >= 2) or (not full and cards >= 2):
-				_task(tasks, "bridge_in", "place", "bridge", "NVLink-Brücke aufstecken", ins, {"bridge": "seat"}, {"click": "clip"})
+				_task(tasks, "bridge_in", "place", "bridge", "GPU-Brücke aufstecken", ins, {"bridge": "seat"}, {"click": "clip"})
 			if has_psu:
 				for c in range(new_n):
 					_task(tasks, "gpu_plug%d" % c, "plug", "plug_gpu%d" % c, "PCIe-Stromkabel an die Grafikkarte stecken", ["gpu_in%d" % c], {"plug_gpu%d" % c: "plugged"}, _soft())

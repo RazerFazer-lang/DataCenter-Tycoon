@@ -71,7 +71,7 @@ const BILL_KINDS := {
 	"insurance": {"vendor": "Hanse Gewerbeversicherung AG", "title": "Betriebsversicherung", "icon": "invoice", "due_days": 5},
 	"grid_fee": {"vendor": "Stadtwerke Netz GmbH", "title": "Netzentgelt", "icon": "power", "due_days": 5},
 	"maintenance": {"vendor": "KälteTec Service GmbH", "title": "Wartungsvertrag Klima & USV", "icon": "temp", "due_days": 6},
-	"license": {"vendor": "Nordlicht Software AG", "title": "Server-Lizenzen", "icon": "windows", "due_days": 5},
+	"license": {"vendor": "Nordlicht Software AG", "title": "Server-Lizenzen", "icon": "verion", "due_days": 5},
 }
 
 const LOAN_OFFERS := [
@@ -359,7 +359,8 @@ func get_credit_limit() -> int:
 
 ## Faktor auf den Kreditrahmen durch die Firmenstufe (Stufe 1 = 1.0).
 func get_credit_level_factor() -> float:
-	return 1.0 + CREDIT_LIMIT_LEVEL_BONUS * float(maxi(GameState.get_company_level() - 1, 0))
+	var steps := float(maxi(GameState.get_company_level() - 1, 0))
+	return 1.0 + CREDIT_LIMIT_LEVEL_BONUS * (minf(steps, 4.0) + maxf(0.0, steps - 4.0) * 0.5)
 
 
 func get_free_credit() -> float:

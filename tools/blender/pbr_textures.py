@@ -298,7 +298,7 @@ def _build_mainboard_arrays(variant: str = "green", damaged: bool = False) -> di
     micro = fbm_tile(H, W, 32, 32, octaves=4, seed=11 if variant == "green" else 23)
 
     if variant == "green":
-        # Authentisches tiefes Enterprise-Server-Smaragdgruen (Supermicro/Intel Server Board)
+        # Authentisches tiefes Enterprise-Server-Smaragdgruen
         base_col = np.array([0.048, 0.228, 0.114], dtype=np.float32)
         plane_col = np.array([0.078, 0.305, 0.154], dtype=np.float32)
         trace_col = np.array([0.150, 0.455, 0.232], dtype=np.float32)
@@ -770,7 +770,7 @@ def gen_honeycomb_pbr(cache_dir: str, name: str = "honeycomb_steel",
 
 
 # ---------------------------------------------------------------------------
-# 5. Netzteil-Typenschild (1024x512, 80 PLUS PLATINUM / GOLD + Tabelle + Barcode)
+# 5. Netzteil-Typenschild (1024x512, Effizienz PLATIN / GOLD + Tabelle + Barcode)
 # ---------------------------------------------------------------------------
 
 def gen_psu_label_pbr(cache_dir: str, name: str = "psu_label_std",
@@ -792,12 +792,12 @@ def gen_psu_label_pbr(cache_dir: str, name: str = "psu_label_std",
 
     # Kopfzeile Text
     draw_text(albedo, 40, 38, "DCT-POWER ENTERPRISE", np.array([0.94, 0.95, 0.97]), scale=4)
-    draw_text(albedo, 40, 82, f"SERVER PSU  MODEL DPS-{watt_text}AB  ACTIVE PFC", accent, scale=3)
+    draw_text(albedo, 40, 82, f"SERVER PSU  MODEL DCT-{watt_text}AB  ACTIVE PFC", accent, scale=3)
 
-    # 80 PLUS Plakette rechts oben (sauber zentriert mit Innenabstand)
+    # Effizienz-Plakette rechts oben (sauber zentriert mit Innenabstand)
     fill_rect(albedo, W - 232, 24, W - 26, 114, np.array([0.95, 0.95, 0.95]))
     fill_rect(albedo, W - 232, 78, W - 26, 114, accent)
-    draw_text(albedo, W - 214, 38, "80 PLUS", np.array([0.08, 0.09, 0.10]), scale=4)
+    draw_text(albedo, W - 206, 42, "EFFIZIENZ", np.array([0.08, 0.09, 0.10]), scale=3)
     draw_text(albedo, W - 204, 86, rating, np.array([0.06, 0.06, 0.08]), scale=3)
 
     # Elektrische Spezifikationstabelle
@@ -849,7 +849,7 @@ def gen_psu_label_pbr(cache_dir: str, name: str = "psu_label_std",
     draw_text(albedo, 405, 458, "S/N: DCT2611-884920-042", dark, scale=2)
 
     draw_text(albedo, 815, 396, "CE  FC", dark, scale=4)
-    draw_text(albedo, 815, 444, "ROHS  TUV", dark, scale=2)
+    draw_text(albedo, 815, 444, "ROHS", dark, scale=2)
 
     paper = fbm_tile(H, W, 32, 64, octaves=2, seed=55)
     albedo *= (0.96 + 0.05 * paper)[:, :, None]
@@ -1031,10 +1031,10 @@ def gen_cpu_ihs_pbr(cache_dir: str) -> dict:
         albedo[:, :, c] = np.clip(b * (0.93 + 0.12 * brush), 0, 1)
 
     etch = np.zeros((H, W), dtype=np.float32)
-    draw_text(etch, 80, 110, "DCT XEON-PRO", 1.0, scale=4)
-    draw_text(etch, 80, 165, "GOLD 6548Y+  32C", 1.0, scale=3)
+    draw_text(etch, 80, 110, "DCT KERNOVA", 1.0, scale=4)
+    draw_text(etch, 80, 165, "SERVER V32+  32C", 1.0, scale=3)
     draw_text(etch, 80, 215, "SRN72  3.20GHZ", 1.0, scale=3)
-    draw_text(etch, 80, 265, "X428G914  LGA4677", 1.0, scale=2)
+    draw_text(etch, 80, 265, "X428G914  SOCKET K1", 1.0, scale=2)
     # 2D-DataMatrix-Block
     rng = np.random.default_rng(709)
     for ry in range(10):
@@ -1191,7 +1191,7 @@ def generate_all(cache_dir: str) -> dict:
         "honeycomb_steel": gen_honeycomb_pbr(cache_dir, "honeycomb_steel", (0.58, 0.60, 0.63), hole_ratio=0.335),
         "honeycomb_dark": gen_honeycomb_pbr(cache_dir, "honeycomb_dark", (0.17, 0.18, 0.20), hole_ratio=0.345),
         "psu_label_std": gen_psu_label_pbr(cache_dir, "psu_label_std", "850W", "GOLD"),
-        "psu_label_pro": gen_psu_label_pbr(cache_dir, "psu_label_pro", "1600W", "PLATINUM"),
+        "psu_label_pro": gen_psu_label_pbr(cache_dir, "psu_label_pro", "1600W", "PLATIN"),
         "esd_mat": gen_esd_mat_pbr(cache_dir),
         "workbench_top": gen_workbench_pbr(cache_dir),
         "cable_sleeve": gen_cable_sleeve_pbr(cache_dir),

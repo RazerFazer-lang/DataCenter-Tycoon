@@ -403,7 +403,7 @@ func _rebuild_saves_list() -> void:
 	var saves := SaveManager.list_saves()
 	if saves.is_empty():
 		var empty_lbl := Label.new()
-		empty_lbl.text = tr("Noch keine Spielstände vorhanden.") + "\n" + tr("Starte ein neues Spiel und speichere im Pause-Menü [ESC] oder am Windows-PC!")
+		empty_lbl.text = tr("Noch keine Spielstände vorhanden.") + "\n" + tr("Starte ein neues Spiel und speichere im Pause-Menü [ESC] oder am PC!")
 		empty_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 		UIStyle.style_label(empty_lbl, 13, UIStyle.COL_TEXT_SUB)
 		_saves_list.add_child(empty_lbl)

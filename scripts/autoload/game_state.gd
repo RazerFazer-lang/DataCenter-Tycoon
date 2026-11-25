@@ -165,10 +165,10 @@ const DELIVERY_ZONE_MAX_CRATES := 16
 const DELIVERY_FEES := {1: 15, 2: 45, 3: 95}
 const DELIVERY_EXPRESS_SURCHARGE := 35
 const DELIVERY_SLOTS_HOURS: Array[int] = [8, 12, 16, 20]
-# 3 Liefer-Kategorien: Stufe 1 (Sprinter, 1 Fahrer), Stufe 2 (Kastenwagen 7,5t, 2 Mitarbeiter), Stufe 3 (LKW 18t, 3 Mitarbeiter)
+# 3 Liefer-Kategorien: Stufe 1 (Lieferwagen, 1 Fahrer), Stufe 2 (Kastenwagen 7,5t, 2 Mitarbeiter), Stufe 3 (LKW 18t, 3 Mitarbeiter)
 const DELIVERY_TIER_META := {
 	1: {
-		"name": "Express-Sprinter",
+		"name": "Express-Lieferwagen",
 		"staff": 1,
 		"max_per_trip": 4,
 		"speed_mult": 1.0,
@@ -299,112 +299,112 @@ const ITEM_CATALOG := {
 	},
 	# --- Mainboards: werden im Rack-Menü in einen freien Einschub gekauft und eingebaut ---
 	"mb_h110m_srv": {
-		"name": "Gigabyte GA-H110M Mini-Server",
+		"name": "Bordwerk Mini M110",
 		"category": "module", "mainboard": true, "mb_cat": "entry", "chassis": "web_server", "form": "1U",
 		"price": 120, "watts": 35, "compute": 3, "base_compute": 3, "heat": 1.2, "revenue_bonus": 0.0,
 		"color": Color(0.36, 0.62, 0.86),
 		"desc": "Günstiges Single-Sockel-Board • 2 RAM-Bänke • Ideal für den ersten Webserver",
 	},
 	"mb_b450m_pro4": {
-		"name": "ASRock B450M Pro4 Server",
+		"name": "Bordwerk Pro B45",
 		"category": "module", "mainboard": true, "mb_cat": "entry", "chassis": "web_server", "form": "1U",
 		"price": 160, "watts": 40, "compute": 4, "base_compute": 4, "heat": 1.4, "revenue_bonus": 0.0,
 		"color": Color(0.36, 0.62, 0.86),
-		"desc": "AM4-Board • 4 RAM-Bänke • M.2-Steckplatz für schnelle NVMe-SSDs",
+		"desc": "Einstiegs-Board • 4 RAM-Bänke • M.2-Steckplatz für schnelle NVMe-SSDs",
 	},
 	"mb_x570d4u": {
-		"name": "ASRock Rack X570D4U",
+		"name": "Bordwerk Rack X57",
 		"category": "module", "mainboard": true, "mb_cat": "entry", "chassis": "web_server", "form": "1U",
 		"price": 230, "watts": 45, "compute": 5, "base_compute": 5, "heat": 1.6, "revenue_bonus": 0.02,
 		"color": Color(0.36, 0.62, 0.86),
-		"desc": "Server-AM4 mit Fernwartung (IPMI) • ECC-RAM • +2% Einnahmen",
+		"desc": "Server-Board mit Fernwartung (IPMI) • ECC-RAM • +2% Einnahmen",
 	},
 	"mb_x11scl_f": {
-		"name": "Supermicro X11SCL-F",
+		"name": "Bordwerk Server S11",
 		"category": "module", "mainboard": true, "mb_cat": "entry", "chassis": "web_server", "form": "1U",
 		"price": 260, "watts": 40, "compute": 5, "base_compute": 5, "heat": 1.5, "revenue_bonus": 0.03,
 		"color": Color(0.36, 0.62, 0.86),
-		"desc": "Xeon-E-Board mit IPMI • Sehr stabil • +3% Einnahmen",
+		"desc": "Kernova-Board mit IPMI • Sehr stabil • +3% Einnahmen",
 	},
 	"mb_x11dpi_n": {
-		"name": "Supermicro X11DPi-N (Dual-Sockel)",
+		"name": "Bordwerk Duo S11 (Dual-Sockel)",
 		"category": "module", "mainboard": true, "mb_cat": "server", "chassis": "web_server", "form": "1U",
 		"price": 380, "watts": 60, "compute": 7, "base_compute": 7, "heat": 2.2, "revenue_bonus": 0.04,
 		"color": Color(0.52, 0.48, 0.90),
-		"desc": "2 Xeon-Sockel • 16 RAM-Bänke • Für Webhosting mit vielen Nutzern",
+		"desc": "2 Kernova-Sockel • 16 RAM-Bänke • Für Webhosting mit vielen Nutzern",
 	},
 	"mb_romed8_2t": {
-		"name": "ASRock Rack ROMED8-2T",
+		"name": "Bordwerk Rack R8",
 		"category": "module", "mainboard": true, "mb_cat": "server", "chassis": "web_server", "form": "1U",
 		"price": 520, "watts": 70, "compute": 9, "base_compute": 9, "heat": 2.6, "revenue_bonus": 0.05,
 		"color": Color(0.52, 0.48, 0.90),
-		"desc": "EPYC-Board • 8 RAM-Kanäle • 2× 10-GbE • +5% Einnahmen",
+		"desc": "Quarvex-Board • 8 RAM-Kanäle • 2× 10-GbE • +5% Einnahmen",
 	},
 	"mb_mz73_lm0": {
-		"name": "Gigabyte MZ73-LM0 (Dual EPYC)",
+		"name": "Bordwerk Duo R73 (Dual Quarvex)",
 		"category": "module", "mainboard": true, "mb_cat": "server", "chassis": "web_server", "form": "1U",
 		"price": 780, "watts": 85, "compute": 11, "base_compute": 11, "heat": 3.0, "revenue_bonus": 0.06,
 		"color": Color(0.52, 0.48, 0.90),
-		"desc": "2 EPYC-Sockel • 24 RAM-Bänke • Für Datenbanken & große Kunden",
+		"desc": "2 Quarvex-Sockel • 24 RAM-Bänke • Für Datenbanken & große Kunden",
 	},
 	"mb_x13dei_t": {
-		"name": "Supermicro X13DEI-T (Dual Xeon)",
+		"name": "Bordwerk Duo S13 (Dual Kernova)",
 		"category": "module", "mainboard": true, "mb_cat": "server", "chassis": "web_server", "form": "1U",
 		"price": 950, "watts": 90, "compute": 12, "base_compute": 12, "heat": 3.2, "revenue_bonus": 0.07,
 		"color": Color(0.52, 0.48, 0.90),
-		"desc": "Aktuelle Dual-Xeon-Plattform • DDR5 • +7% Einnahmen",
+		"desc": "Aktuelle Dual-Kernova-Plattform • DDR5 • +7% Einnahmen",
 	},
 	"mb_x10sdv_4c": {
-		"name": "Supermicro X10SDV-4C NAS",
+		"name": "Bordwerk NAS N10",
 		"category": "module", "mainboard": true, "mb_cat": "storage", "chassis": "storage_server", "form": "2U",
 		"price": 240, "watts": 35, "compute": 5, "base_compute": 5, "heat": 1.3, "revenue_bonus": 0.08,
 		"color": Color(0.24, 0.68, 0.48),
 		"desc": "Sparsames NAS-Board • 6 SATA-Ports • +8% Einnahmen bei Speicher",
 	},
 	"mb_x11ssh_ctf": {
-		"name": "Supermicro X11SSH-CTF (SAS)",
+		"name": "Bordwerk Speicher N11 (SAS)",
 		"category": "module", "mainboard": true, "mb_cat": "storage", "chassis": "storage_server", "form": "2U",
 		"price": 340, "watts": 50, "compute": 6, "base_compute": 6, "heat": 1.8, "revenue_bonus": 0.09,
 		"color": Color(0.24, 0.68, 0.48),
 		"desc": "SAS-Controller onboard • 8 Hot-Swap-Laufwerke • +9% Einnahmen",
 	},
 	"mb_h12ssl_nt": {
-		"name": "Supermicro H12SSL-NT Storage",
+		"name": "Bordwerk Speicher N12",
 		"category": "module", "mainboard": true, "mb_cat": "storage", "chassis": "storage_server", "form": "2U",
 		"price": 520, "watts": 65, "compute": 8, "base_compute": 8, "heat": 2.3, "revenue_bonus": 0.11,
 		"color": Color(0.24, 0.68, 0.48),
-		"desc": "EPYC-Storage-Board • viele NVMe-Lanes • +11% Einnahmen",
+		"desc": "Quarvex-Storage-Board • viele NVMe-Lanes • +11% Einnahmen",
 	},
 	"mb_genoad8x_2t": {
-		"name": "ASRock Rack GENOAD8X-2T",
+		"name": "Bordwerk Speicher N8X",
 		"category": "module", "mainboard": true, "mb_cat": "storage", "chassis": "storage_server", "form": "2U",
 		"price": 860, "watts": 80, "compute": 10, "base_compute": 10, "heat": 2.8, "revenue_bonus": 0.14,
 		"color": Color(0.24, 0.68, 0.48),
 		"desc": "All-Flash-Plattform • DDR5 • +14% Einnahmen bei Cloud-Speicher",
 	},
 	"mb_ws_x299_sage": {
-		"name": "ASUS WS X299 SAGE (4× PCIe)",
+		"name": "Bordwerk Grafik G4 (4× PCIe)",
 		"category": "module", "mainboard": true, "mb_cat": "gpu", "chassis": "gpu_server", "form": "4U",
 		"price": 420, "watts": 70, "compute": 10, "base_compute": 10, "heat": 2.6, "revenue_bonus": 0.03,
 		"color": Color(0.84, 0.58, 0.18),
 		"desc": "4 PCIe-x16-Plätze • Für Streaming & Render-Server",
 	},
 	"mb_trx50_sage": {
-		"name": "ASUS Pro WS TRX50-SAGE",
+		"name": "Bordwerk Grafik G3",
 		"category": "module", "mainboard": true, "mb_cat": "gpu", "chassis": "gpu_server", "form": "4U",
 		"price": 680, "watts": 85, "compute": 12, "base_compute": 12, "heat": 3.0, "revenue_bonus": 0.05,
 		"color": Color(0.84, 0.58, 0.18),
-		"desc": "Threadripper-Board • 3 GPU-Plätze • +5% Einnahmen",
+		"desc": "Quarvex-Board • 3 GPU-Plätze • +5% Einnahmen",
 	},
 	"mb_wrx90e_sage": {
-		"name": "ASUS Pro WS WRX90E-SAGE",
+		"name": "Bordwerk Grafik G7",
 		"category": "module", "mainboard": true, "mb_cat": "gpu", "chassis": "gpu_server", "form": "4U",
 		"price": 980, "watts": 100, "compute": 14, "base_compute": 14, "heat": 3.6, "revenue_bonus": 0.07,
 		"color": Color(0.84, 0.58, 0.18),
-		"desc": "Threadripper PRO • 7 PCIe-5.0-Plätze • Für KI-Hosting",
+		"desc": "Quarvex Werkstatt • 7 PCIe-5.0-Plätze • Für KI-Hosting",
 	},
 	"mb_hgx_8gpu": {
-		"name": "NVIDIA HGX 8-GPU Baseboard",
+		"name": "Bordwerk KI-Basis 8-GPU",
 		"category": "module", "mainboard": true, "mb_cat": "gpu", "chassis": "gpu_server", "form": "4U",
 		"price": 1450, "watts": 130, "compute": 18, "base_compute": 18, "heat": 4.4, "revenue_bonus": 0.10,
 		"color": Color(0.84, 0.58, 0.18),
@@ -440,6 +440,54 @@ const ITEM_CATALOG := {
 		"heat": -40.0,
 		"color": Color(0.28, 0.76, 0.98),
 		"desc": "Goldis-Wärmepumpe Pro (Außengerät) | -40°C | 540W | Nur auf dem Rasen rechts vom Garagentor, braucht ein Goldis Innengerät",
+	},
+	"cool_k90": {
+		"name": "Goldis Kaltwassersatz K-90",
+		"category": "placeable",
+		"price": 2400,
+		"unlock_level": 2,
+		"watts": 1050,
+		"compute": 0,
+		"heat": -90.0,
+		"color": Color(0.30, 0.50, 0.62),
+		"desc": "Profi-Außengerät mit vier Lüftern | -90°C | 1.050W | Rasen rechts vom Garagentor, braucht ein Goldis Innengerät",
+	},
+	"cool_inrow": {
+		"name": "Goldis Reihenkühler R-130",
+		"category": "placeable",
+		"price": 5500,
+		"unlock_level": 3,
+		"watts": 1350,
+		"compute": 0,
+		"heat": -130.0,
+		"relief": 6.0,
+		"relief_radius": 2.2,
+		"color": Color(0.16, 0.42, 0.60),
+		"desc": "Steht drinnen neben den Racks | -130°C | 1.350W | Kein Innengerät nötig, nahe Racks laufen 6°C kühler",
+	},
+	"cool_tower": {
+		"name": "Goldis Kälteturm T-220",
+		"category": "placeable",
+		"price": 9800,
+		"unlock_level": 4,
+		"watts": 2050,
+		"compute": 0,
+		"heat": -220.0,
+		"color": Color(0.46, 0.54, 0.60),
+		"desc": "Großer Rückkühlturm mit Dachlüftern | -220°C | 2.050W | Rasen rechts vom Garagentor, braucht ein Goldis Innengerät",
+	},
+	"cool_cdu": {
+		"name": "Goldis Flüssigkühlung F-380",
+		"category": "placeable",
+		"price": 18000,
+		"unlock_level": 5,
+		"watts": 3000,
+		"compute": 0,
+		"heat": -380.0,
+		"relief": 12.0,
+		"relief_radius": 4.5,
+		"color": Color(0.10, 0.48, 0.78),
+		"desc": "Wasserkreislauf für die ganze Rack-Reihe, steht drinnen | -380°C | 3.000W | Kein Innengerät nötig, nahe Racks laufen 12°C kühler",
 	},
 	"indoor_unit": {
 		"name": "Goldis Innengerät",
@@ -688,8 +736,8 @@ const COMPONENT_CATALOG := {
 		"label": "Prozessor (CPU)",
 		"icon": "🧠",
 		"tiers": [
-			{"name": "Standard Xeon 8-Core", "cost": 0, "compute": 0, "watts": 0, "heat": 0.0, "watt_mult": 1.0, "fault_mult": 1.0},
-			{"name": "Multi-Core EPYC 32C", "cost": 220, "compute": 10, "watts": 60, "heat": 2.0, "watt_mult": 1.0, "fault_mult": 1.0},
+			{"name": "Kernova 8-Core", "cost": 0, "compute": 0, "watts": 0, "heat": 0.0, "watt_mult": 1.0, "fault_mult": 1.0},
+			{"name": "Quarvex Multi-Core 32C", "cost": 220, "compute": 10, "watts": 60, "heat": 2.0, "watt_mult": 1.0, "fault_mult": 1.0},
 			{"name": "Dual-Socket Pro 96C", "cost": 520, "compute": 24, "watts": 140, "heat": 4.5, "watt_mult": 1.0, "fault_mult": 0.95},
 			{"name": "Enterprise 192-Core", "cost": 1150, "compute": 52, "watts": 240, "heat": 8.0, "watt_mult": 1.0, "fault_mult": 0.90},
 		],
@@ -699,9 +747,9 @@ const COMPONENT_CATALOG := {
 		"icon": "🎮",
 		"tiers": [
 			{"name": "Integrierte Grafik", "cost": 0, "compute": 0, "watts": 0, "heat": 0.0, "watt_mult": 1.0, "fault_mult": 1.0},
-			{"name": "RTX Compute 4090", "cost": 340, "compute": 18, "watts": 180, "heat": 6.0, "watt_mult": 1.0, "fault_mult": 1.0},
+			{"name": "Prismor Compute 49", "cost": 340, "compute": 18, "watts": 180, "heat": 6.0, "watt_mult": 1.0, "fault_mult": 1.0},
 			{"name": "Dual Tensor AI-GPU", "cost": 780, "compute": 44, "watts": 340, "heat": 11.0, "watt_mult": 1.0, "fault_mult": 1.0},
-			{"name": "Quad H200 AI-Cluster", "cost": 1650, "compute": 95, "watts": 560, "heat": 18.0, "watt_mult": 1.0, "fault_mult": 1.0},
+			{"name": "Vierfach-KI-Cluster", "cost": 1650, "compute": 95, "watts": 560, "heat": 18.0, "watt_mult": 1.0, "fault_mult": 1.0},
 		],
 	},
 	"ram": {
@@ -721,7 +769,7 @@ const COMPONENT_CATALOG := {
 			{"name": "SATA SSD Standard", "cost": 0, "compute": 0, "watts": 0, "heat": 0.0, "watt_mult": 1.0, "fault_mult": 1.0},
 			{"name": "NVMe Gen4 RAID", "cost": 150, "compute": 4, "watts": 15, "heat": 0.4, "watt_mult": 1.0, "fault_mult": 0.80},
 			{"name": "Enterprise Gen5 NVMe", "cost": 380, "compute": 10, "watts": 30, "heat": 0.8, "watt_mult": 1.0, "fault_mult": 0.58},
-			{"name": "Optane Ultra-Array", "cost": 820, "compute": 22, "watts": 45, "heat": 1.2, "watt_mult": 1.0, "fault_mult": 0.35},
+			{"name": "Ultra-Array", "cost": 820, "compute": 22, "watts": 45, "heat": 1.2, "watt_mult": 1.0, "fault_mult": 0.35},
 		],
 	},
 	"cooling": {
@@ -729,7 +777,7 @@ const COMPONENT_CATALOG := {
 		"icon": "❄️",
 		"tiers": [
 			{"name": "Standard-Lüfter", "cost": 0, "compute": 0, "watts": 0, "heat": 0.0, "watt_mult": 1.0, "fault_mult": 1.0},
-			{"name": "High-Airflow Noctua", "cost": 140, "compute": 0, "watts": 15, "heat": -4.0, "watt_mult": 1.0, "fault_mult": 0.90},
+			{"name": "High-Airflow Windhall", "cost": 140, "compute": 0, "watts": 15, "heat": -4.0, "watt_mult": 1.0, "fault_mult": 0.90},
 			{"name": "Vapor-Chamber Pro", "cost": 340, "compute": 0, "watts": 30, "heat": -9.0, "watt_mult": 1.0, "fault_mult": 0.78},
 			{"name": "Direct-Liquid Coldplate", "cost": 720, "compute": 0, "watts": 45, "heat": -16.0, "watt_mult": 1.0, "fault_mult": 0.62},
 		],
@@ -738,9 +786,9 @@ const COMPONENT_CATALOG := {
 		"label": "Netzteil (PSU)",
 		"icon": "🔌",
 		"tiers": [
-			{"name": "80+ Bronze (Standard)", "cost": 0, "compute": 0, "watts": 0, "heat": 0.0, "watt_mult": 1.0, "fault_mult": 1.0},
-			{"name": "80+ Gold Effizienz", "cost": 160, "compute": 0, "watts": 0, "heat": -1.0, "watt_mult": 0.88, "fault_mult": 0.90},
-			{"name": "80+ Platinum Pro", "cost": 390, "compute": 0, "watts": 0, "heat": -2.2, "watt_mult": 0.76, "fault_mult": 0.75},
+			{"name": "Effizienz Bronze (Standard)", "cost": 0, "compute": 0, "watts": 0, "heat": 0.0, "watt_mult": 1.0, "fault_mult": 1.0},
+			{"name": "Effizienz Gold Plus", "cost": 160, "compute": 0, "watts": 0, "heat": -1.0, "watt_mult": 0.88, "fault_mult": 0.90},
+			{"name": "Effizienz Platin Pro", "cost": 390, "compute": 0, "watts": 0, "heat": -2.2, "watt_mult": 0.76, "fault_mult": 0.75},
 			{"name": "Redundant Titanium", "cost": 850, "compute": 0, "watts": 0, "heat": -3.5, "watt_mult": 0.65, "fault_mult": 0.55},
 		],
 	},
@@ -820,12 +868,12 @@ const COMPANY_VALUE_MILESTONES := [
 ]
 ## Anteil des Kaufpreises, mit dem verbaute Hardware in den Firmenwert eingeht.
 const COMPANY_HARDWARE_VALUE_FACTOR := 0.6
-## Firmenstufen: Mindest-Firmenwert für Stufe 1 bis 5. Die Stufe schaltet Bauteile, Pro-Rack, Halle Nord & Boni frei.
-const COMPANY_LEVEL_THRESHOLDS := [0, 24000, 72000, 180000, 400000]
+## Firmenstufen: Mindest-Firmenwert für Stufe 1 bis 10. Die Stufe schaltet Bauteile, Pro-Rack, Halle Nord & Boni frei.
+const COMPANY_LEVEL_THRESHOLDS := [0, 24000, 72000, 180000, 400000, 750000, 1300000, 2100000, 3300000, 5000000]
 const COMPANY_LEVEL_BENEFITS := {
 	1: {
 		"rev_mult": 1.00, "discount": 0.00, "fail_mult": 1.00, "delivery_bonus": 0, "max_contracts": 4,
-		"summary": "Start-Setup: Standard-Rack, Express-Sprinter, Basis-Hardware",
+		"summary": "Start-Setup: Standard-Rack, Express-Lieferwagen, Basis-Hardware",
 	},
 	2: {
 		"rev_mult": 1.06, "discount": 0.05, "fail_mult": 0.90, "delivery_bonus": 4, "max_contracts": 6,
@@ -836,12 +884,32 @@ const COMPANY_LEVEL_BENEFITS := {
 		"summary": "Pro-Rack (6U) & Großstandort Halle Nord (240 m²) freigeschaltet • +14% Einnahmen • -10% Kosten • 18t-LKW & 24 Plätze",
 	},
 	4: {
-		"rev_mult": 1.24, "discount": 0.15, "fail_mult": 0.72, "delivery_bonus": 12, "max_contracts": 11,
-		"summary": "GPU-Server freigeschaltet • +24% Einnahmen • -15% Kosten • 28 Lieferplätze • -28% Ausfallrate • 11 Verträge",
+		"rev_mult": 1.20, "discount": 0.13, "fail_mult": 0.76, "delivery_bonus": 10, "max_contracts": 10,
+		"summary": "GPU-Server & Kälteturm freigeschaltet • +20% Einnahmen • -13% Kosten • 26 Lieferplätze • -24% Ausfallrate • 10 Verträge",
 	},
 	5: {
-		"rev_mult": 1.36, "discount": 0.20, "fail_mult": 0.62, "delivery_bonus": 16, "max_contracts": 15,
-		"summary": "Enterprise-Hyperscaler • +36% Einnahmen • -20% Kosten • 32 Lieferplätze • -38% Ausfallrate • 15 Verträge",
+		"rev_mult": 1.25, "discount": 0.15, "fail_mult": 0.72, "delivery_bonus": 12, "max_contracts": 11,
+		"summary": "Flüssigkühlung freigeschaltet • +25% Einnahmen • -15% Kosten • 28 Lieferplätze • -28% Ausfallrate • 11 Verträge",
+	},
+	6: {
+		"rev_mult": 1.29, "discount": 0.17, "fail_mult": 0.69, "delivery_bonus": 14, "max_contracts": 12,
+		"summary": "Regionaler Marktführer • +29% Einnahmen • -17% Kosten • 30 Lieferplätze • -31% Ausfallrate • 12 Verträge",
+	},
+	7: {
+		"rev_mult": 1.33, "discount": 0.19, "fail_mult": 0.66, "delivery_bonus": 16, "max_contracts": 13,
+		"summary": "Landesweiter Betreiber • +33% Einnahmen • -19% Kosten • 32 Lieferplätze • -34% Ausfallrate • 13 Verträge",
+	},
+	8: {
+		"rev_mult": 1.37, "discount": 0.21, "fail_mult": 0.64, "delivery_bonus": 18, "max_contracts": 14,
+		"summary": "Cloud-Konzern • +37% Einnahmen • -21% Kosten • 34 Lieferplätze • -36% Ausfallrate • 14 Verträge",
+	},
+	9: {
+		"rev_mult": 1.41, "discount": 0.23, "fail_mult": 0.62, "delivery_bonus": 20, "max_contracts": 15,
+		"summary": "Europäischer Konzern • +41% Einnahmen • -23% Kosten • 36 Lieferplätze • -38% Ausfallrate • 15 Verträge",
+	},
+	10: {
+		"rev_mult": 1.46, "discount": 0.25, "fail_mult": 0.60, "delivery_bonus": 24, "max_contracts": 17,
+		"summary": "Hyperscaler • +46% Einnahmen • -25% Kosten • 40 Lieferplätze • -40% Ausfallrate • 17 Verträge",
 	},
 }
 ## Benötigte Firmenstufe je Mainboard-Kategorie.
@@ -868,22 +936,11 @@ var fuse_stock: int = 0
 const POWER_FUSE_SLOT := 1
 const OLD_FUSE_ITEM := "old_fuse"
 var power_fuse_stock: int = 0
-## Client-Kopie: Die Drehsicherung ist bestellt und mit dem Sprinter unterwegs.
+## Client-Kopie: Die Drehsicherung ist bestellt und mit dem Lieferwagen unterwegs.
 var power_fuse_on_way_synced: bool = false
 const POWER_FUSE_ACC := "acc:power_fuse"
-## Steckleisten am Stromkasten und Netzwerk-Verteiler am Router (im Shop unter "Klima & USV").
-## Ohne Zubehör: 1 Steckdose am Stromkasten, 2 Netzwerkdosen am Router.
+## Der Stromkasten der Start-Garage hat genau eine Steckdose, alles Weitere läuft über Stromleisten.
 const BREAKER_BASE_SOCKETS := 1
-const ROUTER_BASE_PORTS := 2
-const POWER_STRIP_PRICE := 60
-const POWER_STRIP_EXTRA := 3 # 4er-Leiste belegt selbst eine Dose: +3
-const POWER_STRIP_MAX := 8
-const NET_HUB_PRICE := 90
-const NET_HUB_EXTRA := 3 # 4-Port-Verteiler belegt selbst einen Port: +3
-const NET_HUB_MAX := 8
-var power_strips: int = 0
-var net_hubs: int = 0
-signal accessories_changed
 var ups_backup_active: bool = false
 var avg_ups_charge: float = 0.0
 ## Netzausfall der Stadtwerke: Restdauer in Sekunden (0 = Netz da). Währenddessen ist breaker_on false.
@@ -1029,7 +1086,7 @@ var contracts: Dictionary = {}
 var parts_inventory: Dictionary = {} # part_id -> int count in player's warehouse!
 ## Gemeinsamer Warenkorb für PC-Shop & Rack-Konfigurator (lokal pro Spieler).
 var shopping_cart: Array = []
-## Offene Bausatz-Bestellungen, die gerade im Sprinter liegen (order_id -> build_data).
+## Offene Bausatz-Bestellungen, die gerade im Lieferwagen liegen (order_id -> build_data).
 var pending_build_orders: Dictionary = {}
 ## Freie Stellplätze im 3D-Lagerregal: "shelf_0:0" .. "shelf_0:11" -> crate_data Dictionary.
 const STORAGE_SHELF_SLOTS := 12
@@ -1044,7 +1101,7 @@ const SCREW_BOX_PRICE := 14
 const SCREW_BOX_COUNT := 100
 const PASTE_TUBE_PRICE := 9
 const PASTE_TUBE_USES := 10.0
-## Profi-Werkzeug für die Werkbank (einmalig, kommt per Sprinter). "needs" = vorher nötig.
+## Profi-Werkzeug für die Werkbank (einmalig, kommt per Lieferwagen). "needs" = vorher nötig.
 const BENCH_TOOLS := {
 	"akku": {"name": "Akkuschrauber", "price": 180, "desc": "Schraubt fast doppelt so schnell – rein und raus."},
 	"torque": {"name": "Drehmoment-Kupplung", "price": 320, "needs": "akku", "desc": "Aufsatz für den Akkuschrauber: stoppt genau richtig, nichts wird locker oder überdreht."},
@@ -1067,16 +1124,21 @@ var reputation: float = 10.0
 var _last_rep_tier: int = -1
 const REPUTATION_START := 10.0
 const MAX_SERVICES_PER_RACK := 4
-const REPUTATION_LABELS: Array[String] = ["Unbekannt", "Lokal bekannt", "Gefragt", "Etabliert", "Marktführer"]
-const REPUTATION_THRESHOLDS: Array[float] = [15.0, 35.0, 60.0, 85.0]
+const REPUTATION_LABELS: Array[String] = ["Unbekannt", "Lokal bekannt", "Geschätzt", "Gefragt", "Etabliert", "Renommiert", "Branchengröße", "Marktführer"]
+const REPUTATION_THRESHOLDS: Array[float] = [15.0, 27.0, 40.0, 53.0, 66.0, 79.0, 91.0]
 ## Bedarf pro Nutzer, der bei mehreren Diensten nach Nutzerzahl gemittelt wird.
 const _BLEND_KEYS: Array[String] = ["ram_gb_per_user", "cpu_per_user", "gpu_per_user", "storage_tb_per_user", "mbps_per_user", "pay_per_user"]
 var checklist_opened_pc: bool = false
 var checklist_ordered_anything: bool = false
 var checklist_dismissed: bool = false
-var extinguisher_held_by: int = 0
-## Slot (1-4), in dem der Feuerlöscher liegt. Gilt nur, solange extinguisher_held_by != 0.
-var extinguisher_held_slot: int = 1
+## Feuerlöscher: id -> {station, held_by, slot, pos, yaw, fill}. station = "garage" / "nord" / "" (nicht im Halter).
+var extinguishers: Dictionary = make_default_extinguishers()
+const EXT_STATIONS: Array[String] = ["garage", "nord"]
+## Sprühzeit einer vollen Füllung und Zeit bis zum Auffüllen im Halter (Sekunden).
+const EXT_SPRAY_SECONDS := 20.0
+const EXT_REFILL_SECONDS := 45.0
+const EXT_SPRAY_TICK := 0.16
+var _ext_sync_fill: Dictionary = {}
 ## Aktiver Slot (1-4) je Spieler (peer_id -> Slot). Der Server verteilt Änderungen an alle.
 var player_active_slot: Dictionary = {}
 const SLOT_COUNT := 4
@@ -1123,6 +1185,8 @@ var _van_unload_accum: float = 0.0
 var _delivery_slot_cursor: int = 0
 # Spieluhr: der Host zählt in jedem Frame weiter, der Tageswechsel läuft im Simulations-Tick.
 var _day_rollover_pending: bool = false
+## Tempo der Spieluhr (Admin-Menü). Gilt nur für die laufende Sitzung.
+var clock_scale: float = 1.0
 # Client: Abweichung zur Host-Uhr, die weich über mehrere Frames ausgeglichen wird.
 var _time_correction: float = 0.0
 const TIME_SNAP_THRESHOLD := 0.02
@@ -1135,7 +1199,7 @@ func _process(delta: float) -> void:
 	if not multiplayer.is_server():
 		var corr := _time_correction * clampf(delta * TIME_CORRECTION_RATE, 0.0, 1.0)
 		_time_correction -= corr
-		time_of_day = fposmod(time_of_day + delta / DAY_LENGTH_SECONDS + corr, 1.0)
+		time_of_day = fposmod(time_of_day + delta * clock_scale / DAY_LENGTH_SECONDS + corr, 1.0)
 		if van_phase != "idle":
 			van_phase_time += delta
 		# Ticket-Alter lokal weiterzählen, damit der SLA-Countdown läuft. Jeder Sync vom Host korrigiert den Wert.
@@ -1149,9 +1213,11 @@ func _process(delta: float) -> void:
 		return
 
 	_update_delivery_van(delta)
+	_update_extinguishers(delta)
+	_update_slot_boot(delta)
 
 	# Eigene Spieluhr: ein Spieltag dauert DAY_LENGTH_SECONDS echte Sekunden.
-	var next_time := time_of_day + delta / DAY_LENGTH_SECONDS
+	var next_time := time_of_day + delta * clock_scale / DAY_LENGTH_SECONDS
 	if next_time >= 1.0:
 		_day_rollover_pending = true
 	time_of_day = fposmod(next_time, 1.0)
@@ -1400,7 +1466,7 @@ func _reset_van_trip() -> void:
 func is_bulk_packable(item_type: String) -> bool:
 	if is_repair_kit(item_type):
 		return true
-	return item_type == "web_server" or item_type == "storage_server" or item_type == "gpu_server" or item_type == "net_switch" or item_type == INDOOR_UNIT_TYPE
+	return item_type == "web_server" or item_type == "storage_server" or item_type == "gpu_server" or item_type == "net_switch" or item_type == INDOOR_UNIT_TYPE or is_strip_type(item_type)
 
 
 func is_heavy_delivery_item(item_type: String) -> bool:
@@ -1409,10 +1475,10 @@ func is_heavy_delivery_item(item_type: String) -> bool:
 		var parts := base.split(":")
 		if parts.size() >= 2:
 			base = parts[1]
-	return base == "rack" or base == "rack_pro" or base == "cooler" or base == "chiller" or base == "ups" or base == "cart"
+	return base == "rack" or base == "rack_pro" or base == "ups" or base == "cart" or is_heat_pump_type(base) or is_floor_cooler_type(base)
 
 
-## Berechnet die Liefer-Kategorie (1 = Sprinter, 2 = Kastenwagen 7,5t, 3 = Schwerlast-LKW 18t).
+## Berechnet die Liefer-Kategorie (1 = Lieferwagen, 2 = Kastenwagen 7,5t, 3 = Schwerlast-LKW 18t).
 func compute_delivery_tier(packed_cargo: Array) -> int:
 	var total := 0
 	var heavy := 0
@@ -1586,8 +1652,7 @@ func _deliver_parts_parcel() -> void:
 		return
 	var n_parts := 0
 	var n_fuses := 0
-	var n_strips := 0
-	var n_hubs := 0
+	var n_crates := 0
 	var n_power := 0
 	var n_bench := 0
 	for pid_v in _van_parcel_parts:
@@ -1596,18 +1661,10 @@ func _deliver_parts_parcel() -> void:
 			"acc:fuse":
 				fuse_stock += 1
 				n_fuses += 1
-			"acc:power_strip":
-				if power_strips < POWER_STRIP_MAX:
-					power_strips += 1
-					n_strips += 1
-				else:
-					money += float(POWER_STRIP_PRICE) # Maximum schon erreicht: Gutschrift
-			"acc:net_hub":
-				if net_hubs < NET_HUB_MAX:
-					net_hubs += 1
-					n_hubs += 1
-				else:
-					money += float(NET_HUB_PRICE)
+			"acc:power_strip", "acc:net_hub":
+				# Vor v2.6 bestelltes Zubehör kommt als echte Leiste.
+				_spawn_crate_internal("prop_power_strip" if pid == "acc:power_strip" else "prop_lan_strip")
+				n_crates += 1
 			"acc:tool_akku", "acc:tool_torque", "acc:tool_paste_gun", "acc:tool_meter_pro", "acc:tool_rcd":
 				var tid := pid.substr(9)
 				if has_bench_tool(tid):
@@ -1645,13 +1702,8 @@ func _deliver_parts_parcel() -> void:
 		post_event_f("📦 %d Sicherung(en) geliefert. Am Sicherungskasten mit [E] einsetzen.", [n_fuses], "good")
 	if n_power > 0:
 		post_event("📦 Drehsicherung geliefert. Am Sicherungskasten mit [E] in Steckplatz F2 einsetzen.", "good")
-	if n_strips > 0 or n_hubs > 0:
-		_rpc_sync_accessories.rpc(power_strips, net_hubs)
-		_recalculate_networks_and_metrics()
-		if n_strips > 0:
-			post_event_f("📦 %d Steckleiste(n) geliefert und am Stromkasten montiert (+%d Steckplätze).", [n_strips, n_strips * POWER_STRIP_EXTRA], "good")
-		if n_hubs > 0:
-			post_event_f("📦 %d Netzwerk-Verteiler geliefert und am Router montiert (+%d Ports).", [n_hubs, n_hubs * NET_HUB_EXTRA], "good")
+	if n_crates > 0:
+		_broadcast_crates()
 	_broadcast_sim_tick()
 
 
@@ -1790,8 +1842,6 @@ func initialize_new_world(save_id: String = "mein_datacenter", save_name: String
 	breaker_fuses[1] = "ok"
 	fuse_stock = 0
 	power_fuse_stock = 0
-	power_strips = 0
-	net_hubs = 0
 	breaker_on = true
 	grid_outage_left = 0.0
 	_grid_breaker_restore = false
@@ -1912,6 +1962,7 @@ func load_from_save_data(data: Dictionary, save_id: String, display_name: String
 	if saved_pending is Array:
 		for item in saved_pending:
 			pending_delivery_items.append(str(item))
+	_migrate_mounted_strips(data)
 	# Upgrade older v0.2/v0.3 saves cleanly with a starter cart
 	if not data.has("carts"):
 		var cid := _alloc_id("cart")
@@ -1939,6 +1990,21 @@ func load_from_save_data(data: Dictionary, save_id: String, display_name: String
 	post_event_f("Spielstand '%s' geladen! (Tag %d • $%.0f • %d Racks • %d CU)", [
 		current_save_name, day_number, money, racks.size(), total_compute
 	], "good")
+
+
+## Spielstände vor v2.6: am Kasten bzw. Router montierte Leisten werden zu echten Leisten in Kisten.
+func _migrate_mounted_strips(data: Dictionary) -> void:
+	var got := 0
+	for pair in [["power_strips", "prop_power_strip"], ["net_hubs", "prop_lan_strip"]]:
+		var left := clampi(int(data.get(pair[0], 0)), 0, 8)
+		got += left
+		while left > 0:
+			var n := mini(left, BULK_PACK_MAX)
+			_spawn_crate_internal(str(pair[1]), n)
+			left -= n
+	if got > 0:
+		crates_changed.emit()
+		post_event_f("📦 %d montierte Leisten sind jetzt echte Leisten und stehen als Kiste in der Lieferzone. Alte Kabel bleiben stecken, bis du sie ziehst.", [got], "info")
 
 
 func save_current_world(custom_display_name: String = "", is_autosave: bool = false) -> Dictionary:
@@ -1969,6 +2035,7 @@ func _rpc_notify_saved(display_name: String, is_autosave: bool) -> void:
 
 
 func clear_local_state() -> void:
+	clock_scale = 1.0
 	is_active = false
 	FinanceManager.reset()
 	racks.clear()
@@ -1995,8 +2062,6 @@ func clear_local_state() -> void:
 	breaker_fuses = _make_fuse_slots("ok")
 	fuse_stock = 0
 	power_fuse_stock = 0
-	power_strips = 0
-	net_hubs = 0
 	shared_open_panels.clear()
 	garage_door_open = true
 	support_tickets.clear()
@@ -2020,7 +2085,7 @@ func clear_local_state() -> void:
 	van_phase_time = 0.0
 	van_cargo_count = 0
 	pending_delivery_count = 0
-	extinguisher_held_by = 0
+	extinguishers = make_default_extinguishers()
 	ddos_active = false
 	ups_backup_active = false
 	overload_timer = 0.0
@@ -2163,8 +2228,6 @@ func build_snapshot() -> Dictionary:
 		"fuse_stock": fuse_stock,
 		"power_fuse_stock": power_fuse_stock,
 		"power_fuse_on_way": _power_fuse_on_way(),
-		"power_strips": power_strips,
-		"net_hubs": net_hubs,
 		"grid_outage_left": grid_outage_left,
 		"grid_breaker_restore": _grid_breaker_restore,
 		"ups_backup_active": ups_backup_active,
@@ -2186,6 +2249,7 @@ func build_snapshot() -> Dictionary:
 		"ddos_active": ddos_active,
 		"day_number": day_number,
 		"time_of_day": time_of_day,
+		"clock_scale": clock_scale,
 		"daily_kwh": daily_kwh,
 		"last_daily_bill": last_daily_bill,
 		"electricity_rate": electricity_rate,
@@ -2218,8 +2282,7 @@ func build_snapshot() -> Dictionary:
 		"total_storage_tb": total_storage_tb,
 		"used_bandwidth_mbps": used_bandwidth_mbps,
 		"max_bandwidth_mbps": max_bandwidth_mbps,
-		"extinguisher_held_by": extinguisher_held_by,
-		"extinguisher_held_slot": extinguisher_held_slot,
+		"extinguishers": extinguishers.duplicate(true),
 		"van_phase": van_phase,
 		"van_phase_time": van_phase_time,
 		"van_cargo_count": van_cargo.size(),
@@ -2270,8 +2333,6 @@ func _apply_snapshot(snap: Dictionary) -> void:
 	fuse_stock = maxi(0, int(snap.get("fuse_stock", 0)))
 	power_fuse_stock = clampi(int(snap.get("power_fuse_stock", 0)), 0, 1)
 	power_fuse_on_way_synced = bool(snap.get("power_fuse_on_way", false))
-	power_strips = clampi(int(snap.get("power_strips", 0)), 0, POWER_STRIP_MAX)
-	net_hubs = clampi(int(snap.get("net_hubs", 0)), 0, NET_HUB_MAX)
 	ups_backup_active = bool(snap.get("ups_backup_active", false))
 	grid_outage_left = maxf(0.0, float(snap.get("grid_outage_left", 0.0)))
 	_grid_breaker_restore = bool(snap.get("grid_breaker_restore", false))
@@ -2300,6 +2361,8 @@ func _apply_snapshot(snap: Dictionary) -> void:
 	ddos_active = bool(snap.get("ddos_active", false))
 	day_number = maxi(1, int(snap.get("day_number", 1)))
 	time_of_day = clampf(float(snap.get("time_of_day", 0.36)), 0.0, 0.999)
+	# Ein Spielstand startet immer mit normaler Uhr, Mitspieler übernehmen das Tempo des Hosts.
+	clock_scale = 1.0 if multiplayer.is_server() else clampf(float(snap.get("clock_scale", 1.0)), 0.0, 10.0)
 	daily_kwh = float(snap.get("daily_kwh", 0.0))
 	last_daily_bill = int(snap.get("last_daily_bill", 0))
 	electricity_rate = clampf(float(snap.get("electricity_rate", ELECTRICITY_RATE_PER_KWH)), ELECTRICITY_RATE_MIN, ELECTRICITY_RATE_MAX)
@@ -2333,8 +2396,7 @@ func _apply_snapshot(snap: Dictionary) -> void:
 	total_storage_tb = float(snap.get("total_storage_tb", 0.0))
 	used_bandwidth_mbps = float(snap.get("used_bandwidth_mbps", 0.0))
 	max_bandwidth_mbps = float(snap.get("max_bandwidth_mbps", float(ROUTER_TIERS[router_tier]["max_mbps"])))
-	extinguisher_held_by = int(snap.get("extinguisher_held_by", 0))
-	extinguisher_held_slot = clampi(int(snap.get("extinguisher_held_slot", 1)), 1, SLOT_COUNT)
+	extinguishers = _sanitize_extinguishers(snap.get("extinguishers", {}))
 	shared_open_panels = _sanitize_open_panels(snap.get("open_panels", {}))
 	panel_states_changed.emit()
 	garage_door_open = bool(snap.get("garage_door_open", true))
@@ -2385,6 +2447,7 @@ func _apply_snapshot(snap: Dictionary) -> void:
 	cables_changed.emit()
 	extinguisher_changed.emit()
 	room_level_changed.emit()
+	halle_nord_changed.emit()
 	van_updated.emit()
 	inventory_changed.emit()
 	tickets_changed.emit()
@@ -2414,9 +2477,11 @@ func handle_player_disconnect(peer_id: int) -> void:
 	if not workbench_state.is_empty() and get_workbench_worker() == peer_id:
 		workbench_state["worker"] = 0
 		_broadcast_workbench()
-	if extinguisher_held_by == peer_id:
-		extinguisher_held_by = 0
-		_rpc_sync_extinguisher.rpc(0)
+	for ext_id in extinguishers.keys():
+		var ext: Dictionary = extinguishers[ext_id]
+		if int(ext["held_by"]) == peer_id:
+			_stow_extinguisher(str(ext_id))
+			_broadcast_extinguishers()
 
 
 # ==============================================================================
@@ -2695,12 +2760,13 @@ func get_rack_hardware_summary(rack_id: String) -> Dictionary:
 		if is_slot_upgradeable(itype):
 			out["total_servers"] = int(out["total_servers"]) + 1
 		var st := get_slot_stats(sd)
-		out["watts"] = int(out["watts"]) + int(st["watts"])
+		if not bool(sd.get("offline", false)):
+			out["watts"] = int(out["watts"]) + int(st["watts"])
 		if bool(st["psu_overloaded"]):
 			out["psu_overloaded"] = true
 		if not bool(st.get("complete", true)) and is_slot_upgradeable(itype):
 			out["incomplete_servers"] = int(out.get("incomplete_servers", 0)) + 1
-		if powered and networked and str(sd.get("state", "ok")) == "ok" and is_slot_upgradeable(itype) and bool(st.get("complete", true)):
+		if powered and networked and is_slot_on(sd) and is_slot_upgradeable(itype) and bool(st.get("complete", true)):
 			out["active_servers"] = int(out["active_servers"]) + 1
 			out["cpu_score"] = int(out["cpu_score"]) + int(st["cpu_score"])
 			out["ram_gb"] = int(out["ram_gb"]) + int(st["ram_gb"])
@@ -2764,7 +2830,7 @@ func _trigger_water_leak() -> void:
 		if not bool(rack.get("powered", false)):
 			continue
 		for slot in rack["slots"]:
-			if str(slot["item_type"]) != "" and str(slot["state"]) == "ok":
+			if str(slot["item_type"]) != "" and is_slot_on(slot):
 				candidates.append(str(rid))
 				break
 	if candidates.is_empty():
@@ -2775,7 +2841,7 @@ func _trigger_water_leak() -> void:
 	var ok_idx: Array[int] = []
 	for i in range(slots.size()):
 		var s: Dictionary = slots[i]
-		if str(s["item_type"]) != "" and str(s["state"]) == "ok":
+		if str(s["item_type"]) != "" and is_slot_on(s):
 			ok_idx.append(i)
 	ok_idx.shuffle()
 
@@ -2846,6 +2912,9 @@ func get_device_sell_value(kind: String, eid: String) -> int:
 	if kind == "cooler" and coolers.has(eid):
 		var ctype := str(coolers[eid].get("cooler_type", "cooler"))
 		return int(roundf(float(ITEM_CATALOG[ctype]["price"]) * SELL_REFUND_RATIO))
+	if kind == "decor" and decor_items.has(eid):
+		var dtype := str((decor_items[eid] as Dictionary).get("item_type", ""))
+		return int(roundf(float((ITEM_CATALOG.get(dtype, {}) as Dictionary).get("price", 0)) * SELL_REFUND_RATIO))
 	if kind == "ups" and ups_units.has(eid):
 		return int(roundf(float(ITEM_CATALOG["ups"]["price"]) * SELL_REFUND_RATIO))
 	if kind == "cart" and carts.has(eid):
@@ -2879,8 +2948,85 @@ func get_player_pushed_cart(peer_id: int) -> Dictionary:
 	return {}
 
 
+static func make_default_extinguishers() -> Dictionary:
+	var out := {}
+	for st in ["garage", "nord"]:
+		out[st] = {"station": st, "held_by": 0, "slot": 1, "pos": Vector3.ZERO, "yaw": 0.0, "fill": 1.0}
+	return out
+
+
+func _sanitize_extinguishers(raw: Variant) -> Dictionary:
+	var out := make_default_extinguishers()
+	if not (raw is Dictionary):
+		return out
+	var used := {}
+	for id in out.keys():
+		var r: Variant = (raw as Dictionary).get(id, null)
+		if not (r is Dictionary):
+			continue
+		var e: Dictionary = out[id]
+		var rd: Dictionary = r
+		e["held_by"] = maxi(0, int(rd.get("held_by", 0)))
+		e["slot"] = clampi(int(rd.get("slot", 1)), 1, SLOT_COUNT)
+		e["fill"] = clampf(float(rd.get("fill", 1.0)), 0.0, 1.0)
+		e["yaw"] = float(rd.get("yaw", 0.0))
+		if rd.get("pos", null) is Vector3:
+			e["pos"] = rd["pos"]
+		var st := str(rd.get("station", id))
+		if st != "" and (not EXT_STATIONS.has(st) or used.has(st)):
+			st = ""
+		if int(e["held_by"]) != 0:
+			st = ""
+		if st != "":
+			used[st] = true
+		e["station"] = st
+	for id in out.keys():
+		var e2: Dictionary = out[id]
+		# Ohne Halter, Hand und Bodenplatz wäre der Löscher verschwunden: zurück an den eigenen Halter.
+		if str(e2["station"]) == "" and int(e2["held_by"]) == 0 and (e2["pos"] as Vector3) == Vector3.ZERO:
+			for st2 in EXT_STATIONS:
+				if not used.has(st2):
+					e2["station"] = st2
+					used[st2] = true
+					break
+	return out
+
+
+## Feuerlöscher im aktiven Slot des Spielers, sonst "".
+func get_held_extinguisher(peer_id: int) -> String:
+	var slot := get_active_slot(peer_id)
+	for id in extinguishers.keys():
+		var e: Dictionary = extinguishers[id]
+		if int(e["held_by"]) == peer_id and int(e["slot"]) == slot:
+			return str(id)
+	return ""
+
+
+func get_extinguisher_at_station(station: String) -> String:
+	for id in extinguishers.keys():
+		var e: Dictionary = extinguishers[id]
+		if int(e["held_by"]) == 0 and str(e["station"]) == station:
+			return str(id)
+	return ""
+
+
+func get_extinguisher_fill(ext_id: String) -> float:
+	return float((extinguishers.get(ext_id, {}) as Dictionary).get("fill", 0.0))
+
+
 func is_player_holding_extinguisher(peer_id: int) -> bool:
-	return extinguisher_held_by == peer_id and extinguisher_held_slot == get_active_slot(peer_id)
+	return get_held_extinguisher(peer_id) != ""
+
+
+func _stow_extinguisher(ext_id: String) -> void:
+	var e: Dictionary = extinguishers[ext_id]
+	e["held_by"] = 0
+	for st in [ext_id] + EXT_STATIONS:
+		if get_extinguisher_at_station(st) == "":
+			e["station"] = st
+			return
+	e["station"] = ""
+	e["pos"] = Vector3(-2.8, 0.0, -3.6)
 
 
 func is_player_holding_anything(peer_id: int) -> bool:
@@ -2999,7 +3145,7 @@ func get_max_ports(cable_type: String, endpoint_id: String) -> int:
 		return CLUSTER_PORTS_PER_RACK if racks.has(endpoint_id) else 0
 	if cable_type == "power":
 		if endpoint_id == WALL_BREAKER_ID:
-			return BREAKER_BASE_SOCKETS + power_strips * POWER_STRIP_EXTRA
+			return BREAKER_BASE_SOCKETS
 		if endpoint_id == HALL_C_BREAKER_ID:
 			return 6 + power_tier * 2
 		if endpoint_id == HALL_NORD_BREAKER_ID:
@@ -3016,8 +3162,7 @@ func get_max_ports(cable_type: String, endpoint_id: String) -> int:
 		return 0
 	else:
 		if endpoint_id == WALL_ROUTER_ID:
-			var base_jacks: int = ROUTER_TIER_JACK_COUNTS[clampi(router_tier, 0, ROUTER_TIER_JACK_COUNTS.size() - 1)]
-			return base_jacks + net_hubs * NET_HUB_EXTRA
+			return ROUTER_TIER_JACK_COUNTS[clampi(router_tier, 0, ROUTER_TIER_JACK_COUNTS.size() - 1)]
 		if endpoint_id == HALL_C_ROUTER_ID:
 			return 4
 		if endpoint_id == HALL_NORD_ROUTER_ID:
@@ -3059,8 +3204,14 @@ const WALL_FACE_EAST_X := 21.475
 const GARAGE_DOOR_HALF_WIDTH := 2.2
 
 
+## Außengeräte (Rasen). Brauchen ein Goldis Innengerät.
 func is_heat_pump_type(item_type: String) -> bool:
-	return item_type == "cooler" or item_type == "chiller"
+	return item_type == "cooler" or item_type == "chiller" or item_type == "cool_k90" or item_type == "cool_tower"
+
+
+## Standgeräte, die drinnen neben den Racks stehen und ohne Innengerät kühlen.
+func is_floor_cooler_type(item_type: String) -> bool:
+	return item_type == "cool_inrow" or item_type == "cool_cdu"
 
 
 func is_indoor_unit(cooler_id: String) -> bool:
@@ -3080,7 +3231,53 @@ func can_place_item_at(item_type: String, pos: Vector3, rot_y: float = 0.0, igno
 		return can_place_heat_pump_at(pos)
 	if item_type == INDOOR_UNIT_TYPE:
 		return can_place_wall_unit_at(pos, rot_y)
+	if is_strip_type(item_type):
+		return can_place_strip_at(pos, ignore_rack_id)
 	return can_place_at(pos, ignore_rack_id)
+
+
+## Strom- und LAN-Leisten sind flach: feineres Raster und weniger Abstand zu Geräten.
+func is_strip_type(item_type: String) -> bool:
+	return item_type == "prop_power_strip" or item_type == "prop_lan_strip"
+
+
+func snap_place_pos(item_type: String, pos: Vector3) -> Vector3:
+	var f := 4.0 if is_strip_type(item_type) else 2.0
+	return Vector3(roundf(pos.x * f) / f, 0.0, roundf(pos.z * f) / f)
+
+
+func can_place_strip_at(pos: Vector3, ignore_id: String = "") -> bool:
+	if halle_nord_owned and pos.z < -100.0:
+		var lz := pos.z - HALLE_NORD_ORIGIN.z
+		if pos.x < -9.3 or pos.x > 9.3 or lz < -5.0 or lz > 5.2:
+			return false
+		if lz < -2.3 and pos.x > 4.3:
+			return false
+		if lz > 4.0 and absf(pos.x) < 2.3:
+			return false
+	else:
+		var max_x := 4.8 if room_level == 0 else (11.7 if room_level == 1 else 20.6)
+		if pos.x < -4.8 or pos.x > max_x or pos.z < -4.0 or pos.z > 3.9:
+			return false
+		if pos.z > 2.6 and absf(pos.x) < 2.2:
+			return false
+	for group in [racks, coolers, ups_units]:
+		for gid in (group as Dictionary).keys():
+			var entry: Dictionary = (group as Dictionary)[gid]
+			if str(entry.get("cooler_type", "")) == INDOOR_UNIT_TYPE:
+				continue
+			var gpos: Vector3 = entry["pos"]
+			if Vector2(gpos.x - pos.x, gpos.z - pos.z).length() < 0.62:
+				return false
+	for did in decor_items.keys():
+		if str(did) == ignore_id:
+			continue
+		var d: Dictionary = decor_items[did]
+		var dpos: Vector3 = d.get("pos", Vector3.ZERO)
+		var gap := 0.24 if is_strip_type(str(d.get("item_type", ""))) else 0.62
+		if Vector2(dpos.x - pos.x, dpos.z - pos.z).length() < gap:
+			return false
+	return true
 
 
 func can_place_heat_pump_at(pos: Vector3) -> bool:
@@ -3443,7 +3640,7 @@ func get_company_level() -> int:
 
 ## Bauteile der Leistungsstufe vtier N brauchen Firmenstufe N + 1.
 func get_part_required_level(pd: Dictionary) -> int:
-	return clampi(int(pd.get("vtier", 0)) + 1, 1, COMPANY_LEVEL_THRESHOLDS.size())
+	return clampi(int(pd.get("vtier", 0)) + 1, 1, 5)
 
 
 func is_part_unlocked(pd: Dictionary) -> bool:
@@ -3600,13 +3797,13 @@ func _run_simulation_step(dt: float) -> void:
 				continue
 			if str(sd["state"]) == "burning":
 				rack_heat += 18.0
-			elif bool(rack["powered"]) and str(sd["state"]) == "ok":
+			elif bool(rack["powered"]) and is_slot_on(sd):
 				var stats := get_slot_stats(sd)
 				rack_heat += float(stats["heat"])
 				active_modules += 1
 		var effective_rack_heat := maxf(0.0, rack_heat - rack_passive_cool)
 		total_heat_gen += effective_rack_heat
-		var local_hot_spot := float(maxi(0, active_modules - 1)) * 2.2 - rack_passive_cool * 0.6
+		var local_hot_spot := float(maxi(0, active_modules - 1)) * 2.2 - rack_passive_cool * 0.6 - _get_floor_cooler_relief(rack["pos"])
 		var target_rack_temp := clampf(room_temp + local_hot_spot + (14.0 if _rack_has_fire(rack) else 0.0), 16.0, 105.0)
 		rack["temp"] = move_toward(float(rack["temp"]), target_rack_temp, dt * 3.0)
 
@@ -3617,6 +3814,10 @@ func _run_simulation_step(dt: float) -> void:
 		var ctype := str(cooler.get("cooler_type", "cooler"))
 		if ctype == INDOOR_UNIT_TYPE:
 			indoor_units += 1
+		elif is_floor_cooler_type(ctype):
+			# Reihenkühler und Flüssigkühlung wirken direkt, ohne Innengerät.
+			if bool(cooler["powered"]):
+				total_cooling += absf(float(ITEM_CATALOG[ctype]["heat"])) * (1.0 + airflow_bonus)
 		elif bool(cooler["powered"]):
 			heat_pump_capacity += absf(float(ITEM_CATALOG[ctype]["heat"]))
 	# Die Kälte der Außengeräte kommt nur über ein Goldis Innengerät in den Raum.
@@ -3651,7 +3852,7 @@ func _run_simulation_step(dt: float) -> void:
 			var st := str(slot["state"])
 			if st == "burning":
 				money = maxf(0.0, money - 3.0 * dt)
-			elif st == "ok" and bool(rack["powered"]):
+			elif is_slot_on(slot) and bool(rack["powered"]):
 				# Staub sammelt sich sehr langsam an; vorbeugende Wartung drückt Ausfallrisiko auf nahezu 0 %!
 				var dust := clampf(float(slot.get("dust_level", 0.0)) + dt * 0.048, 0.0, 100.0)
 				var th_hp := clampf(float(slot.get("thermal_health", 100.0)) - dt * 0.022 * (1.0 + 1.5 * get_slot_sloppiness(slot)), 0.0, 100.0)
@@ -3705,7 +3906,7 @@ func _run_simulation_step(dt: float) -> void:
 				ddos_active = true
 				var dmult := float(ROUTER_TIERS[clampi(router_tier, 0, ROUTER_TIERS.size() - 1)]["ddos_mult"])
 				ddos_cooldown = randf_range(65.0, 105.0) * dmult
-				post_event("DDOS-ANGRIFF ERKANNT! Am Wand-Router [E] oder im Windows-PC abwehren!", "alert")
+				post_event("DDOS-ANGRIFF ERKANNT! Am Wand-Router [E] oder am PC abwehren!", "alert")
 				_rpc_play_sfx.rpc("alarm")
 
 	# 5a. Wasserschaden: Ein Leck legt einzelne Server eines Racks lahm.
@@ -3737,6 +3938,21 @@ func _run_simulation_step(dt: float) -> void:
 		_process_contract_payouts()
 
 	_broadcast_sim_tick()
+
+
+## Laufende Standgeräte senken den Wärmestau naher Racks (stärkstes Gerät zählt).
+func _get_floor_cooler_relief(pos: Vector3) -> float:
+	var best := 0.0
+	for cid in coolers.keys():
+		var c: Dictionary = coolers[cid]
+		var ctype := str(c.get("cooler_type", ""))
+		if not is_floor_cooler_type(ctype) or not bool(c.get("powered", false)):
+			continue
+		var cat: Dictionary = ITEM_CATALOG[ctype]
+		var cpos: Vector3 = c["pos"]
+		if Vector2(cpos.x - pos.x, cpos.z - pos.z).length() <= float(cat.get("relief_radius", 2.5)):
+			best = maxf(best, float(cat.get("relief", 4.0)))
+	return best
 
 
 func _rack_has_fire(rack: Dictionary) -> bool:
@@ -4297,6 +4513,8 @@ func _describe_issue_call(rack_id: String, rack: Dictionary, issue_key: String) 
 
 
 func _recalculate_networks_and_metrics() -> void:
+	if multiplayer.is_server():
+		_refresh_slot_power()
 	max_watts = int(POWER_TIERS[power_tier]["watts"])
 	if halle_nord_owned:
 		max_watts += HALLE_NORD_EXTRA_WATTS
@@ -4385,7 +4603,7 @@ func _recalculate_networks_and_metrics() -> void:
 		# Goldis Innengeräte laufen, sobald mindestens ein Außengerät Strom hat.
 		var any_heat_pump_on := false
 		for cid in coolers.keys():
-			if not is_indoor_unit(str(cid)) and bool(coolers[cid]["powered"]):
+			if is_heat_pump_type(str(coolers[cid].get("cooler_type", "cooler"))) and bool(coolers[cid]["powered"]):
 				any_heat_pump_on = true
 				break
 		if any_heat_pump_on:
@@ -4457,7 +4675,7 @@ func _recalculate_networks_and_metrics() -> void:
 				continue
 			var st := str(sd["state"])
 			var stats := get_slot_stats(sd)
-			if st == "ok":
+			if is_slot_on(sd):
 				watts += int(stats["watts"])
 				if bool(rack["networked"]):
 					compute += int(stats["compute"])
@@ -4665,24 +4883,25 @@ func request_buy_fuse() -> void:
 	_rpc_req_buy_fuse.rpc_id(1)
 
 
-func request_buy_power_strip() -> void:
-	_rpc_req_buy_accessory.rpc_id(1, "power_strip")
-
-
-func request_buy_net_hub() -> void:
-	_rpc_req_buy_accessory.rpc_id(1, "net_hub")
-
-
 func request_insert_fuse(slot_idx: int) -> void:
 	_rpc_req_insert_fuse.rpc_id(1, slot_idx)
 
 
-func request_pickup_extinguisher() -> void:
-	_rpc_req_pickup_extinguisher.rpc_id(1)
+func request_pickup_extinguisher(ext_id: String) -> void:
+	_rpc_req_pickup_extinguisher.rpc_id(1, ext_id)
 
 
-func request_return_extinguisher() -> void:
-	_rpc_req_return_extinguisher.rpc_id(1)
+func request_hang_extinguisher(station: String) -> void:
+	_rpc_req_hang_extinguisher.rpc_id(1, station)
+
+
+func request_drop_extinguisher(pos: Vector3, yaw: float) -> void:
+	_rpc_req_drop_extinguisher.rpc_id(1, pos, yaw)
+
+
+## Ein Sprühstoß. rack_id leer = daneben gesprüht, leert trotzdem die Füllung.
+func request_spray_extinguisher(rack_id: String, slot_idx: int) -> void:
+	_rpc_req_spray_extinguisher.rpc_id(1, rack_id, slot_idx)
 
 
 func is_shared_panel_open(entity_id: String, panel_id: String) -> bool:
@@ -4730,6 +4949,97 @@ func _rpc_req_toggle_panel(entity_id: String, panel_id: String) -> void:
 	else:
 		shared_open_panels.erase(key)
 	_rpc_sync_panel.rpc(key, opened)
+	if panel_id.begins_with("slot_") and racks.has(entity_id):
+		_on_slot_panel_toggled(entity_id, int(panel_id.trim_prefix("slot_")), opened)
+
+
+## --- Strom im Einschub: ausgefahren = stromlos, eingeschoben = der Server fährt hoch ---
+
+## Hochfahrzeit je nach Servergröße (Sekunden).
+func get_boot_seconds(item_type: String) -> float:
+	if not is_slot_upgradeable(item_type):
+		return 6.0
+	match str((ITEM_CATALOG.get(item_type, {}) as Dictionary).get("mb_cat", "entry")):
+		"server":
+			return 9.0
+		"storage":
+			return 11.0
+		"gpu":
+			return 15.0
+	return 6.0
+
+
+## true, wenn der Server Strom bekommt und fertig hochgefahren ist (Rack-Strom wird extra geprüft).
+func is_slot_on(slot: Dictionary) -> bool:
+	return str(slot.get("state", "ok")) == "ok" and not bool(slot.get("offline", false))
+
+
+func _on_slot_panel_toggled(rack_id: String, slot_idx: int, opened: bool) -> void:
+	var slots: Array = racks[rack_id]["slots"]
+	if slot_idx < 0 or slot_idx >= slots.size():
+		return
+	var slot: Dictionary = slots[slot_idx]
+	if str(slot.get("item_type", "")) == "":
+		return
+	var was_on := is_slot_on(slot) and bool(racks[rack_id].get("powered", false))
+	_recalculate_networks_and_metrics()
+	_broadcast_racks()
+	_broadcast_sim_tick()
+	if opened and was_on:
+		_rpc_play_sfx.rpc("server_off")
+	elif not opened and str(slot.get("state", "")) == "ok":
+		_rpc_play_sfx.rpc("server_latch")
+
+
+func _close_slot_panel(rack_id: String, slot_idx: int) -> void:
+	var key := _panel_key(rack_id, "slot_%d" % slot_idx)
+	if shared_open_panels.has(key):
+		shared_open_panels.erase(key)
+		_rpc_sync_panel.rpc(key, false)
+
+
+## Hält den Stromzustand aller Einschübe passend zur Schiene (nur Host).
+func _refresh_slot_power() -> void:
+	for rid in racks.keys():
+		var slots: Array = racks[rid]["slots"]
+		for i in range(slots.size()):
+			var slot: Dictionary = slots[i]
+			if str(slot.get("item_type", "")) == "":
+				continue
+			if is_slot_extended(str(rid), i):
+				slot["offline"] = true
+				slot.erase("boot_left")
+				slot.erase("boot_total")
+			elif bool(slot.get("offline", false)):
+				if str(slot.get("state", "ok")) != "ok":
+					slot.erase("boot_left")
+					slot.erase("boot_total")
+				elif not slot.has("boot_left"):
+					var t := get_boot_seconds(str(slot["item_type"]))
+					slot["boot_left"] = t
+					slot["boot_total"] = t
+
+
+func _update_slot_boot(dt: float) -> void:
+	var done := false
+	for rid in racks.keys():
+		if not bool(racks[rid].get("powered", false)):
+			continue
+		for slot_v in racks[rid]["slots"]:
+			var slot: Dictionary = slot_v
+			if not slot.has("boot_left"):
+				continue
+			slot["boot_left"] = float(slot["boot_left"]) - dt
+			if float(slot["boot_left"]) <= 0.0:
+				slot.erase("boot_left")
+				slot.erase("boot_total")
+				slot.erase("offline")
+				done = true
+	if done:
+		_recalculate_networks_and_metrics()
+		_broadcast_racks()
+		_broadcast_sim_tick()
+		_rpc_play_sfx.rpc("server_ready")
 
 
 @rpc("authority", "call_local", "reliable")
@@ -4778,10 +5088,6 @@ func _rpc_req_set_garage_door(open: bool) -> void:
 func _rpc_sync_garage_door(open: bool) -> void:
 	garage_door_open = open
 	garage_door_changed.emit(open)
-
-
-func request_extinguish_slot(rack_id: String, slot_idx: int, amount: float) -> void:
-	_rpc_req_extinguish_slot.rpc_id(1, rack_id, slot_idx, amount)
 
 
 func request_repair_slot(rack_id: String, slot_idx: int, amount: float) -> void:
@@ -5088,7 +5394,7 @@ func _rpc_req_place_held_structure(pos: Vector3, rot_y: float) -> void:
 	var item_type := str(held["item_type"])
 	if str(ITEM_CATALOG[item_type]["category"]) != "placeable":
 		return
-	var snapped := Vector3(roundf(pos.x * 2.0) * 0.5, 0.0, roundf(pos.z * 2.0) * 0.5)
+	var snapped := snap_place_pos(item_type, pos)
 	if item_type == INDOOR_UNIT_TYPE:
 		# Wandgeräte behalten Höhe und Wandabstand aus get_wall_mount_spot().
 		snapped = pos
@@ -5111,7 +5417,7 @@ func _rpc_req_place_held_structure(pos: Vector3, rot_y: float) -> void:
 		_recalculate_networks_and_metrics()
 		_broadcast_racks()
 		post_event_f("%s hat %s (%s) aufgestellt.", [NetworkManager.get_player_name(peer_id), get_rack_display_name(rid), ITEM_CATALOG[item_type]["name"]], "info")
-	elif is_heat_pump_type(item_type) or item_type == INDOOR_UNIT_TYPE:
+	elif is_heat_pump_type(item_type) or is_floor_cooler_type(item_type) or item_type == INDOOR_UNIT_TYPE:
 		var cid := _alloc_id("cooler")
 		coolers[cid] = {
 			"id": cid,
@@ -5124,6 +5430,8 @@ func _rpc_req_place_held_structure(pos: Vector3, rot_y: float) -> void:
 		_broadcast_coolers()
 		if item_type == INDOOR_UNIT_TYPE:
 			post_event_f("%s hat ein %s an die Wand gehängt (läuft, sobald ein Außengerät Strom hat).", [NetworkManager.get_player_name(peer_id), ITEM_CATALOG[item_type]["name"]], "info")
+		elif is_floor_cooler_type(item_type):
+			post_event_f("%s hat %s aufgestellt (Stromkabel oben anschließen!).", [NetworkManager.get_player_name(peer_id), ITEM_CATALOG[item_type]["name"]], "info")
 		else:
 			post_event_f("%s hat %s auf den Rasen gestellt (Stromkabel seitlich anschließen!).", [NetworkManager.get_player_name(peer_id), ITEM_CATALOG[item_type]["name"]], "info")
 	elif item_type == "ups":
@@ -5446,7 +5754,7 @@ func _rpc_req_install_component(rack_id: String, slot_idx: int, category: String
 		var stock := int(parts_inventory.get(part_id, 0))
 		if stock <= 0:
 			_rpc_play_sfx.rpc_id(peer_id, "error")
-			post_event_f("%s nicht im Teile-Lager! Erst im Windows-PC-Shop bestellen.", [str(new_part["name"])], "warn")
+			post_event_f("%s nicht im Teile-Lager! Erst im PC-Shop bestellen.", [str(new_part["name"])], "warn")
 			return
 		parts_inventory[part_id] = stock - 1
 		if int(parts_inventory[part_id]) <= 0:
@@ -5599,7 +5907,7 @@ func _rpc_req_checkout_cart(entries: Array, express: bool = false) -> void:
 			for _q in range(qty):
 				queue_items.append("part:" + pid)
 		elif kind == "acc":
-			# Zubehör (Sicherung, Steckleiste, Netzwerk-Verteiler) kommt per Sprinter.
+			# Zubehör (Sicherung, Werkbank-Material, Werkzeug) kommt per Lieferwagen.
 			var aid := str(e.get("id", ""))
 			var aprice := _accessory_price(aid)
 			if aprice <= 0:
@@ -5932,6 +6240,12 @@ func _rpc_req_connect_cable(cable_type: String, from_id: String, to_id: String, 
 				_rpc_play_sfx.rpc_id(peer_id, "error")
 				return
 
+	if cable_type == "power" and (from_id == WALL_BREAKER_ID or to_id == WALL_BREAKER_ID) \
+			and count_cables_on("power", WALL_BREAKER_ID) >= get_max_ports("power", WALL_BREAKER_ID):
+		post_event("Der Stromkasten hat nur eine Steckdose. Schließe dort eine Stromleiste an und verteile von ihr weiter.", "warn")
+		_rpc_play_sfx.rpc_id(peer_id, "error")
+		return
+
 	if count_cables_on(cable_type, from_id) >= get_max_ports(cable_type, from_id):
 		post_event_f("Kein freier %s-Port an %s (Rack-Switch oder Upgrade nötig).", [
 			_cable_type_label(cable_type), from_id.to_upper()
@@ -6237,30 +6551,78 @@ func _rpc_req_toggle_breaker() -> void:
 
 
 @rpc("any_peer", "call_local", "reliable")
-func _rpc_req_pickup_extinguisher() -> void:
+func _rpc_req_pickup_extinguisher(ext_id: String) -> void:
 	if not multiplayer.is_server():
 		return
 	var peer_id := _get_sender_id()
-	if is_player_holding_anything(peer_id) or extinguisher_held_by != 0:
+	if is_player_holding_anything(peer_id) or not extinguishers.has(ext_id) or int((extinguishers[ext_id] as Dictionary)["held_by"]) != 0:
 		_rpc_play_sfx.rpc_id(peer_id, "error")
 		return
-	extinguisher_held_by = peer_id
-	extinguisher_held_slot = get_active_slot(peer_id)
-	_rpc_sync_extinguisher_slot.rpc(extinguisher_held_slot)
-	_rpc_sync_extinguisher.rpc(extinguisher_held_by)
+	var e: Dictionary = extinguishers[ext_id]
+	e["held_by"] = peer_id
+	e["slot"] = get_active_slot(peer_id)
+	e["station"] = ""
+	_broadcast_extinguishers()
 	_rpc_play_sfx.rpc_id(peer_id, "pickup")
 
 
 @rpc("any_peer", "call_local", "reliable")
-func _rpc_req_return_extinguisher() -> void:
+func _rpc_req_hang_extinguisher(station: String) -> void:
 	if not multiplayer.is_server():
 		return
 	var peer_id := _get_sender_id()
-	if not is_player_holding_extinguisher(peer_id):
+	var ext_id := get_held_extinguisher(peer_id)
+	if ext_id == "" or not EXT_STATIONS.has(station) or get_extinguisher_at_station(station) != "":
+		_rpc_play_sfx.rpc_id(peer_id, "error")
 		return
-	extinguisher_held_by = 0
-	_rpc_sync_extinguisher.rpc(0)
+	var e: Dictionary = extinguishers[ext_id]
+	e["held_by"] = 0
+	e["station"] = station
+	_broadcast_extinguishers()
 	_rpc_play_sfx.rpc_id(peer_id, "drop")
+
+
+@rpc("any_peer", "call_local", "reliable")
+func _rpc_req_drop_extinguisher(pos: Vector3, yaw: float) -> void:
+	if not multiplayer.is_server():
+		return
+	if not SecurityGuard.is_finite_vec3(pos) or not SecurityGuard.is_finite_float(yaw):
+		return
+	var peer_id := _get_sender_id()
+	var ext_id := get_held_extinguisher(peer_id)
+	if ext_id == "":
+		return
+	var e: Dictionary = extinguishers[ext_id]
+	e["held_by"] = 0
+	e["station"] = ""
+	e["pos"] = _clamp_drop_pos(pos)
+	e["yaw"] = fposmod(yaw, TAU)
+	_broadcast_extinguishers()
+	_rpc_play_sfx.rpc_id(peer_id, "drop")
+
+
+func _broadcast_extinguishers() -> void:
+	if multiplayer.is_server():
+		for id in extinguishers.keys():
+			_ext_sync_fill[id] = float((extinguishers[id] as Dictionary)["fill"])
+		_rpc_sync_extinguishers.rpc(extinguishers.duplicate(true))
+
+
+## Im Halter füllen sich die Löscher wieder auf (nur Host).
+func _update_extinguishers(delta: float) -> void:
+	var dirty := false
+	for id in extinguishers.keys():
+		var e: Dictionary = extinguishers[id]
+		var fill := float(e["fill"])
+		if int(e["held_by"]) == 0 and str(e["station"]) != "" and fill < 1.0:
+			fill = minf(1.0, fill + delta / EXT_REFILL_SECONDS)
+			e["fill"] = fill
+			if fill >= 1.0:
+				dirty = true
+		if absf(fill - float(_ext_sync_fill.get(id, 1.0))) >= 0.04:
+			dirty = true
+	if dirty:
+		_broadcast_extinguishers()
 
 
 func request_set_active_slot(slot: int) -> void:
@@ -6285,21 +6647,24 @@ func _rpc_sync_active_slot(peer_id: int, slot: int) -> void:
 	player_active_slot[peer_id] = slot
 
 
-@rpc("authority", "call_local", "reliable")
-func _rpc_sync_extinguisher_slot(slot: int) -> void:
-	extinguisher_held_slot = slot
-
-
 @rpc("any_peer", "call_local", "reliable")
-func _rpc_req_extinguish_slot(rack_id: String, slot_idx: int, amount: float) -> void:
+func _rpc_req_spray_extinguisher(rack_id: String, slot_idx: int) -> void:
 	if not multiplayer.is_server():
-		return
-	if not SecurityGuard.is_finite_float(amount):
 		return
 	var peer_id := _get_sender_id()
 	if not SecurityGuard.check_rate_limit(peer_id, "extinguish", 25, 2.0):
 		return
-	if not is_player_holding_extinguisher(peer_id) or not racks.has(rack_id):
+	var ext_id := get_held_extinguisher(peer_id)
+	if ext_id == "":
+		return
+	var ext: Dictionary = extinguishers[ext_id]
+	if float(ext["fill"]) <= 0.0:
+		return
+	ext["fill"] = maxf(0.0, float(ext["fill"]) - EXT_SPRAY_TICK / EXT_SPRAY_SECONDS)
+	if float(ext["fill"]) <= 0.0:
+		_broadcast_extinguishers()
+		post_event_f("%s: Der Feuerlöscher ist leer. Im Wandhalter füllt er sich wieder auf.", [NetworkManager.get_player_name(peer_id)], "warn")
+	if not racks.has(rack_id):
 		return
 	var slots: Array = racks[rack_id]["slots"]
 	if slot_idx < 0 or slot_idx >= slots.size():
@@ -6307,8 +6672,8 @@ func _rpc_req_extinguish_slot(rack_id: String, slot_idx: int, amount: float) -> 
 	var slot: Dictionary = slots[slot_idx]
 	if str(slot["state"]) != "burning":
 		return
-	slot["fire_level"] = maxf(0.0, float(slot["fire_level"]) - clampf(amount, 0.0, 0.5))
-	if float(slot["fire_level"]) <= 0.0:
+	slot["fire_level"] = maxf(0.0, float(slot["fire_level"]) - 0.20)
+	if float(slot["fire_level"]) <= 0.01:
 		slot["state"] = "crashed"
 		slot["repair_progress"] = 0.0
 		slot["faulty_part"] = ""
@@ -6410,7 +6775,7 @@ func _rpc_req_upgrade_power() -> void:
 		return
 	if _power_fuse_on_way():
 		_rpc_play_sfx.rpc_id(peer_id, "error")
-		post_event("Die Drehsicherung ist schon bestellt und kommt mit dem Sprinter.", "warn")
+		post_event("Die Drehsicherung ist schon bestellt und kommt mit dem Lieferwagen.", "warn")
 		return
 	if power_tier + 1 >= POWER_TIERS.size():
 		return
@@ -6420,7 +6785,7 @@ func _rpc_req_upgrade_power() -> void:
 		_rpc_play_sfx.rpc_id(peer_id, "error")
 		return
 	money -= cost
-	# Wie beim Warenkorb: Zubehör kommt ins Sammelpaket des Sprinters.
+	# Wie beim Warenkorb: Zubehör kommt ins Sammelpaket des Lieferwagens.
 	if van_phase != "arriving":
 		pending_delivery_items.append(POWER_FUSE_ACC)
 	else:
@@ -6431,7 +6796,7 @@ func _rpc_req_upgrade_power() -> void:
 	_broadcast_fuses()
 	_broadcast_sim_tick()
 	_rpc_play_sfx.rpc("cash")
-	post_event_f("%s hat eine Drehsicherung für %s bestellt. Sie kommt mit dem Sprinter im Sammelpaket.", [
+	post_event_f("%s hat eine Drehsicherung für %s bestellt. Sie kommt mit dem Lieferwagen im Sammelpaket.", [
 		NetworkManager.get_player_name(peer_id), str(next_tier["label"])
 	], "good")
 
@@ -6773,8 +7138,8 @@ func _rpc_sync_cables(data: Dictionary) -> void:
 
 
 @rpc("authority", "call_local", "reliable")
-func _rpc_sync_extinguisher(holder_id: int) -> void:
-	extinguisher_held_by = holder_id
+func _rpc_sync_extinguishers(data: Dictionary) -> void:
+	extinguishers = data.duplicate(true)
 	extinguisher_changed.emit()
 
 
@@ -6888,59 +7253,11 @@ func _rpc_req_buy_fuse() -> void:
 	_rpc_play_sfx.rpc("cash")
 
 
-## Steckleiste (Stromkasten) oder Netzwerk-Verteiler (Router) kaufen. Wird sofort montiert.
-@rpc("any_peer", "call_local", "reliable")
-func _rpc_req_buy_accessory(kind: String) -> void:
-	if not multiplayer.is_server():
-		return
-	var peer_id := _get_sender_id()
-	var price := 0
-	var at_max := false
-	match kind:
-		"power_strip":
-			price = POWER_STRIP_PRICE
-			at_max = power_strips >= POWER_STRIP_MAX
-		"net_hub":
-			price = NET_HUB_PRICE
-			at_max = net_hubs >= NET_HUB_MAX
-		_:
-			return
-	if at_max or money < float(price):
-		_rpc_play_sfx.rpc_id(peer_id, "error")
-		return
-	money -= float(price)
-	if kind == "power_strip":
-		power_strips += 1
-		post_event_f("%s hat eine Steckleiste am Stromkasten montiert (+%d Steckplätze).", [
-			NetworkManager.get_player_name(peer_id), POWER_STRIP_EXTRA,
-		], "good")
-	else:
-		net_hubs += 1
-		post_event_f("%s hat einen Netzwerk-Verteiler am Router montiert (+%d Ports).", [
-			NetworkManager.get_player_name(peer_id), NET_HUB_EXTRA,
-		], "good")
-	_rpc_sync_accessories.rpc(power_strips, net_hubs)
-	_recalculate_networks_and_metrics()
-	_broadcast_sim_tick()
-	_rpc_play_sfx.rpc("cash")
-
-
-@rpc("authority", "call_local", "reliable")
-func _rpc_sync_accessories(strips: int, hubs: int) -> void:
-	power_strips = clampi(strips, 0, POWER_STRIP_MAX)
-	net_hubs = clampi(hubs, 0, NET_HUB_MAX)
-	accessories_changed.emit()
-
-
 ## Preis eines Zubehörteils aus dem Warenkorb (0 = unbekannte ID).
 func _accessory_price(aid: String) -> int:
 	match aid:
 		"fuse":
 			return FUSE_PRICE
-		"power_strip":
-			return POWER_STRIP_PRICE
-		"net_hub":
-			return NET_HUB_PRICE
 		"screw_box":
 			return SCREW_BOX_PRICE
 		"paste_tube":
@@ -6955,10 +7272,6 @@ func _accessory_order_room(aid: String) -> int:
 	var key := "acc:" + aid
 	var on_way := pending_delivery_items.count(key) + van_cargo.count(key) + _van_parcel_parts.count(key)
 	match aid:
-		"power_strip":
-			return maxi(0, POWER_STRIP_MAX - power_strips - on_way)
-		"net_hub":
-			return maxi(0, NET_HUB_MAX - net_hubs - on_way)
 		"screw_box":
 			return maxi(0, (BENCH_SCREWS_MAX - bench_screws) / SCREW_BOX_COUNT - on_way)
 		"paste_tube":
@@ -7085,6 +7398,7 @@ func _broadcast_sim_tick() -> void:
 		"ddos_active": ddos_active,
 		"day_number": day_number,
 		"time_of_day": time_of_day,
+		"clock_scale": clock_scale,
 		"daily_kwh": daily_kwh,
 		"last_daily_bill": last_daily_bill,
 		"electricity_rate": electricity_rate,
@@ -7143,6 +7457,7 @@ func _rpc_sync_sim_tick(packet: Dictionary) -> void:
 		company_level = int(packet.get("company_level", company_level))
 		ddos_active = bool(packet["ddos_active"])
 		day_number = int(packet["day_number"])
+		clock_scale = clampf(float(packet.get("clock_scale", 1.0)), 0.0, 10.0)
 		var host_time := float(packet["time_of_day"])
 		var time_diff := wrapf(host_time - time_of_day, -0.5, 0.5)
 		if absf(time_diff) > TIME_SNAP_THRESHOLD:
@@ -7516,6 +7831,7 @@ func _slot_from_tray(td: Dictionary) -> Dictionary:
 		"build_quality": get_build_quality(td),
 		"repair_progress": 0.0,
 		"fire_level": 0.0,
+		"offline": true, # fährt nach dem Einschieben erst hoch
 		"components": (td.get("components", _default_components(mb_id)) as Dictionary).duplicate(true),
 	}
 
@@ -7928,6 +8244,7 @@ func server_put_tray(cid: String, rack_id: String, slot_idx: int, who: String) -
 		return false
 	slots[slot_idx] = _slot_from_tray(crates[cid].get("tray_data", {}) as Dictionary)
 	crates.erase(cid)
+	_close_slot_panel(rack_id, slot_idx)
 	_recalculate_networks_and_metrics()
 	_broadcast_crates()
 	_broadcast_racks()
@@ -8848,12 +9165,11 @@ func _rpc_req_set_delivery_site(site: String) -> void:
 
 @rpc("authority", "call_local", "reliable")
 func _rpc_sync_halle_nord(owned: bool, del_site: String) -> void:
-	var changed_own := (halle_nord_owned != owned)
 	var changed_site := (delivery_target_site != del_site)
 	halle_nord_owned = owned
 	delivery_target_site = del_site if owned else "garage"
-	if changed_own:
-		halle_nord_changed.emit()
+	# Immer melden: Beim Host ist der Wert hier schon gesetzt, der Hallenboden muss trotzdem aktiviert werden.
+	halle_nord_changed.emit()
 	if changed_site:
 		delivery_site_changed.emit()
 	state_updated.emit()
@@ -9042,6 +9358,40 @@ func _rpc_req_refill_maint_kits() -> void:
 	_broadcast_sim_tick()
 	_rpc_play_sfx.rpc("snap")
 	post_event_f("🧰 +3 Wartungs- & Ersatzteil-Kits aufgefüllt (Vorrat: %d, Kosten: $%d).", [maint_kits, int(cost)], "good")
+
+
+func get_decor_name(decor_id: String) -> String:
+	var itype := str((decor_items.get(decor_id, {}) as Dictionary).get("item_type", ""))
+	return str((ITEM_CATALOG.get(itype, {}) as Dictionary).get("name", decor_id))
+
+
+func request_relocate_decor(decor_id: String, pos: Vector3, rot_y: float) -> void:
+	_rpc_req_relocate_decor.rpc_id(1, decor_id, pos, rot_y)
+
+
+## Einrichtung umsetzen. Kabel und eingelagerte Kisten bleiben dran.
+@rpc("any_peer", "call_local", "reliable")
+func _rpc_req_relocate_decor(decor_id: String, pos: Vector3, rot_y: float) -> void:
+	if not multiplayer.is_server():
+		return
+	if not SecurityGuard.is_finite_vec3(pos) or not SecurityGuard.is_finite_float(rot_y):
+		return
+	var peer_id := _get_sender_id()
+	if not decor_items.has(decor_id) or not SecurityGuard.check_rate_limit(peer_id, "relocate", 10, 5.0):
+		return
+	var d: Dictionary = decor_items[decor_id]
+	var itype := str(d.get("item_type", ""))
+	var snapped := snap_place_pos(itype, pos)
+	if not can_place_item_at(itype, snapped, rot_y, decor_id):
+		_rpc_play_sfx.rpc_id(peer_id, "error")
+		return
+	d["pos"] = snapped
+	d["rot_y"] = rot_y
+	_recalculate_networks_and_metrics()
+	_broadcast_decor_items()
+	_broadcast_cables()
+	_broadcast_sim_tick()
+	_rpc_play_sfx.rpc("place")
 
 
 func request_sell_decor(decor_id: String) -> void:

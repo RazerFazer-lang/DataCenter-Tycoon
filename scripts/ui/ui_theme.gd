@@ -2,7 +2,7 @@ class_name UIStyle
 extends RefCounted
 ## v1.1 Realistisches Industrie-UI: neutrales Anthrazit, gedämpftes Amber, kleine Radien, Tiefe über Schatten und Kanten.
 ## Gemeinsam genutzt von Hauptmenü, Loadingscreen, HUD, Pause-Menü, Rack-, Router- und Geräte-Overlays
-## (der PC-Monitor bleibt ein heller Windows-11-Desktop).
+## (der PC-Monitor bleibt ein heller Desktop).
 ## Konstantennamen und Funktionssignaturen sind unverändert, damit alle bestehenden Aufrufer weiter funktionieren.
 
 const COL_BG_DARK := Color(0.072, 0.077, 0.086, 0.95)
@@ -269,7 +269,7 @@ static func style_slider(s: HSlider) -> void:
 
 ## Gezeichnete HUD-Symbole, damit keine Emoji-Schrift nötig ist.
 ## kind: "power", "temp", "sun", "moon", "truck", "warn", "info",
-##       "cart", "headset", "building", "chart", "save", "windows", "power_off",
+##       "cart", "headset", "building", "chart", "save", "verion", "power_off",
 ##       "net", "phone", "close", "minimize", "check"
 static func draw_icon(ci: CanvasItem, kind: String, r: Rect2, col: Color) -> void:
 	var c := r.get_center()
@@ -395,12 +395,14 @@ static func draw_icon(ci: CanvasItem, kind: String, r: Rect2, col: Color) -> voi
 			ci.draw_rect(Rect2(c + Vector2(-0.40, -0.40) * s, Vector2(0.80, 0.80) * s), col, false, w)
 			ci.draw_rect(Rect2(c + Vector2(-0.22, -0.40) * s, Vector2(0.40, 0.26) * s), col)
 			ci.draw_rect(Rect2(c + Vector2(-0.24, 0.06) * s, Vector2(0.48, 0.28) * s), col, false, w)
-		"windows":
-			var g := s * 0.06
-			var q := s * 0.38
-			for wy in range(2):
-				for wx in range(2):
-					ci.draw_rect(Rect2(c + Vector2(-q - g * 0.5 + float(wx) * (q + g), -q - g * 0.5 + float(wy) * (q + g)), Vector2(q, q)), col)
+		"verion":
+			# Verion OS: gefaltetes V aus zwei Bändern, der rechte Schenkel dunkler
+			ci.draw_colored_polygon(PackedVector2Array([
+				c + Vector2(-0.46, -0.40) * s, c + Vector2(-0.20, -0.40) * s, c + Vector2(0.03, 0.18) * s, c + Vector2(-0.07, 0.42) * s,
+			]), col)
+			ci.draw_colored_polygon(PackedVector2Array([
+				c + Vector2(0.46, -0.40) * s, c + Vector2(0.20, -0.40) * s, c + Vector2(-0.07, 0.42) * s, c + Vector2(0.07, 0.42) * s,
+			]), Color(col.r * 0.72, col.g * 0.72, col.b * 0.72, col.a))
 		"power_off":
 			ci.draw_arc(c + Vector2(0.0, 0.04) * s, s * 0.36, -PI * 0.5 + 0.7, PI * 1.5 - 0.7, 24, col, w, true)
 			ci.draw_line(c + Vector2(0.0, -0.46) * s, c + Vector2(0.0, -0.02) * s, col, w)

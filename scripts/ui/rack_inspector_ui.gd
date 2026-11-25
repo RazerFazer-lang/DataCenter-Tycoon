@@ -207,6 +207,8 @@ func _coarse_str(v: Variant) -> String:
 		var d: Dictionary = v
 		var out := PackedStringArray()
 		for k in d.keys():
+			if str(k) == "boot_left":
+				continue
 			out.append("%s:%s" % [str(k), _coarse_str(d[k])])
 		return "{" + ",".join(out) + "}"
 	if v is Array:
@@ -492,7 +494,7 @@ func _refresh() -> void:
 			_render_rack_view()
 		"router":
 			_render_router_view()
-		"cooler", "ups", "cart":
+		"cooler", "ups", "cart", "decor":
 			if not _device_exists(_mode):
 				close_requested.emit()
 				return
@@ -515,6 +517,8 @@ func _device_exists(kind: String) -> bool:
 			return GameState.ups_units.has(_entity_id)
 		"cart":
 			return GameState.carts.has(_entity_id)
+		"decor":
+			return GameState.decor_items.has(_entity_id)
 	return false
 
 
@@ -788,6 +792,8 @@ func _make_slot_button(i: int, slot: Dictionary, powered: bool) -> Button:
 		info.add_child(_make_label(tr("BRAND!"), 11, UIStyle.COL_RED, true))
 	elif state == "crashed":
 		info.add_child(_make_label(tr("AUSGEFALLEN"), 11, UIStyle.COL_AMBER, true))
+	elif bool(slot.get("offline", false)):
+		info.add_child(_make_label(tr("FÄHRT HOCH …") if float(slot.get("boot_total", 0.0)) > 0.0 else tr("STROMLOS (ausgefahren)"), 11, UIStyle.COL_BLUE, true))
 	else:
 		info.add_child(_make_label(line, 11, UIStyle.COL_TEXT_SUB))
 	return btn
@@ -814,6 +820,8 @@ func _slot_led_color(slot: Dictionary, powered: bool) -> Color:
 		return UIStyle.COL_AMBER
 	if not powered:
 		return COL_LED_DARK
+	if bool(slot.get("offline", false)):
+		return UIStyle.COL_BLUE if float(slot.get("boot_total", 0.0)) > 0.0 else COL_LED_DARK
 	return UIStyle.COL_GREEN
 
 
@@ -958,7 +966,7 @@ func _build_empty_slot_intro(parent: VBoxContainer) -> void:
 
 	var steps := [
 		tr("Server hier im Einschub konfigurieren & „In den Warenkorb“ legen"),
-		tr("Am PC-Shop bestellen → beschrifteter Bausatz-Karton wird per Sprinter geliefert"),
+		tr("Am PC-Shop bestellen → beschrifteter Bausatz-Karton wird per Lieferwagen geliefert"),
 		tr("An der Werkbank realistisch zusammenbauen & in den ausgefahrenen Schacht einsetzen"),
 	]
 	for i in range(steps.size()):
@@ -1302,6 +1310,8 @@ func _build_slot_detail(parent: VBoxContainer, slot: Dictionary, itype: String) 
 		top.add_child(_make_chip(tr("BRENNT"), UIStyle.COL_RED))
 	elif state == "crashed":
 		top.add_child(_make_chip(tr("AUSGEFALLEN"), UIStyle.COL_AMBER))
+	elif bool(slot.get("offline", false)):
+		top.add_child(_make_chip(tr("FÄHRT HOCH …") if float(slot.get("boot_total", 0.0)) > 0.0 else tr("STROMLOS (ausgefahren)"), UIStyle.COL_BLUE))
 	else:
 		top.add_child(_make_chip(tr("ONLINE"), UIStyle.COL_GREEN))
 
@@ -1986,6 +1996,13 @@ func _render_device_view(kind: String) -> void:
 				_add_kpi("ANSCHLUSS", tr("Kein Kabel nötig"), "", UIStyle.COL_GREEN, -1.0, "check")
 				if not on:
 					note = tr("Kein Außengerät mit Strom: eine Goldis-Wärmepumpe auf den Rasen rechts vom Garagentor stellen und seitlich verkabeln.")
+			elif GameState.is_floor_cooler_type(ctype):
+				_set_status(tr("AKTIV") if on else tr("KEIN STROM"), UIStyle.COL_GREEN if on else UIStyle.COL_RED)
+				_add_kpi("KÜHLLEISTUNG", "%.0f °C" % float(cat["heat"]), "", UIStyle.COL_BLUE, -1.0, "temp")
+				_add_kpi("STROMVERBRAUCH", "%d W" % int(cat["watts"]), "", UIStyle.COL_AMBER, -1.0, "power")
+				_add_kpi("NAHE RACKS", "-%.0f °C" % float(cat.get("relief", 0.0)), tr("bis %.1f m") % float(cat.get("relief_radius", 0.0)), UIStyle.COL_BLUE, -1.0, "temp")
+				if not on:
+					note = tr("Kein Strom: die gelbe Buchse oben am Gerät verkabeln.")
 			else:
 				var has_indoor := GameState.has_indoor_unit()
 				_set_status(tr("AKTIV") if on else tr("KEIN STROM"), UIStyle.COL_GREEN if on else UIStyle.COL_RED)
@@ -2024,6 +2041,17 @@ func _render_device_view(kind: String) -> void:
 			_add_kpi("BELADUNG", tr("%d / %d Pakete") % [items.size(), max_i], "",
 				UIStyle.COL_AMBER if items.size() >= max_i else UIStyle.COL_BLUE, float(items.size()) / float(max_i))
 			note = tr("Mit [E] schieben und bis zu %d Pakete gleichzeitig durch das Gebäude transportieren.") % max_i
+		"decor":
+			_title_lbl.text = tr(GameState.get_decor_name(_entity_id))
+			_set_status(tr("AUFGESTELLT"), UIStyle.COL_BLUE)
+			var ctype_d := "power" if GameState.is_power_strip_decor(_entity_id) else ("network" if GameState.is_lan_strip_decor(_entity_id) else "")
+			if ctype_d != "":
+				var used_d := GameState.count_cables_on(ctype_d, _entity_id)
+				var max_d := GameState.get_max_ports(ctype_d, _entity_id)
+				_add_kpi("ANSCHLÜSSE", tr("%d / %d belegt") % [used_d, max_d], "", UIStyle.COL_AMBER if used_d >= max_d else UIStyle.COL_BLUE, float(used_d) / float(maxi(max_d, 1)))
+				note = tr("Beim Umsetzen bleiben alle Kabel stecken.")
+			else:
+				note = tr("Umsetzen ist kostenlos. Eingelagerte Kisten bleiben im Regal.")
 
 	var refund := GameState.get_device_sell_value(kind, _entity_id)
 	_subtitle_lbl.text = tr("Guthaben: $%.0f   •   Restwert: $%d") % [GameState.money, refund]
@@ -2054,6 +2082,13 @@ func _render_device_view(kind: String) -> void:
 		)
 		brow.add_child(pack_btn)
 
+	if kind == "decor":
+		var mv_btn := _make_btn(tr("[E]  Umsetzen"), "primary", Vector2(0, 44))
+		mv_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		_style_btn(mv_btn, Color(0.15, 0.19, 0.23), UIStyle.COL_BLUE)
+		mv_btn.pressed.connect(func(): relocate_rack_requested.emit(_entity_id))
+		brow.add_child(mv_btn)
+
 	var sell_btn := _make_btn("", "dev_sell", Vector2(0, 44))
 	sell_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	if _confirm_sell_entity:
@@ -2068,7 +2103,10 @@ func _render_device_view(kind: String) -> void:
 			SfxManager.play("click", -8.0, 0.9)
 			_refresh()
 		else:
-			GameState.request_sell_device(kind, _entity_id)
+			if kind == "decor":
+				GameState.request_sell_decor(_entity_id)
+			else:
+				GameState.request_sell_device(kind, _entity_id)
 			close_requested.emit()
 	)
 	brow.add_child(sell_btn)

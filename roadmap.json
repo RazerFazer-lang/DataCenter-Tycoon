@@ -37,6 +37,12 @@
       "items": [
         {
           "tag": "neu",
+          "version": "v2.6",
+          "title": "Admin-Menü, Profi-Kühlung, echte Leisten & eigene Marken",
+          "desc": "Abgesichertes Admin-Menü, 4 Profi-Kühlgeräte, stromlose Einschübe mit Hochfahren, ein Steckplatz am Stromkasten, neuer Feuerlöscher, 10 Firmenstufen und Verion OS."
+        },
+        {
+          "tag": "neu",
           "version": "v2.5",
           "title": "Werkbank-Overhaul, Bauqualität, Profi-Werkzeug & Techniker",
           "desc": "Montage und Reparatur mit der Maus direkt an der 3D-Werkbank, Diagnose per POST-Code und Multimeter, echte Ersatzteile, Bauqualität 0–100 % sowie Techniker für Tag- und Nachtschicht."
@@ -51,7 +57,7 @@
           "tag": "neu",
           "version": "v2.3",
           "title": "High-Poly Hallen-Overhaul, Halle Nord Campus & Live-Bautrupp",
-          "desc": "25 neue 2K-ORM-PBR Blender-5.2-Modelle, Großstandort Halle Nord (240 m²), 6 Gebäude-Upgrades mit Live-Bautrupp, 6 Shop-Dekos, 4K-Mixamo-NPCs & Realismus-Audio."
+          "desc": "25 neue 2K-ORM-PBR Blender-5.2-Modelle, Großstandort Halle Nord (240 m²), 6 Gebäude-Upgrades mit Live-Bautrupp, 6 Shop-Dekos, 4K-NPCs & Realismus-Audio."
         },
         {
           "tag": "neu",
@@ -86,8 +92,8 @@
         {
           "tag": "3d",
           "version": "v2.0",
-          "title": "Realistische Mixamo-Charaktere, 3D-Skin-Editor & Cloud-Express-Van",
-          "desc": "Skeleton3D-Charaktere für Spieler & Lieferfahrer, 360°-Skin-Editor im Hauptmenü und neuer 2K-PBR Sprinter."
+          "title": "Realistische Charaktere, 3D-Skin-Editor & Cloud-Express-Van",
+          "desc": "Skeleton3D-Charaktere für Spieler & Lieferfahrer, 360°-Skin-Editor im Hauptmenü und neuer 2K-PBR Lieferwagen."
         }
       ]
     }

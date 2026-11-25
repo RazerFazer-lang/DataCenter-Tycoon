@@ -1,6 +1,6 @@
 class_name DeliveryVan
 extends Node3D
-## v1.0 Realistic European Sprinter-Style "CLOUD EXPRESS" Delivery Van.
+## v1.0 Realistic European "CLOUD EXPRESS" Delivery Van.
 ## Features sculpted angled hood, raked transparent windshield with visible cabin interior
 ## (dashboard, steering wheel, 2 seats), wing mirrors, slatted radiator grille, EU license plates,
 ## wheel arch flares, 5-spoke alloy wheels, flush fleet livery, steel sliding-door track,
@@ -142,7 +142,7 @@ func _process(delta: float) -> void:
 		_backup_beep_accum = 0.0
 		return
 
-	# Fahrzeugmodell (Stufe 1 Sprinter / Stufe 2 Kastenwagen 7,5t / Stufe 3 Schwerlast-LKW 18t) dynamisch umschalten!
+	# Fahrzeugmodell (Stufe 1 Lieferwagen / Stufe 2 Kastenwagen 7,5t / Stufe 3 Schwerlast-LKW 18t) dynamisch umschalten!
 	var want_tier := clampi(GameState.van_delivery_tier, 1, 3)
 	if want_tier != _active_tier:
 		_switch_vehicle_tier(want_tier)
@@ -216,7 +216,7 @@ func _process(delta: float) -> void:
 		w.rotation.z += wheel_spin
 
 	# Fahrzeugspezifische Entlade-Mechanik:
-	# - Stufe 1 (Sprinter): seitliche Schiebetuer
+	# - Stufe 1 (Lieferwagen): seitliche Schiebetuer
 	# - Stufe 2 (7,5t Kastenwagen): Seiten-Rolltuer + ausklappbare Alu-Laderampe!
 	# - Stufe 3 (18t Schwerlast-LKW): breite Rolltuer + absenkbare Hydraulik-Ladebordwand!
 	_door_open_t = lerpf(_door_open_t, target_door, clampf(delta * 5.0, 0.0, 1.0))
@@ -341,7 +341,7 @@ func _build_van_geometry() -> void:
 	# 1. CHASSIS, UNDERBODY, SIDE CLADDING & SCULPTED BUMPERS
 	# ==========================================================================
 	_add_box(self, Vector3(0.10, 0.42, 0.0), Vector3(5.55, 0.22, 1.96), chassis_dark)
-	# Matte charcoal lower body rubbing trim (authentic Sprinter styling)
+	# Matte charcoal lower body rubbing trim (cargo van styling)
 	_add_box(self, Vector3(0.08, 0.62, -1.03), Vector3(5.48, 0.24, 0.05), trim_plastic)
 	_add_box(self, Vector3(0.08, 0.62, 1.03), Vector3(5.48, 0.24, 0.05), trim_plastic)
 
@@ -351,7 +351,7 @@ func _build_van_geometry() -> void:
 	_add_box(self, Vector3(3.11, 0.56, 0.0), Vector3(0.02, 0.12, 0.52), plate_white)
 	_add_box(self, Vector3(3.115, 0.56, -0.22), Vector3(0.02, 0.12, 0.07), eu_blue)
 	var f_plate := Label3D.new()
-	f_plate.text = "DC-EX 4090"
+	f_plate.text = "DC-EX 2406"
 	f_plate.font_size = 24
 	f_plate.pixel_size = 0.0022
 	f_plate.position = Vector3(3.128, 0.56, 0.03)
@@ -568,7 +568,7 @@ func _build_van_geometry() -> void:
 	_headlight_glow.light_energy = 0.45
 	add_child(_headlight_glow)
 
-	# Tall vertical Sprinter-style rear light clusters (Brake + Amber Turn + White Reverse)
+	# Tall vertical van-style rear light clusters (Brake + Amber Turn + White Reverse)
 	for tz in [-0.92, 0.92]:
 		_add_box(self, Vector3(-2.70, 1.28, tz), Vector3(0.05, 0.56, 0.16), trim_plastic)
 		_add_box(self, Vector3(-2.72, 1.44, tz), Vector3(0.03, 0.20, 0.12), _brake_mat)
@@ -720,7 +720,7 @@ func _bind_custom_fleet_model(root: Node3D, tier: int, staff_n: int) -> void:
 	_cargo_light.light_energy = 0.0
 	_vehicle_root.add_child(_cargo_light)
 
-	# Sichtbare Frachtpakete im Laderaum (6 im Sprinter, 10 im 7,5t Kastenwagen, 14 im 18t LKW)
+	# Sichtbare Frachtpakete im Laderaum (6 im Lieferwagen, 10 im 7,5t Kastenwagen, 14 im 18t LKW)
 	var c_mat := MatLib.get_mat("cardboard")
 	var box_count := 6 if tier == 1 else (10 if tier == 2 else 14)
 	var floor_y := 0.86 if tier == 1 else (1.06 if tier == 2 else 1.32)

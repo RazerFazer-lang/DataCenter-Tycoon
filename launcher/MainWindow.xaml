@@ -452,7 +452,7 @@
                             <ScrollViewer VerticalScrollBarVisibility="Auto">
                                 <StackPanel Margin="0,0,8,0">
                                     <TextBlock Style="{StaticResource PageTitle}" Text="Werkzeuge &amp; Manager"/>
-                                    <TextBlock Style="{StaticResource PageSub}" Text="Automatische Spielstand-Backups, eigene 3D-Modelle (Mixamo-Skins) per Drag &amp; Drop und 1-Klick-Bug-Diagnose."/>
+                                    <TextBlock Style="{StaticResource PageSub}" Text="Automatische Spielstand-Backups, eigene 3D-Modelle (Skins) per Drag &amp; Drop und 1-Klick-Bug-Diagnose."/>
 
                                     <!-- 1. Savegame-Manager -->
                                     <Border Style="{StaticResource Card}" Margin="0,0,0,14">
@@ -473,12 +473,12 @@
                                         </StackPanel>
                                     </Border>
 
-                                    <!-- 2. Custom-Modelle & Mixamo-Skins (Drag & Drop) -->
+                                    <!-- 2. Custom-Modelle & Skins (Drag & Drop) -->
                                     <Border Style="{StaticResource Card}" Margin="0,0,0,14">
                                         <StackPanel>
                                             <Grid Margin="0,0,0,10">
                                                 <StackPanel>
-                                                    <TextBlock Style="{StaticResource SectionTitle}" Text="🧊 Custom-Modelle &amp; Mixamo-Skins (.glb)" Margin="0,0,0,2"/>
+                                                    <TextBlock Style="{StaticResource SectionTitle}" Text="🧊 Custom-Modelle &amp; Skins (.glb)" Margin="0,0,0,2"/>
                                                     <TextBlock Text="Ziehe eigene .glb-Dateien (z. B. player_realistic.glb oder delivery_driver_realistic.glb) hier hinein und aktiviere/deaktiviere sie per Klick." Foreground="{StaticResource TextMuted}" FontSize="12" TextWrapping="Wrap"/>
                                                 </StackPanel>
                                                 <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center">

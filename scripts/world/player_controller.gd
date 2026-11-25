@@ -307,6 +307,21 @@ func start_relocate_rack(rack_id: String) -> void:
 	SfxManager.play("pickup", -8.0)
 
 
+func start_relocate_decor(decor_id: String) -> void:
+	if not is_local or not GameState.decor_items.has(decor_id):
+		return
+	cable_start_id = ""
+	relocating_rack_id = decor_id
+	place_rot_y = float((GameState.decor_items[decor_id] as Dictionary).get("rot_y", 0.0))
+	SfxManager.play("pickup", -8.0)
+
+
+func _relocating_name() -> String:
+	if GameState.decor_items.has(relocating_rack_id):
+		return tr(GameState.get_decor_name(relocating_rack_id))
+	return GameState.get_rack_display_name(relocating_rack_id)
+
+
 func set_ui_locked(locked: bool) -> void:
 	var was_locked := ui_locked
 	ui_locked = locked
@@ -435,6 +450,8 @@ func _handle_inspect() -> void:
 		_world.open_device_inspector("ups", eid)
 	elif itype == "cart" and GameState.carts.has(eid):
 		_world.open_device_inspector("cart", eid)
+	elif GameState.decor_items.has(eid):
+		_world.open_device_inspector("decor", eid)
 
 
 ## Dauer vom Hinsetzen bis der Monitor das ganze Bild füllt.
@@ -485,7 +502,7 @@ func _physics_process(delta: float) -> void:
 	_anim_time += delta
 	if _ui_unlock_cooldown > 0.0:
 		_ui_unlock_cooldown = maxf(0.0, _ui_unlock_cooldown - delta)
-	if relocating_rack_id != "" and not GameState.racks.has(relocating_rack_id):
+	if relocating_rack_id != "" and not GameState.racks.has(relocating_rack_id) and not GameState.decor_items.has(relocating_rack_id):
 		relocating_rack_id = ""
 	if _emote_timer > 0.0:
 		_emote_timer = maxf(0.0, _emote_timer - delta)
@@ -499,6 +516,8 @@ func _physics_process(delta: float) -> void:
 		if _emote_timer <= 0.0 and _emote_badge != null:
 			_emote_badge.visible = false
 	_update_held_visuals()
+	if is_local and position.y < -6.0:
+		_rescue_from_fall()
 
 	if not is_local:
 		var prev_pos := position
@@ -832,7 +851,7 @@ func _handle_drop() -> void:
 		SfxManager.play("cable_cut", -10.0, 0.9)
 		return
 	if GameState.is_player_holding_extinguisher(peer_id):
-		GameState.request_return_extinguisher()
+		GameState.request_drop_extinguisher(_safe_drop_pos(), rotation.y)
 		return
 	var pushed_cart := GameState.get_player_pushed_cart(peer_id)
 	if not pushed_cart.is_empty():
@@ -844,35 +863,43 @@ func _handle_drop() -> void:
 		if _ghost_root != null and _ghost_root.visible and _ghost_is_drop_preview:
 			drop_pos = _ghost_pos
 		else:
-			# Sicherer Vorwärts-Check gegen feste Hindernisse (Racks/Wände), damit das Item NIE in einem Rack verschwindet!
-			var forward := -global_transform.basis.z
-			forward.y = 0.0
-			if forward.length_squared() < 0.001:
-				forward = Vector3.FORWARD
-			else:
-				forward = forward.normalized()
-			var dist := 1.05
-			var space := get_world_3d().direct_space_state
-			if space != null:
-				var probe_from := global_position + Vector3(0.0, 0.75, 0.0)
-				var probe_to := probe_from + forward * 1.45
-				var q := PhysicsRayQueryParameters3D.create(probe_from, probe_to, 1)
-				q.exclude = [get_rid()]
-				var hit := space.intersect_ray(q)
-				if not hit.is_empty():
-					var hd := probe_from.distance_to(hit["position"] as Vector3)
-					dist = clampf(hd - 0.50, 0.36, 1.05)
-			drop_pos = global_position + forward * dist
-			drop_pos.y = 0.0
+			drop_pos = _safe_drop_pos()
 		_cam_weight_dip = maxf(_cam_weight_dip, 0.042)
 		GameState.request_drop_crate(drop_pos)
+
+
+## Sicherer Vorwärts-Check gegen feste Hindernisse (Racks/Wände), damit das Item NIE in einem Rack verschwindet!
+func _safe_drop_pos() -> Vector3:
+	var forward := -global_transform.basis.z
+	forward.y = 0.0
+	if forward.length_squared() < 0.001:
+		forward = Vector3.FORWARD
+	else:
+		forward = forward.normalized()
+	var dist := 1.05
+	var space := get_world_3d().direct_space_state
+	if space != null:
+		var probe_from := global_position + Vector3(0.0, 0.75, 0.0)
+		var probe_to := probe_from + forward * 1.45
+		var q := PhysicsRayQueryParameters3D.create(probe_from, probe_to, 1)
+		q.exclude = [get_rid()]
+		var hit := space.intersect_ray(q)
+		if not hit.is_empty():
+			var hd := probe_from.distance_to(hit["position"] as Vector3)
+			dist = clampf(hd - 0.50, 0.36, 1.05)
+	var out := global_position + forward * dist
+	out.y = 0.0
+	return out
 
 
 func _try_confirm_placement() -> void:
 	if relocating_rack_id != "":
 		if _ghost_root != null and _ghost_root.visible and _ghost_valid:
 			_cam_weight_dip = maxf(_cam_weight_dip, 0.068)
-			GameState.request_relocate_rack(relocating_rack_id, _ghost_pos, _ghost_rot_y)
+			if GameState.decor_items.has(relocating_rack_id):
+				GameState.request_relocate_decor(relocating_rack_id, _ghost_pos, _ghost_rot_y)
+			else:
+				GameState.request_relocate_rack(relocating_rack_id, _ghost_pos, _ghost_rot_y)
 			relocating_rack_id = ""
 		else:
 			SfxManager.play("error")
@@ -1053,10 +1080,18 @@ func _handle_primary_interact() -> void:
 				cable_start_slot = -1
 				SfxManager.play("cable", -8.0, 1.25)
 		"extinguisher_station":
+			var st_id := str(target.get_meta("station", "garage"))
 			if GameState.is_player_holding_extinguisher(peer_id):
-				GameState.request_return_extinguisher()
+				GameState.request_hang_extinguisher(st_id)
 			elif hands_empty:
-				GameState.request_pickup_extinguisher()
+				var st_ext := GameState.get_extinguisher_at_station(st_id)
+				if st_ext != "":
+					GameState.request_pickup_extinguisher(st_ext)
+				else:
+					SfxManager.play("error")
+		"extinguisher_item":
+			if hands_empty:
+				GameState.request_pickup_extinguisher(eid)
 		"rack_panel":
 			var rp_node: Variant = target.get_meta("rack_prop", null)
 			if is_instance_valid(rp_node) and (rp_node as Object).has_method("toggle_panel"):
@@ -1189,10 +1224,12 @@ var _was_holding_ext: bool = false
 func _update_continuous_actions(delta: float) -> void:
 	_is_spraying_local = false
 	var target := _get_aimed_interactable()
-	var holding_ext := GameState.is_player_holding_extinguisher(peer_id)
-	var pressing_spray := Input.is_action_pressed("primary_action") or Input.is_action_pressed("interact")
+	var ext_id := GameState.get_held_extinguisher(peer_id)
+	var holding_ext := ext_id != ""
+	# Gesprüht wird nur mit der linken Maustaste, [E] bleibt für den Wandhalter frei.
+	var pressing_spray := Input.is_action_pressed("primary_action")
 
-	# Beim Aufnehmen (oder Slot-Wechsel auf den Feuerlöscher) erst warten, bis [E]/Maustaste losgelassen wurde,
+	# Beim Aufnehmen (oder Slot-Wechsel auf den Feuerlöscher) erst warten, bis die Maustaste losgelassen wurde,
 	# damit der Feuerlöscher niemals sofort beim Aufheben lossprüht!
 	if holding_ext and not _was_holding_ext:
 		_ext_require_release = true
@@ -1204,18 +1241,21 @@ func _update_continuous_actions(delta: float) -> void:
 		_action_tick_accum = 0.0
 		return
 
-	# Beim Zurückhängen an der Station ebenfalls nicht sprühen
-	var aiming_station := (target != null and str(target.get_meta("interact_type", "")) == "extinguisher_station")
-	if holding_ext and pressing_spray and not (aiming_station and Input.is_action_pressed("interact")):
+	if holding_ext and pressing_spray and GameState.get_extinguisher_fill(ext_id) <= 0.0:
+		if Input.is_action_just_pressed("primary_action"):
+			SfxManager.play("error", -10.0, 0.7)
+		_action_tick_accum = 0.0
+		return
+	if holding_ext and pressing_spray:
 		_is_spraying_local = true
 		SfxManager.keep_extinguisher_spraying()
 		_action_tick_accum += delta
 		if _action_tick_accum >= 0.16:
 			_action_tick_accum = 0.0
 			if target != null and str(target.get_meta("interact_type")) == "rack_slot":
-				var eid := str(target.get_meta("entity_id"))
-				var sidx := int(target.get_meta("slot_index"))
-				GameState.request_extinguish_slot(eid, sidx, 0.20)
+				GameState.request_spray_extinguisher(str(target.get_meta("entity_id")), int(target.get_meta("slot_index")))
+			else:
+				GameState.request_spray_extinguisher("", -1)
 		return
 
 	# Ausgefallene Server werden nur noch in der 3D-Vorschau des Rack-Menüs repariert.
@@ -1471,6 +1511,10 @@ func _update_placement_preview(delta: float) -> void:
 		item_type = str(GameState.racks[relocating_rack_id].get("rack_type", "rack"))
 		ignore_rid = relocating_rack_id
 		is_placeable = true
+	elif relocating_rack_id != "" and GameState.decor_items.has(relocating_rack_id):
+		item_type = str((GameState.decor_items[relocating_rack_id] as Dictionary).get("item_type", ""))
+		ignore_rid = relocating_rack_id
+		is_placeable = true
 	else:
 		if held.is_empty():
 			_ghost_root.visible = false
@@ -1527,7 +1571,7 @@ func _update_placement_preview(delta: float) -> void:
 			_ghost_root.visible = false
 			_ghost_has_visual_pose = false
 			return
-		_ghost_pos = Vector3(roundf(hpos.x * 2.0) * 0.5, 0.0, roundf(hpos.z * 2.0) * 0.5)
+		_ghost_pos = GameState.snap_place_pos(item_type, hpos)
 		_ghost_rot_y = 0.0 if GameState.is_heat_pump_type(item_type) else place_rot_y
 		_ghost_valid = GameState.can_place_item_at(item_type, _ghost_pos, _ghost_rot_y, ignore_rid)
 
@@ -1572,7 +1616,7 @@ func _update_cable_preview() -> void:
 	if cable_start_id == "" or cable_active_type == "":
 		_world.update_cable_preview(false, "power", Vector3.ZERO, Vector3.ZERO)
 		return
-	var start_pos: Variant = _world.get_port_world_pos(cable_active_type, cable_start_id)
+	var start_pos: Variant = _world.get_socket_world_pos(cable_active_type, cable_start_id, cable_start_slot)
 	if start_pos == null:
 		cable_start_id = ""
 		cable_active_type = ""
@@ -1596,6 +1640,12 @@ func _cable_target_state(endpoint: String) -> int:
 		return CableRenderer.TARGET_NONE
 	if GameState.count_cables_on(cable_active_type, endpoint) >= GameState.get_max_ports(cable_active_type, endpoint):
 		return CableRenderer.TARGET_INVALID
+	# Genau anvisierte Buchse schon belegt: nicht heimlich auf eine andere ausweichen.
+	var aimed := _get_aimed_interactable() as Area3D
+	if aimed != null and str(aimed.get_meta("entity_id", "")) == endpoint:
+		var aimed_slot := _get_target_slot_idx(aimed, cable_active_type, endpoint)
+		if aimed_slot >= 0 and not GameState.get_cable_on_slot(cable_active_type, endpoint, aimed_slot).is_empty():
+			return CableRenderer.TARGET_INVALID
 	if GameState.count_cables_on(cable_active_type, cable_start_id) >= GameState.get_max_ports(cable_active_type, cable_start_id):
 		return CableRenderer.TARGET_INVALID
 	for cid in GameState.cables.keys():
@@ -1681,10 +1731,13 @@ func _update_context_prompt() -> void:
 
 	if relocating_rack_id != "":
 		if _ghost_root != null and _ghost_root.visible and _ghost_valid:
-			current_prompt = tr("[Klick / E] %s hier neu aufstellen") % GameState.get_rack_display_name(relocating_rack_id)
+			current_prompt = tr("[Klick / E] %s hier neu aufstellen") % _relocating_name()
 		else:
-			current_prompt = tr("Neuen freien Bodenplatz für %s wählen") % GameState.get_rack_display_name(relocating_rack_id)
-		current_sub_prompt = tr("[R] Drehen  •  [Q / Rechtsklick] Abbrechen (Alle Server bleiben erhalten)")
+			current_prompt = tr("Neuen freien Bodenplatz für %s wählen") % _relocating_name()
+		if GameState.decor_items.has(relocating_rack_id):
+			current_sub_prompt = tr("[R] Drehen  •  [Q / Rechtsklick] Abbrechen (Kabel bleiben dran)")
+		else:
+			current_sub_prompt = tr("[R] Drehen  •  [Q / Rechtsklick] Abbrechen (Alle Server bleiben erhalten)")
 		return
 
 	var held := GameState.get_player_held_crate(peer_id)
@@ -1724,7 +1777,7 @@ func _update_context_prompt() -> void:
 			var cnt := (pc.get("items", []) as Array).size()
 			current_sub_prompt = tr("Schiebt Rollwagen (%d/%d Kartons)  •  Auf Karton [E] zum Aufladen  •  [Q] Loslassen") % [cnt, GameState.CART_MAX_ITEMS]
 		elif GameState.is_player_holding_extinguisher(peer_id):
-			current_sub_prompt = tr("Feuerlöscher bereit – auf brennenden Server zielen + [Klick halten]  •  [Q] Zurückhängen")
+			current_sub_prompt = tr("Feuerlöscher %d %%  •  [Linksklick halten] Sprühen  •  [Q] Auf den Boden stellen") % roundi(GameState.get_extinguisher_fill(GameState.get_held_extinguisher(peer_id)) * 100.0)
 		elif not held.is_empty():
 			var h_name := str(GameState.ITEM_CATALOG[str(held["item_type"])]["name"])
 			current_sub_prompt = tr("Trägt: %s  •  [Q] Ablegen") % tr(h_name)
@@ -1734,7 +1787,7 @@ func _update_context_prompt() -> void:
 	var eid := str(target.get_meta("entity_id"))
 	match itype:
 		"terminal":
-			current_prompt = tr("[E] Windows Server-PC öffnen (Shop, Verträge, Router, Upgrades)")
+			current_prompt = tr("[E] Verion OS öffnen (Shop, Verträge, Router, Upgrades)")
 			if PcScreenState.is_occupied_by_other():
 				current_prompt = tr("PC besetzt: %s sitzt gerade davor") % PcScreenState.user_name
 		"garage_door":
@@ -1757,12 +1810,16 @@ func _update_context_prompt() -> void:
 				current_prompt = tr("[E] Karton ins Lagerregal (Fach %d) stellen") % (s_idx + 1)
 			else:
 				current_prompt = tr("[E] Gegenstand aus Lagerregal (Fach %d) nehmen") % (s_idx + 1)
+			current_sub_prompt = tr("[F] Umsetzen oder verkaufen")
 		"parts_cabinet":
 			current_prompt = tr("[E] +3 Wartungs- & Ersatzteil-Kits auffüllen ($20 • Vorrat: %d/12)") % GameState.maint_kits
+			current_sub_prompt = tr("[F] Umsetzen oder verkaufen")
 		"decor_info":
 			var d_itype := str(target.get_meta("item_type", ""))
+			current_prompt = tr(GameState.get_decor_name(eid))
 			if d_itype == "prop_esd_workbench":
 				current_prompt = tr("ESD-Diagnose-Werkbank aktiv (+35 % Reparatur- & Diagnose-Tempo)")
+			current_sub_prompt = tr("[F] Umsetzen oder verkaufen")
 		"wall_breaker":
 			if GameState.grid_outage_left > 0.0:
 				current_prompt = tr("Netzausfall der Stadtwerke: Strom kommt in ca. %d Min. zurück") % GameState.get_grid_outage_minutes()
@@ -1815,6 +1872,8 @@ func _update_context_prompt() -> void:
 				current_prompt = tr("[E] Verlängerungskabel ziehen (%s • %d/%d Steckdosen)") % [p_lbl, used_p, max_p]
 				if used_p > 0:
 					current_sub_prompt = tr("[Rechtsklick] Letztes Stromkabel hier abziehen")
+			if GameState.decor_items.has(eid):
+				current_sub_prompt += "  •  " + tr("[F] Leiste umsetzen")
 		"net_port":
 			var used_np := GameState.count_cables_on("network", eid)
 			var max_np := GameState.get_max_ports("network", eid)
@@ -1833,6 +1892,8 @@ func _update_context_prompt() -> void:
 				current_prompt = tr("[E] Blaues Netzwerkkabel ziehen (%s • %d/%d Ports)") % [n_lbl, used_np, max_np]
 				if used_np > 0:
 					current_sub_prompt = tr("[Rechtsklick] Letztes Netzwerkkabel hier abziehen")
+			if GameState.decor_items.has(eid):
+				current_sub_prompt += "  •  " + tr("[F] Leiste umsetzen")
 		"cluster_port":
 			var used_cp := GameState.count_cables_on("cluster", eid)
 			var max_cp := GameState.get_max_ports("cluster", eid)
@@ -1842,12 +1903,18 @@ func _update_context_prompt() -> void:
 			else:
 				current_sub_prompt = tr("Verbundene Racks leihen sich bei Engpässen freie Hardware")
 		"extinguisher_station":
+			var p_station := str(target.get_meta("station", "garage"))
+			var p_ext := GameState.get_extinguisher_at_station(p_station)
 			if GameState.is_player_holding_extinguisher(peer_id):
-				current_prompt = tr("[E] Feuerlöscher zurückhängen")
-			elif GameState.extinguisher_held_by == 0 and not GameState.is_player_holding_anything(peer_id):
-				current_prompt = tr("[E] Feuerlöscher nehmen")
+				current_prompt = tr("[E] Feuerlöscher zurückhängen") if p_ext == "" else tr("Hier hängt schon ein Feuerlöscher")
+			elif p_ext == "":
+				current_prompt = tr("Halter ist leer. Der Feuerlöscher muss erst zurückgebracht werden.")
 			else:
-				current_prompt = tr("Feuerlöscher wird gerade benutzt")
+				current_prompt = tr("[E] Feuerlöscher nehmen")
+				current_sub_prompt = tr("Füllung: %d %%") % roundi(GameState.get_extinguisher_fill(p_ext) * 100.0)
+		"extinguisher_item":
+			current_prompt = tr("[E] Feuerlöscher aufheben")
+			current_sub_prompt = tr("Füllung: %d %%") % roundi(GameState.get_extinguisher_fill(eid) * 100.0)
 		"rack_panel":
 			var rpp: Variant = target.get_meta("rack_prop", null)
 			if is_instance_valid(rpp) and (rpp as Object).has_method("is_panel_open"):
@@ -1898,7 +1965,7 @@ func _update_context_prompt() -> void:
 				if ctype == GameState.INDOOR_UNIT_TYPE:
 					current_sub_prompt = tr("Kein Kabel nötig: läuft, sobald ein Goldis-Außengerät Strom hat")
 				else:
-					current_sub_prompt = tr("Auf die gelbe Buchse an der rechten Seite zielen für Stromkabel")
+					current_sub_prompt = tr("Auf die gelbe Buchse oben zielen für Stromkabel") if GameState.is_floor_cooler_type(ctype) else tr("Auf die gelbe Buchse an der rechten Seite zielen für Stromkabel")
 		"ups_unit":
 			if GameState.ups_units.has(eid):
 				var ch := float(GameState.ups_units[eid]["charge"])
@@ -1970,9 +2037,10 @@ func _update_context_prompt() -> void:
 				if st_state == "burning":
 					hover_mode = "warn"
 					if GameState.is_player_holding_extinguisher(peer_id):
-						current_prompt = tr("[Klick / E HALTEN] Brand in %s · Slot %d löschen!") % [rname, sidx + 1]
+						current_prompt = tr("[Linksklick HALTEN] Brand in %s · Slot %d löschen!") % [rname, sidx + 1]
+						current_sub_prompt = tr("Füllung: %d %%") % roundi(GameState.get_extinguisher_fill(GameState.get_held_extinguisher(peer_id)) * 100.0)
 					else:
-						current_prompt = tr("SERVER BRENNT! Feuerlöscher an der Nordwand holen!")
+						current_prompt = tr("SERVER BRENNT! Feuerlöscher vom Wandhalter holen!")
 				elif not held.is_empty() and str(held["item_type"]) == "server_tray":
 					if st_item != "":
 						hover_mode = "warn"
@@ -2499,6 +2567,35 @@ func _add_hose_part(parent: Node3D, points: PackedVector3Array, radius: float, m
 		parent.add_child(mi)
 
 
+## Vom Host geprüfter Admin-Teleport (nur der eigene Spieler).
+func admin_teleport(pos: Vector3, yaw: float) -> void:
+	if not is_local or not pos.is_finite():
+		return
+	is_seated_at_pc = false
+	is_typing_at_pc = false
+	_stand_blend_timer = 0.0
+	relocating_rack_id = ""
+	cable_start_id = ""
+	cable_start_slot = -1
+	if is_crouching:
+		_apply_crouch(false)
+	position = pos
+	rotation.y = yaw
+	velocity = Vector3.ZERO
+	SfxManager.play("save", -7.0, 1.08)
+	if _world != null and _world.has_method("send_local_pose"):
+		_world.send_local_pose(position, rotation.y, _head_pivot.rotation.x, 0, false)
+
+
+## Wer durch die Welt fällt, landet wieder sicher am eigenen Standort.
+func _rescue_from_fall() -> void:
+	velocity = Vector3.ZERO
+	if position.z < -80.0 and GameState.halle_nord_owned:
+		position = GameState.HALLE_NORD_ORIGIN + Vector3(3.2, 0.12, -4.2)
+	else:
+		position = Vector3(-4.1, 0.12, -3.5)
+
+
 func teleport_between_sites() -> void:
 	if not GameState.is_active:
 		return
@@ -2606,6 +2703,18 @@ void fragment() {
 	_ghost_root.add_child(_ghost_drop_ring)
 
 
+const DECOR_GHOSTS := {
+	"prop_storage_shelf": ["decor_storage_shelf", Vector2(1.56, 0.58)],
+	"prop_esd_workbench": ["decor_esd_workbench", Vector2(1.58, 0.84)],
+	"prop_parts_cabinet": ["decor_parts_cabinet", Vector2(1.16, 0.60)],
+	"prop_cold_aisle_gate": ["decor_cold_aisle_gate", Vector2(2.28, 0.24)],
+	"prop_vending_lounge": ["decor_vending_lounge", Vector2(1.50, 0.76)],
+	"prop_cctv_monitor": ["decor_cctv_monitor", Vector2(0.74, 0.50)],
+	"prop_power_strip": ["power_strip", Vector2(0.70, 0.16)],
+	"prop_lan_strip": ["lan_strip", Vector2(0.66, 0.18)],
+}
+
+
 func _rebuild_ghost_model(item_type: String, held: Dictionary, is_drop_preview: bool) -> void:
 	for c in _ghost_model_holder.get_children():
 		c.queue_free()
@@ -2634,8 +2743,11 @@ func _rebuild_ghost_model(item_type: String, held: Dictionary, is_drop_preview: 
 	elif item_type == "ups":
 		model = ModelLoader.instantiate_custom_model("ups_unit")
 		fp_size = Vector2(0.76, 0.62)
-	elif item_type == "cooler" or item_type == "chiller" or item_type == GameState.INDOOR_UNIT_TYPE:
-		var box_sz := Vector3(1.14, 1.50, 0.52) if item_type == "chiller" else (Vector3(0.96, 0.30, 0.22) if item_type == GameState.INDOOR_UNIT_TYPE else Vector3(1.04, 0.98, 0.48))
+	elif DECOR_GHOSTS.has(item_type):
+		model = ModelLoader.instantiate_custom_model(str(DECOR_GHOSTS[item_type][0]))
+		fp_size = DECOR_GHOSTS[item_type][1]
+	elif GameState.is_heat_pump_type(item_type) or GameState.is_floor_cooler_type(item_type) or item_type == GameState.INDOOR_UNIT_TYPE:
+		var box_sz: Vector3 = CoolerProp.GHOST_SIZES.get(item_type, Vector3(1.04, 0.98, 0.48))
 		var mi := MeshInstance3D.new()
 		var bm := BoxMesh.new()
 		bm.size = box_sz

@@ -1,6 +1,6 @@
 class_name AmbientNpcSystem
 extends Node3D
-## Photorealistische 4K-Mixamo-Außen-NPCs (player_realistic & delivery_driver_realistic via HumanoidRigHelper)
+## Photorealistische 4K-Außen-NPCs (player_realistic & delivery_driver_realistic via HumanoidRigHelper)
 ## mit echter Skeleton3D-Geh-Animation + organischer Regenpfützen-Shader mit Regentropfen-Ripples!
 
 var _walkers: Array[Dictionary] = []

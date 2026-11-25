@@ -368,7 +368,7 @@ def build_trades_van():
     pb = PartBuilder("Body", origin_g=Vector((0, 0, 0)))
     pb.box((0.0, 0.34, 0.0), (5.15, 0.18, 1.72), mats["chassis"], bevel=0.02)
 
-    # Kastenwagen-Karosserie (aerodynamische Sprinter-Schnauze + Hochdach)
+    # Kastenwagen-Karosserie (aerodynamische Lieferwagen-Schnauze + Hochdach)
     stations = [
         (-2.72, _rect_ring(0.42, 2.34, 0.95, 0.86, 1.35, 1.00)),
         (-2.45, _rect_ring(0.36, 2.40, 0.98, 0.88, 1.35, 1.02)),

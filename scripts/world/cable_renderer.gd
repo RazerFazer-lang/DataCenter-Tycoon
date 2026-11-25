@@ -14,6 +14,8 @@ const POWER_BEND_RADIUS := 0.16 # Kaltgerätekabel sind steifer als Patchkabel
 const NET_BEND_RADIUS := 0.10
 const BEND_STEPS := 10
 const EXIT_LEN := 0.11 # waagerechtes Stück direkt hinter dem Stecker
+const LIFT_POWER := 0.115 # Steckerlänge bei Buchsen, die nach oben zeigen
+const LIFT_NET := 0.075
 const PLUG_INSET := 0.012 # Stecker sitzt etwas in der Buchse
 const TYPE_SEPARATION := 0.07 # Abstand zwischen Strom- und Datenspur (Trennung wie im Rechenzentrum)
 const LANE_SPACING := 0.026 # Abstand paralleler Kabel gleichen Typs
@@ -117,11 +119,12 @@ func _ready() -> void:
 	_power_boot_rib_a = _cyl(0.0158, 0.0158, 0.003, 16)
 	_power_boot_rib_b = _cyl(0.0146, 0.0146, 0.003, 16)
 
-	_net_head_mesh = _box(Vector3(0.0135, 0.020, 0.0115))
-	_net_contact_mesh = _box(Vector3(0.0095, 0.003, 0.0015))
-	_net_latch_mesh = _box(Vector3(0.0055, 0.015, 0.0014))
-	_net_boot_mesh = _cyl(NET_RADIUS + 0.0015, 0.0088, 0.026, 12)
-	_net_guard_mesh = _box(Vector3(0.007, 0.012, 0.004))
+	# Auf die Buchsen der 3D-Modelle abgestimmt (Öffnung 24–28 mm), sonst verschwindet der Stecker darin.
+	_net_head_mesh = _box(Vector3(0.0215, 0.032, 0.0185))
+	_net_contact_mesh = _box(Vector3(0.0155, 0.004, 0.0015))
+	_net_latch_mesh = _box(Vector3(0.0088, 0.024, 0.0018))
+	_net_boot_mesh = _cyl(NET_RADIUS + 0.0015, 0.0115, 0.030, 12)
+	_net_guard_mesh = _box(Vector3(0.010, 0.016, 0.005))
 
 	_clip_power_mesh = _make_clip_mesh(POWER_RADIUS)
 	_clip_net_mesh = _make_clip_mesh(NET_RADIUS)
@@ -180,6 +183,8 @@ func rebuild_cables(cables_dict: Dictionary, port_resolver: Callable, dir_resolv
 		var vb: Vector3 = p_b
 		var n_a := _resolve_dir(dir_resolver, ctype, from_id, va, vb)
 		var n_b := _resolve_dir(dir_resolver, ctype, to_id, vb, va)
+		var up_a := _is_upward(dir_resolver, ctype, from_id)
+		var up_b := _is_upward(dir_resolver, ctype, to_id)
 		var li := int(lane_idx.get(ctype, 0))
 		lane_idx[ctype] = li + 1
 		var lane := _lane_offset(ctype, li)
@@ -192,7 +197,15 @@ func rebuild_cables(cables_dict: Dictionary, port_resolver: Callable, dir_resolv
 		_free_cable(cid)
 
 		var radius := _radius_for(ctype)
-		var pts := _laid_path(va, vb, n_a, n_b, lane, radius, _bend_for(ctype))
+		# Buchsen, die nach oben zeigen (Leisten): erst senkrecht aus der Buchse, dann im Bogen zur Seite.
+		var lift := Vector3.UP * (LIFT_POWER if ctype == "power" else LIFT_NET)
+		var pts := _laid_path(va + lift if up_a else va, vb + lift if up_b else vb, n_a, n_b, lane, radius, _bend_for(ctype))
+		if up_a:
+			pts = _with_lift(va, pts)
+		if up_b:
+			pts.reverse()
+			pts = _with_lift(vb, pts)
+			pts.reverse()
 		if pts.size() < 2:
 			continue
 		_cable_nodes[cid] = _build_laid_cable(ctype, pts, radius)
@@ -283,13 +296,35 @@ func _lane_offset(cable_type: String, idx: int) -> float:
 	return off if cable_type == "power" else -off
 
 
+func _is_upward(dir_resolver: Callable, cable_type: String, endpoint_id: String) -> bool:
+	if not dir_resolver.is_valid():
+		return false
+	var v: Variant = dir_resolver.call(cable_type, endpoint_id)
+	return v is Vector3 and (v as Vector3).y > 0.5
+
+
+## Setzt das senkrechte Stück vor den Pfad und rundet die Ecke ab.
+func _with_lift(port: Vector3, pts: Array[Vector3]) -> Array[Vector3]:
+	if pts.size() < 2:
+		return pts
+	var corner: Array[Vector3] = [port, pts[0], pts[0] + (pts[1] - pts[0]).normalized() * 0.03]
+	var out := _round_polyline(corner, 0.03)
+	for i in range(1, pts.size()):
+		out.append(pts[i])
+	return _dedupe(out)
+
+
 func _resolve_dir(dir_resolver: Callable, cable_type: String, endpoint_id: String, pos: Vector3, other: Vector3) -> Vector3:
 	if dir_resolver.is_valid():
 		var v: Variant = dir_resolver.call(cable_type, endpoint_id)
 		if v is Vector3:
 			var flat := Vector3((v as Vector3).x, 0.0, (v as Vector3).z)
 			if flat.length_squared() > 0.0001:
-				return flat.normalized()
+				flat = flat.normalized()
+				# Nach oben zeigende Buchsen dürfen zu beiden Seiten abgehen.
+				if (v as Vector3).y > 0.5 and flat.dot(other - pos) < 0.0:
+					flat = -flat
+				return flat
 	var to_other := Vector3(other.x - pos.x, 0.0, other.z - pos.z)
 	if to_other.length_squared() > 0.0001:
 		return to_other.normalized()
@@ -602,11 +637,11 @@ func _make_plug(cable_type: String) -> Node3D:
 		_add_part(plug, _power_boot_rib_a, _plug_mat, Vector3(0.0, 0.066, 0.0))
 		_add_part(plug, _power_boot_rib_b, _plug_mat, Vector3(0.0, 0.080, 0.0))
 	else:
-		_add_part(plug, _net_head_mesh, _rj45_mat, Vector3(0.0, 0.010, 0.0))
-		_add_part(plug, _net_contact_mesh, _metal_mat, Vector3(0.0, 0.0035, 0.0058))
-		_add_part(plug, _net_latch_mesh, _rj45_mat, Vector3(0.0, 0.010, -0.0068), Vector3(-0.18, 0.0, 0.0))
-		_add_part(plug, _net_boot_mesh, _net_mat, Vector3(0.0, 0.033, 0.0))
-		_add_part(plug, _net_guard_mesh, _net_mat, Vector3(0.0, 0.024, -0.0072))
+		_add_part(plug, _net_head_mesh, _rj45_mat, Vector3(0.0, 0.014, 0.0))
+		_add_part(plug, _net_contact_mesh, _metal_mat, Vector3(0.0, 0.0035, 0.0093))
+		_add_part(plug, _net_latch_mesh, _rj45_mat, Vector3(0.0, 0.014, -0.0108), Vector3(-0.18, 0.0, 0.0))
+		_add_part(plug, _net_boot_mesh, _net_mat, Vector3(0.0, 0.044, 0.0))
+		_add_part(plug, _net_guard_mesh, _net_mat, Vector3(0.0, 0.034, -0.0105))
 	return plug
 
 

@@ -844,7 +844,7 @@ def build_cpu(P: Part, tier: int):
         P.box((0.0, 0.0168, 0.0), (0.068, 0.0036, 0.068), M_COPPER, bevel=0.0)
         P.box((0.0, 0.0182, 0.0), (0.098, 0.0032, 0.098), M_ALU, bevel=0.0008)
         P.fins((0.0, 0.0290, 0.0), (0.096, 0.0185, 0.078), 13, 0, M_ALU, fill_ratio=0.45)
-        # Mittlerer Klemmbuegel in Gunmetal ueber den Rippen (echter Supermicro-1U-Look!)
+        # Mittlerer Klemmbuegel in Gunmetal ueber den Rippen
         P.box((0.0, 0.0392, 0.0), (0.100, 0.0024, 0.020), M_GUNMETAL, bevel=0.0006)
         P.box((0.0, 0.0406, 0.0), (0.036, 0.0005, 0.010), M_ALU, bevel=0.0)
         for sx in (-0.041, 0.041):

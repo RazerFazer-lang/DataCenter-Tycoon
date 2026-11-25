@@ -1,11 +1,11 @@
 class_name TerminalUI
 extends Control
-## v1.0 Streamlined Realistic Windows 11 Desktop OS Workstation (opened with [E] at PC Desk).
+## v1.0 Streamlined Realistic Desktop OS Workstation (opened with [E] at PC Desk).
 ## Exactly 4 Clean Apps:
 ##   1. [🛒 Shop]     — CloudParts.de with Empty Chassis, 66 Filtered Parts (DDR2-DDR5), Real Shopping Cart & Teile-Lager
 ##   2. [🎧 Support]  — Tickets, Live VoIP Customer Calls, Rented Racks, Client Contracts & AI/DDoS Firewall
 ##   3. [🏗 Gebäude]  — 5-Tier Router (Mbit/Gbit), Power/Transformer, Hall B/C & kWh Meter
-##   4. [📊 Monitor]  — Windows Task-Manager with 100% Real Hardware Metrics (GB RAM, TB, Mbit/s, Watts — Zero "CU")
+##   4. [📊 Monitor]  — Verion OS Systemmonitor with 100% Real Hardware Metrics (GB RAM, TB, Mbit/s, Watts — Zero "CU")
 
 signal close_requested
 signal typing_state_changed(is_typing: bool)
@@ -60,7 +60,7 @@ var _fin_msg: String = ""
 var _fin_msg_ok: bool = true
 
 # Der PC bleibt an, bis jemand im Startmenü "Herunterfahren" wählt.
-# Nur ein ausgeschalteter PC fährt beim Hinsetzen mit BIOS und Windows-Logo hoch.
+# Nur ein ausgeschalteter PC fährt beim Hinsetzen mit BIOS und Verion-Logo hoch.
 var _boot_screen: PcBootScreen = null
 var _boot_cold: bool = true
 var _terminal_open: bool = false
@@ -78,7 +78,7 @@ const APP_META := {
 	"shop": {"icon": "cart", "name": "Shop", "title": "CloudParts.de — Hardware-Shop, Warenkorb & Teile-Lager"},
 	"support": {"icon": "headset", "name": "Support", "title": "ServiceDesk & Kunden-Hub — Tickets, Verträge & AI"},
 	"upgrades": {"icon": "building", "name": "Gebäude", "title": "Router (Mbit/Gbit), Stromanschluss & Hallen-Ausbau"},
-	"monitor": {"icon": "chart", "name": "Monitor", "title": "Windows Task-Manager — Live Rechenzentrum-Monitor"},
+	"monitor": {"icon": "chart", "name": "Monitor", "title": "Verion OS Systemmonitor — Live Rechenzentrum-Monitor"},
 	"staff": {"icon": "people", "name": "Personal", "title": "Personalverwaltung — Team, Löhne & Bewerbungen"},
 	"bank": {"icon": "bank", "name": "Bank", "title": "Hanse Direktbank — Geschäftskonto, Kredite & Kontoauszug"},
 	"bills": {"icon": "invoice", "name": "Rechnungen", "title": "Rechnungen — Strom, Garagenmiete, Internet & Versicherung"},
@@ -133,7 +133,6 @@ func _ready() -> void:
 	GameState.racks_changed.connect(_refresh_all)
 	GameState.inventory_changed.connect(_refresh_all)
 	GameState.fuses_changed.connect(_refresh_all)
-	GameState.accessories_changed.connect(_refresh_all)
 	GameState.cart_changed.connect(_refresh_all)
 	GameState.shelf_changed.connect(_refresh_all)
 	GameState.tickets_changed.connect(_refresh_all)
@@ -333,7 +332,7 @@ func power_on_pc() -> void:
 		_active_app = PcScreenState.app
 		PcScreenState.report_local(PcScreenState.PHASE_DESKTOP, PcScreenState.app, false, PcScreenState.detail)
 	elif PcScreenState.phase == PcScreenState.PHASE_BOOT:
-		# Fährt noch hoch (z. B. aufgestanden, bevor Windows fertig war): an derselben Stelle weiter.
+		# Fährt noch hoch (z. B. aufgestanden, bevor das System fertig war): an derselben Stelle weiter.
 		_boot_cold = PcScreenState.cold_boot
 		_boot_started_msec = now - int(PcScreenState.get_boot_elapsed() * 1000.0)
 		_active_app = ""
@@ -353,7 +352,7 @@ func cancel_power_on() -> void:
 	PcScreenState.report_local_released()
 
 
-## Startmenü "Herunterfahren": Windows fährt herunter, der Bildschirm wird schwarz, dann steht der Spieler auf.
+## Startmenü "Herunterfahren": das System fährt herunter, der Bildschirm wird schwarz, dann steht der Spieler auf.
 func _shut_down_pc() -> void:
 	if _shutting_down or not _terminal_open or _boot_screen == null:
 		return
@@ -554,7 +553,7 @@ func _refresh_taskbar_highlights() -> void:
 		var is_open := (aid == _active_app)
 		var app_name := str(meta["name"])
 		_set_win_icon_kind(_btn_icon(btn), "phone" if aid == "support" and has_call else str(meta["icon"]))
-		# Windows 11: nur Symbole. Zähler stehen als kleines Abzeichen neben dem Symbol.
+		# nur Symbole. Zähler stehen als kleines Abzeichen neben dem Symbol.
 		if aid == "support" and (open_t > 0 or has_call):
 			btn.text = str(open_t)
 			btn.tooltip_text = tr("%s: %d offene Tickets%s") % [app_name, open_t, (" · " + tr("eingehender Anruf")) if has_call else ""]
@@ -727,56 +726,17 @@ func _checkout_cart() -> void:
 # ==============================================================================
 # APP 1: HARDWARE SHOP (CLOUDPARTS.DE) + REAL SHOPPING CART + TEILE-LAGER!
 # ==============================================================================
-## Sicherungen kommen mit dem Sprinter im Sammelpaket und landen dann im Lager.
+## Sicherungen kommen mit dem Lieferwagen im Sammelpaket und landen dann im Lager.
 func _add_fuse_shop_card(list: VBoxContainer) -> void:
 	var fuse_name := "Schraubsicherung 63 A (Sicherungskasten)"
 	_add_shop_item_card(list, {
 		"title": tr(fuse_name),
-		"desc": tr("Lieferung per Sprinter im Sammelpaket. Danach am Sicherungskasten mit [E] in einen leeren oder durchgebrannten Steckplatz stecken."),
+		"desc": tr("Lieferung per Lieferwagen im Sammelpaket. Danach am Sicherungskasten mit [E] in einen leeren oder durchgebrannten Steckplatz stecken."),
 		"info": tr("Im Lager: %d  •  Intakt im Kasten: %d / %d") % [GameState.fuse_stock, GameState.count_working_fuses(), GameState.FUSE_SLOT_COUNT],
 		"color": Color(0.86, 0.70, 0.36),
 		"price": GameState.FUSE_PRICE,
 		"on_buy": func(): _cart_add("acc", "fuse", "", fuse_name, GameState.FUSE_PRICE),
 	})
-
-
-## Steckleisten (Stromkasten) und Netzwerk-Verteiler (Router): kommen per Sprinter und werden bei Ankunft montiert.
-func _add_power_strip_card(list: VBoxContainer) -> void:
-	var breaker_cap := GameState.BREAKER_BASE_SOCKETS + GameState.power_strips * GameState.POWER_STRIP_EXTRA
-	var at_max := GameState.power_strips >= GameState.POWER_STRIP_MAX
-	var strip_name := "Steckleiste 4-fach (Stromkasten)"
-	_add_shop_item_card(list, {
-		"title": tr(strip_name),
-		"desc": tr("Lieferung per Sprinter, wird bei Ankunft am Stromkasten montiert. Belegt eine Steckdose und bringt +%d Steckplätze.") % GameState.POWER_STRIP_EXTRA,
-		"info": tr("Steckplätze am Kasten: %d  •  Montiert: %d / %d") % [breaker_cap, GameState.power_strips, GameState.POWER_STRIP_MAX],
-		"color": Color(0.84, 0.66, 0.14),
-		"price": GameState.POWER_STRIP_PRICE,
-		"disabled": at_max,
-		"btn_text": tr("Maximum erreicht") if at_max else "",
-		"on_buy": func(): _cart_add("acc", "power_strip", "", strip_name, GameState.POWER_STRIP_PRICE),
-	})
-
-
-func _add_net_hub_card(list: VBoxContainer) -> void:
-	var router_cap := GameState.ROUTER_BASE_PORTS + GameState.net_hubs * GameState.NET_HUB_EXTRA
-	var at_max := GameState.net_hubs >= GameState.NET_HUB_MAX
-	var hub_name := "Netzwerk-Verteiler 4-Port (Router)"
-	_add_shop_item_card(list, {
-		"title": tr(hub_name),
-		"desc": tr("Lieferung per Sprinter, wird bei Ankunft am Router montiert. Belegt einen Port und bringt +%d Netzwerkdosen.") % GameState.NET_HUB_EXTRA,
-		"info": tr("Ports am Router: %d  •  Montiert: %d / %d") % [router_cap, GameState.net_hubs, GameState.NET_HUB_MAX],
-		"color": Color(0.16, 0.40, 0.68),
-		"price": GameState.NET_HUB_PRICE,
-		"disabled": at_max,
-		"btn_text": tr("Maximum erreicht") if at_max else "",
-		"on_buy": func(): _cart_add("acc", "net_hub", "", hub_name, GameState.NET_HUB_PRICE),
-	})
-
-
-## Steckleisten und Netzwerk-Verteiler kommen per Sprinter und werden bei Ankunft montiert.
-func _add_accessory_shop_cards(list: VBoxContainer) -> void:
-	_add_power_strip_card(list)
-	_add_net_hub_card(list)
 
 
 ## Abschnittsüberschrift im Shop, gruppiert die Karten nach Kategorie.
@@ -852,7 +812,7 @@ func _add_shop_item_card(list: VBoxContainer, opts: Dictionary) -> void:
 	var badge_lbl := Label.new()
 	var badge_txt := str(opts.get("badge", ""))
 	if badge_txt == "":
-		badge_txt = tr("Sofort verfügbar") if instant else tr("Lieferung per Sprinter")
+		badge_txt = tr("Sofort verfügbar") if instant else tr("Lieferung per Lieferwagen")
 	badge_lbl.text = badge_txt
 	badge_lbl.add_theme_font_size_override("font_size", 10)
 	badge_lbl.modulate = Color(0.14, 0.44, 0.22) if instant else Color(0.12, 0.32, 0.58)
@@ -1048,14 +1008,14 @@ func _render_shop_app() -> void:
 		var tip := _make_light_card(Color(0.93, 0.98, 0.92), Color(0.36, 0.72, 0.44), 6, 12, 8)
 		left_list.add_child(tip)
 		var tl := Label.new()
-		tl.text = "START-TIPP: Lege 1× Server-Rack (4U) in den Warenkorb → Bestellen → der Cloud Express Sprinter liefert es. Am Rack drückst du [E], klickst einen freien Einschub an und wählst mit der Maus dein Mainboard. CPU, RAM, GPU, SSD & Co. kaufst du danach direkt im Einschub."
+		tl.text = "START-TIPP: Lege 1× Server-Rack (4U) in den Warenkorb → Bestellen → der Cloud-Express-Lieferwagen liefert es. Am Rack drückst du [E], klickst einen freien Einschub an und wählst mit der Maus dein Mainboard. CPU, RAM, GPU, SSD & Co. kaufst du danach direkt im Einschub."
 		tl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 		tl.add_theme_font_size_override("font_size", 11.5)
 		tl.modulate = Color(0.12, 0.38, 0.18)
 		tip.add_child(tl)
 
 	if _shop_tab == "chassis":
-		_add_shop_section(left_list, tr("Server-Racks"), tr("Gehäuse für deine Einschübe. Lieferung per Sprinter."))
+		_add_shop_section(left_list, tr("Server-Racks"), tr("Gehäuse für deine Einschübe. Lieferung per Lieferwagen."))
 		_populate_physical_shop_list(left_list, ["rack", "rack_pro"])
 		_add_shop_section(left_list, tr("Netzwerk"), tr("Switches für mehr Netzwerk-Ports im Rack."))
 		_populate_physical_shop_list(left_list, ["net_switch"])
@@ -1071,7 +1031,7 @@ func _render_shop_app() -> void:
 				GameState.request_refill_maint_kits()
 				_refresh_all(),
 		})
-		_add_shop_section(left_list, tr("Werkbank-Material"), tr("Schrauben und Wärmeleitpaste für Zusammenbau und Reparatur. Lieferung per Sprinter."))
+		_add_shop_section(left_list, tr("Werkbank-Material"), tr("Schrauben und Wärmeleitpaste für Zusammenbau und Reparatur. Lieferung per Lieferwagen."))
 		_add_shop_item_card(left_list, {
 			"title": tr("Schraubensortiment (%d Stück)") % GameState.SCREW_BOX_COUNT,
 			"desc": tr("M3- und M.2-Schrauben. Beim Ausbauen gelöste Schrauben landen wieder in der Schale."),
@@ -1100,14 +1060,14 @@ func _render_shop_app() -> void:
 			_add_shop_item_card(left_list, {
 				"title": tr(tname),
 				"desc": tr(str(td["desc"])),
-				"info": tr("Vorhanden") if owned else (tr("Braucht: %s") % tr(str(GameState.BENCH_TOOLS[need]["name"])) if locked else tr("Lieferung per Sprinter")),
+				"info": tr("Vorhanden") if owned else (tr("Braucht: %s") % tr(str(GameState.BENCH_TOOLS[need]["name"])) if locked else tr("Lieferung per Lieferwagen")),
 				"color": Color(0.80, 0.52, 0.18),
 				"price": tprice,
 				"disabled": owned or locked,
 				"btn_text": tr("Vorhanden") if owned else (tr("Gesperrt") if locked else ""),
 				"on_buy": func(): _cart_add("acc", "tool_" + tid, "", tname, tprice),
 			})
-		_add_shop_section(left_list, tr("Werkstatt-Spar-Bundle"), tr("Alle 7 Reparatur-Kits im Paket — Lieferung per Sprinter zum Einlagern im Regal."))
+		_add_shop_section(left_list, tr("Werkstatt-Spar-Bundle"), tr("Alle 7 Reparatur-Kits im Paket — Lieferung per Lieferwagen zum Einlagern im Regal."))
 		_populate_physical_shop_list(left_list, ["kit_bundle_all"])
 		_add_shop_section(left_list, tr("Einzelne Reparatur-Kits"), tr("Für Reparaturen an der 3D-Werkbank. Mehrere Kits gleicher Art kommen automatisch in platzsparenden 6er-Mengen-Kisten!"))
 		for kid in GameState.REPAIR_KIT_ORDER:
@@ -1129,17 +1089,15 @@ func _render_shop_app() -> void:
 			})
 	elif _shop_tab == "infra":
 		_add_shop_section(left_list, tr("Kühlung"), tr("Hält die Raumtemperatur unter Kontrolle."))
-		_populate_physical_shop_list(left_list, ["cooler", "chiller", "indoor_unit"])
-		_add_shop_section(left_list, tr("Stromversorgung"), tr("Notstrom, Sicherungen und zusätzliche Steckplätze am Stromkasten."))
-		_populate_physical_shop_list(left_list, ["ups"])
-		_add_power_strip_card(left_list)
+		_populate_physical_shop_list(left_list, ["cooler", "chiller", "indoor_unit", "cool_k90", "cool_inrow", "cool_tower", "cool_cdu"])
+		_add_shop_section(left_list, tr("Stromversorgung"), tr("Der Stromkasten hat nur eine Steckdose: mit Stromleisten verteilst du weiter."))
+		_populate_physical_shop_list(left_list, ["prop_power_strip", "ups"])
 		_add_fuse_shop_card(left_list)
-		_add_shop_section(left_list, tr("Netzwerk-Zubehör"), tr("Mehr Netzwerkdosen am Router."))
-		_add_net_hub_card(left_list)
+		_add_shop_section(left_list, tr("Netzwerk-Zubehör"), tr("Mehr Netzwerkdosen über LAN-Leisten."))
+		_populate_physical_shop_list(left_list, ["prop_lan_strip"])
 		_add_shop_section(left_list, tr("Einrichtung, Lagerregale & Technik-Props"), tr("Frei in allen Hallen platzierbar! Echte Lagerplätze, Werkbänke, Kaltgang-Türen & Deko."))
 		_populate_physical_shop_list(left_list, [
 			"prop_storage_shelf", "prop_esd_workbench", "prop_parts_cabinet",
-			"prop_power_strip", "prop_lan_strip",
 			"prop_cold_aisle_gate", "prop_vending_lounge", "prop_cctv_monitor",
 		])
 	elif _shop_tab == "deals":
@@ -1229,7 +1187,7 @@ func _render_shop_app() -> void:
 
 	if GameState.shopping_cart.is_empty():
 		var ce := Label.new()
-		ce.text = tr("Dein Warenkorb ist leer.") + "\n\n" + tr("Sammle links Racks & Reparatur-Kits oder konfiguriere am Rack einen Slot für den Warenkorb — alles kommt per Sprinter!")
+		ce.text = tr("Dein Warenkorb ist leer.") + "\n\n" + tr("Sammle links Racks & Reparatur-Kits oder konfiguriere am Rack einen Slot für den Warenkorb — alles kommt per Lieferwagen!")
 		ce.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 		ce.add_theme_font_size_override("font_size", 11.5)
 		ce.modulate = Color(0.42, 0.46, 0.54)
@@ -1685,7 +1643,7 @@ func _render_career_subtab(content: VBoxContainer) -> void:
 	bonus_lbl.modulate = Color(0.24, 0.32, 0.44)
 	tv.add_child(bonus_lbl)
 
-	# 2. Firmenstufe & Meilenstein-Boni Übersicht (Level 1 bis 5)
+	# 2. Firmenstufe & Meilenstein-Boni Übersicht (Level 1 bis 10)
 	var cur_lvl := GameState.get_company_level()
 	var lvl_card := _make_light_card(Color(0.94, 0.96, 1.0), Color(0.28, 0.52, 0.86), 7, 14, 10)
 	content.add_child(lvl_card)
@@ -1695,13 +1653,13 @@ func _render_career_subtab(content: VBoxContainer) -> void:
 	var l_head := Label.new()
 	var cur_val := GameState.get_company_value()
 	var next_thr := int(GameState.COMPANY_LEVEL_THRESHOLDS[mini(cur_lvl, GameState.COMPANY_LEVEL_THRESHOLDS.size() - 1)])
-	l_head.text = tr("FIRMENSTUFE %d / 5  •  Firmenwert: $%d%s") % [
-		cur_lvl, cur_val, (tr("  (Nächste Stufe bei $%d)") % next_thr) if cur_lvl < 5 else tr("  (MAXIMALSTUFE)")
+	l_head.text = tr("FIRMENSTUFE %d / 10  •  Firmenwert: $%d%s") % [
+		cur_lvl, cur_val, (tr("  (Nächste Stufe bei $%d)") % next_thr) if cur_lvl < GameState.COMPANY_LEVEL_THRESHOLDS.size() else tr("  (MAXIMALSTUFE)")
 	]
 	l_head.add_theme_font_size_override("font_size", 13.5)
 	l_head.modulate = Color(0.08, 0.24, 0.48)
 	lv.add_child(l_head)
-	for lvl_i in range(1, 6):
+	for lvl_i in range(1, GameState.COMPANY_LEVEL_THRESHOLDS.size() + 1):
 		var b_info: Dictionary = GameState.COMPANY_LEVEL_BENEFITS.get(lvl_i, {})
 		var unlocked_l := cur_lvl >= lvl_i
 		var bl := Label.new()
@@ -1980,7 +1938,7 @@ func _render_ai_firewall_subtab(content: VBoxContainer) -> void:
 	di.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	dh.add_child(di)
 	var dt := Label.new()
-	dt.text = "Windows Server Firewall & DDoS-Abwehr"
+	dt.text = "Verion OS Firewall & DDoS-Abwehr"
 	dt.add_theme_font_size_override("font_size", 15)
 	dt.modulate = Color(0.10, 0.12, 0.16)
 	di.add_child(dt)
@@ -2120,7 +2078,7 @@ func _render_upgrades_app() -> void:
 		pbtn.disabled = true
 		_style_win_btn(pbtn, Color(0.88, 0.90, 0.93), Color(0.76, 0.79, 0.82), Color(0.32, 0.36, 0.42))
 	elif GameState.is_power_fuse_on_way():
-		pbtn.text = tr("Unterwegs mit dem Sprinter")
+		pbtn.text = tr("Unterwegs mit dem Lieferwagen")
 		pbtn.disabled = true
 		_style_win_btn(pbtn, Color(0.88, 0.90, 0.93), Color(0.76, 0.79, 0.82), Color(0.32, 0.36, 0.42))
 	elif GameState.power_tier + 1 < GameState.POWER_TIERS.size():
@@ -2912,7 +2870,7 @@ func _build_ui() -> void:
 	# START MENU POPUP
 	_start_menu = PanelContainer.new()
 	_start_menu.visible = false
-	# Windows 11: das Startmenü öffnet sich mittig über der Taskleiste
+	# das Startmenü öffnet sich mittig über der Taskleiste
 	_start_menu.set_anchors_preset(Control.PRESET_CENTER_BOTTOM)
 	_start_menu.grow_horizontal = Control.GROW_DIRECTION_BOTH
 	_start_menu.grow_vertical = Control.GROW_DIRECTION_BEGIN
@@ -2935,11 +2893,11 @@ func _build_ui() -> void:
 	var sm_hdr_row := HBoxContainer.new()
 	sm_hdr_row.add_theme_constant_override("separation", 8)
 	sm_v.add_child(sm_hdr_row)
-	var sm_logo := _win_icon("windows", 16)
+	var sm_logo := _win_icon("verion", 16)
 	sm_logo.modulate = Color(0.10, 0.46, 0.82)
 	sm_hdr_row.add_child(sm_logo)
 	var sm_hdr := Label.new()
-	sm_hdr.text = "Windows Server — Start"
+	sm_hdr.text = "Verion OS — Start"
 	sm_hdr.add_theme_font_size_override("font_size", 14)
 	sm_hdr.modulate = Color(0.10, 0.14, 0.20)
 	sm_hdr_row.add_child(sm_hdr)
@@ -3033,7 +2991,7 @@ func _build_ui() -> void:
 
 	var start_btn := Button.new()
 	start_btn.tooltip_text = "Start"
-	_add_btn_icon(start_btn, "windows", 20, "center")
+	_add_btn_icon(start_btn, "verion", 20, "center")
 	start_btn.custom_minimum_size = Vector2(44, 40)
 	_style_taskbar_btn(start_btn, false, false)
 	_btn_icon(start_btn).modulate = Color(0.0, 0.47, 0.84)
@@ -3085,7 +3043,7 @@ func _build_ui() -> void:
 	_tray_net.add_theme_font_size_override("font_size", 12)
 	t_row.add_child(_tray_net)
 	t_row.add_child(VSeparator.new())
-	# Windows-Infobereich: WLAN und Lautsprecher, daneben Uhrzeit und Datum
+	# Infobereich: WLAN und Lautsprecher, daneben Uhrzeit und Datum
 	var tray_wifi := _win_icon("wifi", 16)
 	tray_wifi.modulate = Color(0.16, 0.18, 0.22)
 	t_row.add_child(tray_wifi)
@@ -3322,7 +3280,7 @@ func _open_power_overlay() -> void:
 			grid.add_child(lbl)
 
 	var note := Label.new()
-	note.text = tr("Du kaufst eine Drehsicherung. Sie kommt mit dem Sprinter im Sammelpaket ins Lager. Setze sie am Sicherungskasten mit [E] in Steckplatz F2 ein: Erst dann steigt die Stromstufe, und die alte Sicherung bekommst du in die Hand.")
+	note.text = tr("Du kaufst eine Drehsicherung. Sie kommt mit dem Lieferwagen im Sammelpaket ins Lager. Setze sie am Sicherungskasten mit [E] in Steckplatz F2 ein: Erst dann steigt die Stromstufe, und die alte Sicherung bekommst du in die Hand.")
 	note.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	note.add_theme_font_size_override("font_size", 12)
 	note.modulate = Color(0.36, 0.40, 0.46)
@@ -3552,7 +3510,7 @@ func _style_win_btn(btn: Button, bg: Color, border: Color, txt_col: Color) -> vo
 		ic.modulate = txt_col
 
 
-## Taskleisten-Button im Windows-11-Stil: flach, beim Überfahren hell hinterlegt,
+## Taskleisten-Button im modernen Stil: flach, beim Überfahren hell hinterlegt,
 ## geöffnete App mit blauem Strich unten, Warnzustand rot hinterlegt.
 ## Ohne Text sitzt das Symbol mittig, mit Text (Zähler) rückt der Text neben das Symbol.
 func _style_taskbar_btn(btn: Button, is_open: bool, alert: bool) -> void:

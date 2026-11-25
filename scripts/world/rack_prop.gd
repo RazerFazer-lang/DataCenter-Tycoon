@@ -16,6 +16,8 @@ var _rack_data: Dictionary = {}
 
 var _power_port_marker: Node3D
 var _net_port_marker: Node3D
+var _extra_jack_root: Node3D
+var _extra_jack_count: int = 0
 var _cluster_port_marker: Node3D
 var _power_led_mat: StandardMaterial3D
 var _net_led_mat: StandardMaterial3D
@@ -68,6 +70,52 @@ func setup(id: String, p_rack_type: String = "rack", p_showcase: bool = false) -
 	_setup_fan_audio()
 	SettingsManager.settings_changed.connect(_apply_graphics_setting)
 	_apply_graphics_setting()
+
+
+## Einzelne Buchsen an der Rückseite: Strom (2), LAN (2 am Gerät, weitere über Rack-Switches), Cluster (2).
+func get_socket_world_positions(cable_type: String) -> Array[Vector3]:
+	var out: Array[Vector3] = []
+	if cable_type == "cluster":
+		var c := _cluster_port_marker.position if _cluster_port_marker != null else Vector3(-0.015, 0.112, -0.484)
+		for ox in [-0.030, 0.030]:
+			out.append(to_global(Vector3(c.x + float(ox), c.y, -0.483)))
+		return out
+	var m := _power_port_marker if cable_type == "power" else _net_port_marker
+	if m == null:
+		return out
+	if cable_type == "power":
+		out.append(to_global(m.position))
+		out.append(to_global(m.position + Vector3(0.080, 0.0, 0.0)))
+		return out
+	for p in _net_socket_locals():
+		out.append(to_global(p))
+	return out
+
+
+func _net_socket_locals() -> Array[Vector3]:
+	var b := _net_port_marker.position
+	var out: Array[Vector3] = [Vector3(b.x - 0.022, b.y, -0.486), Vector3(b.x + 0.022, b.y, -0.486)]
+	for row in [0.046, -0.044]:
+		for i in range(7):
+			out.append(Vector3(b.x - 0.080 + float(i) * 0.030, b.y + float(row), -0.474))
+	return out
+
+
+## Zusätzliche RJ45-Buchsen rund um den Uplink, sobald Rack-Switches mehr Ports liefern.
+func _sync_extra_net_jacks(count: int) -> void:
+	if _extra_jack_count == count or _net_port_marker == null:
+		return
+	_extra_jack_count = count
+	if _extra_jack_root != null:
+		_extra_jack_root.queue_free()
+	_extra_jack_root = Node3D.new()
+	add_child(_extra_jack_root)
+	var frame := _mat(Color(0.62, 0.65, 0.69), 0.35, 0.75)
+	var hole := _mat(Color(0.03, 0.035, 0.045), 0.9, 0.0)
+	var locals := _net_socket_locals()
+	for i in range(2, mini(2 + count, locals.size())):
+		_limit_detail_range(_add_box(_extra_jack_root, locals[i] + Vector3(0.0, 0.0, 0.004), Vector3(0.027, 0.025, 0.010), frame))
+		_limit_detail_range(_add_box(_extra_jack_root, locals[i] + Vector3(0.0, 0.0, -0.0012), Vector3(0.0235, 0.020, 0.001), hole))
 
 
 func get_power_port_global_pos() -> Vector3:
@@ -223,7 +271,23 @@ func _process(delta: float) -> void:
 			spark_fx.emitting = false
 			continue
 
-		var running := powered and st == "ok"
+		var offline := bool(slot.get("offline", false)) and st == "ok"
+		var booting := offline and powered and float(slot.get("boot_total", 0.0)) > 0.0
+		vis["boot_t"] = (float(vis.get("boot_t", 0.0)) + delta) if booting else 0.0
+		if booting:
+			# Lüfter laufen beim Einschalten kurz auf Vollgas, danach ruhig weiter
+			var boot_p := clampf(float(vis["boot_t"]) / maxf(0.1, float(slot.get("boot_total", 6.0))), 0.0, 1.0)
+			var boot_speed := lerpf(4.0, 34.0, clampf(boot_p * 5.0, 0.0, 1.0)) if boot_p < 0.45 else lerpf(34.0, 12.0, clampf((boot_p - 0.45) * 3.0, 0.0, 1.0))
+			active_servers += 1
+			gpu_weight += 1.2 * clampf(boot_speed / 34.0, 0.2, 1.0)
+			for bf in vis["hw_fans"]:
+				if is_instance_valid(bf):
+					var bnode := bf as Node3D
+					if str(bnode.get_meta("spin_axis", "z")) == "x":
+						bnode.rotation.x += delta * boot_speed
+					else:
+						bnode.rotation.z += delta * boot_speed
+		var running := powered and st == "ok" and not offline
 		if running:
 			active_servers += 1
 			var comps: Dictionary = slot.get("components", {})
@@ -241,6 +305,7 @@ func _process(delta: float) -> void:
 					else:
 						fnode.rotation.z += delta * speed
 
+		_set_leds_lit(vis, powered and (not offline or booting))
 		if st == "burning":
 			has_fire = true
 			smoke_fx.emitting = true
@@ -287,7 +352,9 @@ func _process(delta: float) -> void:
 			smoke_fx.emitting = false
 			flame_fx.emitting = false
 			spark_fx.emitting = false
-			if not powered:
+			if booting:
+				_show_boot_leds(vis, slot, i)
+			elif not powered or offline:
 				led_mat.emission = Color(0.14, 0.14, 0.16)
 				led_mat.emission_energy_multiplier = 0.02
 				for hm in hdd_mats:
@@ -355,6 +422,49 @@ func _process(delta: float) -> void:
 	_update_fan_audio(delta, active_servers, gpu_weight, temp)
 
 
+## Ohne Strom sind die LED-Linsen dunkel, sonst leuchtet ihre Grundfarbe weiter.
+func _set_leds_lit(vis: Dictionary, lit: bool) -> void:
+	if bool(vis.get("leds_lit", true)) == lit:
+		return
+	vis["leds_lit"] = lit
+	var mats: Array = [vis["led_mat"], vis["nic_mat"], vis["bmc_mat"]]
+	mats.append_array(vis["hdd_mats"])
+	for m_v in mats:
+		var m := m_v as StandardMaterial3D
+		if m == null:
+			continue
+		if not m.has_meta("lit_albedo"):
+			m.set_meta("lit_albedo", m.albedo_color)
+		m.albedo_color = m.get_meta("lit_albedo") if lit else Color(0.05, 0.05, 0.055)
+
+
+const BOOT_CODES: Array[String] = ["00", "19", "2B", "32", "4F", "60", "78", "92", "99", "A0", "AA"]
+
+
+## Hochfahren: BMC zuerst, dann Laufwerke der Reihe nach, zum Schluss Netzwerk und Status-LED.
+func _show_boot_leds(vis: Dictionary, slot: Dictionary, idx: int) -> void:
+	var p := clampf(float(vis["boot_t"]) / maxf(0.1, float(slot.get("boot_total", 6.0))), 0.0, 1.0)
+	var led_mat: StandardMaterial3D = vis["led_mat"]
+	var nic_mat: StandardMaterial3D = vis["nic_mat"]
+	var bmc_mat: StandardMaterial3D = vis["bmc_mat"]
+	var post_lbl: Label3D = vis["post_lbl"]
+	var hdds: Array = vis["hdd_mats"]
+	led_mat.emission = Color(0.95, 0.66, 0.16)
+	led_mat.emission_energy_multiplier = 0.9 if sin(_anim_time * (5.0 + p * 10.0)) > 0.0 else 0.08
+	bmc_mat.emission = Color(0.20, 0.60, 0.98)
+	bmc_mat.emission_energy_multiplier = 0.9 if sin(_anim_time * 9.0 + float(idx)) > -0.3 else 0.1
+	for h_i in range(hdds.size()):
+		var hm := hdds[h_i] as StandardMaterial3D
+		var on_at := 0.20 + 0.45 * float(h_i) / float(maxi(1, hdds.size()))
+		hm.emission = Color(0.22, 0.80, 0.38)
+		hm.emission_energy_multiplier = 0.04 if p < on_at else (0.9 if sin(_anim_time * 21.0 + float(h_i) * 2.0) > 0.2 else 0.15)
+	nic_mat.emission = Color(0.24, 0.64, 0.96)
+	nic_mat.emission_energy_multiplier = 0.03 if p < 0.75 else (0.8 if sin(_anim_time * 24.0) > 0.0 else 0.1)
+	post_lbl.text = BOOT_CODES[clampi(int(p * float(BOOT_CODES.size())), 0, BOOT_CODES.size() - 1)]
+	post_lbl.modulate = Color(0.96, 0.58, 0.16)
+	post_lbl.visible = true
+
+
 func _update_fan_audio(delta: float, active_servers: int, gpu_weight: float, temp: float) -> void:
 	if _fan_audio == null or is_showcase_only:
 		return
@@ -387,6 +497,8 @@ func _refresh_visuals() -> void:
 	var clustered := bool(_rack_data.get("clustered", false))
 	var temp := float(_rack_data.get("temp", 22.0))
 	var slots: Array = _rack_data.get("slots", [])
+	if not is_showcase_only and GameState.racks.has(rack_id):
+		_sync_extra_net_jacks(maxi(0, GameState.get_max_ports("network", rack_id) - 2))
 
 	if _power_led_mat != null:
 		_power_led_mat.emission = Color(0.24, 0.84, 0.40) if powered else Color(0.16, 0.16, 0.18)
@@ -470,6 +582,13 @@ func _refresh_visuals() -> void:
 				any_fault = true
 				slot_lbl.text = tr("DEFEKT · Schacht ziehen → Werkbank")
 				slot_lbl.modulate = Color(0.96, 0.34, 0.30)
+			elif bool(slot.get("offline", false)):
+				if float(slot.get("boot_total", 0.0)) > 0.0:
+					slot_lbl.text = tr("FÄHRT HOCH …") if powered else tr("KEIN STROM")
+					slot_lbl.modulate = Color(0.98, 0.74, 0.24)
+				else:
+					slot_lbl.text = tr("STROMLOS · Schacht einschieben")
+					slot_lbl.modulate = Color(0.62, 0.65, 0.70)
 			else:
 				var up_tag := _get_upgrade_badge(slot)
 				slot_lbl.text = "%s%s" % [tr(str(cat["name"])), up_tag]
@@ -597,8 +716,11 @@ func _build_rack_geometry() -> void:
 	_power_led_mat = _make_led_mat(Color(0.24, 0.84, 0.40))
 	_limit_detail_range(_add_cyl(self, Vector3(-0.145, top_y - 0.002, -0.474), 0.009, 0.010, _power_led_mat, Vector3(90.0, 0.0, 0.0)))
 	_power_port_marker = Node3D.new()
-	_power_port_marker.position = Vector3(-0.27, top_y - 0.004, -0.492)
+	_power_port_marker.position = Vector3(-0.27, top_y - 0.004, -0.488)
 	add_child(_power_port_marker)
+	# Zweite Dose zum Durchschleifen rechts neben der Haupteinspeisung
+	_limit_detail_range(_add_box(self, Vector3(-0.19, top_y - 0.004, -0.474), Vector3(0.056, 0.044, 0.022), dark_mat))
+	_limit_detail_range(_add_box(self, Vector3(-0.19, top_y - 0.004, -0.4862), Vector3(0.048, 0.034, 0.002), _mat(Color(0.02, 0.02, 0.025), 0.9, 0.0)))
 	if not is_showcase_only:
 		var p_area := _make_area(Vector3(0.30, 0.24, 0.24), {"interact_type": "power_port", "entity_id": rack_id})
 		p_area.position = Vector3(-0.25, top_y, -0.47)

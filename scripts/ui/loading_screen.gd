@@ -17,9 +17,9 @@ const TIPS: Array[String] = [
 
 const STAGES: Array[String] = [
 	"Initialisiere Gebäude-Architektur & 3D-Beleuchtung…",
-	"Lade 66 Hardware-Komponenten (DDR2–DDR5, EPYC, H200)…",
+	"Lade 66 Hardware-Komponenten (DDR2–DDR5, CPUs, GPUs)…",
 	"Kalibriere Raum-Akustik & 3D-Lüfter-Simulation…",
-	"Starte Windows-Workstation & Kunden-Support-Desk…",
+	"Starte Verion-OS-Workstation & Kunden-Support-Desk…",
 	"Synchronisiere Co-op-Netzwerk & Weltzustand…",
 	"Rechenzentrum bereit!",
 ]

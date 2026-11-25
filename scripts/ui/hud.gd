@@ -9,6 +9,7 @@ extends Control
 
 signal resume_requested
 signal leave_requested
+signal admin_requested
 
 const HUD_BG := Color(0.055, 0.058, 0.066, 0.86)
 const HUD_BORDER := Color(0.24, 0.25, 0.27, 0.85)
@@ -63,6 +64,7 @@ var _crew_panel: PanelContainer
 var _crew_box: VBoxContainer
 ## Pausemenü: Mitspielerliste mit Ping und Kick-Knopf (nur Host).
 var _pause_players_box: VBoxContainer
+var _pause_admin_btn: Button
 ## peer_id -> Ping-Label in der Pausemenü-Liste
 var _pause_ping_labels: Dictionary = {}
 var _help_panel: PanelContainer
@@ -172,6 +174,7 @@ func set_pause_visible(show_pause: bool) -> void:
 		if is_host and not NetworkManager.public_ip.is_empty():
 			_pause_world_lbl.text += "  •  " + tr("IP für Freunde: %s (Port %d)") % [NetworkManager.public_ip, NetworkManager.hosted_port]
 		_save_section.visible = is_host
+		_pause_admin_btn.visible = AdminManager.is_local_admin()
 		_refresh_pause_players()
 		_save_name_input.text = GameState.current_save_name
 		_pause_master_slider.set_value_no_signal(SettingsManager.master_volume * 100.0)
@@ -1214,9 +1217,10 @@ func _refresh_slot_bar() -> void:
 			continue
 		var s := clampi(int(c.get("held_slot", 1)), 1, GameState.SLOT_COUNT)
 		names[s - 1] = GameState.get_crate_display_label(c)
-	if GameState.extinguisher_held_by == pid:
-		var es := clampi(GameState.extinguisher_held_slot, 1, GameState.SLOT_COUNT)
-		names[es - 1] = tr("Feuerlöscher")
+	for ext_id in GameState.extinguishers.keys():
+		var ext: Dictionary = GameState.extinguishers[ext_id]
+		if int(ext["held_by"]) == pid:
+			names[clampi(int(ext["slot"]), 1, GameState.SLOT_COUNT) - 1] = tr("Feuerlöscher")
 	for i in GameState.SLOT_COUNT:
 		if not names[i].is_empty():
 			continue
@@ -1432,6 +1436,13 @@ func _build_pause_overlay() -> void:
 	_pause_players_box.add_theme_constant_override("separation", 6)
 	_pause_players_box.visible = false
 	pvbox.add_child(_pause_players_box)
+
+	_pause_admin_btn = Button.new()
+	_pause_admin_btn.text = tr("Admin-Menü [F10]")
+	_pause_admin_btn.custom_minimum_size = Vector2(0, 34)
+	UIStyle.style_button(_pause_admin_btn, Color(0.20, 0.17, 0.10), UIStyle.COL_ACCENT)
+	_pause_admin_btn.pressed.connect(func(): admin_requested.emit())
+	pvbox.add_child(_pause_admin_btn)
 
 	var log_btn := Button.new()
 	log_btn.text = "Log-Ordner öffnen"

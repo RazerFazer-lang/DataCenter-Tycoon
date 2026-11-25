@@ -122,7 +122,7 @@ func _build_all_materials() -> void:
 	epoxy_mat.uv1_scale = Vector3(0.55, 0.55, 0.55)
 	_materials["epoxy_floor"] = epoxy_mat
 
-	# 3. Clean Bright Enterprise Raised Datacenter Floor (Hall C — like Hetzner/AWS/Google DC)
+	# 3. Clean Bright Enterprise Raised Datacenter Floor (Hall C — hyperscale style)
 	var ent_pair := _cached_tex_pair("raised_floor_c", 1024, _render_raised_floor.bind(Color(0.68, 0.70, 0.72), Color(0.75, 0.77, 0.79), Color(0.36, 0.38, 0.41)))
 	var ent_mat := StandardMaterial3D.new()
 	ent_mat.albedo_texture = ent_pair[0]

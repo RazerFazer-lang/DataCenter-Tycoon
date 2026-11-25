@@ -1,7 +1,7 @@
 class_name PcBootScreen
 extends Control
 ## Hochfahr-Animation des Büro-PCs.
-## Kaltstart: Hersteller-Logo, BIOS-Selbsttest, Windows-Ladekreis, Anmeldung.
+## Kaltstart: Hersteller-Logo, BIOS-Selbsttest, Ladekreis, Anmeldung.
 ## Aufwachen aus dem Energiesparmodus: nur der Anmeldebildschirm.
 ## Klick, Leertaste oder Enter springt direkt zur Anmeldung.
 
@@ -229,7 +229,7 @@ func _draw_os_logo(r: Rect2, k: float, t: float) -> void:
 	var a := clampf(t / 0.35, 0.0, 1.0)
 	var c := r.get_center()
 	var s := 120.0 * k
-	UIStyle.draw_icon(self, "windows", Rect2(c.x - s * 0.5, c.y - s * 0.85, s, s), Color(0.20, 0.60, 1.0, a))
+	UIStyle.draw_icon(self, "verion", Rect2(c.x - s * 0.5, c.y - s * 0.85, s, s), Color(0.20, 0.60, 1.0, a))
 	_draw_spinner(Vector2(c.x, c.y + s * 0.75), 22.0 * k, t, a)
 
 

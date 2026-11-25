@@ -151,7 +151,7 @@ def build_and_render():
             led_m = mat_led_green if (idx + s_i) % 4 != 0 else mat_led_blue
             add_box(f"LED_L_{idx}_{s_i}", (-1.06, ry + 0.18, sz + 0.04), (0.008, 0.016, 0.008), led_m)
 
-    # Echte Detail-Props im Vordergrund: USV + Pelican-Repair-Kit-Koffer
+    # Echte Detail-Props im Vordergrund: USV + Repair-Kit-Koffer
     import_glb("ups.glb", loc=(1.18, 0.55, 0.0), rot_z_deg=90.0)
     import_glb("repair_kit_case.glb", loc=(0.48, 1.38, 0.0), rot_z_deg=26.0, scale=1.0)
 

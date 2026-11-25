@@ -40,6 +40,13 @@ func get_power_port_global_pos() -> Vector3:
 	return _power_port_marker.global_position if _power_port_marker != null else global_position + Vector3(0.0, 1.32, 0.30)
 
 
+func get_socket_world_positions() -> Array[Vector3]:
+	var base := get_power_port_global_pos()
+	var side := global_transform.basis.x * 0.026
+	var out: Array[Vector3] = [base - side, base + side]
+	return out
+
+
 func _process(delta: float) -> void:
 	_blink_t += delta
 	if _ups_data.is_empty() or _status_led_mat == null:

@@ -1,4 +1,4 @@
-"""Blender 5.2 Generator fuer den realistischen 2K-PBR CLOUD-EXPRESS Lieferwagen (Sprinter-Klasse).
+"""Blender 5.2 Generator fuer den realistischen 2K-PBR CLOUD-EXPRESS Lieferwagen (Lieferwagen-Klasse).
 Exportiert nach assets/models/delivery_van.glb.
 
 Godot-Koordinaten (g(x, y, z) -> Blender (x, -z, y)):
@@ -262,7 +262,7 @@ class PartBuilder:
         self._uv_box(faces, 0.5)
 
     def loft_x(self, stations: list, mat, cap_ends: bool = True, smooth: bool = True):
-        """Erzeugt eine sauber geschwungene Sprinter-Karosserieform entlang der Godot-X-Achse.
+        """Erzeugt eine sauber geschwungene Lieferwagen-Karosserieform entlang der Godot-X-Achse.
         stations: Liste von (x_g, [(y_g, z_g), ...]) mit gleicher Punktzahl im Querschnitt.
         """
         mid = self._mid(mat)
@@ -311,7 +311,7 @@ class PartBuilder:
 
 
 def _rounded_profile(y_bot: float, y_top: float, half_w_bot: float, half_w_mid: float, half_w_top: float, y_mid: float):
-    """8-Punkt-Querschnitt mit leicht gewoelbten Seitenwaenden & gerundeter Dachkante (Sprinter-Silhouette)."""
+    """8-Punkt-Querschnitt mit leicht gewoelbten Seitenwaenden & gerundeter Dachkante (Lieferwagen-Silhouette)."""
     return [
         (y_bot, -half_w_bot),
         (y_mid, -half_w_mid),
@@ -374,7 +374,7 @@ def build_van():
 
     B = PartBuilder("Van_Body")
 
-    # 1. Geschwungene Sprinter-Motorhaube & Frontpartie (X = 1.96 .. 2.86)
+    # 1. Geschwungene Lieferwagen-Motorhaube & Frontpartie (X = 1.96 .. 2.86)
     hood_stations = [
         (1.96, _rounded_profile(0.42, 1.48, 0.95, 0.98, 0.88, 0.96)),
         (2.34, _rounded_profile(0.42, 1.38, 0.94, 0.96, 0.84, 0.92)),
@@ -456,7 +456,7 @@ def build_van():
         B.box((2.86, 0.84, lz * 1.06), (0.08, 0.07, 0.22), M["hazard"], bevel=0.006)
         B.box((2.90, 0.46, lz * 0.92), (0.05, 0.09, 0.16), M["headlight"], bevel=0.008)
 
-    # 6. Aussenspiegel (Doppelarm-Sprinter-Spiegel), Radlauf-Verbreiterungen & Dach-Rundumleuchte
+    # 6. Aussenspiegel (Doppelarm-Lieferwagen-Spiegel), Radlauf-Verbreiterungen & Dach-Rundumleuchte
     for sz in (-1.0, 1.0):
         B.box((2.06, 1.56, sz * 1.12), (0.10, 0.28, 0.16), M["bumper"], bevel=0.016)
         B.box((2.04, 1.50, sz * 1.02), (0.04, 0.03, 0.18), M["bumper"], bevel=0.004)

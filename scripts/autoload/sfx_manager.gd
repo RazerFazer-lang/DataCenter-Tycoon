@@ -8,7 +8,7 @@ const MIX_RATE := 44100
 # Erzeugte Klänge werden hier gespeichert, damit nur der erste Start rechnen muss (~870 ms gemessen).
 const SFX_CACHE_DIR := "user://sfx_cache"
 # Erhöhen, wenn sich ein Generator oder seine Parameter ändern, sonst bleiben die alten Klänge im Cache.
-const SFX_CACHE_VERSION := 15
+const SFX_CACHE_VERSION := 16
 const EXTERNAL_AUDIO_DIR := "res://assets/audio"
 
 var _sounds: Dictionary = {}
@@ -58,6 +58,10 @@ func _generate_sounds() -> void:
 	_sounds["breaker_trip"] = _gen_breaker_trip()
 	_sounds["power_down"] = _gen_power_down_whine()
 	_sounds["upgrade"] = _gen_hardware_install_ratchet()
+	# Einschub: Stecker rastet hinten ein und die Lüfter laufen hoch / Stecker löst sich und alles läuft aus
+	_sounds["server_latch"] = _gen_server_power(true)
+	_sounds["server_off"] = _gen_server_power(false)
+	_sounds["server_ready"] = _gen_soft_chime([1318.51], 0.07, 0.10)
 	# Werkbank: Schraubendreher, Clips, Steckplätze, Paste
 	_sounds["screw_tick"] = _gen_click_burst([[0.0, 2300.0, 0.30, 260.0], [0.006, 1500.0, 0.20, 210.0]], 0.035, 0.30)
 	_sounds["screw_tight"] = _gen_click_burst([[0.0, 900.0, 0.36, 60.0], [0.045, 1650.0, 0.42, 120.0], [0.052, 520.0, 0.30, 50.0]], 0.16, 0.26)
@@ -105,7 +109,7 @@ func _generate_sounds() -> void:
 	_sounds["ups_beep"] = _gen_soft_chime([1120.0], 0.08, 0.14)
 	_sounds["bill"] = _gen_soft_chime([440.0, 392.0], 0.09, 0.16)
 
-	# Windows-typische Systemklänge des Büro-PCs
+	# Systemklänge des Büro-PCs
 	_sounds["win_logon"] = _gen_os_chord([392.0, 587.33, 783.99, 1174.66], 0.16, 1.6, 0.11)
 	_sounds["win_shutdown"] = _gen_os_chord([1174.66, 783.99, 587.33, 392.0], 0.14, 1.4, 0.10)
 	_sounds["win_notify"] = _gen_soft_chime([880.0, 1318.51], 0.05, 0.13)
@@ -829,6 +833,37 @@ func _gen_heavy_steel_place() -> AudioStreamWAV:
 		var metal := (sin(TAU * 420.0 * t) * 0.15 + sin(TAU * 695.0 * t) * 0.09) * env_ring
 		var rattle := lp * 0.40 * exp(-u * 9.0)
 		s[i] = clampf((thud + metal + rattle) * 0.60, -0.95, 0.95)
+	return _make_wav(s)
+
+
+## Klack am Rückwandstecker, danach Lüfter hoch (starting) oder Auslaufen.
+func _gen_server_power(starting: bool) -> AudioStreamWAV:
+	var duration := 2.4 if starting else 1.3
+	var count := int(MIX_RATE * duration)
+	var s := PackedFloat32Array()
+	s.resize(count)
+	var lp := 0.0
+	var lp2 := 0.0
+	var phase := 0.0
+	for i in range(count):
+		var t := float(i) / float(MIX_RATE)
+		var w := randf_range(-1.0, 1.0)
+		var ce := exp(-t * 62.0)
+		var clack := (sin(TAU * 310.0 * t) * 0.46 + sin(TAU * 1240.0 * t) * 0.26 + w * 0.34) * ce
+		if t >= 0.055:
+			var t2 := t - 0.055
+			clack += (sin(TAU * 820.0 * t2) * 0.26 + w * 0.20) * exp(-t2 * 95.0)
+		var level := 0.0
+		if starting:
+			var ft := maxf(0.0, t - 0.22)
+			level = clampf(ft * 1.6, 0.0, 1.0) * (1.0 - 0.55 * smoothstep(1.2, 2.0, t)) * (1.0 - smoothstep(2.0, 2.4, t))
+		else:
+			level = (1.0 - smoothstep(0.05, 1.3, t)) * 0.8
+		phase += TAU * (90.0 + 360.0 * level) / float(MIX_RATE)
+		lp = lerpf(lp, w, 0.10 + 0.22 * level)
+		lp2 = lerpf(lp2, lp, 0.06)
+		var fan := ((lp - lp2) * 0.34 + sin(phase) * 0.05 + sin(phase * 2.0) * 0.03) * level
+		s[i] = clampf((clack + fan) * 0.62, -0.95, 0.95)
 	return _make_wav(s)
 
 

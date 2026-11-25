@@ -28,6 +28,7 @@ var _showcase_container: Node3D
 var _rack_nodes: Dictionary = {}   # rack_id -> RackProp
 var _cooler_nodes: Dictionary = {} # cooler_id -> CoolerProp
 var _ups_nodes: Dictionary = {}    # ups_id -> UpsProp
+var _extinguisher_nodes: Dictionary = {}
 var _decor_nodes: Dictionary = {}  # decor_id -> DecorProp
 var _cart_nodes: Dictionary = {}   # cart_id -> CartProp
 var _crate_nodes: Dictionary = {}  # crate_id -> CrateProp
@@ -520,7 +521,9 @@ func reset_world() -> void:
 	_cable_renderer.rebuild_cables({}, get_port_world_pos)
 	_cable_renderer.update_preview_cable(false, "power", Vector3.ZERO, Vector3.ZERO)
 	_garage.set_room_level(0)
-	_garage.set_extinguisher_mounted(true)
+	for st in GameState.EXT_STATIONS:
+		_garage.set_extinguisher_mounted(st, true)
+	_sync_extinguisher()
 
 
 func open_terminal() -> void:
@@ -608,7 +611,23 @@ func _sync_room_level() -> void:
 
 
 func _sync_extinguisher() -> void:
-	_garage.set_extinguisher_mounted(GameState.extinguisher_held_by == 0)
+	for st in GameState.EXT_STATIONS:
+		_garage.set_extinguisher_mounted(st, GameState.get_extinguisher_at_station(st) != "")
+	for id in GameState.extinguishers.keys():
+		var e: Dictionary = GameState.extinguishers[id]
+		var on_floor: bool = GameState.is_active and int(e["held_by"]) == 0 and str(e["station"]) == ""
+		var node: Variant = _extinguisher_nodes.get(id)
+		if not on_floor:
+			if is_instance_valid(node):
+				(node as Node).queue_free()
+			_extinguisher_nodes.erase(id)
+			continue
+		if not is_instance_valid(node):
+			node = _garage.build_loose_extinguisher(str(id))
+			add_child(node as Node3D)
+			_extinguisher_nodes[id] = node
+		(node as Node3D).position = e["pos"]
+		(node as Node3D).rotation.y = float(e["yaw"])
 
 
 func _sync_racks() -> void:
@@ -759,18 +778,17 @@ func _on_router_visuals_rebuilt() -> void:
 ## Legt jedes Kabel an Anschlüssen mit mehreren Buchsen (Strombus Halle C, Wand-Router)
 ## auf die beim Stecken gewählte Buchse. null = allgemeiner Port des Anschlusses.
 func _make_cable_socket_resolver() -> Callable:
-	var slot_maps := {
-		"power": {GameState.HALL_C_BREAKER_ID: GameState.get_cable_slot_map("power", GameState.HALL_C_BREAKER_ID)},
-		"network": {GameState.WALL_ROUTER_ID: GameState.get_cable_slot_map("network", GameState.WALL_ROUTER_ID)},
-	}
+	var slot_maps := {}
 	return func(cid: String, ctype: String, eid: String) -> Variant:
-		var per_type: Dictionary = slot_maps.get(ctype, {})
-		if not per_type.has(eid):
+		var socks := get_socket_positions(ctype, eid)
+		if socks.is_empty():
 			return null
-		var slots: Dictionary = per_type[eid]
+		var key := ctype + "|" + eid
+		if not slot_maps.has(key):
+			slot_maps[key] = GameState.get_cable_slot_map(ctype, eid)
+		var slots: Dictionary = slot_maps[key]
 		if not slots.has(cid):
 			return null
-		var socks := get_socket_positions(ctype, eid)
 		var idx := int(slots[cid])
 		if idx >= 0 and idx < socks.size():
 			return socks[idx]
@@ -783,6 +801,17 @@ func get_socket_positions(cable_type: String, endpoint_id: String) -> Array[Vect
 		return _garage.get_hall_c_socket_positions()
 	if cable_type == "network" and endpoint_id == GameState.WALL_ROUTER_ID:
 		return _garage.get_router_jack_positions()
+	var fixed: Array[Vector3] = _garage.get_fixed_socket_positions(cable_type, endpoint_id)
+	if not fixed.is_empty():
+		return fixed
+	if _rack_nodes.has(endpoint_id):
+		var rp: RackProp = _rack_nodes[endpoint_id]
+		if is_instance_valid(rp):
+			return rp.get_socket_world_positions(cable_type)
+	if cable_type == "power" and _ups_nodes.has(endpoint_id):
+		var up: UpsProp = _ups_nodes[endpoint_id]
+		if is_instance_valid(up):
+			return up.get_socket_world_positions()
 	if _decor_nodes.has(endpoint_id):
 		var dp: DecorProp = _decor_nodes[endpoint_id]
 		if is_instance_valid(dp):
@@ -816,6 +845,10 @@ func get_port_world_dir(_cable_type: String, endpoint_id: String) -> Variant:
 		if is_instance_valid(up) and up.is_inside_tree():
 			return up.global_transform.basis.z
 	if _decor_nodes.has(endpoint_id):
+		var dn: DecorProp = _decor_nodes[endpoint_id]
+		if is_instance_valid(dn) and dn.is_inside_tree():
+			# Buchsen zeigen nach oben (y > 0.5), das Kabel läuft quer zur Leiste weg.
+			return dn.global_transform.basis.z + Vector3.UP
 		return Vector3.UP
 	return null
 
@@ -858,6 +891,7 @@ func _spawn_player_if_missing(peer_id: int, info: Dictionary) -> void:
 	)
 	p.apply_skin(info.get("skin", {}))
 	_players_container.add_child(p)
+	p.add_to_group("players")
 	_player_nodes[peer_id] = p
 	if is_me:
 		local_player = p

@@ -102,7 +102,7 @@ func set_hand_truck(truck: HandTruckScript) -> void:
 		_truck.visible = false
 
 
-## Konfiguriert Rolle & Positionen fuer Liefer-Stufe 1 (Sprinter), 2 (7,5t Kastenwagen) oder 3 (18t LKW).
+## Konfiguriert Rolle & Positionen fuer Liefer-Stufe 1 (Lieferwagen), 2 (7,5t Kastenwagen) oder 3 (18t LKW).
 func configure_worker(role_idx: int, tier: int) -> void:
 	_role_idx = maxi(0, role_idx)
 	_vehicle_tier = clampi(tier, 1, 3)

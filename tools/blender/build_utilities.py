@@ -749,7 +749,7 @@ def build_router_dsl(coll, M):
     a.build(coll, ae, g(*ap))
     ae.rotation_euler.y = math.radians(18.0)
 
-    add_text(coll, root, f"{n}_Txt_Model", "SpeedPort 50", (0.10, 0.03, 0.0725), 0.0264, M["text_light"])
+    add_text(coll, root, f"{n}_Txt_Model", "DCT LINK 50", (0.10, 0.03, 0.0725), 0.0264, M["text_light"])
     for i, s in enumerate(("Power", "DSL", "WLAN", "Online")):
         add_text(coll, root, f"{n}_Txt_{s}", s, (-0.16 + 0.04 * i, -0.004, 0.0725), 0.0065, M["text_light"])
     add_text(coll, root, f"{n}_Txt_SN", "SN 4711-0815", (0.13, -0.11, 0.0735), 0.007, M["text_dark"])

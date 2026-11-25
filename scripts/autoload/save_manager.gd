@@ -9,7 +9,7 @@ const BACKUPS_SUBDIR := "backups"
 ## So viele Sicherungen bleiben pro Welt erhalten.
 const MAX_BACKUPS := 5
 ## Bereiche mit (auch verschachtelten) "pos"-Feldern, die JSON nicht als Vector3 speichern kann.
-const NESTED_POS_KEYS: Array[String] = ["decor_items", "storage_shelf_slots"]
+const NESTED_POS_KEYS: Array[String] = ["decor_items", "storage_shelf_slots", "extinguishers"]
 
 
 func _ensure_saves_dir() -> bool:
@@ -287,7 +287,13 @@ func _serialize_state(data: Dictionary) -> Dictionary:
 	for key in NESTED_POS_KEYS:
 		if out.has(key):
 			out[key] = _convert_nested_pos(out[key], true)
-	out["extinguisher_held_by"] = 0
+	if out.get("extinguishers", null) is Dictionary:
+		# Wer speichert, während er einen Löscher trägt, findet ihn danach wieder im Halter.
+		for ext_id in (out["extinguishers"] as Dictionary).keys():
+			var ext: Variant = (out["extinguishers"] as Dictionary)[ext_id]
+			if ext is Dictionary and int((ext as Dictionary).get("held_by", 0)) != 0:
+				(ext as Dictionary)["held_by"] = 0
+				(ext as Dictionary)["station"] = ext_id
 	return out
 
 
@@ -316,7 +322,13 @@ func _deserialize_state(data: Dictionary) -> Dictionary:
 	for key in NESTED_POS_KEYS:
 		if out.has(key):
 			out[key] = _convert_nested_pos(out[key], false)
-	out["extinguisher_held_by"] = 0
+	if out.get("extinguishers", null) is Dictionary:
+		# Wer speichert, während er einen Löscher trägt, findet ihn danach wieder im Halter.
+		for ext_id in (out["extinguishers"] as Dictionary).keys():
+			var ext: Variant = (out["extinguishers"] as Dictionary)[ext_id]
+			if ext is Dictionary and int((ext as Dictionary).get("held_by", 0)) != 0:
+				(ext as Dictionary)["held_by"] = 0
+				(ext as Dictionary)["station"] = ext_id
 	return out
 
 

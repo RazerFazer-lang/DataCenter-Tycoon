@@ -143,6 +143,7 @@ func _setup_input_actions() -> void:
 	_add_key_action("emote_wave", [KEY_B])
 	_add_key_action("emote_thumbs", [KEY_N])
 	_add_key_action("teleport_site", [KEY_T])
+	_add_key_action("admin_menu", [KEY_F10])
 	_add_mouse_action("primary_action", MOUSE_BUTTON_LEFT)
 	_add_mouse_action("secondary_action", MOUSE_BUTTON_RIGHT)
 

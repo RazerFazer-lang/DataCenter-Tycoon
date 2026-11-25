@@ -1,9 +1,27 @@
 {
-  "version": "2.5.0",
-  "launcher_version": "2.5.0",
-  "codename": "v2.5.0 Werkbank-Overhaul: Montage, Diagnose & Techniker",
+  "version": "2.6.0",
+  "launcher_version": "2.6.0",
+  "codename": "v2.6.0 Admin-Menü, Profi-Kühlung, echte Leisten & eigene Marken",
   "release_date": "2026-11-25",
   "changelog": [
+    {
+      "version": "v2.6.0",
+      "date": "2026-11-25",
+      "title": "Update 2.6: Admin-Menü, Profi-Kühlung, stromlose Einschübe, echte Leisten & eigene Marken",
+      "items": [
+        "[NEU / ADMIN] Admin-Menü mit [F10]: Spieler teleportieren, herholen, kicken und bannen, Geld, Ruf, Zeit, Wetter, Ereignisse und Items. Nur der Host und von ihm freigeschaltete Mitspieler, alles wird beim Host geprüft und protokolliert.",
+        "[NEU / KÜHLUNG] 4 Profi-Kühlgeräte von $2.400 bis $18.000: Kaltwassersatz, Reihenkühler, Kälteturm und Flüssigkühlung. Zwei davon stehen drinnen und kühlen nahe Racks zusätzlich.",
+        "[GAMEPLAY] Ein ausgefahrener Einschub ist stromlos. Nach dem Einschieben klackt es, und der Server fährt je nach Größe in 6 bis 15 Sekunden hoch.",
+        "[GAMEPLAY] Der Stromkasten der Garage hat nur noch eine Steckdose, alles Weitere läuft über echte Strom- und LAN-Leisten. Bisher montierte Leisten werden in alten Spielständen zu Leisten in Kisten, alte Kabel bleiben stecken.",
+        "[GAMEPLAY] Feuerlöscher: Sprühen mit Linksklick, Abstellen auf dem Boden, leerer Wandhalter bis zum Zurückbringen, rund 20 Sekunden Füllung. Garage und Halle Nord haben je einen.",
+        "[GAMEPLAY] 10 Firmenstufen bis $5 Mio. Firmenwert und 8 Ruf-Ränge. Ab Stufe 4 steigen die Einnahmen langsamer.",
+        "[NEU] Alle Einrichtungs-Gegenstände lassen sich mit [F] umsetzen und verkaufen. Beim Umsetzen bleiben alle Kabel dran.",
+        "[FIX] Host-Teleport nach Halle Nord: Der Hallenboden ist jetzt immer aktiv. Wer trotzdem fällt, landet wieder am Standort.",
+        "[FIX] Stecker sitzen genau in der anvisierten Buchse: an Leisten, Racks, USV und in Halle Nord. Die LAN-Stecker am Rack passen jetzt in die Buchse.",
+        "[INHALT] Alle Bauteile, Mainboards und Netzteile tragen eigene Fantasiemarken, der Büro-PC läuft mit Verion OS. Werte, Preise und Spielstände bleiben gleich.",
+        "[CO-OP] Alle Mitspieler brauchen v2.6.0."
+      ]
+    },
     {
       "version": "v2.5.0",
       "date": "2026-11-25",
@@ -48,7 +66,7 @@
       "items": [
         "[GRAFIK] Echte volumetrische 3D-Wolken im Sky-Shader: 20-Step-Raymarching mit 4-Step-Sonnen-Shadow-March, Beer-Lambert-Selbstabschattung, Henyey-Greenstein Silver-Lining, Sonnenuntergangs-/Nacht-Beleuchtung und wetterabhängiger Bewölkungsdichte.",
         "[NEU / 3D] Einzelne Router- & Sicherungskasten-Ports + frei platzierbare Strom- & LAN-Leisten: Jede physische RJ45-Buchse des Routers (2/3/5/6/6 Ports) sowie die 230V-Buchse sind gezielt anvisier-, steck- und abziehbar. Neu im Shop: 6-fach Industrie-Stromleiste ($75) & 8-Port LAN-Verteilerleiste ($110) als echte 2K-ORM-PBR Blender-5.2-Modelle.",
-        "[NEU / LOGISTIK] Lieferkosten & feste Lieferzeiten: Fahrzeugabhängige Versandkosten (Sprinter $15, 7,5t $45, 18t LKW $95), feste tägliche Lieferfenster (08:00 / 12:00 / 16:00 / 20:00 Uhr) sowie optionaler Sofort-Express (+$35) im Warenkorb.",
+        "[NEU / LOGISTIK] Lieferkosten & feste Lieferzeiten: Fahrzeugabhängige Versandkosten (Lieferwagen $15, 7,5t $45, 18t LKW $95), feste tägliche Lieferfenster (08:00 / 12:00 / 16:00 / 20:00 Uhr) sowie optionaler Sofort-Express (+$35) im Warenkorb.",
         "[CO-OP] Motorisiertes Garagentor vollständig server-autoritativ & Co-op-synchronisiert (inkl. Snapshot & automatischer Öffnung bei Lieferung).",
         "[FIX] Lieferanten-Ausstieg & Laufweg korrigiert (laufen jetzt korrekt zur Garagenseite), echte Rückwärtslogistik beim Einparken (Rückfahr-Piepen nur noch bei echter Rückwärtsfahrt), kein Feuerlöscher-Sprühgeräusch mehr beim Aufnehmen und Whiteboard an der Nordwand entfernt."
       ]
@@ -61,7 +79,7 @@
         "[3D / OVERHAUL] Kompletter High-Poly- & 2K-ORM-PBR-Hallen-Overhaul: Alle Hallen (Halle Nord, Start-Garage, Halle B & C), Technik-Einbauten (400V-Schaltanlage, 42U-Core-Rack mit 3D-LWL-Bögen, NOC-Echtglas-Leitstand) sowie alle 6 kaufbaren Shop-Dekos wurden mit 25 neu gebauten Blender-5.2-Modellen, 2K-Epoxidboden, HEB-Stahlrahmen, 3D-Trapezblechdach, durchgebrochenen Echtglas-Oberlichtern und weichen SpotLight-Schatten neu aufgebaut.",
         "[NEU] Großstandort Halle Nord (240 m² Tier-4 Enterprise-Campus): Ab Firmen-Level 3 freischaltbar ($8.500), mit eigenem 8.500-W-Strombus, 10G-Core-Switch, Shuttle-Terminal ([T] / [E]), Lieferziel-Wahl und komplettem Gewerbecampus.",
         "[NEU] 6 Gebäude-Upgrades mit Live-Bautrupp (PV-Solaranlage, 2-MVA Notstrom-Diesel, Sicherheitsschranke, NOC-Leitstand, Dach-Kaltwasserkühler & Kaltgang-Pro) + 6 frei platzierbare Einrichtungs-Items.",
-        "[NEU] Außenwelt 3.1 & Realismus-Overhaul: Erweitertes deutsches Gewerbegebiet, 4K-Mixamo-NPCs mit Skelett-Laufanimation, FBM-Soft-Rauch/Dampf, Luftperspektiven-Nebel & nasser spiegelnder Asphalt bei Regen.",
+        "[NEU] Außenwelt 3.1 & Realismus-Overhaul: Erweitertes deutsches Gewerbegebiet, 4K-NPCs mit Skelett-Laufanimation, FBM-Soft-Rauch/Dampf, Luftperspektiven-Nebel & nasser spiegelnder Asphalt bei Regen.",
         "[GAMEPLAY] Seltener Ausfall (~80 % reduziert), tiefes Fehlercode-Diagnose- & vorbeugendes Wartungssystem (Staub / Wärmeleitpaste / Maint-Kits) sowie Pro-Rack-Freischaltung ab Firmen-Level 3.",
         "[AUDIO] Mehrschichtiger Regen, Tag/Nacht-Naturkulisse, untergrundabhängige Schritte (Doppelboden / Nass / Beton), Dieselgenerator-Sound & Hallen-Reverb."
       ]
@@ -86,11 +104,11 @@
       "date": "2026-11-23",
       "title": "Mega-Update 2.1: 3-Stufen-Lieferflotte, 6er-Mengen-Kisten, AAA-Halte-/Platzier-System & 6+ Gameplay-Fixes",
       "items": [
-        "[NEU] 3 Liefer-Kategorien mit wachsender Flotte & Personal: Stufe 1 Express-Sprinter (1 Fahrer, kleine Bestellungen), Stufe 2 7,5t-Kastenwagen (2 Mitarbeiter + Ausklapp-Rampe & parallele Sackkarren) und Stufe 3 18t-Schwerlast-LKW (3 Logistiker + Hydraulik-Ladebordwand & 6 Räder).",
+        "[NEU] 3 Liefer-Kategorien mit wachsender Flotte & Personal: Stufe 1 Express-Lieferwagen (1 Fahrer, kleine Bestellungen), Stufe 2 7,5t-Kastenwagen (2 Mitarbeiter + Ausklapp-Rampe & parallele Sackkarren) und Stufe 3 18t-Schwerlast-LKW (3 Logistiker + Hydraulik-Ladebordwand & 6 Räder).",
         "[NEU] Mengen-Kisten (bis 6× pro Box): Mehrfach bestellte Reparatur-Kits und Module werden automatisch in robuste 6er-Mengen-Kisten gepackt, im PC-Shop per 1-Klick „+ 6er-Kiste“ bestellbar, im Lagerregal stapelbar und einzeln verbrauchbar.",
         "[NEU] Lieferflächen-Limit (16 Plätze): Die Einfahrt hat eine feste Stellplatz-Kapazität inkl. Live-Anzeige über dem Tor und im PC-Warenkorb, damit Bestellungen nicht unendlich übereinander landen.",
         "[NEU] Triple-A Halte- & Platzier-System: Realistische 3D-Ego-Hände (zweihändig für Kisten/Server/Racks, einhändig für Kits/Kabel) mit Maus-Trägheit & Lauf-Bob sowie echtem 3D-Fresnel-/Scanline-Hologramm (Mausrad/[R] drehen, Linksklick/[E] platzieren, [Q] präziser Boden-Ablegering).",
-        "[3D] Komplett neu modellierte Pro-Reparatur-Kits (Pelican/iFixit-Hartschale mit Sichtfenster, Werkzeug-Innenleben, Gummibumpern & Edelstahl-Verschlüssen), neue 6er-Mengen-Kiste, neuer 7,5t-Kastenwagen und 18t-Schwerlast-LKW.",
+        "[3D] Komplett neu modellierte Pro-Reparatur-Kits (Hartschalenkoffer mit Sichtfenster, Werkzeug-Innenleben, Gummibumpern & Edelstahl-Verschlüssen), neue 6er-Mengen-Kiste, neuer 7,5t-Kastenwagen und 18t-Schwerlast-LKW.",
         "[VERBESSERUNG] Rack-Slot-Interaktion überarbeitet (kein Vertippen mehr): Ausgefahrene Server-Schlitten haben jetzt eine Voll-Chassis-Hitbox, einen farbcodierten 3D-Hover-Rahmen, [Rechtsklick] zum Schacht-Fahren ohne Fallenlassen und [F] direkt fürs Rack-Menü.",
         "[VERBESSERUNG] Lagerregal komplett überarbeitet: Blockierende Wand entfernt, großzügige vordere Fach-Hitboxen sowie leuchtender 3D-Hover-Rahmen + Hologramm-Vorschau beim Ein- & Auslagern.",
         "[AUDIO] Realistische Schrittgeräusche (6 Beton-Varianten mit Raumreflexion) und überarbeiteter Feuerlöscher-Sound (Ventil-Zischen, Druckrauschen & Nachklang).",
@@ -101,12 +119,12 @@
     {
       "version": "v2.0.0",
       "date": "2026-11-23",
-      "title": "Mega-Update 2.0: Werkbank & Reparatur-Overhaul, realistische Mixamo-Charaktere, 3D-Skin-Editor & Launcher v2.0",
+      "title": "Mega-Update 2.0: Werkbank & Reparatur-Overhaul, realistische Charaktere, 3D-Skin-Editor & Launcher v2.0",
       "items": [
         "[NEU] Komplett überarbeitetes Reparatur- & Zusammenbau-System: Defekte Server-Schlitten am ausgefahrenen Rack-Schacht herausziehen, an der neuen IT-Werkbank mit Reparatur-Kits (RAM-Clips umklappen, Kühler lösen, CPU/GPU/Netzteil tauschen) reparieren und wieder einschieben.",
         "[NEU] Neues funktionelles Werkstatt-Lagerregal: Gelieferte Bausatz-Kartons und Reparatur-Kits lassen sich sichtbar in 9 Regalfächern einlagern.",
         "[NEU] Interaktiver 3D-Skin-Editor im Hauptmenü mit 360°-Live-Vorschau für Kleidung, Haut, Haare, Schuhe, Kopfbedeckung und Brillen.",
-        "[3D] Echte realistische Skeleton3D-Charaktere (Mixamo / MakeHuman) für Spieler und Lieferfahrer inkl. automatischer T-Pose-Korrektur, matter Stoff-PBR-Materialien und Live-Skin-Umfärbung.",
+        "[3D] Echte realistische Skeleton3D-Charaktere für Spieler und Lieferfahrer inkl. automatischer T-Pose-Korrektur, matter Stoff-PBR-Materialien und Live-Skin-Umfärbung.",
         "[3D] Neuer 2K-PBR Cloud-Express-Lieferwagen, neue IT-Werkbank, 8 kaputte Hardware-3D-Modelle (inkl. Rauch-/Funken-VFX) und überarbeitetes Rack mit 3 rückseitigen Anschlüssen & Teleskopschächten.",
         "[FIX] 3D-Hover-Picking in der Server-Vorschau behoben: Jedes Bauteil (RAM, CPU, GPU, SSD, Netzteil, Lüfter) wird wieder exakt erkannt statt überall „Mainboard“ anzuzeigen.",
         "[FIX] Rack-Fronttür öffnet jetzt korrekt nach außen/vorne; Interaktion einheitlich auf [E] (Öffnen & Schließen) ohne Doppelbelegung auf [F]; schwebende gelbe Rack-Texte und [rack_2]-Suffix entfernt.",
@@ -167,7 +185,7 @@
       "title": "Mega-Release v1.0: AAA-Look, Warenkorb & 66 Hardware-Teile (DDR2–DDR5)",
       "items": [
         "[NEU] Kompletter Hardware-Kreislauf (PC-Shop + Warenkorb → Teile-Lager → Rack-Bau) mit 66 Einzelteilen (DDR2–DDR5 RAM, CPUs, GPUs, HDD/SSD/NVMe, Kühlung, Netzteile 350–2400W).",
-        "[VERBESSERUNG] Einheitliches 3-Tab Rack-Overlay (Schiefergrau & Gold), 4-App Windows-PC und minimalistisches Ultra-Clean-HUD mit 5-Schritte-Start-Checkliste.",
+        "[VERBESSERUNG] Einheitliches 3-Tab Rack-Overlay (Schiefergrau & Gold), 4-App-PC und minimalistisches Ultra-Clean-HUD mit 5-Schritte-Start-Checkliste.",
         "[BALANCE] 100 % echte Hardware-Werte überall: RAM in GB, Speicher in TB, Internet in Mbit/s & Gbit/s, Strom in Watt & kWh.",
         "[LAUNCHER] Eigener nativer Windows-Launcher (DataCenterLauncher.exe) mit GitHub-Download & Auto-Updater."
       ]

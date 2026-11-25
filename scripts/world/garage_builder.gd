@@ -93,6 +93,8 @@ var _breaker_audio: AudioStreamPlayer3D
 var _pc_audio: AudioStreamPlayer3D
 
 var _extinguisher_mesh_root: Node3D
+## Station ("garage" / "nord") -> Knoten des hängenden Löschers.
+var _extinguisher_mounts: Dictionary = {}
 var _blink_time: float = 0.0
 var _emergency_lights_extra: Array[OmniLight3D] = []
 var _emergency_lamp_mats: Array[StandardMaterial3D] = []
@@ -120,7 +122,7 @@ func _ready() -> void:
 	_build_lighting()
 	_build_reflection_probes()
 	_build_breaker_box()
-	_build_extinguisher_station()
+	_build_extinguisher_station(self, "garage", Vector3(-2.8, 1.22, -4.36), 0.0)
 	_build_wall_router()
 	_build_hall_c_subpanel()
 	_build_terminal_desk()
@@ -276,9 +278,30 @@ func _set_wall_open(wall: StaticBody3D, opened: bool) -> void:
 			child.disabled = opened
 
 
-func set_extinguisher_mounted(mounted: bool) -> void:
-	if _extinguisher_mesh_root != null:
-		_extinguisher_mesh_root.visible = mounted
+func set_extinguisher_mounted(station: String, mounted: bool) -> void:
+	var m: Variant = _extinguisher_mounts.get(station)
+	if is_instance_valid(m):
+		(m as Node3D).visible = mounted
+
+
+## Freistehender Feuerlöscher auf dem Boden (gleiches Modell wie im Halter).
+func build_loose_extinguisher(ext_id: String) -> Node3D:
+	var root := Node3D.new()
+	root.name = "Extinguisher_%s" % ext_id
+	var src: Variant = _extinguisher_mounts.get("garage")
+	if is_instance_valid(src):
+		var body := (src as Node3D).duplicate() as Node3D
+		body.visible = true
+		# Im Halter liegt der Boden des Löschers 25 cm unter und 9 cm vor dem Stationsursprung.
+		body.position += Vector3(0.0, 0.252, -0.09)
+		root.add_child(body)
+	var area := _make_interact_area(Vector3(0.34, 0.66, 0.34), {
+		"interact_type": "extinguisher_item",
+		"entity_id": ext_id,
+	})
+	area.position = Vector3(0.0, 0.32, 0.0)
+	root.add_child(area)
+	return root
 
 
 func _update_dynamic_visuals() -> void:
@@ -1632,10 +1655,11 @@ func _add_scrap_fuse() -> void:
 		i += 1
 
 
-func _build_extinguisher_station() -> void:
+func _build_extinguisher_station(parent: Node3D, station: String, pos: Vector3, yaw_deg: float) -> void:
 	var root := Node3D.new()
-	root.position = Vector3(-2.8, 1.22, -4.36)
-	add_child(root)
+	root.position = pos
+	root.rotation_degrees.y = yaw_deg
+	parent.add_child(root)
 
 	# Blender-Modell (assets/models/extinguisher_station.glb) ersetzt das prozedurale Modell, falls vorhanden.
 	var ext_model := ModelLoader.instantiate_custom_model("extinguisher_station")
@@ -1716,7 +1740,9 @@ func _build_extinguisher_station() -> void:
 	var area := _make_interact_area(Vector3(0.48, 0.82, 0.42), {
 		"interact_type": "extinguisher_station",
 		"entity_id": "extinguisher_station",
+		"station": station,
 	})
+	_extinguisher_mounts[station] = _extinguisher_mesh_root
 	area.position = Vector3(0.0, 0.04, 0.08)
 	root.add_child(area)
 
@@ -1844,7 +1870,7 @@ func _build_router_tier_dsl(h: Node3D) -> void:
 
 	for i in range(4):
 		_add_cyl_visual(h, Vector3(-0.16 + 0.04 * float(i), 0.01, 0.073), 0.006, 0.006, 0.004, _router_led_mat, Vector3(90, 0, 0), 12)
-	_add_small_label(h, Vector3(0.10, 0.03, 0.0725), "SpeedPort 50", 22, 0.0012, Color(0.80, 0.80, 0.76))
+	_add_small_label(h, Vector3(0.10, 0.03, 0.0725), "DCT LINK 50", 22, 0.0012, Color(0.80, 0.80, 0.76))
 	for i in range(4):
 		_add_box_visual(h, Vector3(0.11, -0.01 - 0.022 * float(i), 0.0725), Vector3(0.10, 0.006, 0.002), slot)
 	_add_box_visual(h, Vector3(0.13, -0.11, 0.0725), Vector3(0.07, 0.03, 0.002), sticker)
@@ -2341,6 +2367,22 @@ func get_hall_c_socket_positions() -> Array[Vector3]:
 	return _hall_c_socket_pos.duplicate()
 
 
+## Buchsen der fest eingebauten Verteiler in Halle C und Halle Nord.
+func get_fixed_socket_positions(cable_type: String, endpoint_id: String) -> Array[Vector3]:
+	var out: Array[Vector3] = []
+	if cable_type == "power" and endpoint_id == GameState.HALL_NORD_BREAKER_ID:
+		for i in range(16):
+			out.append(GameState.HALLE_NORD_ORIGIN + Vector3(-7.6 - 1.05 + float(i) * 0.14, 1.10, -5.60 + 0.437))
+	elif cable_type == "network" and endpoint_id == GameState.HALL_NORD_ROUTER_ID:
+		for r in range(3):
+			for c in [1, 3, 4, 5, 6, 8]:
+				out.append(GameState.HALLE_NORD_ORIGIN + Vector3(-4.75 - 0.245 + float(c) * 0.054, 1.025 + float(r) * 0.27, -5.50 + 0.309))
+	elif cable_type == "network" and endpoint_id == GameState.HALL_C_ROUTER_ID:
+		for i in range(8):
+			out.append(Vector3(16.6 - 0.22 + float(i) * 0.063, 1.52, -4.38 + 0.159))
+	return out
+
+
 ## Alle LAN-Buchsen am Wand-Router der aktuellen Stufe.
 func get_router_jack_positions() -> Array[Vector3]:
 	return _router_jack_pos.duplicate()
@@ -2656,6 +2698,8 @@ func _build_halle_nord_site() -> void:
 	_add_box_visual(hn, Vector3(0.0, 3.68, 5.93), Vector3(0.62, 0.22, 0.05), exit_green)
 	var exit_lbl := _add_small_label(hn, Vector3(0.0, 3.68, 5.90), "NOTAUSGANG", 22, 0.0024, Color(1, 1, 1))
 	exit_lbl.rotation_degrees.y = 180.0
+
+	_build_extinguisher_station(hn, "nord", Vector3(-3.45, 1.22, 5.80), 180.0)
 
 	# ---------------------------------------------------------------- 4. SCHALTANLAGE 400V (16 Steckdosen) + 42U CORE-RACK (16 Ports)
 	var p_root := Node3D.new()

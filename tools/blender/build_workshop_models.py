@@ -549,7 +549,7 @@ def build_storage_shelf():
 
 
 # ---------------------------------------------------------------------------
-# 3. AAA Pro-Reparatur-Kit-Koffer (repair_kit_case.glb — Pelican/iFixit-Style)
+# 3. AAA Pro-Reparatur-Kit-Koffer (repair_kit_case.glb — Hartschalen-Stil)
 # ---------------------------------------------------------------------------
 
 def build_repair_kit_case():
@@ -608,7 +608,7 @@ def build_repair_kit_case():
     # 10. Saubere Typenschilder: Frontleiste + kleines Schild vorne oben (verdeckt das Sichtfenster NICHT!)
     B.box((0.0, -0.095, 0.123), (0.170, 0.030, 0.003), M["paper"], bevel=0.0005)
     B.box((0.0, -D * 0.5 - 0.002, 0.098), (0.145, 0.003, 0.026), M["anthracite"], bevel=0.001)
-    # Seitliche Schutzrippen auf dem Deckel (Pelican-Look) + Kategorie-Farb-Akzente
+    # Seitliche Schutzrippen auf dem Deckel (Koffer-Look) + Kategorie-Farb-Akzente
     for sx in (-0.140, 0.140):
         B.box((sx, 0.002, 0.123), (0.036, 0.136, 0.006), M["kit_stripe"], bevel=0.002)
         for ry in (-0.045, 0.0, 0.045):

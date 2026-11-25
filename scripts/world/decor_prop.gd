@@ -212,6 +212,8 @@ func _build_cold_aisle_gate() -> void:
 	# Nur die beiden Seitenpfosten blockieren — Spieler läuft frei durch die Mitte!
 	_add_collider(Vector3(-1.05, 1.28, 0.0), Vector3(0.18, 2.56, 0.20))
 	_add_collider(Vector3( 1.05, 1.28, 0.0), Vector3(0.18, 2.56, 0.20))
+	for gx in [-1.05, 1.05]:
+		_add_info_area(Vector3(float(gx), 1.28, 0.0), Vector3(0.26, 2.5, 0.28))
 
 
 # ---------------------------------------------------------------- 5. Getränkeautomat & Kaffee-Lounge
@@ -230,6 +232,7 @@ func _build_vending_lounge() -> void:
 	vend_glow.omni_range = 2.4
 	add_child(vend_glow)
 	_add_collider(Vector3(0.05, 0.98, 0.0), Vector3(1.48, 1.96, 0.74))
+	_add_info_area(Vector3(0.05, 0.98, 0.0), Vector3(1.56, 1.98, 0.82))
 
 
 # ---------------------------------------------------------------- 6. CCTV- & Temperatur-Stele
@@ -260,6 +263,7 @@ func _build_cctv_monitor() -> void:
 	else:
 		_box(_cctv_cam, Vector3(0.0, 0.0, 0.10), Vector3(0.12, 0.10, 0.24), _mat(Color(0.72, 0.76, 0.80), 0.28, 0.86))
 	_add_collider(Vector3(0.0, 1.15, 0.0), Vector3(0.72, 2.30, 0.48))
+	_add_info_area(Vector3(0.0, 1.15, 0.0), Vector3(0.80, 2.32, 0.56))
 
 
 # ---------------------------------------------------------------- 7. Platzierbare 6-fach Industrie-Stromleiste
@@ -285,6 +289,8 @@ func _build_power_strip() -> void:
 		area.position = Vector3(sx, 0.068, 0.0)
 		add_child(area)
 	_add_collider(Vector3(0.0, 0.028, 0.0), Vector3(0.66, 0.056, 0.13))
+	for ex in [-0.30, 0.30]:
+		_add_info_area(Vector3(float(ex), 0.05, 0.0), Vector3(0.10, 0.11, 0.16))
 
 
 # ---------------------------------------------------------------- 8. Platzierbare 8-Port LAN-Verteilerleiste
@@ -310,6 +316,8 @@ func _build_lan_strip() -> void:
 		area.position = Vector3(px, 0.066, 0.0)
 		add_child(area)
 	_add_collider(Vector3(0.0, 0.028, 0.0), Vector3(0.62, 0.056, 0.14))
+	for ex in [-0.28, 0.28]:
+		_add_info_area(Vector3(float(ex), 0.05, 0.0), Vector3(0.07, 0.11, 0.17))
 
 
 # ---------------------------------------------------------------- Helfer
@@ -336,6 +344,16 @@ func _add_collider(pos: Vector3, sz: Vector3) -> void:
 	bs.size = sz
 	col.shape = bs
 	body.add_child(col)
+
+
+func _add_info_area(pos: Vector3, sz: Vector3) -> void:
+	var area := _make_interact_area(sz, {
+		"interact_type": "decor_info",
+		"decor_id": decor_id,
+		"item_type": item_type,
+	})
+	area.position = pos
+	add_child(area)
 
 
 func _make_interact_area(sz: Vector3, meta: Dictionary) -> Area3D:

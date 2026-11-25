@@ -14,6 +14,7 @@ const DedicatedServerScript := preload("res://scripts/server/dedicated_server.gd
 var intro_splash: IntroSplash
 var loading_screen: LoadingScreen
 var workbench_ui: WorkbenchUI
+var admin_ui: AdminUI
 var _is_paused: bool = false
 var _menu_orbit_angle: float = 0.0
 # Hinsetzen läuft, Vollbild ist noch nicht offen. Der Zähler macht alte Timer ungültig.
@@ -36,6 +37,13 @@ func _ready() -> void:
 	$UI.add_child(workbench_ui)
 	workbench_ui.visible = false
 	workbench_ui.close_requested.connect(_close_workbench_ui)
+
+	admin_ui = AdminUI.new()
+	$UI.add_child(admin_ui)
+	admin_ui.visible = false
+	admin_ui.close_requested.connect(_close_admin)
+	hud.admin_requested.connect(_open_admin)
+	AdminManager.teleport_requested.connect(_on_admin_teleport)
 
 	hud.bind_world(world)
 	hud.visible = false
@@ -170,7 +178,9 @@ func _input(event: InputEvent) -> void:
 			return
 		if event.keycode == KEY_ESCAPE:
 			get_viewport().set_input_as_handled()
-			if workbench_ui != null and workbench_ui.visible:
+			if admin_ui.visible:
+				_close_admin()
+			elif workbench_ui != null and workbench_ui.visible:
 				_close_workbench_ui()
 			elif rack_inspector.visible and rack_inspector.is_preview_fullscreen():
 				rack_inspector.set_preview_fullscreen(false)
@@ -184,6 +194,14 @@ func _input(event: InputEvent) -> void:
 				_resume_from_pause()
 			else:
 				_open_pause()
+			return
+
+		if event.is_action_pressed("admin_menu"):
+			get_viewport().set_input_as_handled()
+			if admin_ui.visible:
+				_close_admin()
+			else:
+				_open_admin()
 			return
 
 		# [E] schließt das Rack-Menü wieder (beim Umbenennen oben bereits abgefangen).
@@ -235,6 +253,7 @@ func _leave_to_menu() -> void:
 
 
 func _return_to_menu_ui() -> void:
+	admin_ui.visible = false
 	_is_paused = false
 	_pc_entering = false
 	_pc_enter_token += 1
@@ -354,7 +373,45 @@ func _close_workbench_ui() -> void:
 
 func _on_relocate_rack_requested(rack_id: String) -> void:
 	_close_rack_inspector()
+	if GameState.decor_items.has(rack_id):
+		if world.local_player != null:
+			world.local_player.start_relocate_decor(rack_id)
+		return
 	world.start_relocate_rack(rack_id)
+
+
+func _open_admin() -> void:
+	if not AdminManager.is_local_admin():
+		return
+	# Nicht über andere Vollbild-Ansichten legen.
+	if terminal_ui.visible or rack_inspector.visible or workbench_ui.visible or _pc_entering:
+		return
+	if _is_paused:
+		_resume_from_pause()
+	admin_ui.open()
+	if world.local_player != null:
+		world.local_player.set_ui_locked(true)
+	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
+
+
+func _close_admin() -> void:
+	if not admin_ui.visible:
+		return
+	admin_ui.visible = false
+	if not NetworkManager.is_in_session:
+		return
+	if world.local_player != null:
+		world.local_player.set_ui_locked(false)
+	Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
+
+
+func _on_admin_teleport(pos: Vector3, yaw: float) -> void:
+	if terminal_ui.visible:
+		_close_terminal()
+	if workbench_ui.visible:
+		_close_workbench_ui()
+	if world.local_player != null:
+		world.local_player.admin_teleport(pos, yaw)
 
 
 func _open_pause() -> void:

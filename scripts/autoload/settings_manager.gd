@@ -110,6 +110,7 @@ const ACTION_LABELS := {
 	"toggle_help": "Hilfe ein/aus",
 	"toggle_perf": "Leistungsanzeige",
 	"open_chat": "Chat öffnen",
+	"admin_menu": "Admin-Menü",
 }
 ## Tasten, die nicht belegt werden dürfen (Escape öffnet das Pausemenü und bricht die Tastenabfrage ab).
 const RESERVED_KEYS: Array[int] = [KEY_ESCAPE]

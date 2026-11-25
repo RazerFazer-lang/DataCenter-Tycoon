@@ -47,7 +47,7 @@ var _lock: Control
 var _desk: Control
 var _window: PanelContainer
 var _win_icon: Control
-var _win_icon_kind: String = "windows"
+var _win_icon_kind: String = "verion"
 var _win_title: Label
 var _win_typing: Label
 var _win_body: VBoxContainer
@@ -191,7 +191,7 @@ func _update_window() -> void:
 	if not _window.visible:
 		_body_key = ""
 		return
-	var info: Dictionary = APP_INFO.get(app, {"icon": "windows", "name": app, "short": app})
+	var info: Dictionary = APP_INFO.get(app, {"icon": "verion", "name": app, "short": app})
 	_win_title.text = tr(str(info["name"]))
 	_win_icon_kind = str(info["icon"])
 	_win_icon.queue_redraw()
@@ -364,7 +364,7 @@ func _draw_desk() -> void:
 	_desk.draw_rect(tb, Color(0.11, 0.12, 0.15, 0.94))
 	var accent := Color(0.35, 0.70, 1.0)
 	var x0 := s.x * 0.5 - float(keys.size() + 1) * 24.0
-	UIStyle.draw_icon(_desk, "windows", Rect2(x0 + 11, tb.position.y + 11, 26, 26), accent)
+	UIStyle.draw_icon(_desk, "verion", Rect2(x0 + 11, tb.position.y + 11, 26, 26), accent)
 	for i in range(keys.size()):
 		var aid := str(keys[i])
 		var info: Dictionary = APP_INFO[aid]
