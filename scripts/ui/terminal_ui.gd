@@ -771,6 +771,20 @@ func _add_shop_item_card(list: VBoxContainer, opts: Dictionary) -> void:
 	swatch.color = accent
 	row.add_child(swatch)
 
+	# Bauteile: 3D-Vorschau, ein Klick nimmt das Teil groß in die Hand.
+	var part_id := str(opts.get("part_id", ""))
+	if PartModels.has_product(part_id):
+		var tb := TextureButton.new()
+		tb.texture_normal = PartThumbs.get_texture(part_id)
+		tb.ignore_texture_size = true
+		tb.stretch_mode = TextureButton.STRETCH_KEEP_ASPECT_CENTERED
+		tb.custom_minimum_size = Vector2(84, 62)
+		tb.focus_mode = Control.FOCUS_NONE
+		tb.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
+		tb.tooltip_text = tr("In 3D ansehen")
+		tb.pressed.connect(func(): PartViewer.open(self, [part_id]))
+		row.add_child(tb)
+
 	var info_box := VBoxContainer.new()
 	info_box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	info_box.add_theme_constant_override("separation", 3)
@@ -1432,6 +1446,7 @@ func _populate_parts_shop_list(parent: VBoxContainer, cat: String) -> void:
 			"title": ("[%s]  %s" % [tag, cap_name]) if tag != "" else cap_name,
 			"info": (tr("Im Lager: %d×") % stock) if stock > 0 else "",
 			"color": _part_accent(cap_cat),
+			"part_id": cap_pid,
 			"price": cap_cost,
 			"strength_pct": HardwareCatalog.get_part_strength_pct(cap_cat, pd),
 			"specs": _format_part_specs_short(cap_cat, pd),
@@ -1511,6 +1526,7 @@ func _populate_warehouse_list(parent: VBoxContainer) -> void:
 				"title": ("[%s]  %s" % [tag, pname]) if tag != "" else pname,
 				"info": tr("Im Lager: %d×") % cnt,
 				"color": _part_accent(cat),
+				"part_id": pid,
 				"price": refund,
 				"price_text": "+$%d" % refund,
 				"badge": tr("Im Lager"),

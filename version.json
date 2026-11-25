@@ -1,9 +1,28 @@
 {
-  "version": "2.9.0",
-  "launcher_version": "2.9.0",
-  "codename": "v2.9.0 Lagerregale, Einrichtung mit Funktion & neue Lieferung",
+  "version": "3.0.0",
+  "launcher_version": "3.0.0",
+  "codename": "v3.0.0 Eigene Figuren, Leben draußen & neue Bauteile",
   "release_date": "2026-11-25",
   "changelog": [
+    {
+      "version": "v3.0.0",
+      "date": "2026-11-25",
+      "title": "Update 3.0: Eigene Figuren & Editor, begehbares Grundstück mit Jahreszeiten, Tieren & Garten und 185 neue Bauteile",
+      "items": [
+        "[NEU / BAUTEILE] Alle 185 Teile haben ein eigenes Blender-Modell. Lüfter und Lichter folgen Last und Temperatur, Hitze, Staub und fließendes Wasser sind zu sehen.",
+        "[NEU / 3D-ANSICHT] 3D-Bilder in Shop und Teile-Lager. An Werkbank und Rack nimmst du Teile in die Hand, drehst sie und liest das Datenblatt.",
+        "[NEU / FIGUREN] Komplett eigene Figuren für Spieler, Lieferanten, Techniker, Diebe, Passanten und den Bautrupp. In der Ich-Ansicht siehst du deine eigenen Arme.",
+        "[NEU / EDITOR] Neuer Figuren-Editor im Hauptmenü, im Pausemenü und am Spind mit echtem Spiegel. Sechs eigene Outfits lassen sich speichern.",
+        "[NEU / CO-OP] Gesten-Rad mit zwölf Gesten: [V] gedrückt halten.",
+        "[NEU / DRAUSSEN] Das Grundstück rund um die Halle und die Straße sind begehbar, mit Hintertür, Zauntor, Außenlampen, Bänken und einer Leiter aufs Dach.",
+        "[GAMEPLAY] Vier Jahreszeiten mit je vier Spieltagen. Laub, Schnee und Staub setzen Außengeräte zu, reinige sie regelmäßig.",
+        "[NEU / DACH] Solaranlage, Satellitenschüssel zum Nachstellen und Wetterstation mit Vorhersage.",
+        "[NEU / GARTEN] Beete, Grill, Futterhaus und Vogeltränke. Neue Bäume, Vögel und Tiere.",
+        "[GAMEPLAY] Ein geschlossenes Zauntor und Licht halten Diebe ab. Autos bremsen für dich.",
+        "[PERFORMANCE] Alte Figuren-Modelle entfernt, das Spiel ist rund 66 MB kleiner.",
+        "[CO-OP] Alle Mitspieler brauchen v3.0.0."
+      ]
+    },
     {
       "version": "v2.9.0",
       "date": "2026-11-25",

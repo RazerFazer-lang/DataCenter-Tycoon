@@ -64,10 +64,6 @@ var _window_size_values: Array[Vector2i] = []
 var _window_size_list_fullscreen := false
 var _ui_scale_option: OptionButton
 var _language_option: OptionButton
-## Skin-Editor: Jacke, Hose, Hautton (Indizes in die Listen im SettingsManager).
-var _skin_jacket_option: OptionButton
-var _skin_pants_option: OptionButton
-var _skin_tone_option: OptionButton
 ## Tastenbelegung: action -> Button mit der aktuellen Taste.
 var _keybind_buttons: Dictionary = {}
 ## Aktion, die gerade auf eine neue Taste wartet ("" = keine).
@@ -199,12 +195,6 @@ func _sync_from_settings() -> void:
 		_fov_val.text = "%d°" % int(roundf(SettingsManager.fov))
 	if _gfx_option != null:
 		_gfx_option.selected = SettingsManager.graphics_quality
-	if _skin_jacket_option != null:
-		_skin_jacket_option.select(clampi(SettingsManager.skin_jacket, 0, _skin_jacket_option.item_count - 1))
-	if _skin_pants_option != null:
-		_skin_pants_option.select(clampi(SettingsManager.skin_pants, 0, _skin_pants_option.item_count - 1))
-	if _skin_tone_option != null:
-		_skin_tone_option.select(clampi(SettingsManager.skin_tone, 0, _skin_tone_option.item_count - 1))
 	_sync_window_options()
 	if _autosave_check != null:
 		_autosave_check.set_pressed_no_signal(SettingsManager.autosave_enabled)
@@ -248,7 +238,7 @@ func _switch_page(page_id: String, animate: bool = true) -> void:
 	if _skin_editor_panel != null:
 		_skin_editor_panel.set_preview_active(page_id == "skin_editor")
 	if _content_card != null:
-		_content_card.custom_minimum_size.x = 760.0 if page_id == "skin_editor" else 520.0
+		_content_card.custom_minimum_size.x = 900.0 if page_id == "skin_editor" else 520.0
 
 
 func _parse_port(text: String) -> int:
@@ -351,12 +341,6 @@ func _apply_settings_change() -> void:
 	if _language_option != null:
 		var lang_idx := clampi(_language_option.selected, 0, SettingsManager.LANGUAGE_CODES.size() - 1)
 		SettingsManager.language = SettingsManager.LANGUAGE_CODES[lang_idx]
-	if _skin_jacket_option != null:
-		SettingsManager.skin_jacket = clampi(_skin_jacket_option.selected, 0, SettingsManager.SKIN_JACKET_COLORS.size() - 1)
-	if _skin_pants_option != null:
-		SettingsManager.skin_pants = clampi(_skin_pants_option.selected, 0, SettingsManager.SKIN_PANTS_COLORS.size() - 1)
-	if _skin_tone_option != null:
-		SettingsManager.skin_tone = clampi(_skin_tone_option.selected, 0, SettingsManager.SKIN_TONE_COLORS.size() - 1)
 	if _screen_option != null:
 		SettingsManager.screen_index = maxi(_screen_option.selected - 1, -1)
 	if _window_size_option != null and _window_size_option.selected >= 0 and _window_size_option.selected < _window_size_values.size():
@@ -776,7 +760,7 @@ func _build_nav_column() -> Control:
 	_add_nav_button(nav_v, "new_game", "NEUES SPIEL", "Eigenes Rechenzentrum hosten")
 	_add_nav_button(nav_v, "load_game", "SPIELSTAND LADEN", "Gespeicherte Welt fortsetzen")
 	_add_nav_button(nav_v, "join_game", "CO-OP BEITRETEN", "Per IP mit Freunden spielen")
-	_add_nav_button(nav_v, "skin_editor", "SKIN-EDITOR", "3D-Charakter, Kleidung & Accessoires")
+	_add_nav_button(nav_v, "skin_editor", "FIGUR", "Gesicht, Kleidung und Outfits")
 	_add_nav_button(nav_v, "settings", "EINSTELLUNGEN", "Grafik, Audio und Steuerung")
 
 	var spacer := Control.new()
@@ -1175,11 +1159,6 @@ func _build_settings_page() -> Control:
 	_set_name_input.text_changed.connect(func(_t: String): _apply_settings_change())
 	name_row.add_child(_set_name_input)
 
-	# Skin-Editor: färbt die Blender-Materialien DCT_Jacket, DCT_Pants und DCT_Skin.
-	_skin_jacket_option = _add_option_row(general, "Skin: Jacke & Kappe", SettingsManager.SKIN_JACKET_LABELS)
-	_skin_jacket_option.tooltip_text = tr("Gilt ab der nächsten Sitzung. Teamfarbe = Farbe, die der Host dir zuweist.")
-	_skin_pants_option = _add_option_row(general, "Skin: Hose", SettingsManager.SKIN_PANTS_LABELS)
-	_skin_tone_option = _add_option_row(general, "Skin: Hautton", SettingsManager.SKIN_TONE_LABELS)
 
 	_language_option = _add_option_row(general, "Sprache", SettingsManager.LANGUAGE_LABELS)
 	_autosave_check = _add_check_row(general, "Auto-Save alle 3 Minuten (Host)")

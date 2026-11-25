@@ -802,12 +802,7 @@ func _spawn_model(model_id: String, pos: Vector3, yaw_deg: float = 0.0, scl: Vec
 
 
 func _spawn_tree(pos: Vector3, is_pine: bool, scale_val: float, yaw_deg: float, cast_sh: bool) -> void:
-	var tr := _spawn_model("ext_tree_pine" if is_pine else "ext_tree_oak", pos, yaw_deg, Vector3.ONE * scale_val)
-	if tr == null:
-		return
-	if not cast_sh:
-		_set_shadows_recursive(tr, false)
-	_apply_wind_to_canopy(tr, 1.2 if is_pine else 1.8, 0.92 + fmod(absf(pos.x * 0.13 + pos.z * 0.07), 0.16))
+	add_child(Nature.tree(Nature.species_for(pos, is_pine), pos, scale_val, yaw_deg, true, cast_sh))
 
 
 func _spawn_flagpole(pos: Vector3, yaw_deg: float, flag_col: Color, stripe_col: Color) -> void:

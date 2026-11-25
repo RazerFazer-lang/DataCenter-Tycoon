@@ -10,6 +10,7 @@ extends Control
 signal resume_requested
 signal leave_requested
 signal admin_requested
+signal avatar_requested
 
 const HUD_BG := Color(0.055, 0.058, 0.066, 0.86)
 const HUD_BORDER := Color(0.24, 0.25, 0.27, 0.85)
@@ -249,7 +250,7 @@ func _process(delta: float) -> void:
 		if af_b > 0: bonus_str += "  •  Airflow +%d%%" % af_b
 		if cm_b > 0: bonus_str += "  •  Kabel +%d%%" % cm_b
 		var site_str := ("  •  [T] Halle Nord" if GameState.halle_nord_owned else "")
-		_day_lbl.text = (tr("TAG %d") % GameState.day_number) + ("  •  Lv.%d" % GameState.get_company_level()) + "  •  " + GameState.get_weather_label() + bonus_str + site_str
+		_day_lbl.text = (tr("TAG %d") % GameState.day_number) + ("  •  Lv.%d" % GameState.get_company_level()) + "  •  " + OutdoorManager.season_label() + "  •  " + GameState.get_weather_label() + bonus_str + site_str
 
 	_refresh_player_hud(delta)
 	_refresh_slot_bar()
@@ -1030,6 +1031,7 @@ func _build_right_column() -> void:
 		["Q", tr("Ablegen")],
 		["G / MMB", tr("3D-Ping / Wegpunkt im Team setzen")],
 		["B / N", tr("Emotes: Winken & Daumen hoch")],
+		["V", tr("Gesten-Rad (halten)")],
 		["E", tr("Garagentor-Taster (öffnet/schließt Tor & dämpft Lärm)")],
 		["ESC", "Pause"],
 	]
@@ -1079,8 +1081,8 @@ func _build_key_hints() -> void:
 	var gap_em := Control.new()
 	gap_em.custom_minimum_size = Vector2(8, 0)
 	hints.add_child(gap_em)
-	hints.add_child(_make_keycap("B/N"))
-	hints.add_child(_hint_label("Emotes"))
+	hints.add_child(_make_keycap("V"))
+	hints.add_child(_hint_label("Gesten"))
 	var gap_p := Control.new()
 	gap_p.custom_minimum_size = Vector2(8, 0)
 	hints.add_child(gap_p)
@@ -1206,6 +1208,7 @@ const BUFF_META := {
 	"coffee": ["cup", "Kaffee", Color(0.93, 0.70, 0.38)],
 	"water": ["drop", "Erfrischt", Color(0.45, 0.78, 1.0)],
 	"rest": ["sofa", "Ausgeruht", Color(0.62, 0.92, 0.60)],
+	"food": ["cup", "Gestärkt", Color(0.95, 0.55, 0.35)],
 }
 
 
@@ -1390,6 +1393,14 @@ func _build_pause_overlay() -> void:
 	resume_btn.add_theme_font_size_override("font_size", 16)
 	resume_btn.pressed.connect(func(): resume_requested.emit())
 	pvbox.add_child(resume_btn)
+
+	var fig_btn := Button.new()
+	fig_btn.text = "FIGUR ANPASSEN"
+	fig_btn.custom_minimum_size = Vector2(0, 38)
+	UIStyle.style_button(fig_btn, Color(0.14, 0.17, 0.22), UIStyle.COL_BORDER)
+	fig_btn.add_theme_font_override("font", _display_font)
+	fig_btn.pressed.connect(func(): avatar_requested.emit())
+	pvbox.add_child(fig_btn)
 
 	_save_section = VBoxContainer.new()
 	_save_section.add_theme_constant_override("separation", 6)

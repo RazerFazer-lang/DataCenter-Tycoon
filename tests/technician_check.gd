@@ -235,7 +235,8 @@ func _avg_quality(skill: int) -> Array:
 	fm.employees[id]["skill"] = skill
 	var q := 0.0
 	var dur := 0.0
-	for i in 6:
+	tm._rng.seed = 4711
+	for i in 16:
 		gs.bench_screws = 500
 		gs.bench_paste = 50.0
 		gs.workbench_state = {"mode": "assembly", "label": "Q", "mainboard_id": "web_server", "components": _comps(2), "done": {}, "worker": 0, "rack_id": "", "slot_idx": 0}
@@ -245,7 +246,7 @@ func _avg_quality(skill: int) -> Array:
 		q += float(gs.get_build_quality(gs.workbench_state))
 		gs.workbench_state = {}
 		_run(func(): return tm._phase == "idle", 30.0)
-	return [q / 6.0, dur / 6.0]
+	return [q / 16.0, dur / 16.0]
 
 
 func _check_tools() -> void:

@@ -234,11 +234,15 @@ func _add_assembly_model(it: Item, model: String) -> void:
 	var rotors: Array = []
 	match model:
 		"#cooling":
-			m = HardwareMeshFactory.build_cooling_wall(tier, rotors)
+			m = PartModels.mount(str(it.spec.get("pid", "")), rotors)
+			if m == null:
+				m = HardwareMeshFactory.build_cooling_wall(tier, rotors)
 		"#cooling_broken":
 			m = HardwareMeshFactory.build_cooling_wall(0, rotors, true)
 		"#psu":
-			m = HardwareMeshFactory.build_psu_unit(tier)
+			m = PartModels.mount(str(it.spec.get("pid", "")))
+			if m == null:
+				m = HardwareMeshFactory.build_psu_unit(tier)
 		_:
 			m = HardwareMeshFactory.build_psu_unit(0, true)
 	it.node.add_child(m)
@@ -295,6 +299,8 @@ func _add_mesh_copy(parent: Node3D, src: MeshInstance3D, xf: Transform3D, model:
 static func _shared_material(mat_name: String, model: String) -> Material:
 	if not mat_name.begins_with("PBR_"):
 		return null
+	if model.begins_with("hwm_"):
+		return PartModels.pbr(mat_name)
 	if _mat_cache.has(mat_name):
 		return _mat_cache[mat_name]
 	var sources: Array[String] = [model.replace("asm_", "part_"), "part_cpu_t1", "part_psu_t0", "part_ram_t1", "part_gpu_t2", "part_mainboard"]

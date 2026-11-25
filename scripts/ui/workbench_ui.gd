@@ -272,6 +272,19 @@ func _build_ui() -> void:
 	close_b.pressed.connect(close_workbench)
 	add_child(close_b)
 
+	var view_b := Button.new()
+	view_b.text = tr("Teile ansehen [V]")
+	view_b.anchor_left = 1.0
+	view_b.anchor_right = 1.0
+	view_b.offset_left = -236
+	view_b.offset_right = -18
+	view_b.offset_top = 60
+	view_b.offset_bottom = 96
+	view_b.focus_mode = Control.FOCUS_NONE
+	UIStyle.style_button(view_b)
+	view_b.pressed.connect(_view_parts)
+	add_child(view_b)
+
 	var bottom := PanelContainer.new()
 	bottom.add_theme_stylebox_override("panel", UIStyle.make_panel(Color(0.06, 0.065, 0.075, 0.88), UIStyle.COL_BORDER, 8, 1, 18, 10))
 	bottom.anchor_left = 0.5
@@ -495,7 +508,26 @@ func _add_choice(title: String, info: String, enabled: bool, selected: bool, spa
 	b.disabled = not enabled
 	UIStyle.style_button(b, Color(0.30, 0.23, 0.10, 0.97) if selected else Color(0.165, 0.170, 0.182, 0.97))
 	b.pressed.connect(func(): GameState.request_workbench_choose(spare_id))
+	if PartModels.has_product(spare_id):
+		b.icon = PartThumbs.get_texture(spare_id)
+		b.expand_icon = true
 	_choose_list.add_child(b)
+
+
+## Alle Teile dieses Servers (und das gewählte Ersatzteil) nacheinander in die Hand nehmen.
+func _view_parts() -> void:
+	var comps: Dictionary = GameState.workbench_state.get("components", {}) if GameState.workbench_state.get("components", {}) is Dictionary else {}
+	var list: Array = []
+	var start := 0
+	var spare := AssemblyPlan.spare_of(GameState.workbench_state)
+	if str(spare.get("kind", "")) == "part":
+		list.append(str(spare.get("id", "")))
+	for cat in HardwareCatalog.CATEGORY_ORDER:
+		var id := str(comps.get(cat, ""))
+		if id != "" and not list.has(id):
+			list.append(id)
+	if PartViewer.open(self, list, start) == null:
+		_show_toast(tr("Hier liegen keine Bauteile zum Ansehen."))
 
 
 func _kit_name() -> String:
@@ -783,6 +815,8 @@ func _unhandled_key_input(event: InputEvent) -> void:
 				_action["turns"] = (int(_action["turns"]) + 1) % 4
 				_action["t"] = 0.0
 				SfxManager.play("part_touch", -14.0, 1.2)
+		KEY_V:
+			_view_parts()
 		KEY_H:
 			_guide = not _guide
 			_show_toast(tr("Markierungen an") if _guide else tr("Markierungen aus"))

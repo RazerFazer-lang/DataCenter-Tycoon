@@ -243,7 +243,9 @@ static func build_open_server_chassis(item_type: String, components: Dictionary,
 	# Leere Steckplätze bleiben leer: nur eingebaute Teile werden gezeigt.
 	if has_part(components, "cpu") or broken_cat == "cpu":
 		var cpu_lvl := get_visual_tier(components, "cpu")
-		var cpu_node := build_cpu_assembly(cpu_lvl, broken_cat == "cpu")
+		var cpu_node := own_part(components, "cpu", broken_cat)
+		if cpu_node == null:
+			cpu_node = build_cpu_assembly(cpu_lvl, broken_cat == "cpu")
 		# Der Sockel beginnt bei y = 0 und sitzt damit direkt auf der Platine (Oberseite 0.006).
 		cpu_node.position = Vector3(-0.07, 0.006, -0.01)
 		cpu_node.set_meta("part_cat", "cpu")
@@ -252,7 +254,9 @@ static func build_open_server_chassis(item_type: String, components: Dictionary,
 	# 4. REAL 3D RAM DIMM Bank (right beside CPU!)
 	if has_part(components, "ram") or broken_cat == "ram":
 		var ram_lvl := get_visual_tier(components, "ram")
-		var ram_node := build_ram_bank(ram_lvl, broken_cat == "ram")
+		var ram_node := own_part(components, "ram", broken_cat)
+		if ram_node == null:
+			ram_node = build_ram_bank(ram_lvl, broken_cat == "ram")
 		ram_node.position = Vector3(0.09, 0.008, -0.03)
 		ram_node.set_meta("part_cat", "ram")
 		mb.add_child(ram_node)
@@ -262,14 +266,18 @@ static func build_open_server_chassis(item_type: String, components: Dictionary,
 		var gpu_lvl := get_visual_tier(components, "gpu")
 		if item_type == "gpu_server" and gpu_lvl == 0:
 			gpu_lvl = 1 # GPU-AI server always has at least a visible GPU installed!
-		var gpu_node := build_gpu_card(gpu_lvl, out_fans, broken_cat == "gpu")
+		var gpu_node := own_part(components, "gpu", broken_cat, out_fans)
+		if gpu_node == null:
+			gpu_node = build_gpu_card(gpu_lvl, out_fans, broken_cat == "gpu")
 		gpu_node.position = Vector3(-0.21, 0.008, 0.05)
 		gpu_node.set_meta("part_cat", "gpu")
 		mb.add_child(gpu_node)
 
 	# 6. REAL 3D M.2 NVMe SSDs mounted directly on the Motherboard
 	if has_part(components, "storage") or broken_cat == "storage":
-		var nvme_node := build_storage_module(stor_lvl, broken_cat == "storage")
+		var nvme_node := own_part(components, "storage", broken_cat)
+		if nvme_node == null:
+			nvme_node = build_storage_module(stor_lvl, broken_cat == "storage")
 		nvme_node.position = Vector3(0.04, 0.008, 0.14)
 		nvme_node.set_meta("part_cat", "storage")
 		mb.add_child(nvme_node)
@@ -277,7 +285,9 @@ static func build_open_server_chassis(item_type: String, components: Dictionary,
 	# 7. REAL 3D Server Cooling Fan Wall (between drives & motherboard!)
 	if has_part(components, "cooling") or broken_cat == "cooling":
 		var cool_lvl := get_visual_tier(components, "cooling")
-		var fan_wall := build_cooling_wall(cool_lvl, out_fans, broken_cat == "cooling")
+		var fan_wall := own_part(components, "cooling", broken_cat, out_fans)
+		if fan_wall == null:
+			fan_wall = build_cooling_wall(cool_lvl, out_fans, broken_cat == "cooling")
 		fan_wall.position = Vector3(-0.02, 0.018, 0.21)
 		fan_wall.set_meta("part_cat", "cooling")
 		root.add_child(fan_wall)
@@ -285,7 +295,9 @@ static func build_open_server_chassis(item_type: String, components: Dictionary,
 	# 8. REAL 3D Server PSU Unit (rear-right bay inside chassis!)
 	if has_part(components, "psu") or broken_cat == "psu":
 		var psu_lvl := get_visual_tier(components, "psu")
-		var psu_node := build_psu_unit(psu_lvl, broken_cat == "psu")
+		var psu_node := own_part(components, "psu", broken_cat)
+		if psu_node == null:
+			psu_node = build_psu_unit(psu_lvl, broken_cat == "psu")
 		psu_node.position = Vector3(0.285, 0.018, -0.17)
 		psu_node.set_meta("part_cat", "psu")
 		root.add_child(psu_node)
@@ -315,6 +327,14 @@ static func _build_mainboard_fallback(mb: Node3D, pcb: StandardMaterial3D, steel
 	# SATA ports block
 	for s_i in range(4):
 		_box(mb, Vector3(0.24, 0.016, 0.12 + float(s_i) * 0.024), Vector3(0.036, 0.016, 0.016), plastic)
+
+
+## Eigenes Modell des eingebauten Teils. null, wenn das Teil kaputt ist oder kein eigenes Modell hat.
+static func own_part(components: Dictionary, cat: String, broken_cat: String, out_fans: Array = []) -> Node3D:
+	if broken_cat == cat:
+		return null
+	var v: Variant = components.get(cat, "")
+	return PartModels.mount(str(v), out_fans) if v is String else null
 
 
 static func build_cpu_assembly(tier: int, broken: bool = false) -> Node3D:

@@ -2139,6 +2139,7 @@ func clear_local_state() -> void:
 	MarketManager.reset()
 	MailManager.reset()
 	DecorManager.reset()
+	OutdoorManager.reset()
 	racks.clear()
 	coolers.clear()
 	ups_units.clear()
@@ -2348,6 +2349,7 @@ func build_snapshot() -> Dictionary:
 		"building_upgrades": building_upgrades.duplicate(true),
 		"active_constructions": active_constructions.duplicate(true),
 		"decor_items": decor_items.duplicate(true),
+		"outdoor": OutdoorManager.export_data(),
 		"maint_kits": maint_kits,
 		"company_milestones_reached": company_milestones_reached,
 		"company_level": company_level,
@@ -2417,6 +2419,7 @@ func build_snapshot() -> Dictionary:
 		"pending_build_orders": pending_build_orders.duplicate(true),
 		"host_only_destructive": host_only_destructive,
 		"weather_state": weather_state,
+		"weather_next": weather_next,
 		"airflow_bonus": airflow_bonus,
 		"cable_mgmt_bonus": cable_mgmt_bonus,
 		"daily_deals": daily_deals.duplicate(true),
@@ -2468,6 +2471,7 @@ func _apply_snapshot(snap: Dictionary) -> void:
 	building_upgrades = (snap.get("building_upgrades", {}) as Dictionary).duplicate(true)
 	active_constructions = (snap.get("active_constructions", {}) as Dictionary).duplicate(true)
 	decor_items = (snap.get("decor_items", {}) as Dictionary).duplicate(true)
+	OutdoorManager.load_data(snap.get("outdoor", {}))
 	maint_kits = maxi(0, int(snap.get("maint_kits", 3)))
 	ai_platform_level = int(snap.get("ai_platform_level", 0))
 	company_milestones_reached = clampi(int(snap.get("company_milestones_reached", -1)), -1, COMPANY_VALUE_MILESTONES.size())
@@ -2544,6 +2548,7 @@ func _apply_snapshot(snap: Dictionary) -> void:
 	van_plan = (snap.get("van_plan", {}) as Dictionary).duplicate(true) if snap.get("van_plan", {}) is Dictionary else {}
 	host_only_destructive = bool(snap.get("host_only_destructive", false))
 	weather_state = str(snap.get("weather_state", "clear"))
+	weather_next = str(snap.get("weather_next", ""))
 	airflow_bonus = clampf(float(snap.get("airflow_bonus", 0.0)), 0.0, 0.35)
 	cable_mgmt_bonus = clampf(float(snap.get("cable_mgmt_bonus", 0.0)), 0.0, 0.15)
 	daily_deals = (snap.get("daily_deals", []) as Array).duplicate(true) if snap.get("daily_deals", []) is Array else []
@@ -4137,7 +4142,7 @@ func _run_simulation_step(dt: float) -> void:
 	# 0. Day/Night Clock & kWh Meter (PV-Solaranlage spart 28 % laufenden Strom!)
 	var kw_now := float(total_watts) / 1000.0
 	if breaker_on:
-		var pv_mult := 0.72 if has_building_upgrade("upg_pv_solar") else 1.0
+		var pv_mult := (0.72 if has_building_upgrade("upg_pv_solar") else 1.0) * OutdoorManager.power_mult()
 		# Verbrauch in Spielstunden: ein Spieltag zählt 24 Stunden Last (realistische kWh pro Tag).
 		daily_kwh += kw_now * pv_mult * (dt / DAY_LENGTH_SECONDS) * 24.0
 	if _day_rollover_pending:
@@ -4308,7 +4313,7 @@ func _run_simulation_step(dt: float) -> void:
 			if bool(cooler["powered"]):
 				total_cooling += absf(float(ITEM_CATALOG[ctype]["heat"])) * (1.0 + airflow_bonus)
 		elif bool(cooler["powered"]):
-			heat_pump_capacity += absf(float(ITEM_CATALOG[ctype]["heat"]))
+			heat_pump_capacity += absf(float(ITEM_CATALOG[ctype]["heat"])) * OutdoorManager.unit_factor(str(cid))
 	# Die Kälte der Außengeräte kommt nur über ein Goldis Innengerät in den Raum.
 	# Kaltgang/Warmgang-Airflow steigert die reale Kühlleistung um bis zu +30 %!
 	if indoor_units > 0:
@@ -4324,6 +4329,7 @@ func _run_simulation_step(dt: float) -> void:
 	var night_bonus := -3.0 if (time_of_day < 0.22 or time_of_day > 0.80) else 0.0
 	var chiller_farm_bonus := -4.5 if has_building_upgrade("upg_roof_chillers") else 0.0
 	var weather_temp_delta := 8.5 if weather_state == "heatwave" else (-2.5 if (weather_state == "rain" or weather_state == "storm") else 0.0)
+	weather_temp_delta += OutdoorManager.season_temp()
 	var target_room := clampf(22.0 + night_bonus + chiller_farm_bonus + weather_temp_delta + total_heat_gen - total_cooling, 15.0, 96.0)
 	room_temp = move_toward(room_temp, target_room, dt * 2.0)
 
@@ -5896,6 +5902,9 @@ func _clamp_drop_pos(drop_pos: Vector3) -> Vector3:
 	var max_x := 5.0 if room_level == 0 else (11.8 if room_level == 1 else 20.8)
 	var min_z := -4.0
 	var max_z := 8.8
+	# Draußen auf dem Grundstück (links, hinten, rechts der Halle und auf dem Rasen davor).
+	if drop_pos.z > -60.0 and OutdoorWorld.PLOT.grow(-0.5).has_point(Vector2(drop_pos.x, drop_pos.z)) and not OutdoorWorld.HALL.grow(0.25).has_point(Vector2(drop_pos.x, drop_pos.z)):
+		return Vector3(drop_pos.x, 0.0, drop_pos.z)
 	if halle_nord_owned and drop_pos.z < -100.0:
 		min_x = -9.5
 		max_x = 9.5
@@ -8142,6 +8151,7 @@ func _broadcast_sim_tick() -> void:
 		"cooler_pwr": cooler_pwr,
 		"ups_sync": ups_sync,
 		"weather_state": weather_state,
+		"weather_next": weather_next,
 		"airflow_bonus": airflow_bonus,
 		"cable_mgmt_bonus": cable_mgmt_bonus,
 		"career_completed": career_completed,
@@ -8208,6 +8218,7 @@ func _rpc_sync_sim_tick(packet: Dictionary) -> void:
 		next_payout_in = float(packet["next_payout_in"])
 		contracts = packet["contracts"].duplicate(true)
 		weather_state = str(packet.get("weather_state", weather_state))
+		weather_next = str(packet.get("weather_next", ""))
 		airflow_bonus = float(packet.get("airflow_bonus", airflow_bonus))
 		cable_mgmt_bonus = float(packet.get("cable_mgmt_bonus", cable_mgmt_bonus))
 		if packet.has("career_completed") and packet["career_completed"] is Array:
@@ -9604,9 +9615,9 @@ func get_weather_label() -> String:
 		"cloudy":
 			return tr("Bewölkt")
 		"rain":
-			return tr("Regen")
+			return tr("Schnee") if OutdoorManager.is_winter() else tr("Regen")
 		"storm":
-			return tr("Gewitter")
+			return tr("Schneesturm") if OutdoorManager.is_winter() else tr("Gewitter")
 		"heatwave":
 			return tr("Hitzewelle")
 		_:
@@ -9615,9 +9626,34 @@ func get_weather_label() -> String:
 
 func _tick_weather(dt: float) -> void:
 	_weather_timer -= dt
+	# Die Wetterstation auf dem Dach sagt 40 Sekunden vorher Bescheid.
+	if _weather_timer <= 40.0 and weather_next == "":
+		weather_next = _roll_weather()
+		if weather_next in ["storm", "heatwave"] and weather_next != weather_state:
+			post_event("📡 Wetterstation: Schneesturm im Anmarsch!" if weather_next == "storm" and OutdoorManager.is_winter() else ("📡 Wetterstation: Gewitter im Anmarsch!" if weather_next == "storm" else "📡 Wetterstation: Gleich wird es sehr heiß."), "warn")
 	if _weather_timer > 0.0:
 		return
 	_weather_timer = randf_range(85.0, 145.0)
+	var next_w := weather_next if weather_next != "" else _roll_weather()
+	weather_next = ""
+	if next_w == weather_state:
+		return
+	weather_state = next_w
+	match weather_state:
+		"rain":
+			post_event("❄ Es fängt an zu schneien (-2,5 °C natürliche Außenkühlung)." if OutdoorManager.is_winter() else "🌧 Regen zieht auf (-2,5 °C natürliche Außenkühlung).", "info")
+		"storm":
+			post_event("❄ SCHNEESTURM! Erhöhtes Risiko für Netzschwankungen – USV bereithalten!" if OutdoorManager.is_winter() else "⛈ GEWITTER! Erhöhtes Risiko für Netzschwankungen – USV bereithalten!", "warn")
+		"heatwave":
+			post_event("☀ HITZEWELLE (+8,5 °C)! Klimaanlagen ziehen +22% Strom – Sicherungen & Temperaturen im Blick behalten!", "warn")
+		"clear":
+			post_event("🌤 Das Wetter klart wieder auf.", "info")
+
+
+var weather_next := ""
+
+
+func _roll_weather() -> String:
 	var roll := randf()
 	var next_w := "clear"
 	if roll < 0.36:
@@ -9629,19 +9665,9 @@ func _tick_weather(dt: float) -> void:
 	elif roll < 0.90 and day_number >= 2:
 		next_w = "storm"
 	elif day_number >= 2:
-		next_w = "heatwave"
-	if next_w == weather_state:
-		return
-	weather_state = next_w
-	match weather_state:
-		"rain":
-			post_event("🌧 Regen zieht auf (-2,5 °C natürliche Außenkühlung).", "info")
-		"storm":
-			post_event("⛈ GEWITTER! Erhöhtes Risiko für Netzschwankungen – USV bereithalten!", "warn")
-		"heatwave":
-			post_event("☀ HITZEWELLE (+8,5 °C)! Klimaanlagen ziehen +22% Strom – Sicherungen & Temperaturen im Blick behalten!", "warn")
-		"clear":
-			post_event("🌤 Das Wetter klart wieder auf.", "info")
+		# Hitzewellen nur im Frühling und Sommer.
+		next_w = "heatwave" if OutdoorManager.season_index() <= 1 else "cloudy"
+	return next_w
 
 
 ## Berechnet Kaltgang-/Warmgang-Airflow (bis +30 % Kühlleistung & weniger Klima-Strom)
@@ -9963,14 +9989,14 @@ func _rpc_req_player_emote(emote_id: String) -> void:
 	var peer_id := _get_sender_id()
 	if not SecurityGuard.check_rate_limit(peer_id, "emote", 3, 4.0, false):
 		return
-	if emote_id != "wave" and emote_id != "thumbs_up":
+	if not EmoteWheel.EMOTES.has(emote_id):
 		return
 	_rpc_broadcast_player_emote.rpc(peer_id, emote_id)
 
 
 @rpc("authority", "call_local", "reliable")
 func _rpc_broadcast_player_emote(peer_id: int, emote_id: String) -> void:
-	SfxManager.play("emote", -10.0, 1.05 if emote_id == "thumbs_up" else 0.96)
+	SfxManager.play("emote", -10.0, 1.05 if emote_id == "thumbs" else 0.96)
 	player_emote_received.emit(peer_id, emote_id)
 
 

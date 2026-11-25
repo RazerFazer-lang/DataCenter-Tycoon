@@ -22,9 +22,6 @@ const PORT_ASSIST_RADIUS := 0.16
 const PORT_ASSIST_SIGHT_SLACK := 0.25
 const INTERACT_RANGE := 3.6
 const PLACE_RANGE := 5.5
-const AVATAR_MODEL_ID := "player"
-const REALISTIC_AVATAR_MODEL_ID := "player_realistic"
-const RigHelper := preload("res://scripts/world/humanoid_rig_helper.gd")
 
 var peer_id: int = 1
 var is_local: bool = false
@@ -48,7 +45,7 @@ var is_typing_at_pc: bool = false
 var _pre_seat_pos: Vector3 = Vector3(2.78, 0.0, -2.05)
 var _pre_seat_yaw: float = 0.0
 var _stand_blend_timer: float = 0.0
-var _remote_pose_flag: int = 0 # 0=standing, 1=seated at PC, 2=seated & typing, 3=crouching
+var _remote_pose_flag: int = 0 # 0 steht, 1 sitzt am PC, 2 tippt, 3 duckt sich, 4 Sofa/Bank, 5 Werkbank, 6 Leiter, 7 in der Luft
 
 # Kamerafahrt an den Monitor: erst hinsetzen, dann heranfahren, bis der Bildschirm das Bild füllt.
 const PC_SIT_SETTLE := 0.45
@@ -68,28 +65,18 @@ var _camera: Camera3D
 var _ray: RayCast3D
 var _head_pivot: Node3D
 var _avatar_root: Node3D
-var _avatar_head: Node3D
-var _left_leg: Node3D
-var _right_leg: Node3D
-var _left_arm: Node3D
-var _right_arm: Node3D
+var _human: HumanModel
 var _nametag: Label3D
-var _skel: Skeleton3D = null
-var _skel_bones: Dictionary = {}
-var _anim_player: AnimationPlayer = null
-var _skel_angles: Dictionary = {"head": 0.0, "leg_l": 0.0, "leg_r": 0.0, "knee_l": 0.0, "knee_r": 0.0, "arm_l": 0.0, "arm_r": 0.0, "forearm_l": 0.14, "forearm_r": 0.14}
 
 # Held visual (shown in first-person corner OR in remote avatar's hands)
 var _held_root: Node3D
 var _held_item_holder: Node3D
-## Ich-Perspektive: Geriggte Ego-Arme (fp_arms.glb) mit AnimationPlayer + Fallback-Hände.
-var _fp_arms: Node3D
-var _fp_arms_anim: AnimationPlayer
-var _fp_arms_current_anim: String = ""
-var _fp_hand: Node3D
-var _fp_hand_left: Node3D
-const FP_HAND_ITEM_POS := Vector3(0.0, -0.09, 0.02)
-const FP_HAND_EXT_POS := Vector3(0.03, 0.25, 0.08)
+## Ich-Ansicht: eigene Arme (FpArms).
+var _fp: FpArms
+var _vm_from := Vector3.ZERO
+var _last_aim := Vector3.ZERO
+var _emote_wheel: EmoteWheel
+var _held_half_w := 0.24
 var _held_item_type_cached: String = ""
 var _held_extinguisher: Node3D
 var _foam_root: Node3D
@@ -106,6 +93,8 @@ var _cam_weight_dip: float = 0.0
 var _emote_badge: Label3D
 var _emote_timer: float = 0.0
 var _emote_id: String = ""
+## Auf einer Leiter (Dach).
+var on_ladder := false
 var _was_on_floor: bool = true
 var _vm_last_state_key: String = ""
 
@@ -149,10 +138,13 @@ var _body_col: CollisionShape3D
 var _body_shape: CapsuleShape3D
 var _stand_probe: CapsuleShape3D
 
-# Skin (Hose, Haut). Die Jacke steckt in avatar_color.
-var skin_pants_color: Color = Color(0.15, 0.17, 0.21)
-var skin_tone_color: Color = Color(0.88, 0.72, 0.60)
 var skin_data: Dictionary = {}
+## Haltung der Mitspieler: zuletzt gesehener Gegenstand in der Hand.
+var _remote_held := ""
+var seat_kind := ""
+var _talk_left := 0.0
+## Steht am Spind (Editor offen): Tür geht auf.
+var at_locker := false
 
 
 func setup(p_peer_id: int, p_is_local: bool, p_name: String, p_color: Color, world_ref: Node) -> void:
@@ -163,14 +155,13 @@ func setup(p_peer_id: int, p_is_local: bool, p_name: String, p_color: Color, wor
 	_world = world_ref
 
 
-## Übernimmt den Skin aus dem Spieler-Eintrag. Nach setup() und vor add_child() aufrufen,
-## weil die Visuals in _ready() entstehen.
+## Aussehen setzen (auch während der Sitzung).
 func apply_skin(skin: Variant) -> void:
 	skin_data = SettingsManager.sanitize_skin(skin)
-	var colors := SettingsManager.skin_colors(skin_data, avatar_color)
-	avatar_color = colors["jacket"]
-	skin_pants_color = colors["pants"]
-	skin_tone_color = colors["tone"]
+	if _avatar_root != null:
+		_build_human()
+	if _fp != null:
+		_fp.set_look(skin_data)
 
 
 func _ready() -> void:
@@ -201,7 +192,6 @@ func _ready() -> void:
 
 	if is_local:
 		add_to_group("local_player")
-		_avatar_root.visible = false
 		_nametag.visible = false
 
 		_camera = Camera3D.new()
@@ -212,6 +202,7 @@ func _ready() -> void:
 		_camera.current = true
 		SettingsManager.settings_changed.connect(_on_settings_changed)
 	GameState.player_emote_received.connect(_on_player_emote_received)
+	NetworkManager.chat_message_received.connect(_on_chat)
 	if is_local:
 
 		_ray = RayCast3D.new()
@@ -224,7 +215,11 @@ func _ready() -> void:
 		_held_root.position = Vector3(0.36, -0.30, -0.62)
 		_held_root.scale = Vector3(0.62, 0.62, 0.62)
 		_camera.add_child(_held_root)
-		_build_fp_hand()
+		for vi in _held_extinguisher.find_children("*", "VisualInstance3D", true, false):
+			(vi as VisualInstance3D).layers = FpArms.LAYER
+		_fp = FpArms.new()
+		_camera.add_child(_fp)
+		_fp.set_look(skin_data if not skin_data.is_empty() else SettingsManager.get_skin())
 
 		_build_placement_ghost()
 	else:
@@ -241,7 +236,6 @@ func _exit_tree() -> void:
 func _on_settings_changed() -> void:
 	if _camera != null:
 		_camera.fov = SettingsManager.fov
-	_refresh_fp_hand_skin()
 
 
 func apply_remote_pose(pos: Vector3, yaw: float, pitch: float, p_tool: int, spraying: bool) -> void:
@@ -337,6 +331,86 @@ func _process_sofa(delta: float) -> void:
 		SfxManager.play("save", -12.0, 1.1)
 
 
+var _bench_pos := Vector3.ZERO
+var _bench_yaw := 0.0
+var _bench_time := 0.0
+var _bench_rested := false
+var _ladder_y := 0.0
+
+
+## Auf eine Gartenbank setzen. Jede Bewegung steht wieder auf.
+func sit_on_bench(target: Node3D) -> void:
+	if not is_local or seat_kind != "" or target == null or GameState.is_player_holding_anything(peer_id):
+		SfxManager.play("error")
+		return
+	seat_kind = "bench"
+	_bench_time = 0.0
+	_bench_rested = false
+	_pre_seat_pos = position
+	_bench_yaw = deg_to_rad(float(target.get_meta("yaw", 0.0)))
+	var side := Vector3(cos(_bench_yaw), 0.0, -sin(_bench_yaw))
+	var off := 0.42 if (position - target.global_position).dot(side) >= 0.0 else -0.42
+	_bench_pos = Vector3(target.global_position.x, 0.0, target.global_position.z) + side * off
+	SfxManager.play("chair_sit", -8.0, 0.9)
+
+
+func _process_bench(delta: float) -> void:
+	var moving := Input.get_vector("move_left", "move_right", "move_forward", "move_back").length() > 0.2 or Input.is_action_just_pressed("jump")
+	if ui_locked or (moving and _bench_time > 0.4):
+		seat_kind = ""
+		_stand_blend_timer = 0.30
+		SfxManager.play("chair_sit", -12.0, 1.2)
+		return
+	_bench_time += delta
+	position = position.lerp(_bench_pos, clampf(delta * 8.0, 0.0, 1.0))
+	if _bench_time < 0.7:
+		rotation.y = lerp_angle(rotation.y, _bench_yaw + PI, clampf(delta * 8.0, 0.0, 1.0))
+	_head_pivot.position.y = lerpf(_head_pivot.position.y, 1.16, clampf(delta * 8.0, 0.0, 1.0))
+	velocity = Vector3.ZERO
+	if _bench_time >= OutdoorManager.BENCH_REST and not _bench_rested:
+		_bench_rested = true
+		OutdoorManager.request_use("bench")
+		SfxManager.play("save", -12.0, 1.1)
+
+
+## Leiter zum Dach: [E] steigt ein, vor und zurück klettert, Springen lässt los.
+func start_ladder(from_top: bool) -> void:
+	if not is_local or on_ladder:
+		return
+	if GameState.is_player_holding_anything(peer_id):
+		SfxManager.play("error")
+		return
+	on_ladder = true
+	velocity = Vector3.ZERO
+	_ladder_y = OutdoorWorld.ROOF_Y - 0.1 if from_top else 0.05
+	SfxManager.play("part_touch", -8.0, 0.8)
+
+
+func _process_ladder(delta: float) -> void:
+	var foot := OutdoorWorld.LADDER_POS + Vector3(0.0, 0.0, -0.58)
+	var inp := 0.0 if ui_locked else Input.get_axis("move_back", "move_forward")
+	# Beim Hinunterschauen geht vorwärts nach unten.
+	if _head_pivot.rotation.x < -0.9 and position.y > 1.0:
+		inp = -inp
+	_ladder_y += inp * 1.9 * delta
+	velocity = Vector3(0.0, inp * 1.9, 0.0)
+	_footstep_accum += absf(inp) * delta
+	if _footstep_accum > 0.42:
+		_footstep_accum = 0.0
+		SfxManager.play("step_raised", -10.0, randf_range(1.1, 1.25))
+	position = position.lerp(Vector3(foot.x, _ladder_y, foot.z), clampf(delta * 12.0, 0.0, 1.0))
+	rotation.y = lerp_angle(rotation.y, PI, clampf(delta * 6.0, 0.0, 1.0)) if absf(inp) > 0.1 else rotation.y
+	_head_pivot.position.y = lerpf(_head_pivot.position.y, STAND_HEAD_Y, clampf(delta * 8.0, 0.0, 1.0))
+	if _ladder_y > OutdoorWorld.ROOF_Y + 0.15:
+		on_ladder = false
+		velocity = Vector3.ZERO
+		position = Vector3(foot.x, OutdoorWorld.ROOF_Y + 0.08, -4.15)
+	elif _ladder_y < 0.0 or (not ui_locked and Input.is_action_just_pressed("jump")):
+		on_ladder = false
+		velocity = Vector3.ZERO
+		position = Vector3(foot.x, maxf(0.05, position.y), foot.z - 0.45)
+
+
 func set_typing_at_pc(active: bool) -> void:
 	is_typing_at_pc = active and is_seated_at_pc
 
@@ -369,6 +443,8 @@ func set_ui_locked(locked: bool) -> void:
 	var was_locked := ui_locked
 	ui_locked = locked
 	if ui_locked:
+		if _emote_wheel != null:
+			_emote_wheel.visible = false
 		_is_spraying_local = false
 		current_prompt = ""
 		current_sub_prompt = ""
@@ -383,6 +459,9 @@ func _unhandled_input(event: InputEvent) -> void:
 	if not is_local or ui_locked:
 		return
 
+	if event is InputEventMouseMotion and _emote_wheel != null and _emote_wheel.visible:
+		_emote_wheel.move((event as InputEventMouseMotion).relative)
+		return
 	if event is InputEventMouseMotion and Input.mouse_mode == Input.MOUSE_MODE_CAPTURED:
 		var sens := SettingsManager.mouse_sensitivity
 		rotate_y(-event.relative.x * sens)
@@ -437,12 +516,17 @@ func _unhandled_input(event: InputEvent) -> void:
 	elif event.is_action_pressed("world_ping"):
 		if _ui_unlock_cooldown <= 0.0 and Input.mouse_mode == Input.MOUSE_MODE_CAPTURED:
 			_handle_world_ping()
+	elif event.is_action_pressed("emote_wheel"):
+		if _ui_unlock_cooldown <= 0.0 and Input.mouse_mode == Input.MOUSE_MODE_CAPTURED:
+			_open_emote_wheel()
+	elif event.is_action_released("emote_wheel"):
+		_close_emote_wheel()
 	elif event.is_action_pressed("emote_wave"):
 		if _ui_unlock_cooldown <= 0.0 and Input.mouse_mode == Input.MOUSE_MODE_CAPTURED:
 			GameState.request_player_emote("wave")
 	elif event.is_action_pressed("emote_thumbs"):
 		if _ui_unlock_cooldown <= 0.0 and Input.mouse_mode == Input.MOUSE_MODE_CAPTURED:
-			GameState.request_player_emote("thumbs_up")
+			GameState.request_player_emote("thumbs")
 	elif event.is_action_pressed("teleport_site"):
 		if _ui_unlock_cooldown <= 0.0 and not ui_locked:
 			teleport_between_sites()
@@ -480,7 +564,9 @@ func _handle_inspect() -> void:
 		return
 	var itype := str(target.get_meta("interact_type"))
 	var eid := str(target.get_meta("entity_id"))
-	if itype == "wall_router":
+	if itype == "outdoor" and eid == "gate":
+		OutdoorManager.request_use(eid, true)
+	elif itype == "wall_router":
 		_world.open_device_inspector("router", eid)
 	elif itype == "workbench":
 		GameState.select_bench(eid)
@@ -554,14 +640,12 @@ func _physics_process(delta: float) -> void:
 		_emote_timer = maxf(0.0, _emote_timer - delta)
 		if _emote_badge != null:
 			_emote_badge.position.y = 2.28 + sin(_anim_time * 5.0) * 0.03
-		if not is_local and _right_arm != null:
-			if _emote_id == "wave":
-				_right_arm.rotation_degrees = Vector3(-135.0, 0.0, 20.0 + sin(_anim_time * 12.0) * 28.0)
-			else:
-				_right_arm.rotation_degrees = Vector3(-95.0, 0.0, 12.0)
 		if _emote_timer <= 0.0 and _emote_badge != null:
 			_emote_badge.visible = false
 	_update_held_visuals()
+	if is_local:
+		_animate_avatar(delta, velocity if not is_seated_at_pc and _sofa_id == "" else Vector3.ZERO, _pose_flag())
+		_update_fp(delta)
 	if is_local and position.y < -6.0:
 		_rescue_from_fall()
 
@@ -570,8 +654,8 @@ func _physics_process(delta: float) -> void:
 		position = position.lerp(_target_pos, clampf(delta * 14.0, 0.0, 1.0))
 		rotation.y = lerp_angle(rotation.y, _target_yaw, clampf(delta * 14.0, 0.0, 1.0))
 		_head_pivot.rotation.x = lerpf(_head_pivot.rotation.x, _target_pitch, clampf(delta * 14.0, 0.0, 1.0))
-		var horiz_speed := Vector2(position.x - prev_pos.x, position.z - prev_pos.z).length() / maxf(delta, 0.001)
-		_animate_remote_avatar(delta, horiz_speed)
+		_animate_avatar(delta, (position - prev_pos) / maxf(delta, 0.001), _remote_pose_flag)
+		_place_remote_held()
 		_update_foam_visuals(_remote_spraying)
 		return
 
@@ -587,6 +671,10 @@ func _physics_process(delta: float) -> void:
 		velocity = Vector3.ZERO
 	elif _sofa_id != "":
 		_process_sofa(delta)
+	elif seat_kind != "":
+		_process_bench(delta)
+	elif on_ladder:
+		pass
 	elif _stand_blend_timer > 0.0:
 		_stand_blend_timer = maxf(0.0, _stand_blend_timer - delta)
 		position = position.lerp(_pre_seat_pos, clampf(delta * 10.0, 0.0, 1.0))
@@ -624,6 +712,8 @@ func _physics_process(delta: float) -> void:
 
 		move_and_slide()
 
+	if on_ladder:
+		_process_ladder(delta)
 	if is_at_workbench:
 		var to_bench := _workbench_pos - position
 		rotation.y = lerp_angle(rotation.y, atan2(-to_bench.x, -to_bench.z), clampf(delta * 8.0, 0.0, 1.0))
@@ -656,6 +746,8 @@ func _physics_process(delta: float) -> void:
 						surf = "wet"
 				elif position.z > 4.65 and is_wet:
 					surf = "wet"
+				if surf == "concrete" and OutdoorWorld.surface(position) == "grass":
+					surf = "snow" if OutdoorManager.snow_shown > 0.4 else "grass"
 				SfxManager.play_footstep(flat_speed > 5.8, surf)
 		else:
 			_footstep_accum = 0.25
@@ -680,8 +772,7 @@ func _physics_process(delta: float) -> void:
 	if _net_send_accum >= 0.05:
 		_net_send_accum = 0.0
 		if _world != null and _world.has_method("send_local_pose"):
-			var pose_flag := 2 if is_typing_at_pc else (1 if is_seated_at_pc or _sofa_id != "" else (3 if is_crouching else 0))
-			_world.send_local_pose(position, rotation.y, _head_pivot.rotation.x, pose_flag, _is_spraying_local)
+			_world.send_local_pose(position, rotation.y, _head_pivot.rotation.x, _pose_flag(), _is_spraying_local)
 			if not pushed_cart.is_empty():
 				_world.send_cart_pose(str(pushed_cart["id"]), _compute_pushed_cart_pos(), rotation.y)
 
@@ -729,124 +820,213 @@ func _compute_pushed_cart_pos() -> Vector3:
 	return Vector3(cx, 0.0, cz)
 
 
-func _animate_remote_avatar(delta: float, horiz_speed: float) -> void:
-	var seated := (_remote_pose_flag == 1 or _remote_pose_flag == 2)
-	var typing := (_remote_pose_flag == 2)
-	var crouching := (_remote_pose_flag == 3)
+func human_model() -> HumanModel:
+	return _human
 
-	if _avatar_root != null:
-		var target_y := -0.34 if seated else (-0.42 if crouching else 0.0)
-		_avatar_root.position.y = lerpf(_avatar_root.position.y, target_y, clampf(delta * 10.0, 0.0, 1.0))
 
-	if _skel != null:
-		_animate_skeleton_avatar(delta, horiz_speed, seated, typing, crouching)
+func _pose_flag() -> int:
+	if is_seated_at_pc:
+		return 2 if is_typing_at_pc else 1
+	if _sofa_id != "" or seat_kind != "":
+		return 4
+	if is_at_workbench:
+		return 5
+	if on_ladder:
+		return 6
+	if is_crouching:
+		return 3
+	return 0 if is_on_floor() else 7
+
+
+## Haltung der ganzen Figur. Für Mitspieler aus der übertragenen Haltung, für sich selbst (Schatten, Spiegel) aus dem eigenen Zustand.
+func _animate_avatar(_delta: float, vel: Vector3, flag: int) -> void:
+	if _human == null or _human.rig == null:
 		return
+	var r := _human.rig
+	var flat := Vector3(vel.x, 0.0, vel.z)
+	if flat.length() > 12.0:
+		flat = Vector3.ZERO
+	var seated := flag == 1 or flag == 2 or flag == 4
+	_human.move(Vector3.ZERO if seated or flag == 5 else flat)
+	r.crouch = 1.0 if flag == 3 else 0.0
+	r.airborne = flag == 7
+	r.seat = 1.0 if seated else 0.0
+	r.seat_height = 0.46 if flag == 4 else 0.52
+	r.look_pitch = clampf(_head_pivot.rotation.x, -0.9, 0.9)
+	r.tempo = clampf(absf(vel.y) / 1.2, 0.0, 1.6)
+	_talk_left = maxf(0.0, _talk_left - _delta)
+	r.talk = 1.0 if _talk_left > 0.0 else 0.0
+	var held := GameState.get_player_held_crate(peer_id)
+	var ext := GameState.is_player_holding_extinguisher(peer_id)
+	var cart := GameState.get_player_pushed_cart(peer_id)
+	var b := ""
+	var key := ""
+	if flag == 2:
+		b = "type"
+	elif flag == 1:
+		b = "type"
+	elif flag == 4:
+		b = "sofa"
+	elif flag == 5:
+		b = "work"
+	elif flag == 6:
+		b = "ladder"
+	elif ext:
+		b = "extinguisher"
+		key = "ext"
+	elif not held.is_empty():
+		key = str(held.get("id", held.get("item_type", "")))
+		var two := _is_two_handed_item(str(held["item_type"]), maxi(1, int(held.get("pack_count", 1))))
+		b = ("carry_wide" if maxi(1, int(held.get("pack_count", 1))) > 1 else "carry_box") if two else "one"
+	elif not cart.is_empty():
+		b = "push"
+		key = "cart"
+	r.base = b
+	if key != _remote_held:
+		# Aufheben und Ablegen sichtbar machen.
+		var drop := key == ""
+		_remote_held = key
+		if not seated and flag != 5 and key != "cart":
+			r.play("place" if drop else "pickup", Vector3(0.0, 0.35 if _remote_low(drop) else 0.95, 0.42))
 
-	if _avatar_head != null:
-		var head_x := clampf(_head_pivot.rotation.x * 0.65, -0.7, 0.7)
-		if typing:
-			head_x += sin(_anim_time * 8.0) * 0.05 - 0.14
-		elif seated:
-			head_x -= 0.08
-		_avatar_head.rotation.x = lerpf(_avatar_head.rotation.x, head_x, clampf(delta * 12.0, 0.0, 1.0))
 
-	if seated:
-		if _left_leg != null and _right_leg != null:
-			_left_leg.rotation.x = lerpf(_left_leg.rotation.x, 1.48, clampf(delta * 12.0, 0.0, 1.0))
-			_right_leg.rotation.x = lerpf(_right_leg.rotation.x, 1.48, clampf(delta * 12.0, 0.0, 1.0))
-		if _left_arm != null and _right_arm != null:
-			var tl := 1.12 + (sin(_anim_time * 24.0) * 0.16 if typing else 0.0)
-			var tr := 1.12 + (cos(_anim_time * 24.0 + 0.7) * 0.16 if typing else 0.0)
-			_left_arm.rotation.x = lerpf(_left_arm.rotation.x, tl, clampf(delta * 16.0, 0.0, 1.0))
-			_right_arm.rotation.x = lerpf(_right_arm.rotation.x, tr, clampf(delta * 16.0, 0.0, 1.0))
+func _remote_low(_drop: bool) -> bool:
+	return _head_pivot.rotation.x < -0.35
+
+
+## Gehaltenes liegt in den Händen der Figur.
+func _place_remote_held() -> void:
+	if _human == null or _human.rig == null or _held_root == null:
 		return
-
-	var moving := horiz_speed > 0.35
-	if moving:
-		_walk_cycle += delta * clampf(horiz_speed * 2.2, 6.0, 14.0)
-	# Geduckt: Beine nach vorn angewinkelt, beim Schleichen nur kleiner Schritt.
-	var swing_amp := 0.22 if crouching else 0.55
-	var leg_base := 1.05 if crouching else 0.0
-	var leg_swing := sin(_walk_cycle) * swing_amp if moving else 0.0
-	if _left_leg != null and _right_leg != null:
-		_left_leg.rotation.x = lerpf(_left_leg.rotation.x, leg_base + leg_swing, clampf(delta * 12.0, 0.0, 1.0))
-		_right_leg.rotation.x = lerpf(_right_leg.rotation.x, leg_base - leg_swing, clampf(delta * 12.0, 0.0, 1.0))
-
-	var holding := GameState.is_player_holding_anything(peer_id)
-	if _left_arm != null and _right_arm != null:
-		var target_l := 0.85 if holding else -leg_swing * 0.6
-		var target_r := 0.85 if holding else leg_swing * 0.6
-		_left_arm.rotation.x = lerpf(_left_arm.rotation.x, target_l, clampf(delta * 12.0, 0.0, 1.0))
-		_right_arm.rotation.x = lerpf(_right_arm.rotation.x, target_r, clampf(delta * 12.0, 0.0, 1.0))
-
-
-func _animate_skeleton_avatar(delta: float, horiz_speed: float, seated: bool, typing: bool, crouching: bool) -> void:
-	var k := clampf(delta * 12.0, 0.0, 1.0)
-	var head_t := clampf(-_head_pivot.rotation.x * 0.65, -0.60, 0.60)
-	if typing:
-		head_t += sin(_anim_time * 8.0) * 0.05 + 0.14
-	elif seated:
-		head_t += 0.08
-	var leg_l_t := 0.0
-	var leg_r_t := 0.0
-	var knee_l_t := -0.04
-	var knee_r_t := -0.04
-	var arm_l_t := 0.04
-	var arm_r_t := 0.04
-	var forearm_l_t := 0.14
-	var forearm_r_t := 0.14
-	if seated:
-		# Oberschenkel nach vorn (+1.48), Knie nach unten (-1.45), Arme nach vorn zur Tastatur (+0.78) + Ellbogen angewinkelt (+0.85)
-		leg_l_t = 1.48
-		leg_r_t = 1.48
-		knee_l_t = -1.45
-		knee_r_t = -1.45
-		arm_l_t = 0.72 + (sin(_anim_time * 24.0) * 0.10 if typing else 0.0)
-		arm_r_t = 0.72 + (cos(_anim_time * 24.0 + 0.7) * 0.10 if typing else 0.0)
-		forearm_l_t = 0.92 + (sin(_anim_time * 24.0 + 0.4) * 0.12 if typing else 0.0)
-		forearm_r_t = 0.92 + (cos(_anim_time * 24.0 + 1.1) * 0.12 if typing else 0.0)
+	var l := to_local(_human.rig.hand_transform(true).origin)
+	var rr := to_local(_human.rig.hand_transform(false).origin)
+	var held := GameState.get_player_held_crate(peer_id)
+	if GameState.is_player_holding_extinguisher(peer_id):
+		_held_root.position = rr + Vector3(-0.01, -0.27, -0.06)
+	elif not held.is_empty() and not _is_two_handed_item(str(held["item_type"]), maxi(1, int(held.get("pack_count", 1)))):
+		_held_root.position = rr + Vector3(0.0, 0.05, -0.10)
 	else:
-		var moving := horiz_speed > 0.35
-		if moving:
-			_walk_cycle += delta * clampf(horiz_speed * 2.2, 6.0, 14.0)
-		var swing_amp := 0.24 if crouching else 0.52
-		var leg_base := 0.85 if crouching else 0.0
-		var leg_swing := sin(_walk_cycle) * swing_amp if moving else 0.0
-		leg_l_t = leg_base + leg_swing
-		leg_r_t = leg_base - leg_swing
-		knee_l_t = (-1.20 if crouching else -0.04) - maxf(0.0, -leg_swing) * 0.85
-		knee_r_t = (-1.20 if crouching else -0.04) - maxf(0.0, leg_swing) * 0.85
-		var holding := GameState.is_player_holding_anything(peer_id)
-		if holding:
-			arm_l_t = 0.65
-			arm_r_t = 0.65
-			forearm_l_t = 0.88
-			forearm_r_t = 0.88
-		else:
-			arm_l_t = -leg_swing * 0.50
-			arm_r_t = leg_swing * 0.50
-			forearm_l_t = 0.18 + maxf(0.0, -leg_swing) * 0.35
-			forearm_r_t = 0.18 + maxf(0.0, leg_swing) * 0.35
+		_held_root.position = (l + rr) * 0.5 + Vector3(0.0, 0.0, -0.10)
 
-	_skel_angles["head"] = lerpf(float(_skel_angles["head"]), head_t, k)
-	_skel_angles["leg_l"] = lerpf(float(_skel_angles["leg_l"]), leg_l_t, k)
-	_skel_angles["leg_r"] = lerpf(float(_skel_angles["leg_r"]), leg_r_t, k)
-	_skel_angles["knee_l"] = lerpf(float(_skel_angles["knee_l"]), knee_l_t, k)
-	_skel_angles["knee_r"] = lerpf(float(_skel_angles["knee_r"]), knee_r_t, k)
-	_skel_angles["arm_l"] = lerpf(float(_skel_angles["arm_l"]), arm_l_t, k)
-	_skel_angles["arm_r"] = lerpf(float(_skel_angles["arm_r"]), arm_r_t, k)
-	_skel_angles["forearm_l"] = lerpf(float(_skel_angles["forearm_l"]), forearm_l_t, k)
-	_skel_angles["forearm_r"] = lerpf(float(_skel_angles["forearm_r"]), forearm_r_t, k)
 
-	RigHelper.set_torso_pitch(_skel, _skel_bones, "head", float(_skel_angles["head"]))
-	RigHelper.set_leg_pitch(_skel, _skel_bones, "thigh_l", float(_skel_angles["leg_l"]))
-	RigHelper.set_leg_pitch(_skel, _skel_bones, "thigh_r", float(_skel_angles["leg_r"]))
-	RigHelper.set_leg_pitch(_skel, _skel_bones, "knee_l", float(_skel_angles["knee_l"]))
-	RigHelper.set_leg_pitch(_skel, _skel_bones, "knee_r", float(_skel_angles["knee_r"]))
-	RigHelper.set_arm_pose(_skel, _skel_bones, true, float(_skel_angles["arm_l"]), 0.0)
-	RigHelper.set_arm_pose(_skel, _skel_bones, false, float(_skel_angles["arm_r"]), 0.0)
-	RigHelper.set_forearm_bend(_skel, _skel_bones, true, float(_skel_angles["forearm_l"]))
-	RigHelper.set_forearm_bend(_skel, _skel_bones, false, float(_skel_angles["forearm_r"]))
+## Handlung zeigen: eigene Arme, eigene Figur und bei den Mitspielern.
+func act(action: String, world_at: Variant = null) -> void:
+	if not is_local:
+		return
+	if _fp != null:
+		_fp.play(action, world_at)
+	var at := Vector3(0.0, 0.95, 0.45)
+	if world_at is Vector3:
+		var l := to_local(world_at)
+		at = Vector3(clampf(-l.x, -0.5, 0.5), clampf(l.y, 0.15, 1.75), clampf(-l.z, 0.25, 0.55))
+	play_remote_action(action, at)
+	if _world != null and _world.has_method("send_local_action"):
+		_world.send_local_action(action, at)
+
+
+func play_remote_action(action: String, at: Vector3) -> void:
+	if _human != null and _human.rig != null and at.is_finite():
+		_human.rig.play(action, at.clamp(Vector3(-1, 0, 0), Vector3(1, 2, 1)))
+
+
+## Passende Bewegung zum anvisierten Ding.
+func _act_on_target(primary: bool) -> void:
+	var at := _aim_point()
+	if cable_start_id != "":
+		act("plug", at)
+		return
+	var target := _get_aimed_interactable()
+	if target == null:
+		return
+	var holding := not GameState.get_player_held_crate(peer_id).is_empty()
+	match str(target.get_meta("interact_type")):
+		"crate", "extinguisher_item", "extinguisher_station":
+			act("pickup", at)
+		"decor_shelf_slot", "workbench", "cart":
+			act("place" if holding else "pickup", at)
+		"terminal", "cooler_unit", "ups_unit", "wall_breaker", "strip_switch", "garage_door", "shuttle_teleport", "delivery_sign":
+			act("press", at)
+		"power_port", "net_port", "cluster_port", "wall_router":
+			act("plug", at)
+		"rack_slot":
+			act("place" if holding and primary else "reach", at)
+		"fuse_slot":
+			act("plug", at)
+		"outdoor":
+			var oid := str(target.get_meta("entity_id"))
+			if oid.begins_with("bed:") or oid == "feeder":
+				act("feed", at)
+			elif oid == "solar":
+				act("sweep", at)
+			elif oid == "dish":
+				act("screw", at)
+			else:
+				act("press" if oid in ["gate", "lamps"] else "reach", at)
+		"bench", "ladder":
+			pass
+		"decor_use":
+			if str((GameState.decor_items.get(str(target.get_meta("entity_id")), {}) as Dictionary).get("item_type", "")) == "prop_water":
+				act("drink")
+			elif str((GameState.decor_items.get(str(target.get_meta("entity_id")), {}) as Dictionary).get("item_type", "")) != "prop_sofa":
+				act("reach", at)
+		_:
+			act("reach", at)
+
+
+func _aim_point() -> Vector3:
+	if _ray != null and _ray.is_colliding():
+		return _ray.get_collision_point()
+	return _camera.global_position - _camera.global_basis.z * 0.6
+
+
+func _open_emote_wheel() -> void:
+	if _emote_wheel == null:
+		var layer := CanvasLayer.new()
+		layer.layer = 40
+		add_child(layer)
+		_emote_wheel = EmoteWheel.new()
+		layer.add_child(_emote_wheel)
+	_emote_wheel.open()
+
+
+func _close_emote_wheel() -> void:
+	if _emote_wheel == null or not _emote_wheel.visible:
+		return
+	var id := _emote_wheel.close()
+	if id != "" and not ui_locked:
+		GameState.request_player_emote(id)
+
+
+## Eigene Arme: was liegt in der Hand, wo sind die Griffe.
+func _update_fp(delta: float) -> void:
+	if _fp == null:
+		return
+	var held_ext := GameState.is_player_holding_extinguisher(peer_id)
+	var held := GameState.get_player_held_crate(peer_id)
+	var cart := GameState.get_player_pushed_cart(peer_id)
+	var mode := ""
+	if is_seated_at_pc or is_at_workbench or _sofa_id != "" or on_ladder:
+		mode = ""
+	elif held_ext:
+		mode = "ext"
+	elif not held.is_empty():
+		var two := _is_two_handed_item(str(held["item_type"]), maxi(1, int(held.get("pack_count", 1))))
+		mode = "box" if two else "item"
+		if two:
+			_fp.half_w = _held_half_w
+	elif not cart.is_empty():
+		mode = "push"
+		var cp := _compute_pushed_cart_pos()
+		var cb := Basis(Vector3.UP, rotation.y)
+		_fp.push_l = cp + cb * Vector3(-0.26, 0.98, 0.62)
+		_fp.push_r = cp + cb * Vector3(0.26, 0.98, 0.62)
+	elif cable_active_type != "":
+		mode = "cable"
+	_fp.grip_mode = mode
+	_fp.item_xf = _held_root.transform
+	_fp.bob = Vector3(_vm_sway.x, _vm_sway.y - _vm_land_dip + absf(sin(_walk_cycle * 0.5)) * -0.010, 0.0)
+	_fp.set_plug(mode == "cable", Color(0.10, 0.35, 0.80) if cable_active_type == "network" else (Color(0.55, 0.20, 0.70) if cable_active_type == "cluster" else Color(0.09, 0.09, 0.10)))
+	_fp.update(delta)
 
 
 func _get_aimed_interactable() -> Object:
@@ -907,6 +1087,9 @@ func _handle_drop() -> void:
 		GameState.request_release_cart(_compute_pushed_cart_pos(), rotation.y)
 		return
 	var held := GameState.get_player_held_crate(peer_id)
+	if not held.is_empty() and position.y > 2.5 and position.z > -60.0:
+		SfxManager.play("error")
+		return
 	if not held.is_empty():
 		var drop_pos: Vector3
 		if _ghost_root != null and _ghost_root.visible and _ghost_is_drop_preview:
@@ -914,6 +1097,7 @@ func _handle_drop() -> void:
 		else:
 			drop_pos = _safe_drop_pos()
 		_cam_weight_dip = maxf(_cam_weight_dip, 0.042)
+		act("place", drop_pos + Vector3(0.0, 0.3, 0.0))
 		GameState.request_drop_crate(drop_pos)
 
 
@@ -1007,22 +1191,32 @@ func _handle_world_ping() -> void:
 	GameState.request_world_ping(pos, kind, label)
 
 
+## Wer im Chat schreibt, bewegt den Mund.
+func _on_chat(sender_name: String, _col: Color, message: String, _ts: String) -> void:
+	if sender_name == player_name:
+		_talk_left = clampf(message.length() * 0.09, 0.8, 5.0)
+
+
 func _on_player_emote_received(sender_peer: int, emote_id: String) -> void:
 	if sender_peer != peer_id:
 		return
 	_emote_id = emote_id
 	_emote_timer = 2.6
 	if _emote_badge != null:
-		_emote_badge.text = "👋 " + tr("Hallo!") if emote_id == "wave" else "👍 " + tr("Top!")
+		_emote_badge.text = tr(str(EmoteWheel.SAYS.get(emote_id, "")))
 		_emote_badge.visible = not is_local
-	if is_local:
-		GameState.post_event_f("%s: %s", [player_name, "👋 Winkt!" if emote_id == "wave" else "👍 Daumen hoch!"], "info")
+	if _human != null and _human.rig != null:
+		_human.rig.play(emote_id)
+	if is_local and _fp != null:
+		_fp.play(emote_id)
 
 
 func _handle_primary_interact() -> void:
 	if relocating_rack_id != "":
 		_try_confirm_placement()
 		return
+	_vm_from = _aim_point()
+	_act_on_target(true)
 
 	# If player is currently holding a pulled cable in hand -> connect it to aimed compatible target!
 	if cable_start_id != "" and cable_active_type != "":
@@ -1076,6 +1270,15 @@ func _handle_primary_interact() -> void:
 				garage.call("toggle_garage_door")
 		"shuttle_teleport":
 			teleport_between_sites()
+		"outdoor":
+			OutdoorManager.request_use(eid)
+		"bench":
+			sit_on_bench(target as Node3D)
+		"ladder":
+			start_ladder(eid == "ladder_top")
+		"locker":
+			if _world != null and _world.has_method("open_locker"):
+				_world.open_locker()
 		"decor_shelf_slot":
 			GameState.request_decor_shelf_interact(str(target.get_meta("decor_id", "")), int(target.get_meta("slot_idx", 0)))
 		"strip_switch":
@@ -1161,7 +1364,10 @@ func _handle_primary_interact() -> void:
 			elif hands_empty:
 				GameState.request_grab_cart(eid)
 		"cooler_unit":
-			if hands_empty and _world != null and _world.has_method("open_device_inspector"):
+			if hands_empty and OutdoorManager.clog(eid) >= 0.25:
+				OutdoorManager.request_use("unit:" + eid)
+				act("sweep", _aim_point())
+			elif hands_empty and _world != null and _world.has_method("open_device_inspector"):
 				_world.open_device_inspector("cooler", eid)
 		"ups_unit":
 			if hands_empty and _world != null and _world.has_method("open_device_inspector"):
@@ -1235,6 +1441,8 @@ func _handle_secondary_action() -> void:
 		SfxManager.play("cable_cut", -10.0, 0.9)
 		return
 
+	_vm_from = _aim_point()
+	_act_on_target(false)
 	# ZUERST anvisiertes Ziel prüfen: Rechtsklick auf einen Rack-Schacht fährt ihn IMMER aus/ein —
 	# auch wenn man einen Server-Schlitten oder ein Kit in der Hand hält (wirft das Item NIE ins Rack!).
 	var target := _get_aimed_interactable()
@@ -1511,14 +1719,18 @@ func _update_viewmodel_motion(delta: float, flat_speed: float) -> void:
 		_vm_last_state_key = state_key
 		if state_key != "":
 			_vm_equip = 1.0
+			# Das Ding kommt von dort, wo es lag, in die Hände.
+			var from := _camera.to_local(_vm_from) if _vm_from != Vector3.ZERO else Vector3(0, -0.5, -0.7)
+			from.z = minf(from.z, -0.35)
+			_held_root.position = from.limit_length(1.3)
 
 	_vm_sway = _vm_sway.lerp(Vector2.ZERO, clampf(delta * 10.5, 0.0, 1.0))
 	_vm_equip = move_toward(_vm_equip, 0.0, delta * 3.8)
 	_vm_land_dip = lerpf(_vm_land_dip, 0.0, clampf(delta * 11.0, 0.0, 1.0))
 
 	var two_handed := (not held_ext) and (not held_crate.is_empty()) and _is_two_handed_item(item_type, maxi(1, int(held_crate.get("pack_count", 1))))
-	var base_pos := Vector3(0.0, -0.26, -0.78) if two_handed else (Vector3(0.30, -0.29, -0.58) if held_ext else Vector3(0.30, -0.25, -0.56))
-	var base_scale := 0.64 if two_handed else 0.62
+	var base_pos := Vector3(0.0, -0.33, -0.54) if two_handed else (Vector3(0.12, -0.27, -0.42) if held_ext else Vector3(0.20, -0.21, -0.40))
+	var base_scale := 0.50 if two_handed else (0.48 if held_ext else 0.46)
 
 	# Figure-8 Lauf- & Atembewegung
 	var move_amp := clampf(flat_speed / MOVE_SPEED, 0.0, 1.45) if (on_floor and not is_seated_at_pc) else 0.0
@@ -1528,10 +1740,10 @@ func _update_viewmodel_motion(delta: float, flat_speed: float) -> void:
 
 	var target_pos := base_pos + Vector3(
 		_vm_sway.x + bob_x,
-		_vm_sway.y + bob_y - _vm_land_dip - equip_ease * 0.26,
-		equip_ease * 0.14
+		_vm_sway.y + bob_y - _vm_land_dip,
+		0.0
 	)
-	_held_root.position = _held_root.position.lerp(target_pos, clampf(delta * 18.0, 0.0, 1.0))
+	_held_root.position = _held_root.position.lerp(target_pos, clampf(delta * lerpf(18.0, 7.5, _vm_equip), 0.0, 1.0))
 	var cur_s := lerpf(_held_root.scale.x, base_scale, clampf(delta * 14.0, 0.0, 1.0))
 	_held_root.scale = Vector3(cur_s, cur_s, cur_s)
 
@@ -2090,6 +2302,9 @@ func _update_context_prompt() -> void:
 			if GameState.coolers.has(eid):
 				var ctype := str(GameState.coolers[eid].get("cooler_type", "cooler"))
 				current_prompt = tr("[E / F] %s verwalten (Umsetzen / Verkaufen)") % str(GameState.ITEM_CATALOG[ctype]["name"])
+				var cl := OutdoorManager.clog(eid)
+				if cl >= 0.25:
+					current_prompt = tr("[E] Außengerät reinigen (Leistung nur %d %%)") % int(round(OutdoorManager.unit_factor(eid) * 100.0))
 				if ctype == GameState.INDOOR_UNIT_TYPE:
 					current_sub_prompt = tr("Kein Kabel nötig: läuft, sobald ein Goldis-Außengerät Strom hat")
 				else:
@@ -2100,6 +2315,12 @@ func _update_context_prompt() -> void:
 				var ups_state := tr("NOTSTROM!") if bool(GameState.ups_units[eid].get("discharging", false)) else (tr("LÄDT/BEREIT") if bool(GameState.ups_units[eid].get("connected", false)) else tr("KEIN KABEL"))
 				current_prompt = tr("[E / F] USV-Batterie %s (%.0f%%, %s) — Umsetzen / Verkaufen") % [eid.to_upper(), ch, ups_state]
 				current_sub_prompt = tr("Auf die gelbe Buchse unten zielen für Stromkabel")
+		"locker":
+			current_prompt = tr("[E] Spind: Figur umziehen")
+		"outdoor", "bench", "ladder":
+			var op: Array = OutdoorPrompts.prompt_for(eid, itype)
+			current_prompt = str(op[0])
+			current_sub_prompt = str(op[1])
 		"workbench":
 			GameState.select_bench(eid)
 			var wb := GameState.workbench_state
@@ -2203,54 +2424,8 @@ func _update_held_visuals() -> void:
 		return
 	var held_ext := GameState.is_player_holding_extinguisher(peer_id)
 	var held_crate := GameState.get_player_held_crate(peer_id)
-	var has_cable := not str(cable_active_type).is_empty()
 
 	_held_extinguisher.visible = held_ext
-	var show_any := held_ext or not held_crate.is_empty() or has_cable
-	if _fp_arms != null:
-		_fp_arms.visible = show_any
-		if held_ext:
-			_play_fp_arms_anim("extinguisher_spray" if _is_spraying_local else "extinguisher_idle", 0.12)
-		elif not held_crate.is_empty():
-			var itype := str(held_crate["item_type"])
-			var pcount := maxi(1, int(held_crate.get("pack_count", 1)))
-			var two_handed := _is_two_handed_item(itype, pcount)
-			_play_fp_arms_anim("hold_box_twohand" if two_handed else "hold_item_onehand", 0.14)
-		elif has_cable:
-			_play_fp_arms_anim("hold_cable", 0.14)
-	elif _fp_hand != null:
-		_fp_hand.visible = show_any
-		if held_ext:
-			_fp_hand.position = FP_HAND_EXT_POS
-			_fp_hand.rotation_degrees = Vector3(-14.0, -8.0, 0.0)
-			if _fp_hand_left != null:
-				_fp_hand_left.visible = true
-				_fp_hand_left.position = Vector3(-0.13, 0.02, -0.14)
-				_fp_hand_left.rotation_degrees = Vector3(12.0, 26.0, 18.0)
-		elif not held_crate.is_empty():
-			var itype := str(held_crate["item_type"])
-			var pcount := maxi(1, int(held_crate.get("pack_count", 1)))
-			var two_handed := _is_two_handed_item(itype, pcount)
-			if two_handed:
-				var half_w := 0.255 if (itype == "server_tray" or itype == "slot_build_box") else (0.245 if pcount > 1 else 0.235)
-				_fp_hand.position = Vector3(half_w, 0.045, 0.02)
-				_fp_hand.rotation_degrees = Vector3(14.0, -6.0, 82.0)
-				if _fp_hand_left != null:
-					_fp_hand_left.visible = true
-					_fp_hand_left.position = Vector3(-half_w, 0.045, 0.02)
-					_fp_hand_left.rotation_degrees = Vector3(14.0, 6.0, -82.0)
-			else:
-				_fp_hand.position = FP_HAND_ITEM_POS
-				_fp_hand.rotation_degrees = Vector3(4.0, 4.0, 0.0)
-				if _fp_hand_left != null:
-					_fp_hand_left.visible = false
-		elif has_cable:
-			_fp_hand.position = Vector3(0.02, -0.07, 0.04)
-			_fp_hand.rotation_degrees = Vector3(10.0, 14.0, -10.0)
-			if _fp_hand_left != null:
-				_fp_hand_left.visible = false
-		elif _fp_hand_left != null:
-			_fp_hand_left.visible = false
 	if not held_crate.is_empty():
 		var item_type := str(held_crate["item_type"])
 		var pcount := maxi(1, int(held_crate.get("pack_count", 1)))
@@ -2281,6 +2456,10 @@ func _update_held_visuals() -> void:
 				model.position = Vector3(0.0, -0.05, 0.0)
 			_held_item_holder.add_child(model)
 			_held_item_type_cached = cache_key
+			if is_local:
+				for vi in model.find_children("*", "VisualInstance3D", true, false):
+					(vi as VisualInstance3D).layers = FpArms.LAYER
+			_held_half_w = clampf(_visual_half_width(model) + 0.01, 0.10, 0.40)
 	else:
 		_held_item_holder.visible = false
 		if _held_item_type_cached != "":
@@ -2293,8 +2472,6 @@ func _update_foam_visuals(spraying: bool) -> void:
 	if _held_lever_pivot != null:
 		var lever_target := deg_to_rad(EXT_LEVER_PRESS_DEG) if spraying else 0.0
 		_held_lever_pivot.rotation.x = lerpf(_held_lever_pivot.rotation.x, lever_target, 0.35)
-	if is_local and _fp_arms != null and _held_extinguisher != null and _held_extinguisher.visible:
-		_play_fp_arms_anim("extinguisher_spray" if spraying else "extinguisher_idle", 0.08 if spraying else 0.14)
 	if _foam_root == null:
 		return
 	_foam_root.visible = spraying
@@ -2311,62 +2488,38 @@ func _update_foam_visuals(spraying: bool) -> void:
 func _build_avatar_visuals() -> void:
 	_avatar_root = Node3D.new()
 	add_child(_avatar_root)
-
-	var jacket_mat := _mat(avatar_color, 0.45, 0.12)
-	var pants_mat := _mat(skin_pants_color, 0.72, 0.05)
-	var pack_mat := _mat(Color(0.24, 0.27, 0.32), 0.55, 0.25)
-	var skin_mat := _mat(skin_tone_color, 0.65, 0.0)
-	var belt_mat := _mat(Color(0.12, 0.13, 0.15), 0.5, 0.3)
-
-	# Spielermodell aus assets/models/player.glb (tools/blender/build_player.py), sonst Box-Avatar.
-	if _build_model_avatar({"DCT_Jacket": jacket_mat, "DCT_Pants": pants_mat, "DCT_Skin": skin_mat}):
-		_add_nametag()
-		return
-
-	# Articulated Left & Right Legs (pivoted at hip Y = 0.68)
-	_left_leg = Node3D.new()
-	_left_leg.position = Vector3(-0.14, 0.68, 0.0)
-	_avatar_root.add_child(_left_leg)
-	_add_box(_left_leg, Vector3(0.0, -0.32, 0.0), Vector3(0.17, 0.62, 0.19), pants_mat)
-	_add_box(_left_leg, Vector3(0.0, -0.63, -0.04), Vector3(0.18, 0.10, 0.26), belt_mat)
-
-	_right_leg = Node3D.new()
-	_right_leg.position = Vector3(0.14, 0.68, 0.0)
-	_avatar_root.add_child(_right_leg)
-	_add_box(_right_leg, Vector3(0.0, -0.32, 0.0), Vector3(0.17, 0.62, 0.19), pants_mat)
-	_add_box(_right_leg, Vector3(0.0, -0.63, -0.04), Vector3(0.18, 0.10, 0.26), belt_mat)
-
-	# Torso Tech Jacket + Toolbelt + Tech Backpack
-	_add_box(_avatar_root, Vector3(0.0, 1.02, 0.0), Vector3(0.46, 0.62, 0.26), jacket_mat)
-	_add_box(_avatar_root, Vector3(0.0, 0.74, 0.0), Vector3(0.48, 0.09, 0.28), belt_mat)
-	_add_box(_avatar_root, Vector3(0.0, 1.04, 0.18), Vector3(0.32, 0.42, 0.15), pack_mat)
-
-	# Articulated Left & Right Arms (pivoted at shoulder Y = 1.24)
-	_left_arm = Node3D.new()
-	_left_arm.position = Vector3(-0.31, 1.24, 0.0)
-	_avatar_root.add_child(_left_arm)
-	_add_box(_left_arm, Vector3(0.0, -0.24, 0.0), Vector3(0.14, 0.50, 0.15), jacket_mat)
-	_add_box(_left_arm, Vector3(0.0, -0.52, 0.0), Vector3(0.11, 0.11, 0.12), skin_mat)
-
-	_right_arm = Node3D.new()
-	_right_arm.position = Vector3(0.31, 1.24, 0.0)
-	_avatar_root.add_child(_right_arm)
-	_add_box(_right_arm, Vector3(0.0, -0.24, 0.0), Vector3(0.14, 0.50, 0.15), jacket_mat)
-	_add_box(_right_arm, Vector3(0.0, -0.52, 0.0), Vector3(0.11, 0.11, 0.12), skin_mat)
-
-	# Head + Work Cap + Realistic Safety Glasses (no neon AR visor!)
-	_avatar_head = Node3D.new()
-	_avatar_head.position = Vector3(0.0, 1.50, 0.0)
-	_avatar_root.add_child(_avatar_head)
-	_add_box(_avatar_head, Vector3.ZERO, Vector3(0.34, 0.34, 0.34), skin_mat)
-	# Work cap & visor brim
-	_add_box(_avatar_head, Vector3(0.0, 0.15, 0.01), Vector3(0.37, 0.12, 0.37), jacket_mat)
-	_add_box(_avatar_head, Vector3(0.0, 0.10, -0.22), Vector3(0.34, 0.03, 0.14), jacket_mat)
-	# Matte dark-tinted safety glasses
-	var glass_mat := _mat(Color(0.14, 0.16, 0.18), 0.18, 0.35)
-	_add_box(_avatar_head, Vector3(0.0, 0.02, -0.175), Vector3(0.28, 0.08, 0.04), glass_mat)
-
+	_build_human()
 	_add_nametag()
+
+
+## Eigene Figur: nur Schatten (im Spiegel zeigt LockerProp eine eigene). Mitspieler: ganz.
+func _build_human() -> void:
+	if _human != null:
+		_human.queue_free()
+	_human = HumanModel.create(skin_data if not skin_data.is_empty() else SettingsManager.get_skin())
+	_avatar_root.add_child(_human)
+	if is_local:
+		for mi in _human.find_children("*", "MeshInstance3D", true, false):
+			(mi as MeshInstance3D).cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_SHADOWS_ONLY
+		for l in _human.find_children("*", "Label3D", true, false):
+			(l as Label3D).visible = false
+
+
+static func _visual_half_width(n: Node3D) -> float:
+	var hw := 0.0
+	for mi_n in n.find_children("*", "MeshInstance3D", true, false):
+		var mi := mi_n as MeshInstance3D
+		if mi.mesh == null or not mi.visible:
+			continue
+		var xf := Transform3D.IDENTITY
+		var p: Node = mi
+		while p != null and p != n:
+			if p is Node3D:
+				xf = (p as Node3D).transform * xf
+			p = p.get_parent()
+		var ab := (Transform3D(Basis.from_scale(n.scale), Vector3.ZERO) * xf) * mi.mesh.get_aabb()
+		hw = maxf(hw, maxf(absf(ab.position.x), absf(ab.end.x)))
+	return hw
 
 
 func _add_nametag() -> void:
@@ -2388,181 +2541,6 @@ func _add_nametag() -> void:
 	_emote_badge.modulate = Color(1.0, 0.88, 0.36)
 	_emote_badge.visible = false
 	add_child(_emote_badge)
-
-
-## Lädt player_realistic.glb (Skeleton3D / Mixamo / MakeHuman) oder player.glb.
-## Gibt false zurück, wenn kein gültiges Modell vorhanden ist.
-func _build_model_avatar(_tint_mats: Dictionary) -> bool:
-	var model_id := REALISTIC_AVATAR_MODEL_ID if ModelLoader.has_custom_model(REALISTIC_AVATAR_MODEL_ID) else AVATAR_MODEL_ID
-	if not ModelLoader.has_custom_model(model_id):
-		return false
-	var model := ModelLoader.instantiate_custom_model(model_id)
-	if model == null:
-		return false
-	var skel: Skeleton3D = RigHelper.find_skeleton(model)
-	if skel != null:
-		_avatar_root.add_child(model)
-		RigHelper.normalize_character_root(model, true)
-		_skel = skel
-		_skel_bones = RigHelper.map_bones(skel)
-		_anim_player = RigHelper.find_anim_player(model)
-		RigHelper.apply_skin_to_skeleton_model(model, skin_data if not skin_data.is_empty() else SettingsManager.get_skin(), avatar_color)
-		return true
-	var left_leg := model.find_child("Pivot_LegL", true, false) as Node3D
-	var right_leg := model.find_child("Pivot_LegR", true, false) as Node3D
-	var left_arm := model.find_child("Pivot_ArmL", true, false) as Node3D
-	var right_arm := model.find_child("Pivot_ArmR", true, false) as Node3D
-	var head := model.find_child("Pivot_Head", true, false) as Node3D
-	if left_leg == null or right_leg == null or left_arm == null or right_arm == null or head == null:
-		push_warning("%s.glb: Gelenke Pivot_* oder Skeleton3D fehlen, nutze Box-Avatar." % model_id)
-		model.free()
-		return false
-	_avatar_root.add_child(model)
-	_left_leg = left_leg
-	_right_leg = right_leg
-	_left_arm = left_arm
-	_right_arm = right_arm
-	_avatar_head = head
-	PlayerController.apply_skin_to_model(model, skin_data if not skin_data.is_empty() else SettingsManager.get_skin(), avatar_color)
-	return true
-
-
-## Wendet Farben (Jacke, Hose, Haut, Haare, Schuhe, Akzent) und Accessoires (Frisur/Mütze/Headset/Brille)
-## auf ein instanziiertes player.glb ODER player_realistic.glb (Skeleton3D) an — im Spiel & im 3D-Skin-Editor!
-static func apply_skin_to_model(model: Node3D, skin: Variant, fallback_team_color: Color = Color(0.14, 0.28, 0.54)) -> void:
-	if model == null:
-		return
-	if RigHelper.find_skeleton(model) != null:
-		RigHelper.apply_skin_to_skeleton_model(model, skin, fallback_team_color)
-		return
-	var c := SettingsManager.skin_colors(skin, fallback_team_color)
-	var mk := func(col: Color, rough: float, metal: float = 0.0) -> StandardMaterial3D:
-		var m := StandardMaterial3D.new()
-		m.albedo_color = col
-		m.roughness = rough
-		m.metallic = metal
-		return m
-	var tint_mats := {
-		"DCT_Jacket": mk.call(c["jacket"], 0.62, 0.05),
-		"DCT_Pants": mk.call(c["pants"], 0.78, 0.0),
-		"DCT_Skin": mk.call(c["tone"], 0.60, 0.0),
-		"DCT_Hair": mk.call(c["hair"], 0.80, 0.0),
-		"DCT_Shoes": mk.call(c["shoes"], 0.52, 0.04),
-		"DCT_Accent": mk.call(c["accent"], 0.35, 0.08),
-	}
-	_tint_avatar_static(model, tint_mats)
-
-	var hw := int(c.get("headwear", 2))
-	var gl := int(c.get("glasses", 0))
-	var vis_map := {
-		"Hair_Short": (hw == 0 or hw == 2 or hw == 4 or hw == 5),
-		"Hair_Undercut": (hw == 1),
-		"Hat_Cap": (hw == 2 or hw == 5),
-		"Hat_Beanie": (hw == 3),
-		"Acc_Headset": (hw == 4 or hw == 5),
-		"Acc_Glasses": (gl == 1),
-		"Acc_SafetyGlasses": (gl == 2),
-	}
-	for node_name in vis_map.keys():
-		var nd := model.find_child(str(node_name), true, false) as Node3D
-		if nd != null:
-			nd.visible = bool(vis_map[node_name])
-
-
-static func _tint_avatar_static(node: Node, tint_mats: Dictionary) -> void:
-	if node is MeshInstance3D:
-		var mi := node as MeshInstance3D
-		if mi.mesh != null:
-			for i in mi.mesh.get_surface_count():
-				var m := mi.mesh.surface_get_material(i)
-				if m != null and tint_mats.has(m.resource_name):
-					mi.set_surface_override_material(i, tint_mats[m.resource_name] as Material)
-	for child in node.get_children():
-		_tint_avatar_static(child, tint_mats)
-
-
-## Ich-Perspektive: Geriggte Ego-Arme (fp_arms.glb) im aktuellen Skin-Farbschema,
-## mit millimetergenauer Feuerlöscher-Griff- & Sprüh-Animation sowie Item-/Kabel-Posen.
-func _build_fp_hand() -> void:
-	var rigged := ModelLoader.instantiate_custom_model("fp_arms")
-	if rigged != null:
-		_fp_arms = rigged
-		_fp_arms.visible = false
-		_held_root.add_child(_fp_arms)
-		_fp_arms_anim = _find_anim_player(_fp_arms)
-		if _fp_arms_anim != null:
-			for aname in _fp_arms_anim.get_animation_list():
-				var anim := _fp_arms_anim.get_animation(aname)
-				if anim != null:
-					anim.loop_mode = Animation.LOOP_LINEAR
-		_disable_shadows_recursive(_fp_arms)
-		_refresh_fp_hand_skin()
-		return
-
-	_fp_hand = Node3D.new()
-	_fp_hand.visible = false
-	_fp_hand.position = FP_HAND_ITEM_POS
-	_held_root.add_child(_fp_hand)
-
-	_fp_hand_left = Node3D.new()
-	_fp_hand_left.visible = false
-	_fp_hand_left.position = Vector3(-0.24, -0.04, 0.03)
-	_held_root.add_child(_fp_hand_left)
-
-	var right_m := ModelLoader.instantiate_custom_model("fp_hand")
-	if right_m != null:
-		_fp_hand.add_child(right_m)
-	var left_m := ModelLoader.instantiate_custom_model("fp_hand")
-	if left_m != null:
-		left_m.scale = Vector3(-1.0, 1.0, 1.0)
-		_fp_hand_left.add_child(left_m)
-
-	_refresh_fp_hand_skin()
-
-
-func _find_anim_player(node: Node) -> AnimationPlayer:
-	if node is AnimationPlayer:
-		return node as AnimationPlayer
-	for c in node.get_children():
-		var found := _find_anim_player(c)
-		if found != null:
-			return found
-	return null
-
-
-func _disable_shadows_recursive(node: Node) -> void:
-	if node is GeometryInstance3D:
-		(node as GeometryInstance3D).cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-	for c in node.get_children():
-		_disable_shadows_recursive(c)
-
-
-func _play_fp_arms_anim(anim_name: String, blend: float = 0.14) -> void:
-	if _fp_arms_anim == null or anim_name == _fp_arms_current_anim:
-		return
-	if _fp_arms_anim.has_animation(anim_name):
-		_fp_arms_anim.play(anim_name, blend)
-		_fp_arms_current_anim = anim_name
-
-
-func _refresh_fp_hand_skin() -> void:
-	if _fp_arms == null and _fp_hand == null:
-		return
-	var c := SettingsManager.skin_colors(skin_data if not skin_data.is_empty() else SettingsManager.get_skin(), avatar_color)
-	var sleeve_col: Color = c["jacket"]
-	var cuff_col: Color = sleeve_col.darkened(0.28)
-	var skin_col: Color = c["tone"]
-	var tint_mats := {
-		"DCT_FP_Skin": _mat(skin_col, 0.60, 0.0),
-		"DCT_FP_Sleeve": _mat(sleeve_col, 0.84, 0.0),
-		"DCT_FP_Cuff": _mat(cuff_col, 0.88, 0.0),
-	}
-	if _fp_arms != null:
-		_tint_avatar_static(_fp_arms, tint_mats)
-	if _fp_hand != null:
-		_tint_avatar_static(_fp_hand, tint_mats)
-	if _fp_hand_left != null:
-		_tint_avatar_static(_fp_hand_left, tint_mats)
 
 
 func _build_held_visuals() -> void:

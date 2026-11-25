@@ -9,6 +9,7 @@ signal connection_failed(reason: String)
 signal disconnected_from_session(reason: String)
 signal players_changed
 signal player_joined(peer_id: int, info: Dictionary)
+signal player_skin_changed(peer_id: int)
 signal player_left(peer_id: int)
 signal chat_message_received(sender_name: String, sender_color: Color, message: String, timestamp: String)
 ## Ergebnis der automatischen Portfreigabe beim Hosten.
@@ -137,11 +138,11 @@ func _setup_input_actions() -> void:
 	_add_key_action("toggle_help", [KEY_H])
 	_add_key_action("open_chat", [KEY_T])
 	_add_key_action("toggle_perf", [KEY_F3])
-	_add_key_action("punch", [KEY_V])
 	_add_key_action("world_ping", [KEY_G])
 	_add_mouse_action("world_ping", MOUSE_BUTTON_MIDDLE)
 	_add_key_action("emote_wave", [KEY_B])
 	_add_key_action("emote_thumbs", [KEY_N])
+	_add_key_action("emote_wheel", [KEY_V])
 	_add_key_action("teleport_site", [KEY_T])
 	_add_key_action("admin_menu", [KEY_F10])
 	_add_mouse_action("primary_action", MOUSE_BUTTON_LEFT)
@@ -862,6 +863,40 @@ func _on_server_disconnected() -> void:
 	var reason := tr(_kick_reason) if not _kick_reason.is_empty() else tr("Der Host hat die Sitzung beendet.")
 	_kick_reason = ""
 	disconnected_from_session.emit(reason)
+
+
+## Aussehen während der Sitzung ändern: Host prüft und verteilt.
+func update_my_skin(look: Dictionary) -> void:
+	if not is_in_session:
+		return
+	if multiplayer.is_server():
+		_apply_skin(1, look)
+	else:
+		_rpc_req_skin.rpc_id(1, look)
+
+
+@rpc("any_peer", "call_remote", "reliable")
+func _rpc_req_skin(look: Dictionary) -> void:
+	if not multiplayer.is_server():
+		return
+	var peer_id := multiplayer.get_remote_sender_id()
+	if not players.has(peer_id) or not SecurityGuard.check_rate_limit(peer_id, "skin", 6, 10.0, false):
+		return
+	_apply_skin(peer_id, look)
+
+
+func _apply_skin(peer_id: int, look: Dictionary) -> void:
+	if not players.has(peer_id):
+		return
+	_rpc_player_skin.rpc(peer_id, SettingsManager.sanitize_skin(look))
+
+
+@rpc("authority", "call_local", "reliable")
+func _rpc_player_skin(peer_id: int, look: Dictionary) -> void:
+	if not players.has(peer_id):
+		return
+	(players[peer_id] as Dictionary)["skin"] = SettingsManager.sanitize_skin(look)
+	player_skin_changed.emit(peer_id)
 
 
 @rpc("any_peer", "call_remote", "reliable")

@@ -443,6 +443,14 @@ func _process(delta: float) -> void:
 						fnode.rotation.z += delta * speed
 
 		_set_leds_lit(vis, powered and (not offline or booting or waiting))
+		var hfx: Variant = vis.get("hw_fx")
+		if hfx != null and is_instance_valid(hfx):
+			var pf := hfx as PartFx
+			pf.powered = running or booting
+			pf.load_f = 1.0 if booting else clampf(0.25 + float(slot.get("load", 0.35)), 0.2, 1.0)
+			pf.temp = temp
+			pf.dust = float(slot.get("dust_level", 0.0))
+			pf.fault = st == "crashed" or st == "burning"
 		if st == "burning":
 			has_fire = true
 			smoke_fx.emitting = true
@@ -725,6 +733,10 @@ func _refresh_visuals() -> void:
 				srv_mesh.position = Vector3(0.0, -0.095, 0.04)
 				_optimize_detail_subtree(srv_mesh, true, DETAIL_RANGE_END)
 				hw_holder.add_child(srv_mesh)
+				var fx := PartFx.new()
+				fx.attach(srv_mesh, [], true)
+				srv_mesh.add_child(fx)
+				vis["hw_fx"] = fx
 				vis["hw_sig"] = sig
 				if _age > 1.5 and not is_showcase_only:
 					_start_install_fx(vis, srv_mesh, old_sig, sig)

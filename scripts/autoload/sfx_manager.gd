@@ -8,7 +8,7 @@ const MIX_RATE := 44100
 # Erzeugte Klänge werden hier gespeichert, damit nur der erste Start rechnen muss (~870 ms gemessen).
 const SFX_CACHE_DIR := "user://sfx_cache"
 # Erhöhen, wenn sich ein Generator oder seine Parameter ändern, sonst bleiben die alten Klänge im Cache.
-const SFX_CACHE_VERSION := 18
+const SFX_CACHE_VERSION := 19
 const EXTERNAL_AUDIO_DIR := "res://assets/audio"
 
 var _sounds: Dictionary = {}
@@ -96,6 +96,14 @@ func _generate_sounds() -> void:
 		_sounds["footstep_%d" % v] = _gen_footstep(v)
 	_sounds["footstep"] = _sounds["footstep_0"]
 	_sounds["step_raised"] = _gen_step_raised_floor()
+	_sounds["step_grass"] = _gen_rustle(0.16, 0.20)
+	# Draußen: Vogelrufe (Tonhöhe gleitet), Flügelschlag, Katze
+	_sounds["bird_sparrow"] = _gen_chirps([[0.0, 3600.0, 4700.0, 0.06], [0.13, 4100.0, 3500.0, 0.07], [0.29, 3700.0, 4900.0, 0.05], [0.40, 4300.0, 3700.0, 0.08], [0.60, 3900.0, 4800.0, 0.06]], 0.75, 0.13, 0.0)
+	_sounds["bird_pigeon"] = _gen_chirps([[0.0, 330.0, 410.0, 0.34], [0.42, 420.0, 350.0, 0.50], [1.02, 340.0, 390.0, 0.30], [1.40, 400.0, 330.0, 0.46]], 2.0, 0.24, 24.0)
+	_sounds["bird_crow"] = _gen_chirps([[0.0, 760.0, 620.0, 0.24], [0.40, 780.0, 610.0, 0.26], [0.85, 740.0, 580.0, 0.30]], 1.3, 0.26, 92.0)
+	_sounds["bird_swallow"] = _gen_chirps([[0.0, 5200.0, 6200.0, 0.03], [0.06, 5600.0, 4700.0, 0.04], [0.12, 5100.0, 6400.0, 0.03], [0.19, 6000.0, 5000.0, 0.04], [0.26, 5400.0, 6600.0, 0.05], [0.36, 4300.0, 3600.0, 0.14]], 0.6, 0.09, 0.0)
+	_sounds["bird_wings"] = _gen_flutter()
+	_sounds["meow"] = _gen_chirps([[0.0, 520.0, 820.0, 0.20], [0.19, 820.0, 480.0, 0.42]], 0.75, 0.20, 9.0)
 	_sounds["step_wet"] = _gen_step_wet_asphalt()
 	_sounds["extinguisher_start"] = _gen_extinguisher_burst()
 	_sounds["van_horn"] = _gen_van_horn()
@@ -401,7 +409,7 @@ func _update_room_ambience_volume() -> void:
 
 func _update_rain_ambience() -> void:
 	var w: String = GameState.weather_state if GameState.is_active else "clear"
-	var raining := (w == "rain" or w == "storm")
+	var raining: bool = (w == "rain" or w == "storm") and not OutdoorManager.is_snowing()
 	var gain := SettingsManager.get_effective_fan_gain()
 	var trans := get_outdoor_transmission()
 	if _rain_amb_player != null and _rain_amb_player.stream != null:
@@ -520,6 +528,25 @@ func play(sfx_name: String, volume_db: float = -6.0, pitch: float = 1.0) -> void
 	player.play()
 
 
+## Kurzer Klang an einem Ort in der Welt (Vögel, Tiere).
+func play_at(sfx_name: String, pos: Vector3, volume_db: float = -8.0, pitch: float = 1.0) -> void:
+	if not _sounds.has(sfx_name) or get_tree().current_scene == null:
+		return
+	var gain := SettingsManager.get_effective_sfx_gain() * get_outdoor_transmission()
+	if gain <= 0.02:
+		return
+	var p := AudioStreamPlayer3D.new()
+	p.stream = _sounds[sfx_name]
+	p.volume_db = volume_db + linear_to_db(gain)
+	p.pitch_scale = pitch
+	p.unit_size = 6.0
+	p.max_distance = 40.0
+	get_tree().current_scene.add_child(p)
+	p.global_position = pos
+	p.finished.connect(p.queue_free)
+	p.play()
+
+
 func play_typing_key(volume_db: float = -10.5) -> void:
 	play("key_type", volume_db, randf_range(0.88, 1.16))
 
@@ -530,6 +557,12 @@ func play_footstep(sprinting: bool = false, surface: String = "concrete") -> voi
 	var pitch := randf_range(0.95, 1.09) if sprinting else randf_range(0.91, 1.05)
 	if surface == "raised_floor" and _sounds.has("step_raised"):
 		play("step_raised", vol + randf_range(-1.0, 0.8), pitch)
+		return
+	if surface == "grass" and _sounds.has("step_grass"):
+		play("step_grass", vol + randf_range(-1.0, 0.8), pitch)
+		return
+	if surface == "snow" and _sounds.has("step_grass"):
+		play("step_grass", vol + randf_range(1.0, 2.0), pitch * 0.72)
 		return
 	if surface == "wet" and _sounds.has("step_wet"):
 		play("step_wet", vol + randf_range(-0.8, 0.8), pitch)
@@ -1329,6 +1362,54 @@ func _gen_os_chord(freqs: Array, step_dur: float, tail: float, amp: float) -> Au
 			v += (sin(TAU * f * nt) * 0.62 + sin(TAU * f * 2.0 * nt) * 0.14 + sin(TAU * f * 1.003 * nt) * 0.22) * env
 		var fade_out := clampf((total_dur - t) / 0.25, 0.0, 1.0)
 		s[i] = clampf(v * amp * fade_out, -0.95, 0.95)
+	return _make_wav(s)
+
+
+## Rufe aus gleitenden Tönen: [Start, Frequenz von, bis, Dauer]. rough > 0 macht sie heiser.
+func _gen_chirps(parts: Array, total: float, amp: float, rough: float) -> AudioStreamWAV:
+	var count := int(MIX_RATE * total)
+	var s := PackedFloat32Array()
+	s.resize(count)
+	for p in parts:
+		var i0 := int(float(p[0]) * MIX_RATE)
+		var n := int(float(p[3]) * MIX_RATE)
+		var ph := 0.0
+		for i in n:
+			if i0 + i >= count:
+				break
+			var u := float(i) / n
+			ph += TAU * lerpf(float(p[1]), float(p[2]), u) / MIX_RATE
+			var v := sin(ph) * 0.8 + sin(ph * 2.0) * 0.16 + sin(ph * 3.0) * 0.05
+			if rough > 0.0:
+				v *= 0.55 + 0.45 * sin(TAU * rough * i / MIX_RATE)
+				v += sin(ph * 2.02) * 0.18 + randf_range(-0.12, 0.12) * (1.0 if rough > 50.0 else 0.0)
+			s[i0 + i] += v * amp * pow(sin(u * PI), 0.6)
+	return _make_wav(s)
+
+
+func _gen_flutter() -> AudioStreamWAV:
+	var count := int(MIX_RATE * 0.6)
+	var s := PackedFloat32Array()
+	s.resize(count)
+	var prev := 0.0
+	for i in count:
+		var t := float(i) / MIX_RATE
+		prev = lerpf(prev, randf_range(-1.0, 1.0), 0.28)
+		s[i] = prev * 0.5 * pow(maxf(0.0, sin(TAU * 11.0 * t)), 2.0) * (1.0 - t / 0.6)
+	return _make_wav(s)
+
+
+func _gen_rustle(duration: float, amp: float) -> AudioStreamWAV:
+	var count := int(MIX_RATE * duration)
+	var s := PackedFloat32Array()
+	s.resize(count)
+	var prev := 0.0
+	for i in count:
+		var u := float(i) / count
+		var w := randf_range(-1.0, 1.0)
+		var hp := w - prev
+		prev = lerpf(prev, w, 0.35)
+		s[i] = hp * amp * sin(u * PI) * (0.5 + 0.5 * sin(u * 31.0 + randf() * 0.8))
 	return _make_wav(s)
 
 

@@ -27,16 +27,11 @@ func _process(delta: float) -> void:
 		var workers: Array = sd.get("workers", [])
 		for wi in range(workers.size()):
 			var w: Dictionary = workers[wi]
-			var skel: Skeleton3D = w.get("skel")
-			var bones: Dictionary = w.get("bones", {})
-			var body: Node3D = w["root"]
-			var phase := _anim_t * 5.8 + float(wi) * 2.1
-			if skel != null:
-				HumanoidRigHelper.set_arm_pose(skel, bones, false, 0.65 + sin(phase) * 0.45, 0.08)
-				HumanoidRigHelper.set_forearm_bend(skel, bones, false, 0.72 + cos(phase) * 0.25)
-				HumanoidRigHelper.set_arm_pose(skel, bones, true, 0.25, 0.05)
-			if body != null:
-				body.position.y = absf(sin(phase * 0.5)) * 0.022
+			var h: HumanModel = w["human"]
+			if h.rig == null:
+				continue
+			# Abwechselnd hämmern, schrauben, am Boden arbeiten.
+			h.rig.base = ["hammer", "work", "low", "hammer"][int(_anim_t / 7.0 + wi * 1.7) % 4]
 		var lbl: Label3D = sd.get("lbl")
 		if lbl != null and GameState.active_constructions.has(uid):
 			var ac: Dictionary = GameState.active_constructions[uid]
@@ -159,7 +154,7 @@ func _spawn_construction_site(uid: String, pos: Vector3) -> void:
 	var w_positions := [Vector3(-1.45, 0.0, 0.95), Vector3(1.55, 0.0, -0.85)]
 	var w_yaws := [35.0, -140.0]
 	for wi in range(2):
-		var wr := _build_worker_npc(yellow, dark, orange)
+		var wr := _build_worker_npc(wi + uid.length())
 		wr["root"].position = w_positions[wi]
 		wr["root"].rotation_degrees.y = w_yaws[wi]
 		root.add_child(wr["root"])
@@ -186,20 +181,11 @@ func _spawn_construction_site(uid: String, pos: Vector3) -> void:
 	}
 
 
-func _build_worker_npc(_helmet_mat: Material, _pants_mat: Material, _vest_mat: Material) -> Dictionary:
+func _build_worker_npc(sd: int) -> Dictionary:
 	var holder := Node3D.new()
-	var m := ModelLoader.instantiate_custom_model("delivery_driver_realistic")
-	var skel: Skeleton3D = null
-	var bones: Dictionary = {}
-	if m != null:
-		holder.add_child(m)
-		HumanoidRigHelper.normalize_character_root(m, true)
-		HumanoidRigHelper.apply_skin_to_skeleton_model(m, {}, Color(0.95, 0.46, 0.06))
-		skel = HumanoidRigHelper.find_skeleton(m)
-		if skel != null:
-			bones = HumanoidRigHelper.map_bones(skel)
-			HumanoidRigHelper.apply_relaxed_standing_pose(skel, bones)
-	return {"root": holder, "skel": skel, "bones": bones}
+	var h := HumanModel.create(HumanModel.job_look("builder", sd))
+	holder.add_child(h)
+	return {"root": holder, "human": h}
 
 
 func _tint_paint(node: Node, col: Color) -> void:

@@ -8,6 +8,7 @@ signal terminal_open_requested
 signal rack_inspect_requested(rack_id: String, slot_index: int)
 signal device_inspect_requested(kind: String, entity_id: String)
 signal workbench_open_requested
+signal locker_open_requested
 
 var local_player: PlayerController = null
 
@@ -26,6 +27,7 @@ var _players_container: Node3D
 var _showcase_container: Node3D
 
 var _rack_nodes: Dictionary = {}   # rack_id -> RackProp
+var _outdoor_amb := 0.0
 var _cooler_nodes: Dictionary = {} # cooler_id -> CoolerProp
 var _ups_nodes: Dictionary = {}    # ups_id -> UpsProp
 var _extinguisher_nodes: Dictionary = {}
@@ -97,6 +99,7 @@ func _ready() -> void:
 	GameState.world_ping_received.connect(_on_world_ping_received)
 
 	NetworkManager.player_joined.connect(_on_player_joined)
+	NetworkManager.player_skin_changed.connect(_on_player_skin)
 	NetworkManager.player_left.connect(_on_player_left)
 	SettingsManager.settings_changed.connect(_apply_graphics_quality)
 
@@ -365,7 +368,7 @@ func _update_day_night_atmosphere() -> void:
 			var in_hn := (absf(lp.x) < 10.1 and absf(lz) < 6.1)
 			SfxManager.set_listener_outdoor(not in_hn, in_hn)
 		else:
-			SfxManager.set_listener_outdoor(lp.z > 4.65, false)
+			SfxManager.set_listener_outdoor(OutdoorWorld.is_outside(lp), false)
 
 	var sky_sh := MatLib.get_sky_shader_material()
 	if sky_sh != null:
@@ -383,6 +386,11 @@ func _update_day_night_atmosphere() -> void:
 	env.ambient_light_color = Color(0.08, 0.13, 0.24).lerp(Color(0.28, 0.33, 0.40), day_factor)
 	# Etwas weniger Grundhelligkeit, damit Lampen und Schatten das Bild formen statt flachem Einheitslicht.
 	env.ambient_light_energy = lerpf(0.20, 0.45, day_factor)
+	# Draußen füllt der Himmel die Schatten auf (drinnen formen die Lampen das Bild).
+	var out_cam := get_viewport().get_camera_3d()
+	var out_on := out_cam != null and OutdoorWorld.is_outside(out_cam.global_position)
+	_outdoor_amb = lerpf(_outdoor_amb, 1.0 if out_on else 0.0, 0.05)
+	env.ambient_light_energy *= 1.0 + _outdoor_amb * lerpf(0.6, 1.5, day_factor)
 
 	# Dynamische Nebel-Atmosphäre, volumetrische Wolken-Dichte & nasser spiegelnder Asphalt bei Regen/Gewitter!
 	var w_now: String = GameState.weather_state if GameState.is_active else "clear"
@@ -406,7 +414,8 @@ func _update_day_night_atmosphere() -> void:
 		_cloud_darkness = lerpf(_cloud_darkness, target_dark, 0.03)
 		sky_sh.set_shader_parameter("cloud_coverage", _cloud_coverage)
 		sky_sh.set_shader_parameter("cloud_darkness", _cloud_darkness)
-	var is_wet := (w_now == "rain" or w_now == "storm")
+	var snowing: bool = OutdoorManager.is_snowing()
+	var is_wet: bool = (w_now == "rain" or w_now == "storm") and not snowing
 	env.fog_density = 0.0062 if w_now == "storm" else (0.0044 if w_now == "rain" else 0.0022)
 	var day_fog := Color(0.58, 0.64, 0.72) if is_wet else Color(0.70, 0.78, 0.88)
 	var night_fog := Color(0.06, 0.09, 0.16)
@@ -416,7 +425,8 @@ func _update_day_night_atmosphere() -> void:
 		asp.roughness = lerpf(asp.roughness, 0.18 if is_wet else 0.86, 0.06)
 		asp.clearcoat_enabled = is_wet or asp.clearcoat > 0.02
 		asp.clearcoat = lerpf(asp.clearcoat, 0.82 if is_wet else 0.0, 0.06)
-		asp.albedo_color = asp.albedo_color.lerp(Color(0.56, 0.58, 0.62) if is_wet else Color(1.0, 1.0, 1.0), 0.06)
+		var asp_col := (Color(0.56, 0.58, 0.62) if is_wet else Color(1.0, 1.0, 1.0)).lerp(Color(2.1, 2.2, 2.35), OutdoorManager.snow_shown * 0.55)
+		asp.albedo_color = asp.albedo_color.lerp(asp_col, 0.06)
 
 
 func show_menu_showcase() -> void:
@@ -533,6 +543,10 @@ func reset_world() -> void:
 
 func open_terminal() -> void:
 	terminal_open_requested.emit()
+
+
+func open_locker() -> void:
+	locker_open_requested.emit()
 
 
 func open_workbench() -> void:
@@ -918,6 +932,44 @@ func _spawn_player_if_missing(peer_id: int, info: Dictionary) -> void:
 	_player_nodes[peer_id] = p
 	if is_me:
 		local_player = p
+
+
+func _on_player_skin(peer_id: int) -> void:
+	var node: PlayerController = _player_nodes.get(peer_id) as PlayerController
+	if node != null and is_instance_valid(node) and NetworkManager.players.has(peer_id):
+		node.apply_skin((NetworkManager.players[peer_id] as Dictionary).get("skin", {}))
+
+
+## Kurze Handlung (greifen, stecken, drücken) bei den Mitspielern zeigen.
+func send_local_action(action: String, at: Vector3) -> void:
+	if not NetworkManager.is_in_session:
+		return
+	if multiplayer.is_server():
+		_rpc_relay_action.rpc(1, action, at)
+	else:
+		_rpc_submit_action.rpc_id(1, action, at)
+
+
+@rpc("any_peer", "call_remote", "unreliable")
+func _rpc_submit_action(action: String, at: Vector3) -> void:
+	if not multiplayer.is_server() or not HumanRig.ACTIONS.has(action) or not at.is_finite():
+		return
+	var sid := multiplayer.get_remote_sender_id()
+	if not SecurityGuard.check_rate_limit(sid, "action", 12, 2.0, false):
+		return
+	var node := _ensure_remote_player(sid)
+	if node != null:
+		node.play_remote_action(action, at)
+	_rpc_relay_action.rpc(sid, action, at)
+
+
+@rpc("authority", "call_remote", "unreliable")
+func _rpc_relay_action(peer_id: int, action: String, at: Vector3) -> void:
+	if peer_id == multiplayer.get_unique_id():
+		return
+	var node := _ensure_remote_player(peer_id)
+	if node != null:
+		node.play_remote_action(action, at)
 
 
 func send_local_pose(pos: Vector3, yaw: float, pitch: float, tool: int, spraying: bool) -> void:

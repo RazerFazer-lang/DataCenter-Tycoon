@@ -89,7 +89,7 @@ const UI_BASE_HEIGHT := 720.0
 const REBINDABLE_ACTIONS: Array[String] = [
 	"move_forward", "move_back", "move_left", "move_right",
 	"jump", "sprint", "crouch", "interact", "inspect_rack", "drop_item", "rotate_item",
-	"tool_hands", "tool_power_cable", "tool_net_cable", "tool_slot_4", "toggle_help", "open_chat", "toggle_perf",
+	"tool_hands", "tool_power_cable", "tool_net_cable", "tool_slot_4", "toggle_help", "open_chat", "toggle_perf", "emote_wheel",
 ]
 const ACTION_LABELS := {
 	"move_forward": "Vorwärts",
@@ -111,6 +111,7 @@ const ACTION_LABELS := {
 	"toggle_perf": "Leistungsanzeige",
 	"open_chat": "Chat öffnen",
 	"admin_menu": "Admin-Menü",
+	"emote_wheel": "Gesten-Rad (halten)",
 }
 ## Tasten, die nicht belegt werden dürfen (Escape öffnet das Pausemenü und bricht die Tastenabfrage ab).
 const RESERVED_KEYS: Array[int] = [KEY_ESCAPE]
@@ -131,73 +132,10 @@ var vsync: bool = true
 var max_fps: int = 0
 
 var player_name: String = "Admin"
-## Skin-Editor: Indizes in die Farblisten unten. Jacke 0 = Teamfarbe der Sitzung.
-var skin_jacket: int = 0
-var skin_pants: int = 0
-var skin_tone: int = DEFAULT_SKIN_TONE
-var skin_hair: int = 1
-var skin_shoes: int = 0
-var skin_accent: int = 0
-var skin_headwear: int = 2 # 0=Kurzhaar, 1=Undercut, 2=Tech-Cap, 3=Beanie, 4=Headset, 5=Cap+Headset
-var skin_glasses: int = 0 # 0=Keine, 1=Tech-Brille, 2=Schutzbrille
-
-const DEFAULT_SKIN_TONE := 1
-const SKIN_JACKET_LABELS := ["Teamfarbe (automatisch)", "Signalrot", "Warngelb", "Dunkelblau", "Waldgrün", "Graphit", "Weiß", "Cyan-Tech", "Cyber-Lila"]
-const SKIN_JACKET_COLORS := [
-	Color(0.0, 0.0, 0.0, 0.0),
-	Color(0.80, 0.16, 0.14),
-	Color(0.96, 0.76, 0.12),
-	Color(0.14, 0.24, 0.52),
-	Color(0.18, 0.42, 0.24),
-	Color(0.26, 0.28, 0.31),
-	Color(0.88, 0.89, 0.90),
-	Color(0.10, 0.56, 0.74),
-	Color(0.42, 0.20, 0.64),
-]
-const SKIN_PANTS_LABELS := ["Anthrazit", "Jeansblau", "Khaki", "Schwarz", "Olivgrün"]
-const SKIN_PANTS_COLORS := [
-	Color(0.15, 0.17, 0.21),
-	Color(0.20, 0.30, 0.46),
-	Color(0.55, 0.49, 0.36),
-	Color(0.07, 0.07, 0.08),
-	Color(0.30, 0.34, 0.20),
-]
-const SKIN_TONE_LABELS := ["Hell", "Mittelhell", "Mittel", "Dunkel", "Sehr dunkel"]
-const SKIN_TONE_COLORS := [
-	Color(0.96, 0.84, 0.74),
-	Color(0.88, 0.72, 0.60),
-	Color(0.74, 0.55, 0.40),
-	Color(0.52, 0.36, 0.25),
-	Color(0.33, 0.22, 0.15),
-]
-const SKIN_HAIR_LABELS := ["Schwarz", "Dunkelbraun", "Kastanienbraun", "Blond", "Rotbraun", "Silbergrau"]
-const SKIN_HAIR_COLORS := [
-	Color(0.07, 0.07, 0.08),
-	Color(0.18, 0.12, 0.08),
-	Color(0.36, 0.22, 0.12),
-	Color(0.82, 0.68, 0.36),
-	Color(0.58, 0.20, 0.10),
-	Color(0.68, 0.70, 0.74),
-]
-const SKIN_SHOE_LABELS := ["Schwarz", "Weiß", "Marineblau", "Signalrot", "Braun"]
-const SKIN_SHOE_COLORS := [
-	Color(0.10, 0.11, 0.13),
-	Color(0.90, 0.91, 0.93),
-	Color(0.14, 0.24, 0.48),
-	Color(0.74, 0.16, 0.14),
-	Color(0.38, 0.24, 0.14),
-]
-const SKIN_ACCENT_LABELS := ["Cyan", "Amber/Gold", "Neon-Grün", "Signalrot", "Violett", "Weiß"]
-const SKIN_ACCENT_COLORS := [
-	Color(0.16, 0.76, 0.96),
-	Color(0.96, 0.70, 0.12),
-	Color(0.20, 0.86, 0.44),
-	Color(0.92, 0.22, 0.20),
-	Color(0.62, 0.38, 0.96),
-	Color(0.92, 0.94, 0.96),
-]
-const SKIN_HEADWEAR_LABELS := ["Kurzhaar", "Undercut", "Tech-Cap", "Beanie", "Headset + Kurzhaar", "Tech-Cap + Headset"]
-const SKIN_GLASSES_LABELS := ["Keine Brille", "Tech-Brille", "Werkstatt-Schutzbrille"]
+## Aussehen der eigenen Figur (HumanModel, Format v2) und gespeicherte Outfits.
+var skin: Dictionary = {}
+var outfits: Array = []
+const MAX_OUTFITS := 6
 var master_volume: float = 0.85
 var sfx_volume: float = 0.85
 var fan_volume: float = 0.70
@@ -257,56 +195,34 @@ func apply_language() -> void:
 		TranslationServer.set_locale(language)
 
 
-## Aktueller Skin als Netzwerk-Dictionary (nur Indizes).
+## Aktuelles Aussehen als Netzwerk-Dictionary (nur Zahlen).
 func get_skin() -> Dictionary:
-	return {
-		"jacket": skin_jacket,
-		"pants": skin_pants,
-		"tone": skin_tone,
-		"hair": skin_hair,
-		"shoes": skin_shoes,
-		"accent": skin_accent,
-		"headwear": skin_headwear,
-		"glasses": skin_glasses,
-	}
+	return sanitize_skin(skin)
 
 
-## Prüft einen Skin aus Datei oder Netzwerk. Ungültige Werte fallen auf den Standard zurück.
+## Prüft ein Aussehen aus Datei oder Netzwerk. Ungültige Werte fallen auf den Standard zurück.
 func sanitize_skin(raw: Variant) -> Dictionary:
-	var d: Dictionary = raw if raw is Dictionary else {}
-	return {
-		"jacket": _skin_index(d.get("jacket", 0), SKIN_JACKET_COLORS.size(), 0),
-		"pants": _skin_index(d.get("pants", 0), SKIN_PANTS_COLORS.size(), 0),
-		"tone": _skin_index(d.get("tone", DEFAULT_SKIN_TONE), SKIN_TONE_COLORS.size(), DEFAULT_SKIN_TONE),
-		"hair": _skin_index(d.get("hair", 1), SKIN_HAIR_COLORS.size(), 1),
-		"shoes": _skin_index(d.get("shoes", 0), SKIN_SHOE_COLORS.size(), 0),
-		"accent": _skin_index(d.get("accent", 0), SKIN_ACCENT_COLORS.size(), 0),
-		"headwear": _skin_index(d.get("headwear", 2), SKIN_HEADWEAR_LABELS.size(), 2),
-		"glasses": _skin_index(d.get("glasses", 0), SKIN_GLASSES_LABELS.size(), 0),
-	}
+	return HumanModel.sanitize(raw)
 
 
-## Löst einen Skin in Farben & Accessoire-Indizes auf. Jacke 0 nimmt die Teamfarbe des Spielers.
-func skin_colors(skin: Variant, team_color: Color) -> Dictionary:
-	var s := sanitize_skin(skin)
-	var jacket_idx := int(s["jacket"])
-	var jacket: Color = team_color if jacket_idx == 0 else SKIN_JACKET_COLORS[jacket_idx]
-	return {
-		"jacket": jacket,
-		"pants": SKIN_PANTS_COLORS[int(s["pants"])],
-		"tone": SKIN_TONE_COLORS[int(s["tone"])],
-		"hair": SKIN_HAIR_COLORS[int(s["hair"])],
-		"shoes": SKIN_SHOE_COLORS[int(s["shoes"])],
-		"accent": SKIN_ACCENT_COLORS[int(s["accent"])],
-		"headwear": int(s["headwear"]),
-		"glasses": int(s["glasses"]),
-	}
+func set_skin(look: Dictionary) -> void:
+	skin = sanitize_skin(look)
+	save_settings()
 
 
-func _skin_index(value: Variant, count: int, fallback: int) -> int:
-	if typeof(value) != TYPE_INT and typeof(value) != TYPE_FLOAT:
-		return fallback
-	return clampi(int(value), 0, count - 1)
+func save_outfit(slot: int, p_name: String, look: Dictionary) -> void:
+	if slot < 0 or slot >= MAX_OUTFITS:
+		return
+	while outfits.size() <= slot:
+		outfits.append({})
+	outfits[slot] = {"name": p_name.strip_edges().substr(0, 20), "look": sanitize_skin(look)}
+	save_settings()
+
+
+func delete_outfit(slot: int) -> void:
+	if slot >= 0 and slot < outfits.size():
+		outfits[slot] = {}
+		save_settings()
 
 
 func load_settings() -> void:
@@ -316,24 +232,22 @@ func load_settings() -> void:
 		return
 
 	player_name = str(cfg.get_value("player", "name", "Admin"))
-	var loaded_skin := sanitize_skin({
-		"jacket": cfg.get_value("player", "skin_jacket", 0),
-		"pants": cfg.get_value("player", "skin_pants", 0),
-		"tone": cfg.get_value("player", "skin_tone", DEFAULT_SKIN_TONE),
-		"hair": cfg.get_value("player", "skin_hair", 1),
-		"shoes": cfg.get_value("player", "skin_shoes", 0),
-		"accent": cfg.get_value("player", "skin_accent", 0),
-		"headwear": cfg.get_value("player", "skin_headwear", 2),
-		"glasses": cfg.get_value("player", "skin_glasses", 0),
-	})
-	skin_jacket = int(loaded_skin["jacket"])
-	skin_pants = int(loaded_skin["pants"])
-	skin_tone = int(loaded_skin["tone"])
-	skin_hair = int(loaded_skin["hair"])
-	skin_shoes = int(loaded_skin["shoes"])
-	skin_accent = int(loaded_skin["accent"])
-	skin_headwear = int(loaded_skin["headwear"])
-	skin_glasses = int(loaded_skin["glasses"])
+	var raw_skin: Variant = cfg.get_value("player", "skin", {})
+	if not (raw_skin is Dictionary) or (raw_skin as Dictionary).is_empty():
+		# Einstellungen bis v2.9: einzelne Felder.
+		raw_skin = {}
+		for k in ["jacket", "pants", "tone", "hair", "shoes", "accent", "headwear", "glasses"]:
+			if cfg.has_section_key("player", "skin_" + k):
+				raw_skin[k] = cfg.get_value("player", "skin_" + k)
+	skin = sanitize_skin(raw_skin)
+	outfits.clear()
+	var raw_outfits: Variant = cfg.get_value("player", "outfits", [])
+	if raw_outfits is Array:
+		for o in (raw_outfits as Array).slice(0, MAX_OUTFITS):
+			if o is Dictionary and (o as Dictionary).has("look"):
+				outfits.append({"name": str(o.get("name", "")).substr(0, 20), "look": sanitize_skin(o["look"])})
+			else:
+				outfits.append({})
 	master_volume = clampf(float(cfg.get_value("audio", "master", 0.85)), 0.0, 1.0)
 	sfx_volume = clampf(float(cfg.get_value("audio", "sfx", 0.85)), 0.0, 1.0)
 	fan_volume = clampf(float(cfg.get_value("audio", "fans", 0.70)), 0.0, 1.0)
@@ -395,14 +309,8 @@ func load_settings() -> void:
 func save_settings() -> void:
 	var cfg := ConfigFile.new()
 	cfg.set_value("player", "name", player_name)
-	cfg.set_value("player", "skin_jacket", skin_jacket)
-	cfg.set_value("player", "skin_pants", skin_pants)
-	cfg.set_value("player", "skin_tone", skin_tone)
-	cfg.set_value("player", "skin_hair", skin_hair)
-	cfg.set_value("player", "skin_shoes", skin_shoes)
-	cfg.set_value("player", "skin_accent", skin_accent)
-	cfg.set_value("player", "skin_headwear", skin_headwear)
-	cfg.set_value("player", "skin_glasses", skin_glasses)
+	cfg.set_value("player", "skin", get_skin())
+	cfg.set_value("player", "outfits", outfits)
 	cfg.set_value("audio", "master", master_volume)
 	cfg.set_value("audio", "sfx", sfx_volume)
 	cfg.set_value("audio", "fans", fan_volume)

@@ -15,6 +15,8 @@ var intro_splash: IntroSplash
 var loading_screen: LoadingScreen
 var workbench_ui: WorkbenchUI
 var admin_ui: AdminUI
+var avatar_ui: AvatarEditorUI
+var _avatar_from_pause := false
 var _is_paused: bool = false
 var _menu_orbit_angle: float = 0.0
 # Hinsetzen läuft, Vollbild ist noch nicht offen. Der Zähler macht alte Timer ungültig.
@@ -44,6 +46,12 @@ func _ready() -> void:
 	admin_ui.close_requested.connect(_close_admin)
 	hud.admin_requested.connect(_open_admin)
 	AdminManager.teleport_requested.connect(_on_admin_teleport)
+
+	avatar_ui = AvatarEditorUI.new()
+	$UI.add_child(avatar_ui)
+	avatar_ui.closed.connect(_on_avatar_closed)
+	hud.avatar_requested.connect(func() -> void: _open_avatar(true))
+	world.locker_open_requested.connect(func() -> void: _open_avatar(false))
 
 	hud.bind_world(world)
 	hud.visible = false
@@ -178,7 +186,9 @@ func _input(event: InputEvent) -> void:
 			return
 		if event.keycode == KEY_ESCAPE:
 			get_viewport().set_input_as_handled()
-			if admin_ui.visible:
+			if avatar_ui.visible:
+				avatar_ui.close()
+			elif admin_ui.visible:
 				_close_admin()
 			elif workbench_ui != null and workbench_ui.visible:
 				_close_workbench_ui()
@@ -254,6 +264,7 @@ func _leave_to_menu() -> void:
 
 func _return_to_menu_ui() -> void:
 	admin_ui.visible = false
+	avatar_ui.close()
 	_is_paused = false
 	_pc_entering = false
 	_pc_enter_token += 1
@@ -412,6 +423,35 @@ func _on_admin_teleport(pos: Vector3, yaw: float) -> void:
 		_close_workbench_ui()
 	if world.local_player != null:
 		world.local_player.admin_teleport(pos, yaw)
+
+
+## Figuren-Editor im Spiel: aus dem Pausemenü oder am Spind.
+func _open_avatar(from_pause: bool) -> void:
+	if terminal_ui.visible or rack_inspector.visible or workbench_ui.visible or admin_ui.visible or _pc_entering:
+		return
+	_avatar_from_pause = from_pause
+	if from_pause:
+		hud.set_pause_visible(false)
+	hud.visible = false
+	avatar_ui.open()
+	if world.local_player != null:
+		world.local_player.set_ui_locked(true)
+		world.local_player.at_locker = not from_pause
+	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
+
+
+func _on_avatar_closed() -> void:
+	if world.local_player != null:
+		world.local_player.at_locker = false
+	if not NetworkManager.is_in_session:
+		return
+	hud.visible = true
+	if _avatar_from_pause:
+		_open_pause()
+		return
+	if world.local_player != null:
+		world.local_player.set_ui_locked(false)
+	Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
 
 
 func _open_pause() -> void:

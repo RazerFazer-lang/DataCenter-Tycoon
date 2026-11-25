@@ -1,7 +1,6 @@
 class_name AmbientNpcSystem
 extends Node3D
-## Photorealistische 4K-Außen-NPCs (player_realistic & delivery_driver_realistic via HumanoidRigHelper)
-## mit echter Skeleton3D-Geh-Animation + organischer Regenpfützen-Shader mit Regentropfen-Ripples!
+## Passanten (eigene Figuren, jeder sieht anders aus), Pförtner und Regenpfützen mit Tropfenringen.
 
 var _walkers: Array[Dictionary] = []
 var _puddle_shader_mat: ShaderMaterial
@@ -39,21 +38,7 @@ func _process(delta: float) -> void:
 			root.position.x = xmin
 		elif dir < 0.0 and root.position.x < xmin:
 			root.position.x = xmax
-		# Echte Skeleton3D-Geh-Animation (Oberschenkel, Knie, Oberarme & Unterarme!)
-		var skel: Skeleton3D = w["skel"]
-		var bones: Dictionary = w["bones"]
-		if skel != null:
-			var phase := _anim_t * spd * 4.6 + float(w["phase"])
-			var s := sin(phase)
-			HumanoidRigHelper.set_leg_pitch(skel, bones, "thigh_l", s * 0.44)
-			HumanoidRigHelper.set_leg_pitch(skel, bones, "thigh_r", -s * 0.44)
-			HumanoidRigHelper.set_leg_pitch(skel, bones, "knee_l", -maxf(0.0, -s) * 0.55)
-			HumanoidRigHelper.set_leg_pitch(skel, bones, "knee_r", -maxf(0.0, s) * 0.55)
-			HumanoidRigHelper.set_arm_pose(skel, bones, true, -s * 0.34, 0.04)
-			HumanoidRigHelper.set_arm_pose(skel, bones, false, s * 0.34, 0.04)
-			HumanoidRigHelper.set_forearm_bend(skel, bones, true, 0.22 + maxf(0.0, -s) * 0.22)
-			HumanoidRigHelper.set_forearm_bend(skel, bones, false, 0.22 + maxf(0.0, s) * 0.22)
-			root.position.y = absf(s) * 0.024
+		_walk(w, dir, spd, delta)
 
 	# Organische Regenpfützen mit Ripples weich ein-/ausblenden
 	var w_st: String = GameState.weather_state if GameState.is_active else "clear"
@@ -73,56 +58,62 @@ func _sync_guard() -> void:
 		_guard_node.visible = GameState.halle_nord_owned and GameState.has_building_upgrade("upg_security_gate")
 
 
+## Passant: geht, schaut sich um, bleibt manchmal stehen und grüßt Spieler in der Nähe.
+func _walk(w: Dictionary, dir: float, spd: float, delta: float) -> void:
+	var h: HumanModel = w["human"]
+	if h.rig == null:
+		return
+	var root: Node3D = w["root"]
+	w["wait"] = maxf(0.0, float(w["wait"]) - delta)
+	w["cool"] = maxf(0.0, float(w["cool"]) - delta)
+	var lp := get_tree().get_first_node_in_group("local_player") as Node3D
+	var look := 0.0
+	if lp != null:
+		var to := lp.global_position - root.global_position
+		if to.length() < 5.5:
+			var loc := root.global_basis.inverse() * to
+			look = clampf(atan2(-loc.x, -loc.z), -1.1, 1.1) if loc.z < 0.5 else 0.0
+			if float(w["cool"]) <= 0.0 and loc.z < 0.0:
+				w["cool"] = randf_range(25.0, 60.0)
+				w["wait"] = 2.4
+				h.rig.play("wave" if randf() < 0.6 else "nod")
+	var waiting := float(w["wait"]) > 0.0
+	if waiting:
+		root.position.x -= dir * spd * delta
+	h.move(Vector3.ZERO if waiting else Vector3(dir * spd, 0, 0))
+	h.rig.look_yaw = look
+	h.rig.mood = 0.5 if absf(look) > 0.01 else 0.0
+
+
 func _build_pedestrians() -> void:
 	var o := GameState.HALLE_NORD_ORIGIN
 	var specs := [
-		["player_realistic",          Vector3(-18.0, 0.0, 19.35),  1.0, 1.32, -44.0, 46.0, Color(0.18, 0.36, 0.58), false],
-		["delivery_driver_realistic", Vector3( 14.0, 0.0, 19.65), -1.0, 1.18, -44.0, 46.0, Color(0.58, 0.22, 0.20), false],
-		["player_realistic",          Vector3(  2.0, 0.0, 19.10),  1.0, 1.42, -44.0, 46.0, Color(0.22, 0.44, 0.30), false],
-		["player_realistic",          o + Vector3(-22.0, 0.0, 26.85),  1.0, 1.35, -48.0, 48.0, Color(0.16, 0.28, 0.48), true],
-		["delivery_driver_realistic", o + Vector3( 16.0, 0.0, 27.15), -1.0, 1.24, -48.0, 48.0, Color(0.52, 0.34, 0.18), true],
-		["player_realistic",          o + Vector3( 13.0, 0.0, 11.40),  1.0, 1.10,   8.0, 21.0, Color(0.24, 0.28, 0.36), true],
+		[Vector3(-18.0, 0.0, 19.35), 1.0, 1.32, -44.0, 46.0, false],
+		[Vector3(14.0, 0.0, 19.65), -1.0, 1.18, -44.0, 46.0, false],
+		[Vector3(2.0, 0.0, 19.10), 1.0, 1.42, -44.0, 46.0, false],
+		[Vector3(-31.0, 0.0, 19.50), -1.0, 1.26, -44.0, 46.0, false],
+		[o + Vector3(-22.0, 0.0, 26.85), 1.0, 1.35, -48.0, 48.0, true],
+		[o + Vector3(16.0, 0.0, 27.15), -1.0, 1.24, -48.0, 48.0, true],
+		[o + Vector3(13.0, 0.0, 11.40), 1.0, 1.10, 8.0, 21.0, true],
 	]
 	for i in range(specs.size()):
 		var sp: Array = specs[i]
-		var npc := _spawn_realistic_human(str(sp[0]), sp[6] as Color)
-		var r: Node3D = npc["root"]
-		r.position = sp[1] as Vector3
-		var dir: float = float(sp[2])
-		# HumanoidRigHelper dreht Mixamo-Blickrichtung auf -Z -> +X ist -90°, -X ist +90°!
+		var r := Node3D.new()
+		var h := HumanModel.create(HumanModel.random_look(i * 5 + 2))
+		r.add_child(h)
+		r.position = sp[0] as Vector3
+		var dir: float = float(sp[1])
 		r.rotation_degrees.y = -90.0 if dir > 0.0 else 90.0
 		add_child(r)
-		npc["dir"] = dir
-		npc["speed"] = float(sp[3])
-		npc["xmin"] = float(sp[4])
-		npc["xmax"] = float(sp[5])
-		npc["is_nord"] = bool(sp[7])
-		npc["phase"] = float(i) * 1.4
-		_walkers.append(npc)
+		_walkers.append({"root": r, "human": h, "dir": dir, "speed": float(sp[2]), "xmin": float(sp[3]), "xmax": float(sp[4]), "is_nord": bool(sp[5]), "wait": 0.0, "cool": randf() * 10.0})
 
 
 func _build_gatehouse_guard() -> void:
-	var g := _spawn_realistic_human("delivery_driver_realistic", Color(0.09, 0.16, 0.30))
-	_guard_node = g["root"]
+	_guard_node = Node3D.new()
+	_guard_node.add_child(HumanModel.create(HumanModel.job_look("guard", 7)))
 	_guard_node.position = GameState.HALLE_NORD_ORIGIN + Vector3(-4.55, 0.18, 16.25)
 	_guard_node.rotation_degrees.y = 160.0
 	add_child(_guard_node)
-
-
-func _spawn_realistic_human(model_id: String, outfit_col: Color) -> Dictionary:
-	var holder := Node3D.new()
-	var m := ModelLoader.instantiate_custom_model(model_id)
-	var skel: Skeleton3D = null
-	var bones: Dictionary = {}
-	if m != null:
-		holder.add_child(m)
-		HumanoidRigHelper.normalize_character_root(m, true)
-		HumanoidRigHelper.apply_skin_to_skeleton_model(m, {}, outfit_col)
-		skel = HumanoidRigHelper.find_skeleton(m)
-		if skel != null:
-			bones = HumanoidRigHelper.map_bones(skel)
-			HumanoidRigHelper.apply_relaxed_standing_pose(skel, bones)
-	return {"root": holder, "skel": skel, "bones": bones}
 
 
 func _build_rain_puddles() -> void:

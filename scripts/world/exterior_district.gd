@@ -11,7 +11,7 @@ extends Node3D
 ##   * Langsam schwenkender gelber Baukran + Heizkraftwerk mit aufsteigenden Dampfwolken
 ##   * Erhoehte Fern-Autobahn (Z=82) mit 24 fliessenden Scheinwerfer-/Ruecklicht-Stroemen (MultiMesh!)
 ##   * Zweiter Hintergrund-Verkehr auf der Ringstrasse + wehende Firmen-Fahnen
-##   * Kreisender Vogelschwarm (MultiMesh) + gelegentliches Flugzeug mit Kondensstreifen & Jet-Sound
+##   * Vögel und Tiere siehe Wildlife, gelegentliches Flugzeug mit Kondensstreifen & Jet-Sound
 
 const TRAFFIC_X_MIN := -86.0
 const TRAFFIC_X_MAX := 90.0
@@ -41,10 +41,6 @@ var _hw_head_mm: MultiMesh
 var _hw_tail_mm: MultiMesh
 var _hw_cars: Array[Dictionary] = []
 
-# Kreisender Vogelschwarm (1 MultiMesh = 1 Draw Call!)
-var _bird_mm_inst: MultiMeshInstance3D
-var _bird_data: Array[Dictionary] = []
-
 # Hohes Linienflugzeug + Kondensstreifen
 var _jet_node: Node3D
 var _jet_timer: float = 28.0
@@ -56,6 +52,8 @@ var _jet_end: Vector3 = Vector3(145.0, 72.0, -42.0)
 # 3D-Regen & Gewitter-Blitze
 var _rain_mm_inst: MultiMeshInstance3D
 var _rain_drops: Array[Vector3] = []
+var _snow_mode := false
+var _drop_mesh: Mesh
 var _rain_speeds: PackedFloat32Array = PackedFloat32Array()
 var _lightning_light: DirectionalLight3D
 var _lightning_flash: float = 0.0
@@ -108,6 +106,9 @@ uniform float roughness_val = 0.78;
 uniform float wind_strength = 0.08;
 uniform float wind_speed = 1.65;
 uniform float height_start = 0.15;
+uniform vec3 season_mul = vec3(1.0);
+uniform float snow = 0.0;
+varying float v_up;
 
 varying vec3 v_wpos;
 varying vec3 v_lpos;
@@ -133,6 +134,7 @@ float vnoise3(vec3 x) {
 
 void vertex() {
 	v_lpos = VERTEX;
+	v_up = normalize((MODEL_MATRIX * vec4(NORMAL, 0.0)).xyz).y;
 	vec3 wpos = (MODEL_MATRIX * vec4(VERTEX, 1.0)).xyz;
 	float h_factor = clamp((VERTEX.y - height_start) * 0.28, 0.0, 1.8);
 	float phase = TIME * wind_speed + wpos.x * 0.35 + wpos.z * 0.28;
@@ -149,7 +151,8 @@ void fragment() {
 	float dapple = mix(0.44, 1.12, leaf_fine * 0.65 + leaf_mid * 0.35);
 	float sun_tip = clamp(0.76 + v_lpos.y * 0.048, 0.68, 1.08);
 	vec3 warm_shift = mix(vec3(0.76, 0.90, 0.80), vec3(1.02, 1.00, 0.78), leaf_fine);
-	ALBEDO = albedo_color.rgb * 0.78 * dapple * sun_tip * warm_shift;
+	vec3 c = albedo_color.rgb * 0.78 * dapple * sun_tip * warm_shift * season_mul;
+	ALBEDO = mix(c, vec3(0.88, 0.91, 0.95), smoothstep(0.1, 0.6, v_up + (leaf_fine - 0.5) * 0.6) * snow);
 	ROUGHNESS = clamp(roughness_val + (0.5 - leaf_fine) * 0.16, 0.58, 0.96);
 	METALLIC = 0.0;
 	SPECULAR = 0.18;
@@ -255,6 +258,8 @@ func _update_wind_shader() -> void:
 	for sm in _wind_materials:
 		if sm != null:
 			sm.set_shader_parameter("wind_strength", target_str)
+			sm.set_shader_parameter("season_mul", Vector3.ONE.lerp(Vector3(1.5, 0.92, 0.5), Nature.mix4([0.0, 0.0, 0.75, 0.45])))
+			sm.set_shader_parameter("snow", OutdoorManager.snow_shown)
 			sm.set_shader_parameter("wind_speed", target_spd)
 	for fm in _flag_materials:
 		if fm != null:
@@ -266,21 +271,14 @@ func _update_wind_shader() -> void:
 
 func _build_360_terrain_and_horizon() -> void:
 	var grass_mat := MatLib.get_mat("grass")
-	var terrain_mat: StandardMaterial3D
-	if grass_mat is StandardMaterial3D:
-		terrain_mat = (grass_mat as StandardMaterial3D).duplicate() as StandardMaterial3D
-		terrain_mat.albedo_color = Color(0.54, 0.66, 0.42)
-		terrain_mat.uv1_triplanar = true
-		terrain_mat.uv1_world_triplanar = true
-		terrain_mat.uv1_scale = Vector3(0.08, 0.08, 0.08)
-	else:
-		terrain_mat = _mat(Color(0.24, 0.34, 0.20), 0.94, 0.0)
+	var terrain_mat := Nature.meadow(grass_mat, 0.22)
 
 	# 560 × 560 m Grundboden in alle 4 Himmelsrichtungen
 	_add_box(Vector3(6.0, -0.32, 8.0), Vector3(560.0, 0.20, 560.0), terrain_mat, false)
 
 	# 360°-Hügelkette am fernen Horizont
 	var hill_mat := _mat(Color(0.16, 0.24, 0.16), 0.96, 0.0)
+	Nature.register_tint(hill_mat, 0.8)
 	var rng := RandomNumberGenerator.new()
 	rng.seed = 9001
 	for i in range(34):
@@ -814,33 +812,6 @@ func _update_background_ring_traffic(delta: float) -> void:
 # ---------------------------------------------------------------- Himmel: Kreisender Vogelschwarm + Flugzeug mit Kondensstreifen!
 
 func _build_sky_life() -> void:
-	# 1. Kreisender Vogelschwarm (14 Vögel in 1 MultiMesh!)
-	var bcount := 14
-	var bmesh := BoxMesh.new()
-	bmesh.size = Vector3(0.55, 0.06, 0.22)
-	var bmat := StandardMaterial3D.new()
-	bmat.albedo_color = Color(0.10, 0.11, 0.13)
-	bmat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	bmesh.material = bmat
-	var mm := MultiMesh.new()
-	mm.transform_format = MultiMesh.TRANSFORM_3D
-	mm.mesh = bmesh
-	mm.instance_count = bcount
-	_bird_mm_inst = MultiMeshInstance3D.new()
-	_bird_mm_inst.multimesh = mm
-	_bird_mm_inst.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-	add_child(_bird_mm_inst)
-	var rng := RandomNumberGenerator.new()
-	rng.seed = 5150
-	for i in range(bcount):
-		_bird_data.append({
-			"ang": rng.randf_range(0.0, TAU),
-			"radius": rng.randf_range(26.0, 48.0),
-			"y": rng.randf_range(22.0, 34.0),
-			"speed": rng.randf_range(0.18, 0.30),
-			"phase": rng.randf_range(0.0, TAU),
-		})
-
 	# 2. Linienflugzeug in großer Höhe + weißer Kondensstreifen
 	_jet_node = Node3D.new()
 	_jet_node.visible = false
@@ -949,26 +920,6 @@ func _update_living_horizon(delta: float) -> void:
 
 func _update_sky_life(delta: float) -> void:
 	var w: String = GameState.weather_state if GameState.is_active else "clear"
-	var tod := GameState.time_of_day if GameState.is_active else 0.38
-	var is_night := (tod < 0.24 or tod > 0.76)
-
-	# 1. Vogelschwarm kreist tagsüber bei trockenem Wetter hoch über dem Gewerbegebiet
-	if _bird_mm_inst != null:
-		var birds_ok := not is_night and w != "storm" and w != "rain"
-		_bird_mm_inst.visible = birds_ok
-		if birds_ok:
-			var mm := _bird_mm_inst.multimesh
-			for i in range(_bird_data.size()):
-				var bd: Dictionary = _bird_data[i]
-				var ang: float = float(bd["ang"]) + _anim_t * float(bd["speed"])
-				var rad: float = float(bd["radius"])
-				var bx := 6.0 + cos(ang) * rad
-				var bz := 28.0 + sin(ang) * rad
-				var by := float(bd["y"]) + sin(_anim_t * 1.2 + float(bd["phase"])) * 1.4
-				var flap := sin(_anim_t * 9.5 + float(bd["phase"])) * 0.28
-				var b := Basis(Vector3.UP, -ang).rotated(Vector3.FORWARD, flap)
-				mm.set_instance_transform(i, Transform3D(b, Vector3(bx, by, bz)))
-
 	# 2. Gelegentlicher Linienflugzeug-Überflug mit Kondensstreifen & leisem Jet-Rauschen!
 	if _jet_node != null and GameState.is_active:
 		if not _jet_active:
@@ -1086,6 +1037,11 @@ func _update_traffic(delta: float) -> void:
 	var trans := SfxManager.get_outdoor_transmission()
 	var audio_active := GameState.is_active and fan_gain > 0.005
 
+	var walkers: Array[Vector3] = []
+	for p_n in get_tree().get_nodes_in_group("player_body"):
+		var pp := (p_n as Node3D).global_position
+		if pp.z > 10.3 and pp.z < 19.0 and pp.y < 2.0:
+			walkers.append(pp)
 	for idx in range(_traffic_cars.size()):
 		var car: Dictionary = _traffic_cars[idx]
 		var n: Node3D = car["node"]
@@ -1110,6 +1066,17 @@ func _update_traffic(delta: float) -> void:
 				is_braking = true
 			elif vgap <= 0.0 and vgap > -26.0:
 				target_spd = base_spd * 1.7
+
+		# Wer auf der Fahrbahn steht, wird nicht überfahren.
+		for pl in walkers:
+			var gapp := (pl.x - n.position.x) * d
+			if absf(pl.z - float(car["lane_z"])) < 1.7 and gapp > -0.5 and gapp < 11.0:
+				target_spd = 0.0
+				is_braking = true
+				if gapp < 5.0 and float(car.get("honk", 0.0)) <= 0.0 and audio_active:
+					car["honk"] = 6.0
+					SfxManager.play("van_horn", -10.0, 1.1 if not bool(car["truck"]) else 0.8)
+		car["honk"] = maxf(0.0, float(car.get("honk", 0.0)) - delta)
 
 		for j in range(_traffic_cars.size()):
 			if j == idx:
@@ -1206,6 +1173,7 @@ func _build_weather_vfx() -> void:
 	dmat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	dm.material = dmat
 	mm.mesh = dm
+	_drop_mesh = dm
 	mm.instance_count = drop_count
 
 	_rain_drops.clear()
@@ -1228,6 +1196,27 @@ func _build_weather_vfx() -> void:
 	_lightning_light.light_energy = 0.0
 	_lightning_light.shadow_enabled = false
 	add_child(_lightning_light)
+
+
+func _flake_mesh() -> Mesh:
+	var qm := QuadMesh.new()
+	qm.size = Vector2(0.055, 0.055)
+	var m := StandardMaterial3D.new()
+	m.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	m.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	m.billboard_mode = BaseMaterial3D.BILLBOARD_ENABLED
+	m.albedo_color = Color(0.95, 0.97, 1.0, 0.85)
+	var gt := GradientTexture2D.new()
+	gt.fill = GradientTexture2D.FILL_RADIAL
+	gt.fill_from = Vector2(0.5, 0.5)
+	gt.fill_to = Vector2(0.5, 0.0)
+	var g := Gradient.new()
+	g.set_color(0, Color(1, 1, 1, 1))
+	g.set_color(1, Color(1, 1, 1, 0))
+	gt.gradient = g
+	m.albedo_texture = gt
+	qm.material = m
+	return qm
 
 
 func _update_night_lights() -> void:
@@ -1273,9 +1262,13 @@ func _update_substation_audio() -> void:
 func _update_weather(delta: float) -> void:
 	var w: String = GameState.weather_state if GameState.is_active else "clear"
 	var raining := (w == "rain" or w == "storm")
+	var snowing: bool = raining and OutdoorManager.is_snowing()
 
 	if _rain_mm_inst != null:
 		_rain_mm_inst.visible = raining
+		if snowing != _snow_mode:
+			_snow_mode = snowing
+			_rain_mm_inst.multimesh.mesh = _flake_mesh() if snowing else _drop_mesh
 		if raining:
 			var center := Vector3(0.0, 0.0, 8.0)
 			var cam := get_viewport().get_camera_3d()
@@ -1286,8 +1279,11 @@ func _update_weather(delta: float) -> void:
 			var tilt := Basis(Vector3.FORWARD, -0.18 if w == "storm" else -0.05)
 			for i in range(_rain_drops.size()):
 				var p := _rain_drops[i]
-				p.y -= _rain_speeds[i] * delta
+				p.y -= _rain_speeds[i] * delta * (0.10 if snowing else 1.0)
 				p.x += wind_x * delta
+				if snowing:
+					p.x += sin(_anim_t * 1.3 + i) * delta * 0.5
+					p.z += cos(_anim_t * 1.1 + i * 1.7) * delta * 0.5
 				if p.y < 0.0:
 					p.y += 12.0
 				if p.x < -18.0:
@@ -1317,10 +1313,8 @@ func _update_weather(delta: float) -> void:
 # ---------------------------------------------------------------- Oeffentliche & interne Hilfsfunktionen
 
 func spawn_tree(pos: Vector3, is_pine: bool, scale_val: float = 1.0, yaw_deg: float = 0.0, with_wind: bool = true) -> Node3D:
-	var model_id := "ext_tree_pine" if is_pine else "ext_tree_oak"
-	var node := _spawn_blender_model(model_id, pos, yaw_deg, Vector3.ONE * scale_val)
-	if node != null and with_wind:
-		_apply_wind_to_canopy(node, 1.3 if is_pine else 2.2, randf_range(0.92, 1.08))
+	var node := Nature.tree(Nature.species_for(pos, is_pine), pos, scale_val, yaw_deg, with_wind, with_wind)
+	add_child(node)
 	return node
 
 

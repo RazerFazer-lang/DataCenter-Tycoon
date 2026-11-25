@@ -4,11 +4,9 @@ extends Node3D
 ## Wege laufen, an der Werkbank schrauben, Server tragen, mit dem Shuttle weg sein.
 
 var _body: Node3D
-var _skel: Skeleton3D
-var _bones: Dictionary = {}
+var _human: HumanModel
 var _name_lbl: Label3D
 var _tray: Node3D
-var _anim: float = 0.0
 var _yaw: float = 0.0
 var _built_for: String = ""
 
@@ -28,6 +26,11 @@ func _on_changed() -> void:
 		_build()
 	if id != _built_for:
 		_built_for = id
+		# Jeder Techniker hat sein eigenes Gesicht.
+		if _human != null:
+			_human.queue_free()
+		_human = HumanModel.create(HumanModel.job_look("technician", id.hash() % 977))
+		_body.add_child(_human)
 		position = v.get("pos", TechnicianManager.HOME)
 	_name_lbl.text = "%s\n%s" % [str(v.get("name", "")), str(v.get("text", ""))]
 	if _tray != null:
@@ -37,15 +40,6 @@ func _on_changed() -> void:
 func _build() -> void:
 	_body = Node3D.new()
 	add_child(_body)
-	var m := ModelLoader.instantiate_custom_model("delivery_driver_realistic")
-	if m != null:
-		_body.add_child(m)
-		HumanoidRigHelper.normalize_character_root(m, true)
-		HumanoidRigHelper.apply_skin_to_skeleton_model(m, {}, Color(0.80, 0.90, 1.0))
-		_skel = HumanoidRigHelper.find_skeleton(m)
-		if _skel != null:
-			_bones = HumanoidRigHelper.map_bones(_skel)
-			HumanoidRigHelper.apply_relaxed_standing_pose(_skel, _bones)
 	_name_lbl = Label3D.new()
 	_name_lbl.position = Vector3(0.0, 2.02, 0.0)
 	_name_lbl.font_size = 30
@@ -108,37 +102,12 @@ func _along(path: Array, t: float) -> Vector3:
 	return path[path.size() - 1]
 
 
-func _animate(delta: float, speed: float, working: bool) -> void:
-	_anim += delta
-	if _skel == null:
+func _animate(_delta: float, speed: float, working: bool) -> void:
+	if _human == null or _human.rig == null:
 		return
+	var r := _human.rig
+	_human.move(Vector3(0, 0, -speed).rotated(Vector3.UP, _yaw))
 	var carrying := _tray != null and _tray.visible
-	if speed > 0.1:
-		var s := sin(_anim * speed * 4.6)
-		HumanoidRigHelper.set_leg_pitch(_skel, _bones, "thigh_l", s * 0.44)
-		HumanoidRigHelper.set_leg_pitch(_skel, _bones, "thigh_r", -s * 0.44)
-		HumanoidRigHelper.set_leg_pitch(_skel, _bones, "knee_l", -maxf(0.0, -s) * 0.55)
-		HumanoidRigHelper.set_leg_pitch(_skel, _bones, "knee_r", -maxf(0.0, s) * 0.55)
-		_body.position.y = absf(s) * 0.02
-		if not carrying:
-			HumanoidRigHelper.set_arm_pose(_skel, _bones, true, -s * 0.34, 0.04)
-			HumanoidRigHelper.set_arm_pose(_skel, _bones, false, s * 0.34, 0.04)
-			HumanoidRigHelper.set_forearm_bend(_skel, _bones, true, 0.25)
-			HumanoidRigHelper.set_forearm_bend(_skel, _bones, false, 0.25)
-	else:
-		for b in ["thigh_l", "thigh_r", "knee_l", "knee_r"]:
-			HumanoidRigHelper.set_leg_pitch(_skel, _bones, b, 0.0)
-		_body.position.y = 0.0
-	if carrying:
-		for left in [true, false]:
-			HumanoidRigHelper.set_arm_pose(_skel, _bones, left, 0.55, 0.10)
-			HumanoidRigHelper.set_forearm_bend(_skel, _bones, left, 1.05)
-	elif working:
-		HumanoidRigHelper.set_arm_pose(_skel, _bones, false, 0.80 + sin(_anim * 4.2) * 0.07, 0.06)
-		HumanoidRigHelper.set_forearm_bend(_skel, _bones, false, 0.70 + cos(_anim * 4.2) * 0.12)
-		HumanoidRigHelper.set_arm_pose(_skel, _bones, true, 0.72 + sin(_anim * 1.7) * 0.04, 0.10)
-		HumanoidRigHelper.set_forearm_bend(_skel, _bones, true, 0.78)
-	elif speed <= 0.1:
-		for left in [true, false]:
-			HumanoidRigHelper.set_arm_pose(_skel, _bones, left, 0.04, 0.06)
-			HumanoidRigHelper.set_forearm_bend(_skel, _bones, left, 0.18)
+	r.base = "carry_box" if carrying else ("work" if working else "")
+	if working and not r.is_playing() and randf() < 0.004:
+		r.play("screw", Vector3(0.0, 1.05, 0.42))

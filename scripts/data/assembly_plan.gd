@@ -89,7 +89,21 @@ static func variant(wb: Dictionary) -> Dictionary:
 	if chassis == "gpu_server":
 		gpu = maxi(1, gpu)
 	v["gpu"] = gpu
+	# Welches Teil genau steckt: jedes hat sein eigenes Modell.
+	var ids: Dictionary = {}
+	for cat in ["cpu", "ram", "gpu", "storage", "cooling", "psu"]:
+		var cv: Variant = comps.get(cat, "")
+		ids[cat] = str(cv) if cv is String else ""
+	v["ids"] = ids
 	return v
+
+
+## Modell eines Teils: eigenes (hwm_<id>), sonst das allgemeine der Stufe.
+static func model_of(v: Dictionary, cat: String, fallback: String) -> String:
+	var id := str((v.get("ids", {}) as Dictionary).get(cat, ""))
+	if cat == "gpu" and int(HardwareCatalog.get_part("gpu", id).get("vtier", 0)) <= 0:
+		return fallback
+	return "hwm_" + id if PartModels.has_mount(id) else fallback
 
 
 ## Defekte Kategorie, so wie sie sich an diesem Server wirklich tauschen lässt.
@@ -150,6 +164,9 @@ static func build(wb: Dictionary) -> Dictionary:
 	if full:
 		var pd := HardwareCatalog.get_part(rcat, str(spare.get("id", "")))
 		nv[rcat] = clampi(int(pd.get("vtier", 0)), 1 if rcat == "gpu" else 0, 3)
+		var nids: Dictionary = (v["ids"] as Dictionary).duplicate()
+		nids[rcat] = str(spare.get("id", ""))
+		nv["ids"] = nids
 	var ctx := {
 		"mode": mode, "v": v, "nv": nv, "rcat": rcat, "full": full,
 		"hidden": bool(wb.get("fault_hidden", false)),
@@ -448,8 +465,8 @@ static func _server_items(items: Dictionary, ctx: Dictionary) -> void:
 	# CPU: Sockel, Halterahmen und Hebel gehören zur Platine.
 	var ct := int(v["cpu"])
 	var ctn := int(nv["cpu"])
-	var cm := "asm_cpu_t%d" % maxi(0, ct)
-	var cmn := "asm_cpu_t%d" % maxi(0, ctn)
+	var cm := model_of(v, "cpu", "asm_cpu_t%d" % maxi(0, ct))
+	var cmn := model_of(nv, "cpu", "asm_cpu_t%d" % maxi(0, ctn))
 	_item(items, "cpu_socket", "fixed", "mb", cm, "Socket", CPU_POS, "seat")
 	_item(items, "cpu_frame", "lever", "mb", cm, "Frame", CPU_POS, "closed", {"axis": Vector3(0, 0, 1), "angle": 104.0})
 	_item(items, "cpu_lever", "lever", "mb", cm, "Lever", CPU_POS, "closed", {"axis": Vector3(1, 0, 0), "angle": -98.0})
@@ -471,8 +488,8 @@ static func _server_items(items: Dictionary, ctx: Dictionary) -> void:
 	# RAM: ein Kit ersetzt die zwei defekten Riegel, ein neues Teil den ganzen Satz.
 	var rt := int(v["ram"])
 	var rtn := int(nv["ram"])
-	var rm := "asm_ram_t%d" % maxi(0, rt)
-	var rmn := "asm_ram_t%d" % maxi(0, rtn)
+	var rm := model_of(v, "ram", "asm_ram_t%d" % maxi(0, rt))
+	var rmn := model_of(nv, "ram", "asm_ram_t%d" % maxi(0, rtn))
 	var swap: Array = _ram_swap(ctx) if rcat == "ram" else []
 	_item(items, "ram_slots", "fixed", "mb", rm, "Slots", RAM_POS, "seat")
 	for i in range(RAM_SLOTS):
@@ -496,8 +513,8 @@ static func _server_items(items: Dictionary, ctx: Dictionary) -> void:
 	# SSDs
 	var st := int(v["storage"])
 	var stn := int(nv["storage"])
-	var sm := "asm_storage_t%d" % maxi(0, st)
-	var smn := "asm_storage_t%d" % maxi(0, stn)
+	var sm := model_of(v, "storage", "asm_storage_t%d" % maxi(0, st))
+	var smn := model_of(nv, "storage", "asm_storage_t%d" % maxi(0, stn))
 	var sfix := rcat == "storage"
 	if st >= 0:
 		_item(items, "ssd_slots", "fixed", "mb", smn if (sfix and full and ssd_count(stn) >= ssd_count(st)) else sm, "Slots", SSD_POS, "seat")
@@ -521,7 +538,7 @@ static func _server_items(items: Dictionary, ctx: Dictionary) -> void:
 	for c in range(slots_n):
 		_item(items, "gpu_slot%d" % c, "fixed", "mb", "asm_gpu_t3" if c == 1 else "asm_gpu_t%d" % maxi(1, gt), "Slot_%d" % c, GPU_POS, "seat")
 	for c in range(gpu_cards(gt)):
-		var gm := "asm_gpu_t%d" % gt
+		var gm := model_of(v, "gpu", "asm_gpu_t%d" % gt)
 		var torn := c == 0 and not hidden
 		if gfix and (full or c == 0):
 			_item(items, "gpu_old%d" % c, "part", "mb", "asm_gpu_broken" if torn else gm, "Card_%d" % c, GPU_POS, "seat", {"n": c})
@@ -531,7 +548,7 @@ static func _server_items(items: Dictionary, ctx: Dictionary) -> void:
 			_item(items, "gpu_s%d" % c, "screw", "mb", "asm_tools", "ScrewM3", _gpu_screw_pos(gt, c), sc, {"own": service})
 	if gfix:
 		for c in (range(gpu_cards(gtn)) if full else [0]):
-			var gmn := "asm_gpu_t%d" % gtn
+			var gmn := model_of(nv, "gpu", "asm_gpu_t%d" % gtn)
 			_item(items, "gpu%d" % c, "part", "mb", gmn, "Card_%d" % c, GPU_POS, "rest", {"n": c, "rotors": gmn, "spare": true})
 			_item(items, "gpu_s%d" % c, "screw", "mb", "asm_tools", "ScrewM3", _gpu_screw_pos(gtn, c), "out")
 	if gt >= 3:
@@ -544,8 +561,8 @@ static func _server_items(items: Dictionary, ctx: Dictionary) -> void:
 	if wt >= 0:
 		var wfix := rcat == "cooling"
 		if wfix:
-			_item(items, "wall_old", "part", "chassis", "#cooling" if hidden else "#cooling_broken", "", WALL_POS, "seat", {"tier": wt})
-		_item(items, "wall", "part", "chassis", "#cooling", "", WALL_POS, "rest" if (building or wfix) else "seat", {"tier": int(nv["cooling"]), "spare": wfix})
+			_item(items, "wall_old", "part", "chassis", "#cooling" if hidden else "#cooling_broken", "", WALL_POS, "seat", {"tier": wt, "pid": str(v["ids"]["cooling"])})
+		_item(items, "wall", "part", "chassis", "#cooling", "", WALL_POS, "rest" if (building or wfix) else "seat", {"tier": int(nv["cooling"]), "spare": wfix, "pid": str(nv["ids"]["cooling"])})
 		_item(items, "plug_pwm", "plug", "mb", "asm_tools", "PlugPWM", Vector3(0.125, 0.0105, 0.218), "unplugged" if building else "plugged",
 			{"owners": ["wall", "wall_old"], "from": Vector3(0.135, 0.022, 0.186), "loose": Vector3(0.175, 0.026, 0.135), "radius": 0.0022, "strands": 2})
 	var pt := int(v["psu"])
@@ -554,10 +571,10 @@ static func _server_items(items: Dictionary, ctx: Dictionary) -> void:
 		var front_old := _psu_front(pt)
 		var front := _psu_front(int(nv["psu"]))
 		if pfix:
-			_item(items, "psu_old", "part", "chassis", "#psu" if hidden else "#psu_broken", "", PSU_POS, "seat", {"tier": pt, "front": front_old})
+			_item(items, "psu_old", "part", "chassis", "#psu" if hidden else "#psu_broken", "", PSU_POS, "seat", {"tier": pt, "front": front_old, "pid": str(v["ids"]["psu"])})
 			for i in range(2):
 				_item(items, "psu_so%d" % i, "screw", "chassis", "asm_tools", "ScrewM3", _psu_screw_pos(front_old, i), "in")
-		_item(items, "psu", "part", "chassis", "#psu", "", PSU_POS, "rest" if (building or pfix) else "seat", {"tier": int(nv["psu"]), "front": front, "spare": pfix})
+		_item(items, "psu", "part", "chassis", "#psu", "", PSU_POS, "rest" if (building or pfix) else "seat", {"tier": int(nv["psu"]), "front": front, "spare": pfix, "pid": str(nv["ids"]["psu"])})
 		for i in range(2):
 			_item(items, "psu_s%d" % i, "screw", "chassis", "asm_tools", "ScrewM3", _psu_screw_pos(front, i), "out" if pfix else sc, {"own": service})
 		var plugged := "unplugged" if building else "plugged"

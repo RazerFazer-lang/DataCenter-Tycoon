@@ -102,6 +102,7 @@ var _preview_vp: SubViewport
 var _preview_pivot: Node3D
 var _preview_model_holder: Node3D
 var _preview_fans: Array = []
+var _preview_fx: PartFx
 var _preview_sig: String = ""
 var _preview_dragging: bool = false
 var _preview_yaw: float = 0.45
@@ -332,13 +333,23 @@ func _process(delta: float) -> void:
 	if _preview_pivot != null:
 		_preview_pivot.rotation.y = _preview_yaw
 		_preview_pivot.rotation.x = _preview_pitch
+	var pspeed := 14.0
+	if _preview_fx != null and is_instance_valid(_preview_fx) and GameState.racks.has(_entity_id):
+		var prack: Dictionary = GameState.racks[_entity_id]
+		var pslots: Array = prack.get("slots", [])
+		var pslot: Dictionary = pslots[_selected_slot] if _selected_slot >= 0 and _selected_slot < pslots.size() and pslots[_selected_slot] is Dictionary else {}
+		_preview_fx.temp = float(prack.get("temp", 25.0))
+		_preview_fx.dust = float(pslot.get("dust_level", 0.0))
+		_preview_fx.fault = str(pslot.get("state", "ok")) != "ok"
+		_preview_fx.powered = bool(prack.get("powered", false)) and not bool(pslot.get("offline", false)) and not _preview_fx.fault
+		pspeed = (11.0 + clampf((_preview_fx.temp - 25.0) * 0.35, 0.0, 22.0)) if _preview_fx.powered else 0.0
 	for fn in _preview_fans:
 		if is_instance_valid(fn):
 			var fnode := fn as Node3D
 			if str(fnode.get_meta("spin_axis", "z")) == "x":
-				fnode.rotation.x += delta * 14.0
+				fnode.rotation.x += delta * pspeed
 			else:
-				fnode.rotation.z += delta * 14.0
+				fnode.rotation.z += delta * pspeed
 	if _preview_fault_mat != null and _preview_faulty_cat != "":
 		_preview_fault_mat.albedo_color.a = 0.15 + 0.30 * absf(sin(_pulse_t * 3.0))
 
@@ -1531,6 +1542,17 @@ func _make_part_row(pd: Dictionary, installed: bool, is_default: bool, stock: in
 	var prow := HBoxContainer.new()
 	prow.add_theme_constant_override("separation", 10)
 	pcard.add_child(prow)
+
+	if PartModels.has_product(pid):
+		var tb := TextureButton.new()
+		tb.texture_normal = PartThumbs.get_texture(pid)
+		tb.ignore_texture_size = true
+		tb.stretch_mode = TextureButton.STRETCH_KEEP_ASPECT_CENTERED
+		tb.custom_minimum_size = Vector2(64, 46)
+		tb.focus_mode = Control.FOCUS_NONE
+		tb.tooltip_text = tr("In die Hand nehmen")
+		tb.pressed.connect(func(): PartViewer.open(self, [pid]))
+		prow.add_child(tb)
 
 	var tag := str(pd.get("tag", ""))
 	if not tag.is_empty():
@@ -3217,6 +3239,9 @@ func _update_3d_preview(item_type: String, comps: Dictionary, faulty_cat: String
 	_preview_part_nodes.clear()
 	var srv := HardwareMeshFactory.build_open_server_chassis(item_type, comps, _preview_fans, broken_visual_cat)
 	_preview_model_holder.add_child(srv)
+	_preview_fx = PartFx.new()
+	_preview_fx.attach(srv, [], true)
+	srv.add_child(_preview_fx)
 	_collect_preview_parts(srv)
 	if broken_visual_cat != "":
 		for part_v in _preview_part_nodes:

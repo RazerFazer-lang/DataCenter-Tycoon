@@ -544,7 +544,10 @@ func _build_architecture() -> void:
 		_add_collider_box(self, Vector3(8.0, -0.1, 0.0), Vector3(27.2, 0.2, 9.2))
 		_add_collider_box(self, Vector3(8.0, 3.9, 0.0), Vector3(27.5, 0.2, 9.4))
 		_add_collider_box(self, Vector3(8.0, 1.9, -4.6), Vector3(27.5, 3.8, 0.25))
-		_add_collider_box(self, Vector3(-5.6, 1.9, 0.0), Vector3(0.25, 3.8, 9.4))
+		# Westwand mit Öffnung für die Hintertür (z 3,17 bis 4,13)
+		_add_collider_box(self, Vector3(-5.6, 1.9, -0.765), Vector3(0.25, 3.8, 7.87))
+		_add_collider_box(self, Vector3(-5.6, 1.9, 4.415), Vector3(0.25, 3.8, 0.57))
+		_add_collider_box(self, Vector3(-5.6, 2.95, 3.65), Vector3(0.25, 1.7, 0.96))
 		_add_collider_box(self, Vector3(21.6, 1.9, 0.0), Vector3(0.25, 3.8, 9.4))
 		_add_collider_box(self, Vector3(-3.85, 1.9, 4.6), Vector3(3.3, 3.8, 0.25))
 		_add_collider_box(self, Vector3(11.85, 1.9, 4.6), Vector3(19.3, 3.8, 0.25))
@@ -701,68 +704,10 @@ func _build_structural_details() -> void:
 
 
 ## Rasenmaterial mit großflächiger Farbvariation (saftig, trocken, dunkle Flecken) in Weltkoordinaten.
-func _make_meadow_material(grass_mat: Material) -> Material:
-	var sh := Shader.new()
-	sh.code = """
-shader_type spatial;
-
-uniform sampler2D grass_tex : source_color, filter_linear_mipmap, repeat_enable, hint_default_white;
-uniform sampler2D grass_norm : hint_normal, filter_linear_mipmap, repeat_enable;
-uniform sampler2D var_noise : filter_linear_mipmap, repeat_enable, hint_default_white;
-uniform float tex_scale = 0.45;
-uniform float normal_strength = 0.6;
-uniform vec3 tint_lush : source_color = vec3(0.86, 1.0, 0.80);
-uniform vec3 tint_dry : source_color = vec3(1.10, 1.02, 0.68);
-uniform vec3 tint_dark : source_color = vec3(0.62, 0.76, 0.58);
-
-varying vec3 wpos;
-
-void vertex() {
-	wpos = (MODEL_MATRIX * vec4(VERTEX, 1.0)).xyz;
-}
-
-void fragment() {
-	vec2 uv = wpos.xz * tex_scale;
-	vec3 base = texture(grass_tex, uv).rgb;
-	float big = texture(var_noise, wpos.xz * 0.012).r;
-	float mid = texture(var_noise, wpos.xz * 0.05 + vec2(0.37, 0.71)).r;
-	float fine = texture(var_noise, wpos.xz * 0.22 + vec2(0.13, 0.52)).r;
-	vec3 tint = mix(tint_lush, tint_dry, smoothstep(0.45, 0.75, big));
-	tint = mix(tint, tint_dark, smoothstep(0.5, 0.8, mid) * 0.6);
-	tint *= 0.9 + fine * 0.2;
-	ALBEDO = base * tint;
-	NORMAL_MAP = texture(grass_norm, uv).rgb;
-	NORMAL_MAP_DEPTH = normal_strength;
-	ROUGHNESS = 0.95;
-	SPECULAR = 0.3;
-}
-"""
-	var noise := FastNoiseLite.new()
-	noise.noise_type = FastNoiseLite.TYPE_SIMPLEX
-	noise.frequency = 0.01
-	noise.fractal_octaves = 4
-	noise.seed = 2024
-	var noise_tex := NoiseTexture2D.new()
-	noise_tex.width = 512
-	noise_tex.height = 512
-	noise_tex.seamless = true
-	noise_tex.noise = noise
-	var sm := ShaderMaterial.new()
-	sm.shader = sh
-	sm.set_shader_parameter("var_noise", noise_tex)
-	var std := grass_mat as StandardMaterial3D
-	if std != null:
-		if std.albedo_texture != null:
-			sm.set_shader_parameter("grass_tex", std.albedo_texture)
-		if std.normal_enabled and std.normal_texture != null:
-			sm.set_shader_parameter("grass_norm", std.normal_texture)
-	return sm
-
-
 func _build_exterior_environment() -> void:
 	var asp_mat := MatLib.get_mat("asphalt")
 	var grass_mat := MatLib.get_mat("grass")
-	var meadow_mat := _make_meadow_material(grass_mat)
+	var meadow_mat := Nature.meadow(grass_mat)
 	var curb_mat := _mat(Color(0.55, 0.56, 0.58), 0.88, 0.0)
 	var trunk_mat := _mat(Color(0.32, 0.22, 0.14), 0.9, 0.0)
 	var leaf_mat := _mat(Color(0.20, 0.48, 0.22), 0.85, 0.0)
@@ -797,11 +742,6 @@ func _build_exterior_environment() -> void:
 	_add_box_visual(self, Vector3(-3.75, 0.03, 7.6), Vector3(0.16, 0.08, 6.0), curb_mat)
 	_add_box_visual(self, Vector3(3.75, 0.03, 7.6), Vector3(0.16, 0.08, 6.0), curb_mat)
 
-	# Invisible driveway containment walls
-	_add_invisible_wall(Vector3(-6.2, 2.0, 7.5), Vector3(0.3, 4.0, 6.2))
-	_add_invisible_wall(Vector3(13.2, 2.0, 7.5), Vector3(0.3, 4.0, 6.2))
-	_add_invisible_wall(Vector3(3.5, 2.0, 10.4), Vector3(20.0, 4.0, 0.3))
-
 	# Außenwelt 3.0: Komplettes deutsches Gewerbegebiet, Blender-Gebäude, Bäume, Hecken, Laternen & KI-Verkehr!
 	_district = ExteriorDistrict.new()
 	add_child(_district)
@@ -822,6 +762,7 @@ func _build_exterior_environment() -> void:
 				add_child(fpanel)
 
 	# Realistische Blender-Bäume direkt links & rechts am Grundstück
+	add_child(OutdoorWorld.new())
 	_district.spawn_tree(Vector3(-7.4, 0.0, 7.6), false, 0.96, 32.0, true)
 	_district.spawn_tree(Vector3(7.6,  0.0, 7.8), false, 0.92, 148.0, true)
 	_district.spawn_tree(Vector3(23.6, 0.0, 7.4), true,  0.95, 22.0, true)
@@ -2338,6 +2279,10 @@ func _refresh_company_decor() -> void:
 
 
 func _build_workshop_props() -> void:
+	var locker := LockerProp.new()
+	locker.position = Vector3(-5.24, 0.0, 0.25)
+	locker.rotation_degrees.y = 90.0
+	add_child(locker)
 	# Das Lagerregal ist seit v2.9 ein normales Einrichtungsstück (GameState._make_start_shelf).
 	# Funktionale industrielle 3D-IT-Werkbank (2K PBR aus Blender, fuer Zusammenbau & Reparatur!)
 	var bench := WorkbenchProp.new()

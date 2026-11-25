@@ -162,6 +162,8 @@ func walk_mult(peer: int) -> float:
 		m += COFFEE_WALK
 	if has_buff(peer, "water"):
 		m += WATER_WALK
+	if has_buff(peer, "food"):
+		m += 0.05
 	return m
 
 
@@ -172,6 +174,8 @@ func work_mult(peer: int, at: Vector3) -> float:
 		m *= COFFEE_WORK
 	if has_buff(peer, "rest"):
 		m *= REST_WORK
+	if has_buff(peer, "food"):
+		m *= 0.92
 	if near_type("prop_tool_cart", at, TOOL_CART_RADIUS):
 		m *= TOOL_CART_WORK
 	return m
@@ -553,7 +557,11 @@ func _tick_thief(_delta: float) -> void:
 		chance *= THIEF_CAM_FACTOR
 	if not GameState.garage_door_open:
 		chance *= 0.75
+	chance *= OutdoorManager.thief_factor()
 	if randf() < chance:
+		if bool(OutdoorManager.state["gate"]):
+			OutdoorManager.force_gate_open()
+			GameState.post_event("🔓 Jemand hat das Zauntor aufgehebelt!", "alert")
 		start_thief(str(targets[randi() % targets.size()]))
 
 
