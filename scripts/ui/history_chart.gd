@@ -1,13 +1,13 @@
 extends Control
-## Liniendiagramm für eine Reihe aus StatsHistory (heller Stil der Monitor-App).
+## Liniendiagramm für eine Reihe aus StatsHistory. Farben folgen der Darstellung von Verion OS.
 
 const HEADER_H := 18.0
 const FOOTER_H := 14.0
 const FONT_SIZE := 11
-const COL_TEXT := Color(0.42, 0.46, 0.52)
-const COL_VALUE := Color(0.10, 0.12, 0.16)
-const COL_PLOT_BG := Color(0.96, 0.97, 0.98)
-const COL_GRID := Color(0.86, 0.88, 0.91)
+var COL_TEXT := Color(0.42, 0.46, 0.52)
+var COL_VALUE := Color(0.10, 0.12, 0.16)
+var COL_PLOT_BG := Color(0.96, 0.97, 0.98)
+var COL_GRID := Color(0.86, 0.88, 0.91)
 
 ## Schlüssel der Reihe in StatsHistory ("money", "watts", "temp").
 var series: String = ""
@@ -22,6 +22,12 @@ var ref_label: String = ""
 
 func _ready() -> void:
 	custom_minimum_size = Vector2(0, 110)
+	if VerionTheme.dark:
+		COL_TEXT = VerionTheme.MUTED
+		COL_VALUE = VerionTheme.TEXT
+		COL_PLOT_BG = Color(0.083, 0.098, 0.140)
+		COL_GRID = Color(0.17, 0.20, 0.27)
+		line_color = line_color.lightened(0.18)
 	mouse_filter = Control.MOUSE_FILTER_IGNORE
 	StatsHistory.sample_added.connect(queue_redraw)
 	resized.connect(queue_redraw)

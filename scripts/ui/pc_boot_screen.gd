@@ -1,15 +1,20 @@
 class_name PcBootScreen
 extends Control
 ## Hochfahr-Animation des Büro-PCs.
-## Kaltstart: Hersteller-Logo, BIOS-Selbsttest, Ladekreis, Anmeldung.
+## Kaltstart: Hersteller-Logo, BIOS-Selbsttest, Ladekreis, Anmeldung. Die Anmeldung wartet auf Klick oder Enter.
 ## Aufwachen aus dem Energiesparmodus: nur der Anmeldebildschirm.
 ## Klick, Leertaste oder Enter springt direkt zur Anmeldung.
 
 signal finished
 
-const COLD_DURATION := 5.6
+const COLD_DURATION := 6.1
 const COLD_LOGIN_START := 4.4
 const WAKE_DURATION := 1.4
+## Ab hier wartet die Anmeldung. Ohne Eingabe geht es nach AUTO_LOGIN Sekunden von selbst weiter.
+const LOGIN_HOLD := 4.9
+const AUTO_LOGIN := 6.0
+const PASSWORD_TIME := 0.5
+const PASSWORD_DOTS := 8
 const FADE_TIME := 0.4
 const VENDOR_START := 0.3
 const POST_START := 1.4
@@ -41,6 +46,8 @@ var _cold: bool = true
 var _mode: int = MODE_BOOT
 var _t: float = 0.0
 var _running: bool = false
+var _login_pressed: bool = false
+var _login_wait: float = 0.0
 var _user: String = ""
 var _font: Font
 var _mono: SystemFont
@@ -66,6 +73,10 @@ func play(cold: bool, user_name: String, start_offset: float = 0.0) -> void:
 	_cold = cold
 	_user = user_name.strip_edges()
 	_t = maxf(0.0, start_offset)
+	_login_pressed = not cold
+	_login_wait = 0.0
+	if cold:
+		_t = minf(_t, LOGIN_HOLD)
 	_running = true
 	modulate.a = 1.0
 	visible = true
@@ -111,8 +122,22 @@ func skip() -> void:
 		return
 	if _cold and _t < COLD_LOGIN_START:
 		_t = COLD_LOGIN_START
+	elif _cold and not _login_pressed:
+		_press_login()
 	elif _t < _duration():
 		_t = _duration()
+	queue_redraw()
+
+
+func is_waiting_for_login() -> bool:
+	return _running and _mode == MODE_BOOT and _cold and not _login_pressed and _t >= LOGIN_HOLD - 0.01
+
+
+func _press_login() -> void:
+	_login_pressed = true
+	_t = maxf(_t, LOGIN_HOLD)
+	if interactive:
+		SfxManager.play_typing_key(-8.0)
 	queue_redraw()
 
 
@@ -137,6 +162,13 @@ func _process(delta: float) -> void:
 			return
 		queue_redraw()
 		return
+	if _cold and not _login_pressed and _t >= LOGIN_HOLD:
+		_t = LOGIN_HOLD
+		_login_wait += delta
+		if interactive and _login_wait >= AUTO_LOGIN:
+			_press_login()
+	if interactive and _cold and _login_pressed and _t < LOGIN_HOLD + PASSWORD_TIME and int(before * 16.0) != int(_t * 16.0):
+		SfxManager.play_typing_key(-12.0)
 	if interactive and _cold and before < COLD_LOGIN_START and _t >= COLD_LOGIN_START:
 		SfxManager.play("click", -10.0, 1.3)
 	var dur := _duration()
@@ -235,16 +267,45 @@ func _draw_os_logo(r: Rect2, k: float, t: float) -> void:
 
 func _draw_login(r: Rect2, k: float, t: float) -> void:
 	draw_wallpaper(self, r)
+	draw_rect(r, Color(0.0, 0.01, 0.03, 0.30))
 	var c := r.get_center()
-	var av_r := 70.0 * k
-	var av_c := Vector2(c.x, c.y - 70.0 * k)
-	draw_circle(av_c, av_r, Color(0.88, 0.91, 0.95, 0.95))
+	_text_center(format_real_clock(), r.position.y + 118.0 * k, int(76.0 * k), Color(1, 1, 1, 0.95), r.size.x, _font)
+	_text_center(format_real_date(), r.position.y + 158.0 * k, int(20.0 * k), Color(1, 1, 1, 0.75), r.size.x, _font)
+	var av_r := 54.0 * k
+	var av_c := Vector2(c.x, c.y + 10.0 * k)
+	draw_circle(av_c, av_r + 4.0 * k, Color(1, 1, 1, 0.18))
+	draw_circle(av_c, av_r, Color(0.12, 0.36, 0.72))
+	draw_circle(av_c + Vector2(0, av_r * 0.22), av_r * 0.78, Color(0.16, 0.46, 0.88, 0.55))
 	var shown_name := _user if not _user.is_empty() else "Admin"
-	_text_center(shown_name.substr(0, 1).to_upper(), av_c.y + 26.0 * k, int(72.0 * k), Color(0.15, 0.30, 0.50), r.size.x, _font)
-	_text_center(shown_name, av_c.y + av_r + 50.0 * k, int(34.0 * k), Color.WHITE, r.size.x, _font)
-	var text_y := av_c.y + av_r + 110.0 * k
-	_draw_spinner(Vector2(c.x - 82.0 * k, text_y - 8.0 * k), 11.0 * k, t, 1.0)
-	draw_string(_font, Vector2(c.x - 58.0 * k, text_y), tr("Willkommen"), HORIZONTAL_ALIGNMENT_LEFT, -1, int(22.0 * k), Color.WHITE)
+	_text_center(shown_name.substr(0, 1).to_upper(), av_c.y + 19.0 * k, int(54.0 * k), Color.WHITE, r.size.x, _font)
+	_text_center(shown_name, av_c.y + av_r + 40.0 * k, int(26.0 * k), Color.WHITE, r.size.x, _font)
+	var y := av_c.y + av_r + 62.0 * k
+	var press_t := _t - LOGIN_HOLD if _cold else t
+	if _login_pressed and press_t > PASSWORD_TIME:
+		_draw_spinner(Vector2(c.x - 70.0 * k, y + 20.0 * k), 10.0 * k, t, 1.0)
+		draw_string(_font, Vector2(c.x - 48.0 * k, y + 27.0 * k), tr("Willkommen"), HORIZONTAL_ALIGNMENT_LEFT, -1, int(20.0 * k), Color.WHITE)
+	else:
+		# Kennwortfeld: erst leer mit Hinweis, nach dem Klick tippen sich die Punkte.
+		var box := Rect2(c.x - 125.0 * k, y, 250.0 * k, 38.0 * k)
+		var sb := StyleBoxFlat.new()
+		sb.bg_color = Color(0.02, 0.04, 0.09, 0.70)
+		sb.border_color = Color(1, 1, 1, 0.30)
+		sb.set_border_width_all(1)
+		sb.set_corner_radius_all(int(19.0 * k))
+		draw_style_box(sb, box)
+		var btn := Rect2(box.end.x - 34.0 * k, box.position.y + 4.0 * k, 30.0 * k, 30.0 * k)
+		draw_circle(btn.get_center(), 14.0 * k, VerionTheme.ACCENT)
+		var bc := btn.get_center()
+		draw_polyline(PackedVector2Array([bc + Vector2(-4, -6) * k, bc + Vector2(4, 0) * k, bc + Vector2(-4, 6) * k]), Color.WHITE, 2.2 * k, true)
+		if _login_pressed:
+			var dots := clampi(int(press_t / PASSWORD_TIME * float(PASSWORD_DOTS)) + 1, 0, PASSWORD_DOTS)
+			for i in dots:
+				draw_circle(Vector2(box.position.x + (26.0 + 15.0 * float(i)) * k, box.get_center().y), 4.0 * k, Color.WHITE)
+		else:
+			var a := 0.55 + 0.35 * sin(float(Time.get_ticks_msec()) * 0.004)
+			draw_string(_font, Vector2(box.position.x + 18.0 * k, box.get_center().y + 5.0 * k), tr("Klick oder Enter"), HORIZONTAL_ALIGNMENT_LEFT, box.size.x - 60.0 * k, int(14.0 * k), Color(1, 1, 1, a))
+	UIStyle.draw_icon(self, "verion", Rect2(r.position.x + 28.0 * k, r.end.y - 58.0 * k, 30.0 * k, 30.0 * k), Color(1, 1, 1, 0.8))
+	draw_string(_font, Vector2(r.position.x + 68.0 * k, r.end.y - 36.0 * k), "Verion OS 4", HORIZONTAL_ALIGNMENT_LEFT, -1, int(16.0 * k), Color(1, 1, 1, 0.75))
 	var fade := clampf(t / 0.3, 0.0, 1.0)
 	if fade < 1.0:
 		draw_rect(r, Color(0, 0, 0, 1.0 - fade))
@@ -274,16 +335,55 @@ func _text_center(text: String, baseline_y: float, fs: int, col: Color, width: f
 
 # ---------------------------------------------------------------- Gemeinsam mit dem 3D-Monitor
 
+## Verion-Hintergrund: Nachthimmel mit Lichtbändern und dem gefalteten V.
 static func draw_wallpaper(ci: CanvasItem, r: Rect2) -> void:
 	var pts := PackedVector2Array([r.position, Vector2(r.end.x, r.position.y), r.end, Vector2(r.position.x, r.end.y)])
-	var cols := PackedColorArray([
-		Color(0.05, 0.14, 0.32), Color(0.12, 0.36, 0.66), Color(0.26, 0.54, 0.84), Color(0.04, 0.10, 0.24),
-	])
-	ci.draw_polygon(pts, cols)
+	ci.draw_polygon(pts, PackedColorArray([
+		Color(0.030, 0.050, 0.120), Color(0.050, 0.070, 0.180), Color(0.020, 0.030, 0.075), Color(0.015, 0.022, 0.055),
+	]))
 	var s := r.size
-	ci.draw_circle(r.position + Vector2(s.x * 0.72, s.y * 0.38), s.y * 0.42, Color(0.55, 0.75, 1.0, 0.10))
-	ci.draw_circle(r.position + Vector2(s.x * 0.80, s.y * 0.46), s.y * 0.26, Color(0.75, 0.88, 1.0, 0.10))
-	ci.draw_circle(r.position + Vector2(s.x * 0.20, s.y * 0.85), s.y * 0.35, Color(0.20, 0.40, 0.80, 0.10))
+	# Sterne, feste Verteilung
+	for i in 70:
+		var sx := fposmod(float(i) * 0.6180339 + 0.13, 1.0)
+		var sy := fposmod(float(i) * 0.7548776 + 0.37, 1.0)
+		var a := 0.10 + 0.28 * fposmod(float(i) * 0.3247, 1.0)
+		ci.draw_circle(r.position + Vector2(sx * s.x, sy * s.y * 0.72), s.y * (0.0010 + 0.0012 * fposmod(float(i) * 0.91, 1.0)), Color(0.8, 0.9, 1.0, a))
+	# Lichtbänder
+	var bands := [
+		[0.60, 0.10, Color(0.10, 0.75, 0.80), 0.0, 0.20], [0.68, 0.13, Color(0.22, 0.46, 1.00), 1.1, 0.26],
+		[0.78, 0.11, Color(0.52, 0.30, 0.95), 2.0, 0.24], [0.88, 0.10, Color(0.80, 0.24, 0.66), 2.9, 0.16],
+	]
+	for b in bands:
+		var col: Color = b[2]
+		var steps := 36
+		for layer in 3:
+			var th := s.y * float(b[1]) * (1.0 - 0.28 * float(layer))
+			for j in steps:
+				var u0 := float(j) / float(steps)
+				var u1 := float(j + 1) / float(steps)
+				var y0 := _band_y(u0, float(b[0]), float(b[3])) * s.y
+				var y1 := _band_y(u1, float(b[0]), float(b[3])) * s.y
+				var a0 := float(b[4]) * 0.34 * (0.35 + 0.65 * sin(u0 * PI))
+				var a1 := float(b[4]) * 0.34 * (0.35 + 0.65 * sin(u1 * PI))
+				ci.draw_polygon(PackedVector2Array([
+					r.position + Vector2(u0 * s.x, y0 - th), r.position + Vector2(u1 * s.x, y1 - th),
+					r.position + Vector2(u1 * s.x, y1), r.position + Vector2(u0 * s.x, y0)]),
+					PackedColorArray([Color(col, 0.0), Color(col, 0.0), Color(col, a1), Color(col, a0)]))
+				ci.draw_polygon(PackedVector2Array([
+					r.position + Vector2(u0 * s.x, y0), r.position + Vector2(u1 * s.x, y1),
+					r.position + Vector2(u1 * s.x, y1 + th * 0.35), r.position + Vector2(u0 * s.x, y0 + th * 0.35)]),
+					PackedColorArray([Color(col, a0), Color(col, a1), Color(col, 0.0), Color(col, 0.0)]))
+	# Großes V aus zwei Flächen
+	var c := r.position + Vector2(s.x * 0.5, s.y * 0.44)
+	var q := s.y * 0.30
+	ci.draw_polygon(PackedVector2Array([c + Vector2(-0.95, -0.80) * q, c + Vector2(-0.42, -0.80) * q, c + Vector2(0.06, 0.36) * q, c + Vector2(-0.14, 0.84) * q]),
+		PackedColorArray([Color(0.35, 0.75, 1.0, 0.34), Color(0.35, 0.75, 1.0, 0.22), Color(0.30, 0.50, 1.0, 0.12), Color(0.30, 0.50, 1.0, 0.20)]))
+	ci.draw_polygon(PackedVector2Array([c + Vector2(0.95, -0.80) * q, c + Vector2(0.42, -0.80) * q, c + Vector2(-0.14, 0.84) * q, c + Vector2(0.14, 0.84) * q]),
+		PackedColorArray([Color(0.70, 0.45, 1.0, 0.30), Color(0.60, 0.45, 1.0, 0.18), Color(0.30, 0.40, 1.0, 0.16), Color(0.40, 0.35, 1.0, 0.10)]))
+
+
+static func _band_y(u: float, base: float, ph: float) -> float:
+	return base + 0.060 * sin(u * 4.2 + ph) + 0.030 * sin(u * 9.1 + ph * 1.7) - 0.10 * u
 
 
 const WEEKDAYS: Array[String] = ["Sonntag", "Montag", "Dienstag", "Mittwoch", "Donnerstag", "Freitag", "Samstag"]

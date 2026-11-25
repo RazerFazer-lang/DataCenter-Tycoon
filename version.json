@@ -1,9 +1,26 @@
 {
-  "version": "2.7.0",
-  "launcher_version": "2.7.0",
-  "codename": "v2.7.0 Neue Kartons, Leisten 2.0, Rack-Start & Notstrom",
+  "version": "2.8.0",
+  "launcher_version": "2.8.0",
+  "codename": "v2.8.0 Konkurrenz, Verion OS, Postfach & neuer Arbeitsplatz",
   "release_date": "2026-11-25",
   "changelog": [
+    {
+      "version": "v2.8.0",
+      "date": "2026-11-25",
+      "title": "Update 2.8: Konkurrenz am Markt, neues Verion OS, E-Mail-Postfach & neuer Arbeitsplatz",
+      "items": [
+        "[NEU / MARKT] Fünf Konkurrenten kämpfen um dieselben Kunden: PfennigHost, Aurelwerk Cloud, Respawnia, Quarknetz KI und Kolossal Rechenzentren. Es zählen Preis, Ruf und Qualität. Zufriedene Kunden bleiben, ab Firmenstufe 3 wird es ernst.",
+        "[NEU / MARKT] Eigene Preise je Dienst (60 bis 160 %), vier Werbekampagnen und Kunden abwerben. Unzufriedene Kunden werden auch bei dir abgeworben, ein Rabatt hält sie.",
+        "[GAMEPLAY] Die Konkurrenz bietet auf dieselben Verträge. Wer dann noch annimmt, bekommt 8 % weniger. Nicht erfüllte Verträge können verloren gehen.",
+        "[NEU / VERION OS] Komplett neue Oberfläche: Anmeldung, Dock, Statusleiste, Mitteilungen und mehrere Fenster zum Verschieben und Vergrößern. Dunkel oder hell.",
+        "[NEU / E-MAIL] Gemeinsames Postfach für Rechnungen, Verträge, Kunden, Lieferungen, Bewerbungen, Bank und Stadtwerke. Vieles erledigst du direkt in der Mail. Vorsicht vor Betrugsmails!",
+        "[GAMEPLAY] Unbezahlte Rechnungen haben nach der letzten Mahnung Folgen: Strom und Internet werden begrenzt, die Versicherung zahlt nicht, die Einnahmen sinken. Nach dem Bezahlen gilt sofort wieder alles.",
+        "[GAMEPLAY] Die Versicherung zahlt jetzt bei Brand und Wasserschaden.",
+        "[NEU / 3D] Neuer Schreibtisch mit zwei Monitoren in Garage und Halle Nord. Der zweite zeigt immer live Strom, Temperatur, Einnahmen, Postfach und Markt. PC mit Glasseite, drehenden Lüftern und Licht.",
+        "[FIX] Es lassen sich so viele Verträge annehmen, wie die Firmenstufe erlaubt (bisher höchstens 4).",
+        "[CO-OP] Alle Mitspieler brauchen v2.8.0."
+      ]
+    },
     {
       "version": "v2.7.0",
       "date": "2026-11-25",

@@ -12,7 +12,8 @@ Koordinaten: Godot-Werte (X rechts, Y oben, Z zur Raummitte). g() rechnet nach B
 
 Ausgabe: assets/models/terminal_desk.glb
 Geometrie wird je Material und Glattheit zu wenigen Meshes zusammengefasst, damit das GLB klein bleibt.
-Das Objekt "PcScreenQuad" ist die Bildschirmflaeche. Das Spiel ersetzt sie durch den Live-Spiegel.
+Die Objekte "PcScreenQuad" und "PcStatusQuad" sind die Bildschirmflaechen, das Spiel ersetzt beide.
+"PcFanX_*"/"PcFanZ_*" sind einzelne Luefter (drehen um ihre lokale X- bzw. Z-Achse in Godot).
 Benoetigt Blender 4.x oder neuer (Principled BSDF mit "Emission Color" und "Emission Strength").
 """
 import math
@@ -125,6 +126,7 @@ def build_materials():
         "gpu_shroud": make_mat("DCT_Desk_GpuShroud", (0.06, 0.06, 0.07), 0.45, 0.30),
         "ram": make_mat("DCT_Desk_Ram", (0.10, 0.10, 0.12), 0.45, 0.20),
         "fan": make_mat("DCT_Desk_Fan", (0.04, 0.04, 0.05), 0.55, 0.10),
+        "fan_blade": make_mat("DCT_Desk_FanBlade", (0.16, 0.17, 0.20), 0.45, 0.10),
         "heatsink": make_mat("DCT_Desk_Heatsink", (0.75, 0.76, 0.78), 0.35, 1.0),
         "rgb": make_mat("DCT_Desk_RGB", (0.15, 0.75, 1.0), 0.40,
                         emit=(0.15, 0.75, 1.0), emit_strength=6.0),
@@ -136,6 +138,13 @@ def build_materials():
         "mesh": make_mat("DCT_Desk_Mesh", (0.05, 0.05, 0.06), 0.60, 0.60),
         "strip": make_mat("DCT_Desk_Strip", (0.10, 0.10, 0.11), 0.50, 0.10),
         "cable": make_mat("DCT_Desk_Cable", (0.05, 0.05, 0.06), 0.80),
+        "rgb_b": make_mat("DCT_Desk_RGB_B", (0.60, 0.30, 1.0), 0.40,
+                          emit=(0.60, 0.30, 1.0), emit_strength=5.0),
+        "paper": make_mat("DCT_Desk_Paper", (0.90, 0.90, 0.88), 0.85),
+        "paper_blue": make_mat("DCT_Desk_PaperBlue", (0.16, 0.34, 0.62), 0.80),
+        "leather": make_mat("DCT_Desk_Leather", (0.030, 0.034, 0.042), 0.62),
+        "leaf": make_mat("DCT_Desk_Leaf", (0.06, 0.22, 0.07), 0.55),
+        "pot": make_mat("DCT_Desk_Pot", (0.72, 0.70, 0.66), 0.55),
         "bulb": make_mat("DCT_Desk_Bulb", (1.00, 0.86, 0.60), 0.30,
                          emit=(1.00, 0.86, 0.60), emit_strength=5.0),
     }
@@ -196,25 +205,30 @@ def build_desk(s, m):
     # Tischplatte mit dunkler Kantenleiste rundum und einer unteren Lippe
     # Platte und Leisten teilen keine Flaeche: Platte (Oberkante 0.8075) liegt 2 mm unter den
     # Leisten (Oberkante 0.8095) und ragt 5 mm in sie hinein. Die Leisten stossen nur an.
-    s.box(m["wood"], (1.89, 0.054, 0.89), (0.0, 0.7805, 0.0))
-    s.box(m["edge"], (1.92, 0.057, 0.020), (0.0, 0.781, 0.45))
-    s.box(m["edge"], (1.92, 0.057, 0.020), (0.0, 0.781, -0.45))
+    # Die Platte reicht von x = -1.42 bis 0.96, damit links der zweite Monitor Platz hat.
+    cx, w = -0.23, 2.38
+    s.box(m["wood"], (w - 0.03, 0.054, 0.89), (cx, 0.7805, 0.0))
+    s.box(m["edge"], (w, 0.057, 0.020), (cx, 0.781, 0.45))
+    s.box(m["edge"], (w, 0.057, 0.020), (cx, 0.781, -0.45))
     s.box(m["edge"], (0.020, 0.057, 0.88), (0.95, 0.781, 0.0))
-    s.box(m["edge"], (0.020, 0.057, 0.88), (-0.95, 0.781, 0.0))
-    s.box(m["edge"], (1.86, 0.0275, 0.84), (0.0, 0.74125, 0.0))
+    s.box(m["edge"], (0.020, 0.057, 0.88), (-1.41, 0.781, 0.0))
+    s.box(m["edge"], (w - 0.06, 0.0275, 0.84), (cx, 0.74125, 0.0))
+    # Schreibunterlage und Lichtleiste an der Hinterkante
+    s.box(m["leather"], (1.02, 0.0035, 0.40), (-0.06, 0.8095, 0.18))
+    s.box(m["rgb"], (w - 0.20, 0.006, 0.010), (cx, 0.742, -0.428))
 
     # Stahlgestell: vier Beine mit Fuss-Platte, Gleiter und Querstreben
-    for lx in (-0.875, 0.875):
+    for lx in (-1.335, 0.875):
         for lz in (-0.40, 0.40):
             s.box(m["frame"], (0.045, 0.72, 0.045), (lx, 0.36, lz))
             s.box(m["frame"], (0.07, 0.0215, 0.07), (lx, 0.74425, lz))
             s.box(m["galv"], (0.05, 0.010, 0.05), (lx, 0.017, lz))
             s.cyl(m["rubber"], 0.030, 0.024, (lx, 0.012, lz))
-    s.box(m["frame"], (1.75, 0.06, 0.03), (0.0, 0.72, 0.40))
-    s.box(m["frame"], (1.75, 0.06, 0.03), (0.0, 0.72, -0.40))
-    s.box(m["frame"], (0.03, 0.06, 0.80), (-0.875, 0.72, 0.0))
+    s.box(m["frame"], (2.21, 0.06, 0.03), (cx, 0.72, 0.40))
+    s.box(m["frame"], (2.21, 0.06, 0.03), (cx, 0.72, -0.40))
+    s.box(m["frame"], (0.03, 0.06, 0.80), (-1.335, 0.72, 0.0))
     s.box(m["frame"], (0.03, 0.06, 0.80), (0.875, 0.72, 0.0))
-    s.box(m["frame"], (1.75, 0.03, 0.03), (0.0, 0.14, -0.40))
+    s.box(m["frame"], (2.21, 0.03, 0.03), (cx, 0.14, -0.40))
 
     # Kabelkanal unter der Platte: Boden plus Gitterstege
     s.box(m["frame"], (1.50, 0.012, 0.10), (0.0, 0.735, -0.33))
@@ -250,19 +264,35 @@ def build_usv(s, m):
 
 
 def build_monitor(s, m):
-    # Fuss, Saeule mit Gelenkkopf und Halter
-    s.cyl(m["steel"], 0.11, 0.02, (-0.10, 0.8185, -0.30))
-    s.cyl(m["steel"], 0.022, 0.355, (-0.10, 1.00, -0.30), r_top=0.016)
-    s.sphere(m["steel"], 0.024, (-0.10, 1.18, -0.30))
-    s.box(m["steel"], (0.03, 0.03, 0.08), (-0.10, 1.18, -0.26))
-    s.box(m["steel"], (0.06, 0.06, 0.012), (-0.10, 1.18, -0.236))
-
-    # Gehaeuse, Blende und Standfuss-LED
-    s.box(m["plastic"], (0.80, 0.44, 0.05), (-0.10, 1.24, -0.205))
-    s.box(m["plastic"], (0.86, 0.48, 0.016), (-0.10, 1.24, -0.172))
-    s.box(m["led_blue"], (0.012, 0.004, 0.002), (-0.10, 1.012, -0.164))
+    # Doppelarm: Klemme an der Hinterkante, Saeule, zwei Gelenkarme
+    s.box(m["steel"], (0.10, 0.016, 0.10), (-0.50, 0.816, -0.36))
+    s.box(m["steel"], (0.06, 0.09, 0.020), (-0.50, 0.785, -0.466))
+    s.cyl(m["steel"], 0.024, 0.50, (-0.50, 1.07, -0.36))
+    s.cyl(m["chrome"], 0.026, 0.012, (-0.50, 1.315, -0.36))
+    for ax, ay in ((-0.10, 1.24), (-0.93, 1.22)):
+        s.cyl(m["steel_dark"], 0.032, 0.05, (-0.50, ay, -0.36))
+        dx = ax + 0.50
+        az = -0.245 if ax > -0.5 else -0.185
+        length = math.hypot(dx, az + 0.36)
+        yaw = -math.degrees(math.atan2(az + 0.36, dx))
+        s.box(m["steel_dark"], (length, 0.034, 0.026), (-0.50 + dx / 2.0, ay, (-0.36 + az) / 2.0), rot=(0.0, yaw, 0.0))
+        s.cyl(m["steel"], 0.026, 0.05, (ax, ay, az))
+    # Hauptmonitor: schmale Blende, flacher Ruecken, Halterplatte
+    s.box(m["steel_dark"], (0.11, 0.11, 0.030), (-0.10, 1.24, -0.225))
+    s.box(m["plastic"], (0.80, 0.42, 0.030), (-0.10, 1.24, -0.200))
+    s.box(m["plastic"], (0.848, 0.468, 0.016), (-0.10, 1.24, -0.172))
+    s.box(m["steel_dark"], (0.848, 0.012, 0.018), (-0.10, 1.012, -0.171))
+    s.box(m["led_blue"], (0.012, 0.004, 0.002), (0.27, 1.012, -0.161))
     # Bildschirmflaeche, im Spiel durch den Live-Spiegel des PCs ersetzt
     s.box(m["screen"], (0.82, 0.44, 0.002), (-0.10, 1.24, -0.1615), group="PcScreenQuad")
+
+    # Zweiter Monitor links, zum Stuhl gedreht. Zeigt im Spiel die Live-Uebersicht.
+    sm = frame_of((-0.93, 1.22, -0.130), (0.0, 24.0, 0.0))
+    s.box(m["steel_dark"], (0.10, 0.10, 0.030), (0.0, 0.0, -0.052), frame=sm)
+    s.box(m["plastic"], (0.60, 0.34, 0.026), (0.0, 0.0, -0.028), frame=sm)
+    s.box(m["plastic"], (0.656, 0.378, 0.016), (0.0, 0.0, -0.008), frame=sm)
+    s.box(m["led_green"], (0.010, 0.004, 0.002), (0.29, -0.181, 0.001), frame=sm)
+    s.box(m["screen"], (0.632, 0.354, 0.002), (0.0, 0.0, 0.0015), frame=sm, group="PcStatusQuad")
 
 
 def build_tower(s, m):
@@ -280,14 +310,29 @@ def build_tower(s, m):
     s.box(m["tower"], (0.012, 0.47, 0.012), (-0.114, 0.25, 0.224), frame=f)
     s.box(m["tower"], (0.012, 0.47, 0.012), (-0.114, 0.25, -0.224), frame=f)
 
-    # Front: Lueftungsgitter aus Schlitzen, Power-Taster, LED und zwei USB-Ports
-    s.box(m["tower"], (0.24, 0.47, 0.014), (0.0, 0.25, 0.223), frame=f)
-    for i in range(10):
-        s.box(m["fan"], (0.18, 0.006, 0.004), (0.0, 0.06 + i * 0.034, 0.232), frame=f)
-    s.cyl(m["steel"], 0.011, 0.006, (0.06, 0.43, 0.236), axis="Z", frame=f)
-    s.box(m["led_blue"], (0.006, 0.006, 0.002), (0.035, 0.43, 0.236), frame=f)
+    # Front: Rahmen mit Gitter, dahinter drehen drei Luefter mit Lichtring
+    for fx in (-0.111, 0.111):
+        s.box(m["tower"], (0.018, 0.47, 0.016), (fx, 0.25, 0.223), frame=f)
+    s.box(m["tower"], (0.24, 0.075, 0.016), (0.0, 0.452, 0.223), frame=f)
+    s.box(m["tower"], (0.24, 0.018, 0.016), (0.0, 0.024, 0.223), frame=f)
+    for i in range(25):
+        s.box(m["fan"], (0.204, 0.0022, 0.002), (0.0, 0.040 + i * 0.0152, 0.230), frame=f)
+    for i in range(13):
+        s.box(m["fan"], (0.0022, 0.375, 0.002), (-0.096 + i * 0.016, 0.224, 0.229), frame=f)
+    for fy in (0.092, 0.222, 0.352):
+        ring(s, m["rgb_b"], f, (0.0, fy, 0.206), 0.058, "Z")
+    s.cyl(m["steel"], 0.011, 0.006, (0.06, 0.455, 0.233), axis="Z", frame=f)
+    ring(s, m["led_blue"], f, (0.06, 0.455, 0.2345), 0.0135, "Z", tube=0.0026)
     for ux in (-0.04, -0.06, -0.08):
-        s.box(m["plastic"], (0.012, 0.008, 0.004), (ux, 0.43, 0.236), frame=f)
+        s.box(m["plastic"], (0.012, 0.008, 0.004), (ux, 0.455, 0.232), frame=f)
+    # Verion-V auf der Frontblende
+    s.box(m["chrome"], (0.006, 0.030, 0.002), (0.0055, 0.452, 0.2315), rot=(0.0, 0.0, -20.0), frame=f)
+    s.box(m["chrome"], (0.006, 0.030, 0.002), (-0.0055, 0.452, 0.2315), rot=(0.0, 0.0, 20.0), frame=f)
+    # Licht im Gehaeuse: Leisten oben und unten, leuchtende RAM-Kanten
+    s.box(m["rgb"], (0.006, 0.006, 0.40), (-0.095, 0.482, 0.0), frame=f)
+    s.box(m["rgb"], (0.006, 0.006, 0.40), (-0.095, 0.018, 0.0), frame=f)
+    for z in (0.03, 0.045, 0.06, 0.075):
+        s.box(m["rgb_b"], (0.004, 0.118, 0.005), (0.079, 0.33, z), frame=f)
 
     # Innenleben, sichtbar durch die Glasscheibe
     s.box(m["pcb"], (0.004, 0.40, 0.36), (0.095, 0.26, 0.0), frame=f)
@@ -297,8 +342,14 @@ def build_tower(s, m):
         s.box(m["ram"], (0.010, 0.12, 0.006), (0.085, 0.33, z), frame=f)
     # Grafikkarte mit Kuehler-Gehaeuse, drei Luefter zur Glasscheibe und RGB-Leiste
     s.box(m["gpu_shroud"], (0.038, 0.14, 0.30), (0.068, 0.20, -0.02), frame=f)
-    for z in (-0.10, -0.01, 0.08):
-        s.cyl(m["fan"], 0.042, 0.006, (0.046, 0.20, z), axis="X", frame=f)
+    for z in (-0.11, -0.02, 0.07):
+        ring(s, m["steel_dark"], f, (0.046, 0.20, z), 0.043, "X", tube=0.003)
+    # CPU-Kuehler als Block mit Luefterring
+    s.box(m["heatsink"], (0.050, 0.10, 0.10), (0.070, 0.385, -0.06), frame=f)
+    ring(s, m["rgb_b"], f, (0.043, 0.385, -0.06), 0.046, "X", tube=0.004)
+    # Wasserkreislauf: zwei Schlaeuche vom Block zum Deckel
+    for hz in (-0.085, -0.035):
+        s.cyl(m["cable"], 0.007, 0.09, (0.055, 0.448, hz), frame=f)
     s.box(m["rgb"], (0.004, 0.006, 0.28), (0.047, 0.13, -0.02), frame=f)
     # Netzteil mit Luefter, SSD und Kabelbuendel
     s.box(m["steel_dark"], (0.18, 0.10, 0.14), (-0.02, 0.09, 0.12), frame=f)
@@ -315,6 +366,107 @@ def build_tower(s, m):
         s.box(m["galv"], (0.002, 0.040, 0.003), (0.030 + i * 0.012, 0.40, -0.236), frame=f)
     for i in range(3):
         s.box(m["galv"], (0.10, 0.012, 0.004), (0.0, 0.16 + i * 0.050, -0.236), frame=f)
+
+
+def ring(s, mat, frame, pos, rad, axis, tube=0.0035, segs=28):
+    """Duenner geschlossener Ring (Torus) um die Achse X oder Z (Godot)."""
+    bm = s._bm(mat, True, None)
+    sides = 8
+    rows = []
+    for i in range(segs):
+        a = i * 2.0 * math.pi / segs
+        row = []
+        for j in range(sides):
+            b = j * 2.0 * math.pi / sides
+            r = rad + tube * 0.5 * math.cos(b)
+            d = tube * 0.5 * math.sin(b)
+            if axis == "Z":
+                p = (pos[0] + r * math.cos(a), pos[1] + r * math.sin(a), pos[2] + d)
+            else:
+                p = (pos[0] + d, pos[1] + r * math.sin(a), pos[2] + r * math.cos(a))
+            row.append(bm.verts.new(frame @ g(*p)))
+        rows.append(row)
+    faces = []
+    for i in range(segs):
+        for j in range(sides):
+            n, k = (i + 1) % segs, (j + 1) % sides
+            faces.append(bm.faces.new((rows[i][j], rows[n][j], rows[n][k], rows[i][k])))
+    bmesh.ops.recalc_face_normals(bm, faces=faces)
+
+
+def add_fan(coll, root, name, pos, rad, axis, m, blades=9):
+    """Einzelner Luefter mit eigenem Ursprung. pos in Godot-Koordinaten, axis "X" oder "Z" (Godot)."""
+    bm = bmesh.new()
+    # Aufbau um die lokale Achse: erst um Blender-Z, danach gedreht.
+    bmesh.ops.create_cone(bm, cap_ends=True, segments=18, radius1=rad * 0.30, radius2=rad * 0.26, depth=0.012)
+    for i in range(blades):
+        a = i * 2.0 * math.pi / blades
+        pts = []
+        for r, w, tilt in ((rad * 0.26, rad * 0.16, 0.55), (rad * 0.62, rad * 0.24, 0.42), (rad * 0.95, rad * 0.26, 0.30)):
+            for sgn in (-1.0, 1.0):
+                off = sgn * w * math.cos(tilt)
+                z = sgn * w * math.sin(tilt) * 0.45
+                sweep = a + r / rad * 0.45
+                pts.append(Vector((r * math.cos(sweep) - off * math.sin(sweep), r * math.sin(sweep) + off * math.cos(sweep), z)))
+        vs = [bm.verts.new(p) for p in pts]
+        for k in (0, 2):
+            bm.faces.new((vs[k], vs[k + 2], vs[k + 3], vs[k + 1]))
+    me = bpy.data.meshes.new(name)
+    if axis == "X":
+        bm.transform(Matrix.Rotation(math.pi / 2.0, 4, "Y"))
+    else:
+        bm.transform(Matrix.Rotation(math.pi / 2.0, 4, "X"))
+    bm.to_mesh(me)
+    bm.free()
+    mat = m["fan_blade"]
+    mat.use_backface_culling = False
+    me.materials.append(mat)
+    ob = bpy.data.objects.new(name, me)
+    ob.parent = root
+    ob.location = g(*pos)
+    coll.objects.link(ob)
+
+
+def build_fans(coll, root, m):
+    ox, oy, oz = 0.68, 0.808, -0.10
+    for i, fy in enumerate((0.092, 0.222, 0.352)):
+        add_fan(coll, root, "PcFanZ_%d" % i, (ox, oy + fy, oz + 0.204), 0.055, "Z", m)
+    for i, z in enumerate((-0.11, -0.02, 0.07)):
+        add_fan(coll, root, "PcFanX_%d" % i, (ox + 0.043, oy + 0.20, oz + z), 0.040, "X", m)
+    add_fan(coll, root, "PcFanX_3", (ox + 0.040, oy + 0.385, oz - 0.06), 0.043, "X", m)
+
+
+def build_extras(s, m):
+    # Ablage mit Briefen (Rechnungen) links vorn
+    tray = frame_of((-1.17, 0.808, 0.24), (0.0, 6.0, 0.0))
+    s.box(m["steel_dark"], (0.25, 0.006, 0.33), (0.0, 0.008, 0.0), frame=tray)
+    for tx in (-0.122, 0.122):
+        s.box(m["steel_dark"], (0.006, 0.050, 0.33), (tx, 0.030, 0.0), frame=tray)
+    s.box(m["steel_dark"], (0.25, 0.050, 0.006), (0.0, 0.030, -0.162), frame=tray)
+    for i, yaw in enumerate((0.0, 3.0, -2.0, 5.0, 1.0)):
+        s.box(m["paper"], (0.21, 0.003, 0.297), (0.004 * (i % 3), 0.014 + i * 0.0034, 0.004 * (i % 2)), rot=(0.0, yaw, 0.0), frame=tray)
+    s.box(m["paper_blue"], (0.07, 0.0012, 0.018), (-0.055, 0.0305, -0.115), rot=(0.0, 1.0, 0.0), frame=tray)
+    # Headset auf Staender
+    hs = frame_of((-1.31, 0.808, -0.04), (0.0, 34.0, 0.0))
+    s.cyl(m["steel_dark"], 0.060, 0.012, (0.0, 0.006, 0.0), frame=hs)
+    s.cyl(m["galv"], 0.007, 0.25, (0.0, 0.135, 0.0), frame=hs)
+    s.box(m["steel_dark"], (0.06, 0.014, 0.030), (0.0, 0.262, 0.0), frame=hs)
+    for i in range(15):
+        a = math.radians(180.0 * i / 14.0)
+        s.box(m["leather"], (0.022, 0.010, 0.026), (0.080 * math.cos(a), 0.190 + 0.088 * math.sin(a), 0.0), rot=(0.0, 0.0, math.degrees(a) + 90.0), frame=hs)
+    for sx in (-1.0, 1.0):
+        s.cyl(m["leather"], 0.036, 0.026, (sx * 0.072, 0.165, 0.0), axis="X", frame=hs)
+        s.cyl(m["steel_dark"], 0.030, 0.010, (sx * 0.089, 0.165, 0.0), axis="X", frame=hs)
+    # Topfpflanze links hinten
+    pot = frame_of((-1.30, 0.808, -0.33))
+    s.cyl(m["pot"], 0.042, 0.075, (0.0, 0.0375, 0.0), r_top=0.052, frame=pot)
+    s.cyl(m["coffee"], 0.047, 0.004, (0.0, 0.073, 0.0), frame=pot)
+    for i in range(11):
+        a = i * 2.399963
+        tilt = 16.0 + 4.5 * (i % 5)
+        ln = 0.13 + 0.014 * (i % 4)
+        s.sphere(m["leaf"], 1.0, (math.sin(a) * ln * 0.5 * math.sin(math.radians(tilt)), 0.075 + ln * 0.5 * math.cos(math.radians(tilt)), math.cos(a) * ln * 0.5 * math.sin(math.radians(tilt))),
+                 scale=(0.010 + 0.004 * (i % 2), ln * 0.52, 0.008), frame=pot)
 
 
 def build_keyboard(s, m):
@@ -447,14 +599,14 @@ def build_mouse(s, m):
 
 def build_strip_and_notes(s, m):
     # Steckdosenleiste mit vier Buchsen und Schalter
-    s.box(m["strip"], (0.28, 0.030, 0.060), (-0.72, 0.823, 0.36))
-    for sx in (-0.82, -0.77, -0.72, -0.67):
-        s.box(m["galv"], (0.018, 0.002, 0.012), (sx, 0.839, 0.36))
-    s.box(m["led_red"], (0.012, 0.010, 0.006), (-0.60, 0.823, 0.392))
+    s.box(m["strip"], (0.28, 0.030, 0.060), (-0.82, 0.823, 0.37))
+    for sx in (-0.92, -0.87, -0.82, -0.77):
+        s.box(m["galv"], (0.018, 0.002, 0.012), (sx, 0.839, 0.37))
+    s.box(m["led_red"], (0.012, 0.010, 0.006), (-0.70, 0.823, 0.402))
 
     # Haftnotizen: drei leicht versetzte Blaetter
     for i, (col, yaw) in enumerate(((m["note"], 6.0), (m["note_pink"], -4.0), (m["note"], 1.0))):
-        s.box(col, (0.07, 0.002, 0.07), (-0.36, 0.809 + i * 0.0025, 0.34), rot=(0.0, yaw, 0.0))
+        s.box(col, (0.07, 0.002, 0.07), (-0.60, 0.8125 + i * 0.0025, 0.37), rot=(0.0, yaw, 0.0))
 
     # Kugelschreiber mit Spitze
     s.cyl(m["pen"], 0.005, 0.14, (-0.20, 0.816, 0.36), axis="X")
@@ -474,7 +626,7 @@ def build_phone(s, m):
 
 
 def build_lamp_and_mug(s, m):
-    lamp = frame_of((-0.80, 0.808, -0.28), (0.0, -32.0, 0.0))
+    lamp = frame_of((0.42, 0.808, -0.33), (0.0, 20.0, 0.0))
     # Fuss mit Schalter, zwei Arme mit Gelenken und Schirm
     s.cyl(m["steel"], 0.078, 0.024, (0.0, 0.012, 0.0), frame=lamp)
     s.cyl(m["steel"], 0.014, 0.010, (0.0, 0.028, 0.040), frame=lamp)
@@ -582,6 +734,7 @@ def main():
     build_usv(s, m)
     build_monitor(s, m)
     build_tower(s, m)
+    build_extras(s, m)
     build_keyboard(s, m)
     build_mouse(s, m)
     build_strip_and_notes(s, m)
@@ -589,6 +742,7 @@ def main():
     build_lamp_and_mug(s, m)
     build_chair(s, m)
     s.flush(coll, root)
+    build_fans(coll, root, m)
 
     print_bounds(root)
     export_model(root)

@@ -512,7 +512,8 @@ static func _icon(kind: String, px: int, col: Color) -> Control:
 	ic.custom_minimum_size = Vector2(px, px)
 	ic.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	ic.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	ic.draw.connect(func(): UIStyle.draw_icon(ic, kind, Rect2(Vector2.ZERO, ic.size), col))
+	ic.modulate = col
+	ic.draw.connect(func(): UIStyle.draw_icon(ic, kind, Rect2(Vector2.ZERO, ic.size), Color.WHITE))
 	return ic
 
 

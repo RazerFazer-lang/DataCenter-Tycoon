@@ -18,9 +18,11 @@ const ICON_COLUMN_W := 150.0
 const SHOW_APP_CONTENT := false
 
 const APP_INFO := {
+	"mail": {"icon": "mail", "name": "Verion Mail", "short": "E-Mail"},
 	"shop": {"icon": "cart", "name": "Hardware-Shop", "short": "Shop"},
 	"support": {"icon": "headset", "name": "Support-Center", "short": "Support"},
-	"upgrades": {"icon": "power", "name": "Upgrades", "short": "Upgrades"},
+	"market": {"icon": "market", "name": "Markt & Konkurrenz", "short": "Markt"},
+	"upgrades": {"icon": "building", "name": "Upgrades", "short": "Upgrades"},
 	"monitor": {"icon": "chart", "name": "Task-Manager", "short": "Monitor"},
 	"staff": {"icon": "people", "name": "Personalverwaltung", "short": "Personal"},
 	"bank": {"icon": "bank", "name": "Hanse Direktbank", "short": "Bank"},
@@ -352,33 +354,28 @@ func _draw_lock() -> void:
 
 func _draw_desk() -> void:
 	var s := _desk.size
-	var keys: Array = APP_INFO.keys()
-	for i in range(keys.size()):
-		var aid := str(keys[i])
-		var info: Dictionary = APP_INFO[aid]
-		var y := 24.0 + float(i) * 88.0
-		UIStyle.draw_icon(_desk, str(info["icon"]), Rect2(53, y, 44, 44), Color(1, 1, 1, 0.95))
-		_desk.draw_string(_font, Vector2(10, y + 66), tr(str(info["short"])), HORIZONTAL_ALIGNMENT_CENTER, 130, 14, Color.WHITE)
-
-	var tb := Rect2(0, s.y - TASKBAR_H, s.x, TASKBAR_H)
-	_desk.draw_rect(tb, Color(0.11, 0.12, 0.15, 0.94))
-	var accent := Color(0.35, 0.70, 1.0)
-	var x0 := s.x * 0.5 - float(keys.size() + 1) * 24.0
-	UIStyle.draw_icon(_desk, "verion", Rect2(x0 + 11, tb.position.y + 11, 26, 26), accent)
-	for i in range(keys.size()):
-		var aid := str(keys[i])
-		var info: Dictionary = APP_INFO[aid]
-		var bx := x0 + 48.0 * float(i + 1)
-		if SHOW_APP_CONTENT and aid == PcScreenState.app:
-			_desk.draw_rect(Rect2(bx + 2, tb.position.y + 5, 44, 38), Color(1, 1, 1, 0.12))
-			_desk.draw_rect(Rect2(bx + 16, tb.position.y + 42, 16, 3), accent)
-		UIStyle.draw_icon(_desk, str(info["icon"]), Rect2(bx + 11, tb.position.y + 11, 26, 26), Color(1, 1, 1, 0.9))
-
-	var user := PcScreenState.user_name if not PcScreenState.user_name.is_empty() else "Admin"
-	_desk.draw_string(_font, Vector2(16, tb.position.y + 30), tr("%s ist angemeldet") % user, HORIZONTAL_ALIGNMENT_LEFT, -1, 15, Color(1, 1, 1, 0.85))
+	# Statusleiste oben
+	_desk.draw_rect(Rect2(0, 0, s.x, 40), Color(0.045, 0.055, 0.085, 0.94))
+	UIStyle.draw_icon(_desk, "verion", Rect2(14, 9, 22, 22), VerionTheme.ACCENT)
+	var user := PcScreenState.user_name if not PcScreenState.user_name.is_empty() else "Verion"
+	_desk.draw_string(_font, Vector2(46, 27), user, HORIZONTAL_ALIGNMENT_LEFT, -1, 17, VerionTheme.TEXT)
+	_desk.draw_string(_font, Vector2(0, 27), "%s   %s" % [PcBootScreen.format_real_date(), PcBootScreen.format_real_clock()], HORIZONTAL_ALIGNMENT_CENTER, s.x, 17, VerionTheme.TEXT)
 	var day: int = GameState.day_number if GameState.is_active else 1
-	_desk.draw_string(_font, Vector2(s.x - 216, tb.position.y + 21), PcBootScreen.format_real_clock(), HORIZONTAL_ALIGNMENT_RIGHT, 200, 15, Color.WHITE)
-	_desk.draw_string(_font, Vector2(s.x - 216, tb.position.y + 40), tr("Tag %d") % day, HORIZONTAL_ALIGNMENT_RIGHT, 200, 13, Color(1, 1, 1, 0.75))
+	_desk.draw_string(_font, Vector2(s.x - 230, 27), tr("Tag %d") % day, HORIZONTAL_ALIGNMENT_RIGHT, 210, 17, VerionTheme.MUTED)
+	# Dock
+	var keys: Array = APP_INFO.keys()
+	var tile := 56.0
+	var gap := 11.0
+	var w := float(keys.size()) * (tile + gap) + gap
+	var dock := Rect2((s.x - w) * 0.5, s.y - tile - 30.0, w, tile + 20.0)
+	_desk.draw_style_box(VerionTheme.flat(Color(0.07, 0.085, 0.13, 0.80), 20, Color(1, 1, 1, 0.12), 1), dock)
+	for k in range(keys.size()):
+		var aid := str(keys[k])
+		var r := Rect2(dock.position.x + gap + float(k) * (tile + gap), dock.position.y + 10.0, tile, tile)
+		_desk.draw_style_box(VerionTheme.flat(VerionTheme.app_color(aid), 14), r)
+		UIStyle.draw_icon(_desk, str(APP_INFO[aid]["icon"]), Rect2(r.get_center() - Vector2(15, 15), Vector2(30, 30)), Color.WHITE)
+		if aid == PcScreenState.app:
+			_desk.draw_circle(Vector2(r.get_center().x, dock.end.y - 4.0), 2.6, Color.WHITE)
 
 
 # ---------------------------------------------------------------- Inhalte der App-Fenster

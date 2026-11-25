@@ -20,7 +20,12 @@ func _initialize() -> void:
 	main_scene.call("_open_terminal")
 	await create_timer(0.5).timeout
 	_check("Hinsetzen startet den Kaltstart", pcs.get("phase") == "boot" and bool(pcs.get("cold_boot")))
-	await create_timer(9.0).timeout
+	# Die Anmeldung wartet auf einen Klick.
+	await create_timer(7.0).timeout
+	var boot0: Node = terminal.get("_boot_screen")
+	_check("Anmeldung wartet", boot0 != null and bool(boot0.call("is_waiting_for_login")))
+	boot0.call("skip")
+	await create_timer(2.5).timeout
 	_check("Nach dem Hochfahren Desktop", pcs.get("phase") == "desktop")
 	_check("Nach dem Hochfahren Homescreen ohne offene App", str(terminal.get("_active_app")) == "")
 	_check("3D-Welt hinter dem Vollbild aus", root.disable_3d)

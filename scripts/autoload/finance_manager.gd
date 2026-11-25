@@ -64,6 +64,27 @@ const ROLES := {
 	},
 }
 
+## Sperren nach der letzten Mahnung. Nach dem Bezahlen gilt sofort wieder alles.
+const BLOCK_KINDS: Array[String] = ["power", "grid_fee", "internet", "insurance", "license"]
+const BLOCK_POWER_FACTOR := 0.35
+const BLOCK_POWER_MIN := 900
+const BLOCK_NET_FACTOR := 0.15
+const BLOCK_LICENSE_FACTOR := 0.75
+const BLOCK_WARNING := {
+	"power": "Danach begrenzen wir Ihren Stromanschluss stark.",
+	"grid_fee": "Danach begrenzen wir Ihren Stromanschluss stark.",
+	"internet": "Danach drosseln wir Ihren Anschluss.",
+	"insurance": "Danach zahlen wir bei Schäden nicht mehr.",
+	"license": "Danach laufen Ihre Lizenzen nur noch eingeschränkt, das senkt Ihre Einnahmen.",
+}
+const BLOCK_TEXT := {
+	"power": "Ihr Stromanschluss ist jetzt stark begrenzt (35 % der Leistung).",
+	"grid_fee": "Ihr Stromanschluss ist jetzt stark begrenzt (35 % der Leistung).",
+	"internet": "Ihr Internet ist jetzt auf 15 % gedrosselt.",
+	"insurance": "Ihr Versicherungsschutz ruht. Schäden zahlen wir nicht.",
+	"license": "Ihre Lizenzen sind eingeschränkt, Ihre Einnahmen sinken um 25 %.",
+}
+
 const BILL_KINDS := {
 	"power": {"vendor": "Stadtwerke Energie GmbH", "title": "Stromrechnung", "icon": "power", "due_days": 3},
 	"rent": {"vendor": "Immobilien Krämer KG", "title": "Garagenmiete", "icon": "building", "due_days": 4},
@@ -441,6 +462,38 @@ func get_dunning_count() -> int:
 	return n
 
 
+## true, solange eine Rechnung dieser Art nach der letzten Mahnung gesperrt ist.
+func is_blocked(kind: String) -> bool:
+	for b in bills.values():
+		if str((b as Dictionary).get("kind", "")) == kind and bool((b as Dictionary).get("blocked", false)):
+			return true
+	return false
+
+
+func is_power_blocked() -> bool:
+	return is_blocked("power") or is_blocked("grid_fee")
+
+
+func get_blocked_kinds() -> Array[String]:
+	var out: Array[String] = []
+	for k in BLOCK_KINDS:
+		if is_blocked(k):
+			out.append(k)
+	return out
+
+
+## Buchungen anderer Systeme (Werbung, Prämien, Versicherung), nur auf dem Host.
+func debit_public(amount: float, text: String, args: Array = []) -> void:
+	_debit(amount, text, GameState.day_number, args)
+	_broadcast()
+
+
+func credit_public(amount: float, text: String, args: Array = []) -> void:
+	GameState.money += amount
+	_add_statement(GameState.day_number, text, amount, args)
+	_broadcast()
+
+
 func get_next_weekly_day() -> int:
 	return _next_weekly_day
 
@@ -807,6 +860,7 @@ func _issue_bill(kind: String, amount: float, day: int, details: Array) -> void:
 	GameState.post_event_f("Neue Rechnung %s von %s: %s, fällig an Tag %d.", [
 		bid, str(k["vendor"]), format_money(amount), day + int(k["due_days"])
 	], "info")
+	MailManager.on_bill(bills[bid])
 
 
 func _process_dunning(day: int) -> void:
@@ -815,6 +869,15 @@ func _process_dunning(day: int) -> void:
 		if day <= int(b["due_day"]):
 			continue
 		var lvl := int(b["dunning"])
+		if lvl >= MAX_DUNNING_LEVEL and BLOCK_KINDS.has(str(b["kind"])):
+			if not bool(b.get("blocked", false)):
+				b["blocked"] = true
+				_change_score(-25)
+				GameState.post_event_f("Sperre! Rechnung %s von %s ist nicht bezahlt. %s", [
+					str(bid), str(b["vendor"]), {"text": str(BLOCK_TEXT[str(b["kind"])]), "args": []}
+				], "alert")
+				MailManager.on_blocked(b)
+			continue
 		if lvl >= MAX_DUNNING_LEVEL:
 			var cost := ceilf(float(b["amount"]) * (1.0 + COLLECTION_FEE_PCT))
 			_debit(cost, "Inkasso %s %s", day, [str(bid), str(b["vendor"])])
@@ -835,6 +898,7 @@ func _process_dunning(day: int) -> void:
 		GameState.post_event_f("%d. Mahnung für %s (%s): jetzt %s, neue Frist Tag %d.", [
 			lvl, str(bid), str(b["vendor"]), format_money(float(b["amount"])), int(b["due_day"])
 		], "warn")
+		MailManager.on_dunning(b)
 
 
 func _settle_bill(b: Dictionary, paid_by: String, paid_by_args: Array = []) -> void:
@@ -849,6 +913,8 @@ func _settle_bill(b: Dictionary, paid_by: String, paid_by_args: Array = []) -> v
 	while paid_bills.size() > PAID_HISTORY_MAX:
 		paid_bills.pop_back()
 	bills.erase(bid)
+	if bool(b.get("blocked", false)) and not is_blocked(str(b["kind"])):
+		GameState.post_event_f("Sperre aufgehoben: %s ist bezahlt.", [str(b["title"])], "good")
 	if int(b["dunning"]) == 0:
 		_change_score(2)
 

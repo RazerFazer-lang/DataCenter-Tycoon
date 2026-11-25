@@ -36,6 +36,13 @@ var _own_hall_interior_loaded: bool = false
 var _light_bar_mats: Array[StandardMaterial3D] = []
 var _reflection_probes: Array[ReflectionProbe] = []
 var _desk_glow_light: OmniLight3D
+## PC am Schreibtisch: Live-Monitor, Lüfter und Licht (Garage und Halle Nord teilen sich das Bild).
+var _pc_status: PcStatusScreen
+var _pc_main_mat: StandardMaterial3D
+var _pc_fans: Array[Node3D] = []
+var _pc_rgb: Array[StandardMaterial3D] = []
+var _pc_light: OmniLight3D
+var _pc_spin := 0.0
 var _emergency_light: OmniLight3D
 var _exterior_lamp_light: OmniLight3D
 var _street_lamp_light: OmniLight3D
@@ -339,6 +346,7 @@ func _update_dynamic_visuals() -> void:
 	if os_sh != null:
 		os_sh.set_shader_parameter("power_on", 1.0 if power_alive else 0.0)
 		os_sh.set_shader_parameter("alert_mode", 1.0 if (GameState.is_active and GameState.ddos_active) else 0.0)
+	_animate_pc(power_alive and PcScreenState.phase != PcScreenState.PHASE_IDLE)
 	var tel_sh := MatLib.get_telemetry_screen_material()
 	if tel_sh != null:
 		tel_sh.set_shader_parameter("power_on", 1.0 if power_alive else 0.0)
@@ -2110,10 +2118,8 @@ func _build_terminal_desk() -> void:
 	var desk_model := ModelLoader.instantiate_custom_model("terminal_desk")
 	if desk_model != null:
 		root.add_child(desk_model)
-		# Die Bildschirmfläche aus dem Modell fliegt raus, weil unten der Live-Spiegel eine eigene Fläche setzt.
-		var model_screen := desk_model.find_child("PcScreenQuad", true, false)
-		if model_screen != null:
-			model_screen.queue_free()
+		# Die Bildschirmflächen aus dem Modell fliegen raus, weil unten eigene Flächen mit Live-Bild kommen.
+		_dress_desk(desk_model)
 		_add_desk_collider(root)
 	else:
 		_build_desk_procedural(root)
@@ -2127,12 +2133,26 @@ func _build_terminal_desk() -> void:
 	pc_screen.name = "PcScreenMirror"
 	pc_screen.power_source = MatLib.get_os_screen_material()
 	root.add_child(pc_screen)
-	os_quad.material_override = pc_screen.make_screen_material()
-	os_quad.position = Vector3(-0.10, 1.24, -0.162)
+	_pc_main_mat = pc_screen.make_screen_material()
+	os_quad.material_override = _pc_main_mat
+	os_quad.position = Vector3(-0.10, 1.24, -0.1595)
 	# Die Spielerkamera fährt beim Hinsetzen an diese Fläche heran.
 	os_quad.name = "PcScreenQuad"
 	os_quad.add_to_group("pc_screen")
 	root.add_child(os_quad)
+
+	_pc_status = PcStatusScreen.new()
+	_pc_status.name = "PcStatusScreen"
+	_pc_status.power_source = MatLib.get_os_screen_material()
+	root.add_child(_pc_status)
+	_add_status_quad(root)
+
+	_pc_light = OmniLight3D.new()
+	_pc_light.position = Vector3(0.63, 1.10, -0.10)
+	_pc_light.omni_range = 0.62
+	_pc_light.light_energy = 0.0
+	_pc_light.shadow_enabled = false
+	root.add_child(_pc_light)
 
 	_desk_glow_light = OmniLight3D.new()
 	_desk_glow_light.position = Vector3(-0.18, 1.28, 0.26)
@@ -2169,6 +2189,70 @@ func _build_terminal_desk() -> void:
 	})
 	area.position = Vector3(0.0, 1.15, 0.0)
 	root.add_child(area)
+
+
+## Zweiter Monitor mit der Live-Übersicht, links vom Hauptmonitor und zum Stuhl gedreht.
+func _add_status_quad(root: Node3D) -> void:
+	var quad := MeshInstance3D.new()
+	var qm := QuadMesh.new()
+	qm.size = Vector2(0.632, 0.354)
+	quad.mesh = qm
+	quad.name = "PcStatusQuad"
+	quad.material_override = _pc_status.make_material()
+	quad.rotation_degrees.y = 24.0
+	quad.position = Vector3(-0.93, 1.22, -0.130) + Vector3(sin(deg_to_rad(24.0)), 0.0, cos(deg_to_rad(24.0))) * 0.0035
+	root.add_child(quad)
+	_pc_status.spots.append(quad)
+
+
+## Entfernt die Platzhalter-Bildschirme und merkt sich Lüfter und Leuchtmaterialien des Schreibtischmodells.
+func _dress_desk(model: Node) -> void:
+	for n in ["PcScreenQuad", "PcStatusQuad"]:
+		var q := model.find_child(str(n), true, false)
+		if q != null:
+			q.queue_free()
+	for f in model.find_children("PcFan*", "Node3D", true, false):
+		if not (f.get_parent() is MeshInstance3D):
+			_pc_fans.append(f as Node3D)
+	for mi_n in model.find_children("*", "MeshInstance3D", true, false):
+		var mi := mi_n as MeshInstance3D
+		for i in mi.mesh.get_surface_count():
+			var mat := mi.mesh.surface_get_material(i) as StandardMaterial3D
+			if mat != null and mat.resource_name.begins_with("DCT_Desk_RGB"):
+				var own: StandardMaterial3D = null
+				for r in _pc_rgb:
+					if r.resource_name == mat.resource_name:
+						own = r
+				if own == null:
+					own = mat.duplicate() as StandardMaterial3D
+					own.resource_name = mat.resource_name
+					_pc_rgb.append(own)
+				mi.set_surface_override_material(i, own)
+
+
+## Läuft der PC, drehen die Lüfter und das Licht wandert langsam durch Blau, Türkis und Violett.
+func _animate_pc(on: bool) -> void:
+	var dt := get_process_delta_time()
+	_pc_spin = move_toward(_pc_spin, 1.0 if on else 0.0, dt * 0.7)
+	if _pc_spin > 0.001:
+		for f in _pc_fans:
+			if not is_instance_valid(f) or not f.is_visible_in_tree():
+				continue
+			if f.name.begins_with("PcFanX"):
+				f.rotate_object_local(Vector3.RIGHT, dt * 17.0 * _pc_spin)
+			else:
+				f.rotate_object_local(Vector3.BACK, dt * 13.0 * _pc_spin)
+	var t := float(Time.get_ticks_msec()) * 0.00008
+	var hue_a := 0.585 + 0.045 * sin(t * TAU)
+	var col_a := Color.from_hsv(hue_a, 0.82, 1.0)
+	var col_b := Color.from_hsv(hue_a + 0.19, 0.78, 1.0)
+	for m in _pc_rgb:
+		var b := m.resource_name.ends_with("_B")
+		m.emission = col_b if b else col_a
+		m.emission_energy_multiplier = (1.1 if b else 1.0) * _pc_spin
+	if _pc_light != null:
+		_pc_light.light_color = col_a
+		_pc_light.light_energy = 0.16 * _pc_spin
 
 
 func _build_wall_decor() -> void:
@@ -2486,8 +2570,9 @@ func _add_desk_collider(parent: Node3D) -> void:
 	parent.add_child(body)
 	var col := CollisionShape3D.new()
 	var shape := BoxShape3D.new()
-	shape.size = Vector3(1.92, 0.055, 0.90)
+	shape.size = Vector3(2.38, 0.055, 0.90)
 	col.shape = shape
+	col.position.x = -0.23
 	body.add_child(col)
 
 
@@ -2817,6 +2902,15 @@ func _build_halle_nord_site() -> void:
 	var desk_m := ModelLoader.instantiate_custom_model("terminal_desk")
 	if desk_m != null:
 		pc_desk.add_child(desk_m)
+		_dress_desk(desk_m)
+		var nord_quad := MeshInstance3D.new()
+		var nqm := QuadMesh.new()
+		nqm.size = Vector2(0.82, 0.44)
+		nord_quad.mesh = nqm
+		nord_quad.material_override = _pc_main_mat
+		nord_quad.position = Vector3(-0.10, 1.24, -0.1595)
+		pc_desk.add_child(nord_quad)
+		_add_status_quad(pc_desk)
 		_add_desk_collider(pc_desk)
 	else:
 		_build_desk_procedural(pc_desk)

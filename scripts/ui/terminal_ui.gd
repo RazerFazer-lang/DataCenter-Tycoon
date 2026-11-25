@@ -1,36 +1,24 @@
 class_name TerminalUI
 extends Control
-## v1.0 Streamlined Realistic Desktop OS Workstation (opened with [E] at PC Desk).
-## Exactly 4 Clean Apps:
-##   1. [🛒 Shop]     — CloudParts.de with Empty Chassis, 66 Filtered Parts (DDR2-DDR5), Real Shopping Cart & Teile-Lager
-##   2. [🎧 Support]  — Tickets, Live VoIP Customer Calls, Rented Racks, Client Contracts & AI/DDoS Firewall
-##   3. [🏗 Gebäude]  — 5-Tier Router (Mbit/Gbit), Power/Transformer, Hall B/C & kWh Meter
-##   4. [📊 Monitor]  — Verion OS Systemmonitor with 100% Real Hardware Metrics (GB RAM, TB, Mbit/s, Watts — Zero "CU")
+## Verion OS am Büro-PC ([E] am Schreibtisch). Die Arbeitsfläche (Fenster, Dock, Statusleiste)
+## liegt in VerionDesktop, hier stehen die Inhalte der Apps. Alle Apps sind mit hellen Farben
+## aufgebaut, VerionTheme färbt sie für den dunklen Modus um.
 
 signal close_requested
 signal typing_state_changed(is_typing: bool)
 
 var _monitor_frame: PanelContainer
-var _app_window: PanelContainer
-var _win_title_lbl: Label
-var _win_subtitle_lbl: Label
+var _desktop: VerionDesktop
 var _app_body_host: VBoxContainer
-var _start_menu: PanelContainer
 var _call_popup: PanelContainer
 var _call_body: VBoxContainer
-var _taskbar_btns: Dictionary = {}
-var _desktop_btns: Dictionary = {}
-
-# System Tray labels
-var _tray_money: Label
-var _tray_power: Label
-var _tray_temp: Label
-var _tray_net: Label
-var _tray_clock: Label
-var _tray_power_icon: Control
-var _tray_temp_icon: Control
-var _tray_net_icon: Control
-var _win_title_icon: Control
+## Apps, deren Fenster neu gezeichnet werden müssen (App -> true).
+var _dirty_apps: Dictionary = {}
+var _dirty_accum := 0.0
+var _mouse_down := false
+var _idle_accum := 0.0
+var _mail_state: Dictionary = {"folder": "all", "mail": "", "msg": "", "ok": true}
+var _market_state: Dictionary = {"tab": "overview", "msg": "", "ok": true}
 
 var _active_app: String = "" # "" | "shop" | "support" | "upgrades" | "monitor"
 var _shop_tab: String = "chassis" # "chassis" | "infra" | "cpu" | "ram" | "gpu" | "storage" | "cooling" | "psu" | "warehouse"
@@ -39,9 +27,6 @@ var _support_tab: String = "tickets" # "tickets" | "contracts" | "ai"
 
 # Real Shopping Cart: Array of {key, kind, id, cat, name, price, qty}
 var _cart: Array = []
-
-var _save_toast_text: String = ""
-var _save_toast_timer: float = 0.0
 
 # Realistic Mechanical Keyboard Typing Animation & Sound
 var _typing_ticket_id: String = ""
@@ -72,12 +57,18 @@ const OPEN_FADE_TIME := 0.25
 var _boot_started_msec: int = -1
 
 const FINANCE_APPS: Array[String] = ["staff", "bank", "bills"]
-const APP_ORDER: Array[String] = ["shop", "support", "upgrades", "monitor", "staff", "bank", "bills"]
+const APP_ORDER: Array[String] = ["mail", "shop", "support", "market", "upgrades", "monitor", "staff", "bank", "bills"]
+## Diese Apps zeigen laufende Werte und werden im Spieltakt neu gezeichnet.
+const LIVE_APPS: Array[String] = ["support", "upgrades", "monitor"]
+const REFRESH_ACTIVE := 0.2
+const REFRESH_IDLE := 1.5
 const HISTORY_CHART := preload("res://scripts/ui/history_chart.gd")
 const APP_META := {
+	"mail": {"icon": "mail", "name": "E-Mail", "title": "Verion Mail — Postfach der Firma"},
+	"market": {"icon": "market", "name": "Markt", "title": "Markt & Konkurrenz — Preise, Werbung und Abwerben"},
 	"shop": {"icon": "cart", "name": "Shop", "title": "CloudParts.de — Hardware-Shop, Warenkorb & Teile-Lager"},
 	"support": {"icon": "headset", "name": "Support", "title": "ServiceDesk & Kunden-Hub — Tickets, Verträge & AI"},
-	"upgrades": {"icon": "building", "name": "Gebäude", "title": "Router (Mbit/Gbit), Stromanschluss & Hallen-Ausbau"},
+	"upgrades": {"icon": "building", "name": "Gebäude", "title": "Gebäude & Anschlüsse — Router, Strom und Hallen-Ausbau"},
 	"monitor": {"icon": "chart", "name": "Monitor", "title": "Verion OS Systemmonitor — Live Rechenzentrum-Monitor"},
 	"staff": {"icon": "people", "name": "Personal", "title": "Personalverwaltung — Team, Löhne & Bewerbungen"},
 	"bank": {"icon": "bank", "name": "Bank", "title": "Hanse Direktbank — Geschäftskonto, Kredite & Kontoauszug"},
@@ -85,57 +76,26 @@ const APP_META := {
 }
 
 
-## Dark Mode des PCs: eigene kleine Datei, damit die Spiel-Einstellungen unberührt bleiben.
+## Darstellung des PCs: eigene kleine Datei, damit die Spiel-Einstellungen unberührt bleiben.
 const PC_DESKTOP_CFG := "user://pc_desktop.cfg"
-## Kehrt die Helligkeit um und behält den Farbton. Weiße Flächen werden dunkelgrau, dunkle Schrift wird hell.
-## Abgerundete Ecken werden ausgespart, damit am Rand kein Hintergrund mit umgefärbt wird.
-const DARK_FILTER_SHADER := """
-shader_type canvas_item;
-render_mode unshaded;
-
-uniform sampler2D screen_tex : hint_screen_texture, filter_linear;
-uniform vec2 rect_size = vec2(1.0, 1.0);
-uniform float corner_radius = 0.0;
-
-void fragment() {
-	vec2 p = UV * rect_size;
-	vec2 half_size = rect_size * 0.5;
-	float r = min(corner_radius, min(half_size.x, half_size.y));
-	vec2 q = abs(p - half_size) - (half_size - vec2(r));
-	if (length(max(q, vec2(0.0))) - r > 0.0) {
-		discard;
-	}
-	vec3 src = texture(screen_tex, SCREEN_UV).rgb;
-	float luma = dot(src, vec3(0.299, 0.587, 0.114));
-	vec3 chroma = src - vec3(luma);
-	float inv = mix(0.10, 0.93, 1.0 - luma);
-	COLOR = vec4(clamp(vec3(inv) + chroma * 0.9, 0.0, 1.0), 1.0);
-}
-"""
-
-var _dark_mode: bool = false
-var _dark_toggle_btn: Button
-var _taskbar_panel: Control
-var _dark_targets: Array[Control] = []
-var _dark_filters: Array[ColorRect] = []
 var _price_overlay: Control = null
 
 
 func _ready() -> void:
 	set_anchors_preset(Control.PRESET_FULL_RECT)
 	visible = false
-	_load_dark_mode()
+	_load_theme()
 	_build_ui()
-	_build_dark_filter()
 	GameState.state_updated.connect(_on_state_tick)
-	GameState.room_level_changed.connect(_refresh_all)
-	GameState.van_updated.connect(_refresh_all)
-	GameState.racks_changed.connect(_refresh_all)
-	GameState.inventory_changed.connect(_refresh_all)
-	GameState.fuses_changed.connect(_refresh_all)
-	GameState.cart_changed.connect(_refresh_all)
-	GameState.shelf_changed.connect(_refresh_all)
-	GameState.tickets_changed.connect(_refresh_all)
+	for sig in [GameState.room_level_changed, GameState.van_updated, GameState.racks_changed, GameState.inventory_changed,
+			GameState.fuses_changed, GameState.cart_changed, GameState.shelf_changed, GameState.tickets_changed]:
+		(sig as Signal).connect(_mark_dirty.bind(["shop", "support", "upgrades", "monitor", "mail"]))
+	GameState.event_logged.connect(_on_event_logged)
+	MailManager.mails_changed.connect(_mark_dirty.bind(["mail"]))
+	MailManager.mail_added.connect(_on_mail_added)
+	MailManager.action_result.connect(_on_app_result.bind("mail"))
+	MarketManager.market_changed.connect(_mark_dirty.bind(["market", "mail"]))
+	MarketManager.action_result.connect(_on_app_result.bind("market"))
 	GameState.call_changed.connect(_refresh_call_popup)
 	FinanceManager.finance_changed.connect(_on_finance_changed)
 	FinanceManager.action_result.connect(_on_finance_result)
@@ -150,12 +110,11 @@ func _process(delta: float) -> void:
 			typing_state_changed.emit(false)
 		return
 
-	_update_dark_filter()
-
-	if _save_toast_timer > 0.0:
-		_save_toast_timer = maxf(0.0, _save_toast_timer - delta)
-		if _save_toast_timer <= 0.0:
-			_save_toast_text = ""
+	if _price_overlay != null and is_instance_valid(_price_overlay) and not _price_overlay.has_meta("vt"):
+		VerionTheme.apply(_price_overlay)
+		_price_overlay.set_meta("vt", true)
+		_price_overlay.add_to_group("verion_overlay")
+	_process_dirty(delta)
 
 	if not _typing_ticket_id.is_empty():
 		_typing_timer -= delta
@@ -212,7 +171,10 @@ func _update_ticket_status_labels() -> void:
 
 func _input(event: InputEvent) -> void:
 	if not visible:
+		_mouse_down = false
 		return
+	if event is InputEventMouseButton and (event as InputEventMouseButton).button_index == MOUSE_BUTTON_LEFT:
+		_mouse_down = event.pressed
 	if event is InputEventKey and event.pressed and not event.echo:
 		var kc: Key = (event as InputEventKey).keycode
 		if kc != KEY_ESCAPE and kc != KEY_SHIFT and kc != KEY_CTRL and kc != KEY_ALT:
@@ -225,32 +187,81 @@ func _input(event: InputEvent) -> void:
 func _on_state_tick() -> void:
 	if not visible:
 		return
-	var focused := get_viewport().gui_get_focus_owner()
-	if _active_app == "support" and (focused is LineEdit or not _typing_ticket_id.is_empty()):
-		_refresh_tray()
-		_refresh_taskbar_highlights()
-		_refresh_call_popup()
+	_refresh_dock()
+	_refresh_call_popup()
+	_mark_dirty(LIVE_APPS)
+
+
+func _mark_dirty(app_list: Array) -> void:
+	if not visible:
 		return
-	if FINANCE_APPS.has(_active_app):
-		# Finanz-Apps werden nur bei finance_changed neu aufgebaut, damit die Scrollposition bleibt.
-		_refresh_tray()
-		_refresh_taskbar_highlights()
-		_refresh_call_popup()
-		_refresh_window_subtitle()
+	for a in app_list:
+		_dirty_apps[str(a)] = true
+
+
+## Zeichnet geänderte Fenster neu: das vordere schnell, die anderen seltener.
+## Solange die Maus gedrückt ist oder jemand in einem Textfeld schreibt, bleibt das Fenster stehen.
+func _process_dirty(delta: float) -> void:
+	_dirty_accum += delta
+	_idle_accum += delta
+	if _dirty_apps.is_empty() or _mouse_down:
 		return
-	if _active_app == "shop" or ["staff", "bank", "bills"].has(_active_app):
-		# Shop und Finanz-Apps nicht jeden Tick neu aufbauen (Finanz-Apps aktualisiert finance_changed).
-		_refresh_tray()
-		_refresh_taskbar_highlights()
-		_refresh_call_popup()
-		_refresh_window_subtitle()
+	var do_active := _dirty_accum >= REFRESH_ACTIVE
+	var do_idle := _idle_accum >= REFRESH_IDLE
+	if not do_active and not do_idle:
 		return
-	_refresh_all()
+	if do_active:
+		_dirty_accum = 0.0
+	if do_idle:
+		_idle_accum = 0.0
+	for a in _desktop.shown_apps():
+		if not _dirty_apps.has(a) or _is_busy_typing(a):
+			continue
+		if (a == _active_app and do_active) or do_idle:
+			_render_window(a)
+
+
+func _is_busy_typing(app: String) -> bool:
+	if app == "support" and not _typing_ticket_id.is_empty():
+		return true
+	var f := get_viewport().gui_get_focus_owner()
+	if not (f is LineEdit or f is TextEdit):
+		return false
+	var w := _desktop.window(app)
+	return w != null and w.is_ancestor_of(f)
+
+
+func _on_event_logged(text: String, severity: String) -> void:
+	_desktop.add_note(text, severity)
+
+
+func _on_mail_added(m: Dictionary) -> void:
+	if not visible or (_boot_screen != null and _boot_screen.is_running()):
+		return
+	var id := str(m["id"])
+	var cat: Dictionary = MailManager.CATS.get(str(m.get("cat", "system")), {})
+	_desktop.toast(str(m["from"]), MailManager.text_of(m["subject"]), str(cat.get("icon", "mail")),
+		VerionTheme.BAD if bool(m.get("urgent", false)) else VerionTheme.ACCENT, func():
+			_mail_state["folder"] = "all"
+			_mail_state["mail"] = id
+			_mail_state["msg"] = ""
+			MailManager.request_read(id)
+			_open_app("mail"))
+	SfxManager.play("ticket_notify", -12.0, 1.25)
+
+
+func _on_app_result(ok: bool, message: String, app: String) -> void:
+	var st := _mail_state if app == "mail" else _market_state
+	st["msg"] = message
+	st["ok"] = ok
+	if not ok:
+		SfxManager.play("win_error", -8.0)
+	_mark_dirty([app])
 
 
 func open_terminal() -> void:
 	GameState.request_mark_checklist_opened_pc()
-	_start_menu.visible = false
+	_desktop.hide_menus()
 	# Keine App automatisch öffnen: nach dem Hochfahren erscheint der Homescreen.
 	# Läuft der PC schon, bleibt die zuletzt geöffnete App offen (power_on_pc übernimmt sie).
 	# Die Kamera steht schon vor dem Monitor, deshalb nur kurz in das Vollbild überblenden.
@@ -261,13 +272,16 @@ func open_terminal() -> void:
 	fade.tween_property(self, "modulate:a", 1.0, OPEN_FADE_TIME)
 	fade.tween_callback(_on_open_faded)
 	_start_boot()
+	# Ein Mitspieler hatte zuletzt eine App offen: hier mit derselben weitermachen.
+	if not _active_app.is_empty() and APP_META.has(_active_app) and not _desktop.windows.has(_active_app):
+		_desktop.open_window(_active_app)
 	_refresh_all()
 	_refresh_call_popup()
 	SfxManager.play("click", -8.0, 1.1)
 
 
 func close_terminal() -> void:
-	_start_menu.visible = false
+	_desktop.hide_menus()
 	_typing_ticket_id = ""
 	_manual_typing_pulse = 0.0
 	if _last_emitted_typing:
@@ -280,6 +294,7 @@ func close_terminal() -> void:
 	if _shutting_down:
 		# Heruntergefahren: das Bild bleibt schwarz, bis das Vollbild zu ist. Danach ist der PC aus.
 		_shutting_down = false
+		_desktop.close_all()
 		_active_app = ""
 		PcScreenState.report_local_closed()
 	else:
@@ -341,6 +356,7 @@ func power_on_pc() -> void:
 		# PC ist aus: echter Kaltstart, danach Homescreen ohne offene App.
 		_boot_cold = true
 		_boot_started_msec = now
+		_desktop.close_all()
 		_active_app = ""
 		PcScreenState.report_local(PcScreenState.PHASE_BOOT, "", true, "")
 		SfxManager.play("click", -6.0, 0.6)
@@ -356,7 +372,7 @@ func cancel_power_on() -> void:
 func _shut_down_pc() -> void:
 	if _shutting_down or not _terminal_open or _boot_screen == null:
 		return
-	_start_menu.visible = false
+	_desktop.hide_menus()
 	_shutting_down = true
 	_typing_ticket_id = ""
 	move_child(_boot_screen, get_child_count() - 1)
@@ -385,7 +401,7 @@ func _on_visibility_changed() -> void:
 
 func _fit_fullscreen() -> void:
 	if _monitor_frame != null:
-		_monitor_frame.custom_minimum_size = get_viewport_rect().size
+		_monitor_frame.size = get_viewport_rect().size
 
 
 func _on_boot_finished() -> void:
@@ -409,52 +425,49 @@ func _report_screen_state() -> void:
 
 
 func _open_app(app_id: String) -> void:
-	var was_open := (_active_app == app_id)
-	_active_app = app_id
-	_start_menu.visible = false
+	if app_id == "":
+		_minimize_app()
+		return
+	if not APP_META.has(app_id):
+		return
+	var was_open := _desktop.is_shown(app_id)
+	# Klick auf das Dock bei der vorderen App legt sie wieder ab.
+	if was_open and _active_app == app_id:
+		_desktop.minimize(app_id)
+		return
+	_desktop.open_window(app_id)
 	if was_open:
 		SfxManager.play_typing_key(-12.0)
 	else:
 		SfxManager.play("win_open", -10.0)
 	_manual_typing_pulse = 0.28
-	_refresh_all()
+	_render_window(app_id)
+	_refresh_dock()
+	_report_screen_state()
 
 
 func _minimize_app() -> void:
-	_active_app = ""
-	_start_menu.visible = false
-	SfxManager.play("click", -10.0, 0.90)
-	_refresh_all()
+	if not _active_app.is_empty():
+		_desktop.minimize(_active_app)
+
+
+func _on_active_changed(app: String) -> void:
+	_active_app = app
+	_report_screen_state()
 
 
 func _trigger_quick_save() -> void:
-	_start_menu.visible = false
+	_desktop.hide_menus()
 	if multiplayer.is_server():
 		GameState.save_current_world("", false)
-		_save_toast_text = tr("Gespeichert!")
-		_save_toast_timer = 3.0
+		_desktop.toast(tr("Gespeichert!"), "", "save", VerionTheme.GOOD)
 		SfxManager.play("cash", -10.0, 1.2)
 	else:
-		_save_toast_text = tr("Nur Host kann speichern")
-		_save_toast_timer = 3.0
-	_refresh_tray()
-
-
-func _refresh_window_subtitle() -> void:
-	if _win_subtitle_lbl == null:
-		return
-	var bw_warn := " LIMIT!" if GameState.used_bandwidth_mbps > GameState.max_bandwidth_mbps else ""
-	_win_subtitle_lbl.text = tr("Guthaben: $%.0f   •   Strom: %d / %d W   •   Internet: %s / %s%s   •   Teile-Lager: %d   •   Tickets: %d") % [
-		GameState.money, GameState.total_watts, GameState.max_watts,
-		HardwareCatalog.format_speed_mbps(GameState.used_bandwidth_mbps),
-		HardwareCatalog.format_speed_mbps(GameState.max_bandwidth_mbps),
-		bw_warn, GameState.get_total_inventory_parts(), GameState.get_open_ticket_count()
-	]
+		_desktop.toast(tr("Nur Host kann speichern"), "", "warn", VerionTheme.WARN)
 
 
 func _on_finance_changed() -> void:
-	if visible and FINANCE_APPS.has(_active_app):
-		_refresh_all()
+	_mark_dirty(["staff", "bank", "bills", "mail"])
 
 
 func _on_finance_result(ok: bool, message: String) -> void:
@@ -462,30 +475,43 @@ func _on_finance_result(ok: bool, message: String) -> void:
 	_fin_msg_ok = ok
 	if not ok:
 		SfxManager.play("win_error", -8.0)
-	if visible and FINANCE_APPS.has(_active_app):
-		_refresh_all()
+	_mark_dirty(FINANCE_APPS)
+	if _active_app == "mail":
+		_on_app_result(ok, message, "mail")
 
 
+## Alle sichtbaren Fenster sofort neu zeichnen.
 func _refresh_all() -> void:
 	if not visible:
 		return
 	_report_screen_state()
-	_refresh_tray()
-	_refresh_taskbar_highlights()
+	_refresh_dock()
 	_refresh_call_popup()
+	for a in _desktop.shown_apps():
+		_render_window(a)
 
-	if _active_app.is_empty() or not APP_META.has(_active_app):
-		_app_window.visible = false
+
+func _render_window(app: String) -> void:
+	var w := _desktop.window(app)
+	if w == null:
 		return
-
-	_app_window.visible = true
-	var meta: Dictionary = APP_META[_active_app]
-	_win_title_lbl.text = tr(str(meta["title"]))
-	_set_win_icon_kind(_win_title_icon, str(meta["icon"]))
-	_refresh_window_subtitle()
-
-	_clear_children(_app_body_host)
-	match _active_app:
+	_dirty_apps.erase(app)
+	w.needs_render = false
+	var meta: Dictionary = APP_META[app]
+	var parts := tr(str(meta["title"])).split(" — ", true, 1)
+	w.set_title(parts[0], parts[1] if parts.size() > 1 else "", str(meta["icon"]))
+	var scrolls: Array[int] = []
+	for sc in w.body.find_children("*", "ScrollContainer", true, false):
+		scrolls.append((sc as ScrollContainer).scroll_vertical)
+	for c in w.body.get_children():
+		w.body.remove_child(c)
+		c.queue_free()
+	_app_body_host = w.body
+	match app:
+		"mail":
+			MailApp.render(w.body, _mail_state, _mark_dirty.bind(["mail"]), _open_app)
+		"market":
+			MarketApp.render(w.body, _market_state, _mark_dirty.bind(["market"]))
 		"shop":
 			_render_shop_app()
 		"support":
@@ -495,87 +521,37 @@ func _refresh_all() -> void:
 		"monitor":
 			_render_monitor_app()
 		"staff":
-			FinanceApps.render_staff(_app_body_host, _fin_msg, _fin_msg_ok)
+			FinanceApps.render_staff(w.body, _fin_msg, _fin_msg_ok)
 		"bank":
-			FinanceApps.render_bank(_app_body_host, _fin_msg, _fin_msg_ok)
+			FinanceApps.render_bank(w.body, _fin_msg, _fin_msg_ok)
 		"bills":
-			FinanceApps.render_bills(_app_body_host, _fin_msg, _fin_msg_ok)
+			FinanceApps.render_bills(w.body, _fin_msg, _fin_msg_ok)
+	VerionTheme.apply(w.body)
+	# Scrollstellung behalten. Der Balken kennt seine Länge erst nach dem Layout, daher vorher weit aufmachen.
+	var i := 0
+	for sc_n in w.body.find_children("*", "ScrollContainer", true, false):
+		if i < scrolls.size() and scrolls[i] > 0:
+			var sc := sc_n as ScrollContainer
+			sc.get_v_scroll_bar().max_value = maxf(sc.get_v_scroll_bar().max_value, 100000.0)
+			sc.scroll_vertical = scrolls[i]
+		i += 1
 
 
 func _refresh_tray() -> void:
-	if _tray_money == null:
-		return
-	if not _save_toast_text.is_empty():
-		_tray_money.text = _save_toast_text
-		_tray_money.modulate = Color(0.14, 0.58, 0.30)
-	else:
-		_tray_money.text = "$%.0f" % GameState.money
-		_tray_money.modulate = Color(0.10, 0.45, 0.24)
-
-	var ups_txt := (" " + tr("(USV %.0f%%)") % GameState.avg_ups_charge) if not GameState.ups_units.is_empty() else ""
-	_tray_power.text = "%d/%dW%s" % [GameState.total_watts, GameState.max_watts, ups_txt]
-	_tray_power.modulate = Color(0.78, 0.16, 0.14) if GameState.total_watts > GameState.max_watts else Color(0.18, 0.20, 0.24)
-	_tray_power_icon.modulate = _tray_power.modulate
-
-	_tray_temp.text = "%.0f°C" % GameState.room_temp
-	_tray_temp.modulate = Color(0.78, 0.22, 0.12) if GameState.room_temp >= 68.0 else Color(0.18, 0.20, 0.24)
-	_tray_temp_icon.modulate = _tray_temp.modulate
-
-	var spd_str := HardwareCatalog.format_speed_mbps(GameState.max_bandwidth_mbps)
-	var is_throttled := GameState.used_bandwidth_mbps > GameState.max_bandwidth_mbps
-	if GameState.ddos_active:
-		_tray_net.text = "DDoS!"
-		_tray_net.modulate = Color(0.80, 0.16, 0.14)
-	elif is_throttled:
-		_tray_net.text = tr("%s LIMIT!") % spd_str
-		_tray_net.modulate = Color(0.76, 0.42, 0.06)
-	else:
-		_tray_net.text = spd_str
-		_tray_net.modulate = Color(0.12, 0.42, 0.66)
-	_set_win_icon_kind(_tray_net_icon, "warn" if GameState.ddos_active or is_throttled else "net")
-	_tray_net_icon.modulate = _tray_net.modulate
-
-	var today := Time.get_date_dict_from_system()
-	_tray_clock.text = "%s\n%02d.%02d.%d" % [
-		PcBootScreen.format_real_clock(), int(today["day"]), int(today["month"]), int(today["year"])
-	]
-	_tray_clock.tooltip_text = tr("Spieltag %d") % GameState.day_number
+	if _desktop != null:
+		_desktop.refresh_tray()
 
 
-func _refresh_taskbar_highlights() -> void:
+func _refresh_dock() -> void:
+	_refresh_tray()
 	var open_t := GameState.get_open_ticket_count()
 	var has_call := not GameState.active_call.is_empty()
 	var cart_n := _get_cart_item_count()
-	for app_id in _taskbar_btns.keys():
-		var aid := str(app_id)
-		var btn: Button = _taskbar_btns[aid]
-		var meta: Dictionary = APP_META[aid]
-		var is_open := (aid == _active_app)
-		var app_name := str(meta["name"])
-		_set_win_icon_kind(_btn_icon(btn), "phone" if aid == "support" and has_call else str(meta["icon"]))
-		# nur Symbole. Zähler stehen als kleines Abzeichen neben dem Symbol.
-		if aid == "support" and (open_t > 0 or has_call):
-			btn.text = str(open_t)
-			btn.tooltip_text = tr("%s: %d offene Tickets%s") % [app_name, open_t, (" · " + tr("eingehender Anruf")) if has_call else ""]
-			_style_taskbar_btn(btn, is_open, true)
-		elif aid == "shop" and cart_n > 0:
-			btn.text = str(cart_n)
-			btn.tooltip_text = tr("%s: %d Artikel im Warenkorb") % [app_name, cart_n]
-			_style_taskbar_btn(btn, is_open, false)
-		else:
-			btn.text = ""
-			btn.tooltip_text = app_name
-			_style_taskbar_btn(btn, is_open, false)
-
-	if _desktop_btns.has("support"):
-		var dbtn: Button = _desktop_btns["support"]
-		_set_win_icon_kind(_btn_icon(dbtn), "phone" if has_call else "headset")
-		if open_t > 0 or has_call:
-			dbtn.text = tr("Support (%d)") % open_t
-			_style_win_btn(dbtn, Color(0.62, 0.16, 0.14, 0.88), Color(0.95, 0.42, 0.36, 0.82), Color.WHITE)
-		else:
-			dbtn.text = "Support"
-			_style_win_btn(dbtn, Color(0.12, 0.22, 0.34, 0.58), Color(0.45, 0.62, 0.80, 0.30), Color(0.96, 0.98, 1.0))
+	_desktop.set_badge("support", maxi(open_t, 1 if has_call else 0), "phone" if has_call else "headset")
+	_desktop.set_badge("shop", cart_n)
+	_desktop.set_badge("mail", MailManager.get_unread_count())
+	_desktop.set_badge("bills", FinanceManager.get_dunning_count())
+	_desktop.set_badge("market", MarketManager.leads.size() + (1 if not MarketManager.poach.is_empty() else 0))
 
 
 func _refresh_call_popup() -> void:
@@ -585,8 +561,13 @@ func _refresh_call_popup() -> void:
 	if call_d.is_empty():
 		_call_popup.visible = false
 		return
+	var key := "%s|%s" % [str(call_d.get("id", "")), str(call_d.get("state", ""))]
+	if _call_popup.visible and str(_call_popup.get_meta("key", "")) == key:
+		return
+	_call_popup.set_meta("key", key)
 	_call_popup.visible = true
 	_clear_children(_call_body)
+	VerionTheme.apply.call_deferred(_call_body)
 
 	var is_ringing := str(call_d.get("state", "ringing")) == "ringing"
 	var hdr_col := Color(0.78, 0.16, 0.12) if is_ringing else Color(0.10, 0.50, 0.26)
@@ -1564,7 +1545,7 @@ func _render_support_hub_app() -> void:
 
 	var stabs: Array = [
 		{"id": "tickets", "label": tr("Tickets & Vermietung (%d)") % GameState.get_open_ticket_count()},
-		{"id": "contracts", "label": tr("Großkunden-Verträge (%d/4)") % GameState.get_active_contract_count()},
+		{"id": "contracts", "label": tr("Großkunden-Verträge (%d/%d)") % [GameState.get_active_contract_count(), GameState.get_max_contracts_limit()]},
 		{"id": "career", "label": tr("Karriere & Team (%d/%d)") % [GameState.career_completed.size(), GameState.CAREER_MILESTONES.size()]},
 		{"id": "ai", "label": tr("AI-Cluster & Firewall") + (" (DDoS!)" if GameState.ddos_active else "")},
 	]
@@ -1856,8 +1837,8 @@ func _render_contracts_subtab(content: VBoxContainer) -> void:
 	var b := _make_light_card(Color(0.94, 0.96, 0.99), Color(0.76, 0.82, 0.90), 6, 12, 8)
 	content.add_child(b)
 	var hl := Label.new()
-	hl.text = tr("Aktive Großkunden-Verträge: %d / 4   •   Verfügbarer RAM: %d GB   •   Router: %s") % [
-		GameState.get_active_contract_count(), GameState.total_ram_gb, HardwareCatalog.format_speed_mbps(GameState.max_bandwidth_mbps)
+	hl.text = tr("Aktive Großkunden-Verträge: %d / %d   •   Verfügbarer RAM: %d GB   •   Router: %s") % [
+		GameState.get_active_contract_count(), GameState.get_max_contracts_limit(), GameState.total_ram_gb, HardwareCatalog.format_speed_mbps(GameState.max_bandwidth_mbps)
 	]
 	hl.add_theme_font_size_override("font_size", 12.5)
 	hl.modulate = Color(0.14, 0.22, 0.32)
@@ -1907,11 +1888,24 @@ func _render_contracts_subtab(content: VBoxContainer) -> void:
 		sl.add_theme_font_size_override("font_size", 11.5)
 		sl.modulate = Color(0.34, 0.38, 0.44)
 		iv.add_child(sl)
+		var rival_line := ""
+		if MarketManager.is_contract_taken(c):
+			rival_line = tr("Läuft gerade bei %s (bis Tag %d).") % [MarketManager.rival_name(str(c["taken_by"])), int(c["taken_until"])]
+		elif not active and str(c.get("bid_rival", "")) != "":
+			rival_line = tr("%s bietet mit: noch %d s. Jetzt annehmen für $%d je Zyklus.") % [
+				MarketManager.rival_name(str(c["bid_rival"])), int(float(c.get("bid_left", 0.0))), MarketManager.contract_payout(c)]
+		if rival_line != "":
+			var rl := Label.new()
+			rl.text = rival_line
+			rl.add_theme_font_size_override("font_size", 12)
+			rl.modulate = Color(0.72, 0.34, 0.06)
+			iv.add_child(rl)
 
 		var btn := Button.new()
 		btn.text = tr("Kündigen") if active else tr("Annehmen")
 		btn.custom_minimum_size = Vector2(130, 34)
-		btn.disabled = (not active) and GameState.get_active_contract_count() >= 4
+		var taken := MarketManager.is_contract_taken(c)
+		btn.disabled = (not active) and (taken or GameState.get_active_contract_count() >= GameState.get_max_contracts_limit())
 		_style_win_btn(
 			btn,
 			Color(0.80, 0.22, 0.20) if active else (Color(0.10, 0.48, 0.84) if not btn.disabled else Color(0.84, 0.86, 0.89)),
@@ -2685,457 +2679,72 @@ func _add_monitor_card(grid: GridContainer, title: String, value_txt: String, su
 # BUILD REALISTIC WINDOWS 11 DESKTOP MONITOR SHELL (4 CLEAN APPS!)
 # ==============================================================================
 func _build_ui() -> void:
-	var dim := ColorRect.new()
-	dim.set_anchors_preset(Control.PRESET_FULL_RECT)
-	dim.color = Color(0.02, 0.03, 0.05, 0.64)
-	add_child(dim)
-
-	var center := CenterContainer.new()
-	center.set_anchors_preset(Control.PRESET_FULL_RECT)
-	add_child(center)
-
 	_monitor_frame = PanelContainer.new()
 	# Vollbild: der PC füllt den ganzen Bildschirm, ohne Rahmen. Die Größe setzt _fit_fullscreen().
-	_monitor_frame.custom_minimum_size = get_viewport_rect().size
+	_monitor_frame.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	var bezel := StyleBoxFlat.new()
 	bezel.bg_color = Color(0.0, 0.0, 0.0)
-	bezel.set_border_width_all(0)
-	bezel.set_corner_radius_all(0)
 	bezel.set_content_margin_all(0)
 	_monitor_frame.add_theme_stylebox_override("panel", bezel)
-	center.add_child(_monitor_frame)
+	add_child(_monitor_frame)
 
-	var screen_v := VBoxContainer.new()
-	screen_v.add_theme_constant_override("separation", 0)
-	_monitor_frame.add_child(screen_v)
+	var layer := Control.new()
+	_monitor_frame.add_child(layer)
+	_desktop = VerionDesktop.new()
+	layer.add_child(_desktop)
+	_desktop.setup(APP_META, APP_ORDER)
+	_desktop.app_requested.connect(_open_app)
+	_desktop.active_changed.connect(_on_active_changed)
+	_desktop.exit_requested.connect(func(): close_requested.emit())
+	_desktop.shutdown_requested.connect(_shut_down_pc)
+	_desktop.save_requested.connect(_trigger_quick_save)
+	_desktop.theme_toggled.connect(_toggle_theme)
 
-	var desktop_area := PanelContainer.new()
-	desktop_area.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	var wp_sb := StyleBoxFlat.new()
-	wp_sb.bg_color = Color(0.14, 0.25, 0.38)
-	wp_sb.set_content_margin_all(0)
-	desktop_area.add_theme_stylebox_override("panel", wp_sb)
-	screen_v.add_child(desktop_area)
-
-	var desktop_layer := Control.new()
-	desktop_layer.set_anchors_preset(Control.PRESET_FULL_RECT)
-	desktop_area.add_child(desktop_layer)
-
-	var wp_accent := ColorRect.new()
-	wp_accent.set_anchors_preset(Control.PRESET_BOTTOM_WIDE)
-	wp_accent.offset_top = -220
-	wp_accent.color = Color(0.10, 0.19, 0.31, 0.55)
-	wp_accent.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	desktop_layer.add_child(wp_accent)
-
-	var desk_hbox := HBoxContainer.new()
-	desk_hbox.set_anchors_preset(Control.PRESET_FULL_RECT)
-	desk_hbox.add_theme_constant_override("separation", 12)
-	desktop_layer.add_child(desk_hbox)
-
-	# LEFT DESKTOP ICONS (4 Clean Apps + Save Shortcut)
-	var icon_margin := MarginContainer.new()
-	icon_margin.add_theme_constant_override("margin_left", 12)
-	icon_margin.add_theme_constant_override("margin_top", 14)
-	icon_margin.add_theme_constant_override("margin_bottom", 14)
-	desk_hbox.add_child(icon_margin)
-
-	var icon_col := VBoxContainer.new()
-	icon_col.custom_minimum_size = Vector2(96, 0)
-	icon_col.add_theme_constant_override("separation", 10)
-	icon_margin.add_child(icon_col)
-
-	for aid in APP_ORDER:
-		var meta: Dictionary = APP_META[aid]
-		var ibtn := Button.new()
-		ibtn.text = tr(str(meta["name"]))
-		_add_btn_icon(ibtn, str(meta["icon"]), 26, "top")
-		ibtn.custom_minimum_size = Vector2(90, 66)
-		ibtn.add_theme_font_size_override("font_size", 12)
-		_style_win_btn(ibtn, Color(0.12, 0.22, 0.34, 0.58), Color(0.45, 0.62, 0.80, 0.30), Color(0.96, 0.98, 1.0))
-		var cap_aid := aid
-		ibtn.pressed.connect(func(): _open_app(cap_aid))
-		icon_col.add_child(ibtn)
-		_desktop_btns[aid] = ibtn
-
-	var save_icon := Button.new()
-	save_icon.text = "Speichern"
-	_add_btn_icon(save_icon, "save", 26, "top")
-	save_icon.custom_minimum_size = Vector2(90, 66)
-	save_icon.add_theme_font_size_override("font_size", 12)
-	_style_win_btn(save_icon, Color(0.12, 0.22, 0.34, 0.58), Color(0.45, 0.62, 0.80, 0.30), Color(0.96, 0.98, 1.0))
-	save_icon.pressed.connect(_trigger_quick_save)
-	icon_col.add_child(save_icon)
-
-	# MAIN FLOATING WINDOWS 11 APP WINDOW
-	var win_margin := MarginContainer.new()
-	win_margin.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	win_margin.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	win_margin.add_theme_constant_override("margin_top", 12)
-	win_margin.add_theme_constant_override("margin_right", 12)
-	win_margin.add_theme_constant_override("margin_bottom", 12)
-	desk_hbox.add_child(win_margin)
-
-	_app_window = PanelContainer.new()
-	_app_window.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	_app_window.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	var win_sb := StyleBoxFlat.new()
-	win_sb.bg_color = Color(0.95, 0.96, 0.97, 0.99)
-	win_sb.border_color = Color(0.68, 0.73, 0.80)
-	win_sb.set_border_width_all(1)
-	win_sb.set_corner_radius_all(8)
-	win_sb.set_content_margin_all(0)
-	_app_window.add_theme_stylebox_override("panel", win_sb)
-	win_margin.add_child(_app_window)
-
-	var win_v := VBoxContainer.new()
-	win_v.add_theme_constant_override("separation", 0)
-	_app_window.add_child(win_v)
-
-	# Light Title Bar
-	var tb_panel := PanelContainer.new()
-	var tb_sb := StyleBoxFlat.new()
-	tb_sb.bg_color = Color(0.90, 0.92, 0.95)
-	tb_sb.border_color = Color(0.80, 0.84, 0.88)
-	tb_sb.border_width_bottom = 1
-	tb_sb.corner_radius_top_left = 7
-	tb_sb.corner_radius_top_right = 7
-	tb_sb.content_margin_left = 14
-	tb_sb.content_margin_right = 8
-	tb_sb.content_margin_top = 6
-	tb_sb.content_margin_bottom = 6
-	tb_panel.add_theme_stylebox_override("panel", tb_sb)
-	win_v.add_child(tb_panel)
-
-	var tb_row := HBoxContainer.new()
-	tb_row.add_theme_constant_override("separation", 6)
-	tb_panel.add_child(tb_row)
-
-	_win_title_icon = _win_icon("cart", 16)
-	_win_title_icon.modulate = Color(0.10, 0.46, 0.82)
-	tb_row.add_child(_win_title_icon)
-
-	_win_title_lbl = Label.new()
-	_win_title_lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	_win_title_lbl.add_theme_font_size_override("font_size", 14)
-	_win_title_lbl.modulate = Color(0.10, 0.12, 0.16)
-	tb_row.add_child(_win_title_lbl)
-
-	var min_btn := Button.new()
-	_add_btn_icon(min_btn, "minimize", 12, "center")
-	min_btn.custom_minimum_size = Vector2(34, 26)
-	_style_win_btn(min_btn, Color(0.90, 0.92, 0.95), Color(0.80, 0.84, 0.88), Color(0.18, 0.20, 0.24))
-	min_btn.pressed.connect(_minimize_app)
-	tb_row.add_child(min_btn)
-
-	var cls_btn := Button.new()
-	_add_btn_icon(cls_btn, "close", 12, "center")
-	cls_btn.custom_minimum_size = Vector2(38, 26)
-	_style_win_btn(cls_btn, Color(0.84, 0.22, 0.20), Color(0.70, 0.16, 0.14), Color.WHITE)
-	cls_btn.pressed.connect(_minimize_app)
-	tb_row.add_child(cls_btn)
-
-	var sub_panel := PanelContainer.new()
-	var sub_sb := StyleBoxFlat.new()
-	sub_sb.bg_color = Color(0.96, 0.97, 0.98)
-	sub_sb.border_color = Color(0.86, 0.88, 0.91)
-	sub_sb.border_width_bottom = 1
-	sub_sb.content_margin_left = 14
-	sub_sb.content_margin_right = 14
-	sub_sb.content_margin_top = 5
-	sub_sb.content_margin_bottom = 5
-	sub_panel.add_theme_stylebox_override("panel", sub_sb)
-	win_v.add_child(sub_panel)
-
-	_win_subtitle_lbl = Label.new()
-	_win_subtitle_lbl.add_theme_font_size_override("font_size", 11.5)
-	_win_subtitle_lbl.modulate = Color(0.28, 0.34, 0.42)
-	sub_panel.add_child(_win_subtitle_lbl)
-
-	var body_margin := MarginContainer.new()
-	body_margin.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	body_margin.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	body_margin.add_theme_constant_override("margin_left", 12)
-	body_margin.add_theme_constant_override("margin_right", 12)
-	body_margin.add_theme_constant_override("margin_top", 10)
-	body_margin.add_theme_constant_override("margin_bottom", 10)
-	win_v.add_child(body_margin)
-
-	_app_body_host = VBoxContainer.new()
-	_app_body_host.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	_app_body_host.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	_app_body_host.add_theme_constant_override("separation", 8)
-	body_margin.add_child(_app_body_host)
-
-	# START MENU POPUP
-	_start_menu = PanelContainer.new()
-	_start_menu.visible = false
-	# das Startmenü öffnet sich mittig über der Taskleiste
-	_start_menu.set_anchors_preset(Control.PRESET_CENTER_BOTTOM)
-	_start_menu.grow_horizontal = Control.GROW_DIRECTION_BOTH
-	_start_menu.grow_vertical = Control.GROW_DIRECTION_BEGIN
-	_start_menu.offset_left = -170.0
-	_start_menu.offset_right = 170.0
-	_start_menu.offset_top = -412.0
-	_start_menu.offset_bottom = -12.0
-	var sm_sb := StyleBoxFlat.new()
-	sm_sb.bg_color = Color(0.95, 0.96, 0.98, 0.98)
-	sm_sb.border_color = Color(0.68, 0.73, 0.80)
-	sm_sb.set_border_width_all(1)
-	sm_sb.set_corner_radius_all(8)
-	sm_sb.set_content_margin_all(14)
-	_start_menu.add_theme_stylebox_override("panel", sm_sb)
-	desktop_layer.add_child(_start_menu)
-
-	var sm_v := VBoxContainer.new()
-	sm_v.add_theme_constant_override("separation", 6)
-	_start_menu.add_child(sm_v)
-	var sm_hdr_row := HBoxContainer.new()
-	sm_hdr_row.add_theme_constant_override("separation", 8)
-	sm_v.add_child(sm_hdr_row)
-	var sm_logo := _win_icon("verion", 16)
-	sm_logo.modulate = Color(0.10, 0.46, 0.82)
-	sm_hdr_row.add_child(sm_logo)
-	var sm_hdr := Label.new()
-	sm_hdr.text = "Verion OS — Start"
-	sm_hdr.add_theme_font_size_override("font_size", 14)
-	sm_hdr.modulate = Color(0.10, 0.14, 0.20)
-	sm_hdr_row.add_child(sm_hdr)
-	sm_v.add_child(HSeparator.new())
-
-	for aid in APP_ORDER:
-		var meta: Dictionary = APP_META[aid]
-		var sbtn := Button.new()
-		sbtn.text = tr(str(meta["name"]))
-		_add_btn_icon(sbtn, str(meta["icon"]), 16)
-		sbtn.alignment = HORIZONTAL_ALIGNMENT_LEFT
-		sbtn.custom_minimum_size = Vector2(0, 34)
-		_style_win_btn(sbtn, Color(0.92, 0.94, 0.97), Color(0.80, 0.84, 0.89), Color(0.12, 0.14, 0.18))
-		var cap_id := aid
-		sbtn.pressed.connect(func(): _open_app(cap_id))
-		sm_v.add_child(sbtn)
-
-	var sm_sp := Control.new()
-	sm_sp.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	sm_v.add_child(sm_sp)
-	sm_v.add_child(HSeparator.new())
-
-	_dark_toggle_btn = Button.new()
-	_dark_toggle_btn.alignment = HORIZONTAL_ALIGNMENT_LEFT
-	_dark_toggle_btn.custom_minimum_size = Vector2(0, 34)
-	_style_win_btn(_dark_toggle_btn, Color(0.92, 0.94, 0.97), Color(0.80, 0.84, 0.89), Color(0.12, 0.14, 0.18))
-	_dark_toggle_btn.pressed.connect(_toggle_dark_mode)
-	sm_v.add_child(_dark_toggle_btn)
-	_update_dark_toggle_text()
-
-	var shutdown_btn := Button.new()
-	shutdown_btn.text = "Herunterfahren"
-	_add_btn_icon(shutdown_btn, "power_off", 16)
-	shutdown_btn.custom_minimum_size = Vector2(0, 36)
-	_style_win_btn(shutdown_btn, Color(0.92, 0.94, 0.97), Color(0.80, 0.84, 0.89), Color(0.12, 0.14, 0.18))
-	shutdown_btn.pressed.connect(_shut_down_pc)
-	sm_v.add_child(shutdown_btn)
-
-	var exit_btn := Button.new()
-	exit_btn.text = "Aufstehen, PC bleibt an [ESC]"
-	_add_btn_icon(exit_btn, "power_off", 16)
-	exit_btn.custom_minimum_size = Vector2(0, 36)
-	_style_win_btn(exit_btn, Color(0.82, 0.22, 0.20), Color(0.66, 0.16, 0.14), Color.WHITE)
-	exit_btn.pressed.connect(func(): close_requested.emit())
-	sm_v.add_child(exit_btn)
-
-	# FLOATING VOIP PHONE CALL POPUP
+	# Anruf-Fenster unten rechts über dem Dock
 	_call_popup = PanelContainer.new()
 	_call_popup.visible = false
 	_call_popup.set_anchors_preset(Control.PRESET_BOTTOM_RIGHT)
 	_call_popup.offset_left = -380
 	_call_popup.offset_right = -14
-	_call_popup.offset_top = -310
-	_call_popup.offset_bottom = -14
+	_call_popup.offset_top = -320
+	_call_popup.offset_bottom = -VerionDesktop.DOCK_H - 8.0
+	_call_popup.grow_vertical = Control.GROW_DIRECTION_BEGIN
 	var cp_sb := StyleBoxFlat.new()
 	cp_sb.bg_color = Color(0.98, 0.99, 1.0, 0.99)
 	cp_sb.border_color = Color(0.82, 0.24, 0.18)
 	cp_sb.set_border_width_all(2)
-	cp_sb.set_corner_radius_all(10)
+	cp_sb.set_corner_radius_all(12)
 	cp_sb.set_content_margin_all(14)
+	cp_sb.shadow_color = Color(0, 0, 0, 0.5)
+	cp_sb.shadow_size = 14
 	_call_popup.add_theme_stylebox_override("panel", cp_sb)
-	desktop_layer.add_child(_call_popup)
-
+	_call_popup.add_to_group("verion_overlay")
+	layer.add_child(_call_popup)
 	_call_body = VBoxContainer.new()
 	_call_body.add_theme_constant_override("separation", 7)
 	_call_popup.add_child(_call_body)
-
-	# BOTTOM WINDOWS 11 TASKBAR: Start und App-Symbole in der Mitte, Infobereich rechts
-	var taskbar := PanelContainer.new()
-	taskbar.custom_minimum_size = Vector2(0, 48)
-	var tb_bar_sb := StyleBoxFlat.new()
-	tb_bar_sb.bg_color = Color(0.93, 0.94, 0.97, 0.97)
-	tb_bar_sb.border_color = Color(0.80, 0.83, 0.88)
-	tb_bar_sb.border_width_top = 1
-	tb_bar_sb.content_margin_left = 10
-	tb_bar_sb.content_margin_right = 10
-	tb_bar_sb.content_margin_top = 4
-	tb_bar_sb.content_margin_bottom = 4
-	taskbar.add_theme_stylebox_override("panel", tb_bar_sb)
-	screen_v.add_child(taskbar)
-	_taskbar_panel = taskbar
-
-	var t_row := HBoxContainer.new()
-	t_row.add_theme_constant_override("separation", 4)
-	taskbar.add_child(t_row)
-
-	# Zwei Platzhalter links und rechts halten Start und Apps in der Mitte, ohne den Infobereich zu überdecken.
-	var tb_left_sp := Control.new()
-	tb_left_sp.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	t_row.add_child(tb_left_sp)
-
-	var start_btn := Button.new()
-	start_btn.tooltip_text = "Start"
-	_add_btn_icon(start_btn, "verion", 20, "center")
-	start_btn.custom_minimum_size = Vector2(44, 40)
-	_style_taskbar_btn(start_btn, false, false)
-	_btn_icon(start_btn).modulate = Color(0.0, 0.47, 0.84)
-	start_btn.pressed.connect(func():
-		_start_menu.visible = not _start_menu.visible
-		if _start_menu.visible:
-			SfxManager.play("win_start", -10.0)
-		else:
-			SfxManager.play("click", -10.0, 1.05)
-	)
-	t_row.add_child(start_btn)
-
-	for aid in APP_ORDER:
-		var meta: Dictionary = APP_META[aid]
-		var pbtn := Button.new()
-		pbtn.tooltip_text = tr(str(meta["name"]))
-		_add_btn_icon(pbtn, str(meta["icon"]), 20)
-		pbtn.custom_minimum_size = Vector2(40, 40)
-		pbtn.add_theme_font_size_override("font_size", 12)
-		_style_taskbar_btn(pbtn, false, false)
-		var cap_id := aid
-		pbtn.pressed.connect(func(): _open_app(cap_id))
-		t_row.add_child(pbtn)
-		_taskbar_btns[aid] = pbtn
-
-	var tb_sp := Control.new()
-	tb_sp.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	t_row.add_child(tb_sp)
-
-	_tray_money = Label.new()
-	_tray_money.add_theme_font_size_override("font_size", 13)
-	t_row.add_child(_tray_money)
-	t_row.add_child(VSeparator.new())
-	_tray_power_icon = _win_icon("power", 14)
-	t_row.add_child(_tray_power_icon)
-	_tray_power = Label.new()
-	_tray_power.add_theme_font_size_override("font_size", 12)
-	t_row.add_child(_tray_power)
-	t_row.add_child(VSeparator.new())
-	_tray_temp_icon = _win_icon("temp", 14)
-	t_row.add_child(_tray_temp_icon)
-	_tray_temp = Label.new()
-	_tray_temp.add_theme_font_size_override("font_size", 12)
-	t_row.add_child(_tray_temp)
-	t_row.add_child(VSeparator.new())
-	_tray_net_icon = _win_icon("net", 14)
-	t_row.add_child(_tray_net_icon)
-	_tray_net = Label.new()
-	_tray_net.add_theme_font_size_override("font_size", 12)
-	t_row.add_child(_tray_net)
-	t_row.add_child(VSeparator.new())
-	# Infobereich: WLAN und Lautsprecher, daneben Uhrzeit und Datum
-	var tray_wifi := _win_icon("wifi", 16)
-	tray_wifi.modulate = Color(0.16, 0.18, 0.22)
-	t_row.add_child(tray_wifi)
-	var tray_speaker := _win_icon("speaker", 16)
-	tray_speaker.modulate = Color(0.16, 0.18, 0.22)
-	t_row.add_child(tray_speaker)
-	_tray_clock = Label.new()
-	_tray_clock.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
-	_tray_clock.add_theme_font_size_override("font_size", 11)
-	_tray_clock.modulate = Color(0.14, 0.16, 0.20)
-	_tray_clock.custom_minimum_size = Vector2(70, 0)
-	# Damit der Tooltip mit dem Spieltag erscheint, muss das Label die Maus sehen.
-	_tray_clock.mouse_filter = Control.MOUSE_FILTER_PASS
-	t_row.add_child(_tray_clock)
-
-	var leave_btn := Button.new()
-	leave_btn.text = "ESC"
-	_add_btn_icon(leave_btn, "power_off", 14)
-	leave_btn.custom_minimum_size = Vector2(64, 32)
-	_style_win_btn(leave_btn, Color(0.84, 0.24, 0.22), Color(0.68, 0.16, 0.14), Color.WHITE)
-	leave_btn.pressed.connect(func(): close_requested.emit())
-	t_row.add_child(leave_btn)
+	VerionTheme.apply(_call_popup)
 
 
-func _load_dark_mode() -> void:
+func _load_theme() -> void:
 	var cfg := ConfigFile.new()
+	VerionTheme.dark = true
 	if cfg.load(PC_DESKTOP_CFG) == OK:
-		_dark_mode = bool(cfg.get_value("desktop", "dark_mode", false))
+		VerionTheme.dark = bool(cfg.get_value("desktop", "verion_dark", true))
 
 
-func _save_dark_mode() -> void:
+func _toggle_theme() -> void:
+	VerionTheme.dark = not VerionTheme.dark
 	var cfg := ConfigFile.new()
 	# Fehlt die Datei noch, wird sie beim Speichern neu angelegt.
 	cfg.load(PC_DESKTOP_CFG)
-	cfg.set_value("desktop", "dark_mode", _dark_mode)
+	cfg.set_value("desktop", "verion_dark", VerionTheme.dark)
 	var err := cfg.save(PC_DESKTOP_CFG)
 	if err != OK:
-		push_warning("PC-Dark-Mode konnte nicht gespeichert werden (Fehler %d)." % err)
-
-
-func _build_dark_filter() -> void:
-	var shader := Shader.new()
-	shader.code = DARK_FILTER_SHADER
-	for target in [_app_window, _start_menu, _call_popup, _taskbar_panel]:
-		var ctrl := target as Control
-		if ctrl == null:
-			continue
-		var mat := ShaderMaterial.new()
-		mat.shader = shader
-		var rect := ColorRect.new()
-		rect.material = mat
-		rect.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		rect.visible = false
-		# Als letzte Kinder gezeichnet, damit sie über dem fertigen Desktop liegen.
-		add_child(rect)
-		_dark_targets.append(ctrl)
-		_dark_filters.append(rect)
-
-
-func _update_dark_filter() -> void:
-	var booting := _boot_screen != null and _boot_screen.is_running()
-	for i in range(_dark_filters.size()):
-		var rect := _dark_filters[i]
-		var target := _dark_targets[i]
-		var active := _dark_mode and not booting and is_instance_valid(target) and target.is_visible_in_tree()
-		rect.visible = active
-		if not active:
-			continue
-		var g := target.get_global_rect()
-		rect.global_position = g.position
-		rect.size = g.size
-		var radius := 0.0
-		var sb := target.get_theme_stylebox("panel") as StyleBoxFlat
-		if sb != null:
-			radius = float(sb.corner_radius_top_left)
-		var mat := rect.material as ShaderMaterial
-		mat.set_shader_parameter("rect_size", g.size)
-		mat.set_shader_parameter("corner_radius", radius)
-
-
-func _toggle_dark_mode() -> void:
-	_dark_mode = not _dark_mode
-	_save_dark_mode()
-	_update_dark_toggle_text()
-	_update_dark_filter()
+		push_warning("PC-Darstellung konnte nicht gespeichert werden (Fehler %d)." % err)
+	_desktop.restyle()
+	_refresh_all()
 	SfxManager.play("click", -10.0, 1.05)
-
-
-func _update_dark_toggle_text() -> void:
-	if _dark_toggle_btn == null:
-		return
-	_dark_toggle_btn.text = "Dunkler Modus: An" if _dark_mode else "Dunkler Modus: Aus"
 
 
 ## Gezeichnetes Symbol aus UIStyle.draw_icon. Es wird weiß gezeichnet, die Farbe kommt über modulate.
@@ -3508,46 +3117,6 @@ func _style_win_btn(btn: Button, bg: Color, border: Color, txt_col: Color) -> vo
 	var ic := _btn_icon(btn)
 	if ic != null:
 		ic.modulate = txt_col
-
-
-## Taskleisten-Button im modernen Stil: flach, beim Überfahren hell hinterlegt,
-## geöffnete App mit blauem Strich unten, Warnzustand rot hinterlegt.
-## Ohne Text sitzt das Symbol mittig, mit Text (Zähler) rückt der Text neben das Symbol.
-func _style_taskbar_btn(btn: Button, is_open: bool, alert: bool) -> void:
-	var accent := Color(0.0, 0.47, 0.84)
-	var txt_col := Color(0.66, 0.12, 0.10) if alert else Color(0.10, 0.12, 0.15)
-	var normal := StyleBoxFlat.new()
-	if alert:
-		normal.bg_color = Color(0.98, 0.86, 0.84, 0.95)
-	elif is_open:
-		normal.bg_color = Color(1.0, 1.0, 1.0, 0.80)
-	else:
-		normal.bg_color = Color(1.0, 1.0, 1.0, 0.0)
-	normal.set_corner_radius_all(5)
-	var pad_left := 10
-	if not btn.text.is_empty():
-		pad_left += int(btn.get_meta("icon_pad_left", 0))
-	normal.content_margin_left = pad_left
-	normal.content_margin_right = 10
-	normal.content_margin_top = 4
-	normal.content_margin_bottom = 4
-	if is_open:
-		normal.border_color = accent
-		normal.border_width_bottom = 3
-	var hover := normal.duplicate() as StyleBoxFlat
-	hover.bg_color = normal.bg_color.darkened(0.05) if alert else Color(1.0, 1.0, 1.0, 0.65)
-	var pressed := normal.duplicate() as StyleBoxFlat
-	pressed.bg_color = Color(0.86, 0.88, 0.92, 0.90)
-	btn.add_theme_stylebox_override("normal", normal)
-	btn.add_theme_stylebox_override("hover", hover)
-	btn.add_theme_stylebox_override("pressed", pressed)
-	btn.add_theme_stylebox_override("focus", StyleBoxEmpty.new())
-	btn.add_theme_color_override("font_color", txt_col)
-	btn.add_theme_color_override("font_hover_color", txt_col)
-	btn.add_theme_color_override("font_pressed_color", txt_col)
-	var ic := _btn_icon(btn)
-	if ic != null:
-		ic.modulate = accent if is_open and not alert else txt_col
 
 
 func _clear_children(node: Node) -> void:

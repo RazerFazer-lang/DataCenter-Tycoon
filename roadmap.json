@@ -37,6 +37,12 @@
       "items": [
         {
           "tag": "neu",
+          "version": "v2.8",
+          "title": "Konkurrenz, Verion OS, Postfach & neuer Arbeitsplatz",
+          "desc": "Fünf Konkurrenzfirmen mit Marktanteilen, Preise, Werbung und Abwerben, neue PC-Oberfläche mit Fenstern, E-Mail-Postfach mit Betrugsmails, echte Rechnungsfolgen und ein Schreibtisch mit zwei Monitoren."
+        },
+        {
+          "tag": "neu",
           "version": "v2.7",
           "title": "Neue Kartons, Leisten 2.0, Rack-Start & Notstrom",
           "desc": "8 Kartonmodelle mit Auspack-Animation und Altpapier-Container, Leisten mit Schalter, Anzeige und Überlastschutz für Boden und Wand, gestaffelter Rack-Start und 3 USV-Größen mit echter Kapazität."

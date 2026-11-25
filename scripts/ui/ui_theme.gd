@@ -419,6 +419,51 @@ static func draw_icon(ci: CanvasItem, kind: String, r: Rect2, col: Color) -> voi
 			ci.draw_arc(pc, s * 0.34, PI * 0.5, PI, 12, col, s * 0.14, true)
 			ci.draw_circle(pc + Vector2(0.0, 0.34) * s, s * 0.12, col)
 			ci.draw_circle(pc + Vector2(-0.34, 0.0) * s, s * 0.12, col)
+		"mail":
+			ci.draw_rect(Rect2(c + Vector2(-0.44, -0.30) * s, Vector2(0.88, 0.60) * s), col, false, w)
+			ci.draw_polyline(PackedVector2Array([c + Vector2(-0.42, -0.26) * s, c + Vector2(0.0, 0.08) * s, c + Vector2(0.42, -0.26) * s]), col, w, true)
+		"market":
+			ci.draw_polyline(PackedVector2Array([c + Vector2(-0.42, 0.28) * s, c + Vector2(-0.14, -0.02) * s, c + Vector2(0.06, 0.14) * s, c + Vector2(0.38, -0.28) * s]), col, w * 1.1, true)
+			ci.draw_colored_polygon(PackedVector2Array([c + Vector2(0.46, -0.40) * s, c + Vector2(0.44, -0.12) * s, c + Vector2(0.18, -0.30) * s]), col)
+			ci.draw_line(c + Vector2(-0.44, 0.42) * s, c + Vector2(0.44, 0.42) * s, col, w * 0.7)
+		"bell":
+			ci.draw_colored_polygon(PackedVector2Array([c + Vector2(-0.34, 0.22) * s, c + Vector2(-0.24, -0.06) * s, c + Vector2(-0.20, -0.28) * s, c + Vector2(0.0, -0.40) * s, c + Vector2(0.20, -0.28) * s, c + Vector2(0.24, -0.06) * s, c + Vector2(0.34, 0.22) * s]), col)
+			ci.draw_circle(c + Vector2(0.0, 0.34) * s, s * 0.09, col)
+		"maximize":
+			ci.draw_rect(Rect2(c + Vector2(-0.32, -0.32) * s, Vector2(0.64, 0.64) * s), col, false, w)
+		"restore":
+			ci.draw_rect(Rect2(c + Vector2(-0.36, -0.14) * s, Vector2(0.50, 0.50) * s), col, false, w)
+			ci.draw_polyline(PackedVector2Array([c + Vector2(-0.14, -0.16) * s, c + Vector2(-0.14, -0.36) * s, c + Vector2(0.36, -0.36) * s, c + Vector2(0.36, 0.14) * s, c + Vector2(0.16, 0.14) * s]), col, w)
+		"trash":
+			ci.draw_line(c + Vector2(-0.34, -0.26) * s, c + Vector2(0.34, -0.26) * s, col, w)
+			ci.draw_line(c + Vector2(-0.10, -0.38) * s, c + Vector2(0.10, -0.38) * s, col, w)
+			ci.draw_polyline(PackedVector2Array([c + Vector2(-0.26, -0.24) * s, c + Vector2(-0.20, 0.40) * s, c + Vector2(0.20, 0.40) * s, c + Vector2(0.26, -0.24) * s]), col, w, true)
+		"flag":
+			ci.draw_line(c + Vector2(-0.28, -0.42) * s, c + Vector2(-0.28, 0.44) * s, col, w)
+			ci.draw_colored_polygon(PackedVector2Array([c + Vector2(-0.26, -0.38) * s, c + Vector2(0.36, -0.18) * s, c + Vector2(-0.26, 0.06) * s]), col)
+		"coin":
+			ci.draw_arc(c, s * 0.38, 0.0, TAU, 32, col, w * 1.2, true)
+			ci.draw_line(c + Vector2(0.0, -0.22) * s, c + Vector2(0.0, 0.22) * s, col, w)
+			ci.draw_arc(c, s * 0.17, PI * 0.25, PI * 1.75, 16, col, w, true)
+		"gem":
+			ci.draw_colored_polygon(PackedVector2Array([c + Vector2(-0.24, -0.34) * s, c + Vector2(0.24, -0.34) * s, c + Vector2(0.44, -0.08) * s, c + Vector2(0.0, 0.44) * s, c + Vector2(-0.44, -0.08) * s]), col)
+			ci.draw_line(c + Vector2(-0.42, -0.08) * s, c + Vector2(0.42, -0.08) * s, Color(0, 0, 0, 0.35), w * 0.6)
+		"pad":
+			ci.draw_rect(Rect2(c + Vector2(-0.44, -0.20) * s, Vector2(0.88, 0.40) * s), col, false, w)
+			ci.draw_line(c + Vector2(-0.34, 0.0) * s, c + Vector2(-0.10, 0.0) * s, col, w)
+			ci.draw_line(c + Vector2(-0.22, -0.12) * s, c + Vector2(-0.22, 0.12) * s, col, w)
+			ci.draw_circle(c + Vector2(0.14, 0.05) * s, s * 0.06, col)
+			ci.draw_circle(c + Vector2(0.28, -0.05) * s, s * 0.06, col)
+		"brain":
+			for bi in range(6):
+				var bd := Vector2.from_angle(float(bi) * TAU / 6.0 + 0.3)
+				ci.draw_line(c, c + bd * s * 0.36, col, w * 0.7)
+				ci.draw_circle(c + bd * s * 0.38, s * 0.08, col)
+			ci.draw_circle(c, s * 0.14, col)
+		"tower":
+			ci.draw_colored_polygon(PackedVector2Array([c + Vector2(-0.20, 0.42) * s, c + Vector2(-0.14, -0.30) * s, c + Vector2(0.0, -0.46) * s, c + Vector2(0.14, -0.30) * s, c + Vector2(0.20, 0.42) * s]), col)
+			ci.draw_rect(Rect2(c + Vector2(-0.46, 0.06) * s, Vector2(0.20, 0.36) * s), col)
+			ci.draw_rect(Rect2(c + Vector2(0.26, -0.08) * s, Vector2(0.20, 0.50) * s), col)
 		"close":
 			ci.draw_line(c + Vector2(-0.30, -0.30) * s, c + Vector2(0.30, 0.30) * s, col, w, true)
 			ci.draw_line(c + Vector2(0.30, -0.30) * s, c + Vector2(-0.30, 0.30) * s, col, w, true)

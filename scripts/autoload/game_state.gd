@@ -1395,6 +1395,7 @@ func _update_van_trip() -> void:
 			if van_trip_time >= van_trip_duration:
 				van_phase = "departing"
 				van_phase_time = 0.0
+				MailManager.on_delivery_done(van_trip_total)
 				_reset_van_trip()
 				_rpc_play_sfx.rpc("van_door")
 				_broadcast_van_state()
@@ -1967,6 +1968,8 @@ func export_save_data() -> Dictionary:
 		data["scheduled_delivery_hour"] = -1
 		data["pending_delivery_express"] = false
 	data["finance"] = FinanceManager.export_data()
+	data["market"] = MarketManager.export_data()
+	data["mail"] = MailManager.export_data()
 	data["checklist_dismissed"] = checklist_dismissed
 	var history := get_node_or_null("/root/StatsHistory")
 	if history != null and history.has_method("export_data"):
@@ -1992,6 +1995,10 @@ func load_from_save_data(data: Dictionary, save_id: String, display_name: String
 		workbench_state["done"] = AssemblyPlan.sanitize_done(AssemblyPlan.build(workbench_state), workbench_state.get("done", {}))
 	var saved_finance: Variant = data.get("finance", {})
 	FinanceManager.import_data(saved_finance if saved_finance is Dictionary else {})
+	var saved_market: Variant = data.get("market", {})
+	MarketManager.import_data(saved_market if saved_market is Dictionary else {})
+	var saved_mail: Variant = data.get("mail", {})
+	MailManager.import_data(saved_mail if saved_mail is Dictionary else {})
 	# Queue any items that were in transit when the game was saved
 	var saved_pending: Variant = data.get("pending_delivery_items", [])
 	if saved_pending is Array:
@@ -2078,6 +2085,8 @@ func clear_local_state() -> void:
 	_ups_over = 0.0
 	is_active = false
 	FinanceManager.reset()
+	MarketManager.reset()
+	MailManager.reset()
 	racks.clear()
 	coolers.clear()
 	ups_units.clear()
@@ -2861,6 +2870,22 @@ func get_starter_checklist() -> Array:
 	]
 
 
+## Die Versicherung zahlt, solange ihre Rechnung nicht gesperrt ist.
+func is_insured() -> bool:
+	return not FinanceManager.is_blocked("insurance")
+
+
+## Geld der Versicherung nach einem Schaden (nur Host).
+func _pay_insurance(amount: float, reason: String) -> void:
+	if amount <= 0.0:
+		return
+	if not is_insured():
+		post_event("Die Versicherung zahlt nicht: Die Rechnung ist noch offen.", "warn")
+		return
+	FinanceManager.credit_public(amount, "Versicherung: %s", [reason])
+	post_event_f("Die Versicherung zahlt %s für den Schaden (%s).", [FinanceManager.format_money(amount), reason], "good")
+
+
 ## Lässt bis zu WATER_LEAK_MAX_SLOTS laufende Server eines zufälligen Racks mit Strom abstürzen.
 func _trigger_water_leak() -> void:
 	var candidates: Array[String] = []
@@ -2894,10 +2919,14 @@ func _trigger_water_leak() -> void:
 		slot["fault_hidden"] = false
 		hit.append(str(ok_idx[j] + 1))
 
-	money = maxf(0.0, money - WATER_LEAK_COST)
+	var leak_cost := WATER_LEAK_COST
+	if is_insured():
+		leak_cost = WATER_LEAK_COST * 0.2
+	money = maxf(0.0, money - leak_cost)
 	post_event_f("WASSERSCHADEN über %s! Slot %s ausgefallen, Trocknung kostet $%d. Reparatur über die 3D-Vorschau im Rack-Menü.", [
-		get_rack_display_name(target), ", ".join(hit), int(WATER_LEAK_COST)
+		get_rack_display_name(target), ", ".join(hit), int(leak_cost)
 	], "alert")
+	_pay_insurance(60.0 * float(hit.size()), "Wasserschaden")
 	_rpc_play_sfx.rpc("alarm")
 	_recalculate_networks_and_metrics()
 	_broadcast_racks()
@@ -3823,6 +3852,7 @@ func _fill_random_contract_offers() -> int:
 	while offers < RANDOM_CONTRACT_MAX_OFFERS:
 		var entry := _make_random_contract()
 		contracts[str(entry["id"])] = entry
+		MailManager.on_new_contract(entry)
 		offers += 1
 		added += 1
 	return added
@@ -4227,6 +4257,7 @@ func _run_simulation_step(dt: float) -> void:
 					slot["fire_level"] = 1.0
 					racks_dirty = true
 					post_event_f("BRAND in %s (Slot %d)! Feuerlöscher von der Wand holen!", [get_rack_display_name(rid), i + 1], "alert")
+					_pay_insurance(roundf(_catalog_price(item_type) * 0.25), "Brandschaden")
 					_rpc_play_sfx.rpc("alarm")
 				elif eff_temp >= 70.0 and randf() < 0.0032 * fmult:
 					slot["state"] = "crashed"
@@ -4536,6 +4567,7 @@ func _update_rack_rentals_and_support(dt: float) -> void:
 			_clear_tickets_for_rack(rid)
 			tickets_dirty = true
 			post_event_f("❌ %s hat %s gekündigt (dauerhafte Überlastung)! Hardware aufrüsten & neu vermieten.", [cname, get_rack_display_name(rid)], "alert")
+			MailManager.on_cancelled(cname, get_rack_display_name(rid))
 			_rpc_play_sfx.rpc("alarm")
 
 	reputation = clampf(reputation + rep_delta, 0.0, 100.0)
@@ -4687,13 +4719,17 @@ func _update_service_users(svc: Dictionary, sat: float, online: bool, dt: float,
 	elif sat >= 72.0:
 		if load_pct < USER_GROWTH_LOAD_LIMIT:
 			var headroom := clampf((USER_GROWTH_LOAD_LIMIT - load_pct) / USER_GROWTH_SOFT_RANGE, 0.0, 1.0)
-			var growth := float(p.get("growth_rate", 1.0)) * time_wave * (0.35 + 0.65 * get_reputation_factor())
+			var growth := float(p.get("growth_rate", 1.0)) * time_wave * (0.35 + 0.65 * get_reputation_factor()) * MarketManager.growth_factor_cached(st)
 			cur += growth * headroom * dt * 0.36
 		elif load_pct >= USER_SHED_LOAD_LIMIT:
 			# Hardware voll ausgelastet: ein Teil der Kunden wandert langsam ab.
 			cur = maxf(base, cur - 1.0 * dt)
 	elif sat < 45.0:
 		cur = maxf(base * 0.25, cur - 2.2 * dt)
+	# Zu hohe Preise vertreiben mit der Zeit Kunden.
+	var shed := MarketManager.price_shed(st) * dt
+	if shed > 0.0:
+		cur = maxf(minf(cur, base * 0.5), cur - shed)
 	svc["users"] = cur
 	if dt > 0.0:
 		var per_min := (cur - prev) / dt * 60.0
@@ -4706,6 +4742,7 @@ func _blend_service_profiles(services: Array) -> Dictionary:
 	var first_type := str((services[0] as Dictionary).get("type", ""))
 	var out: Dictionary = (HardwareCatalog.RENTAL_PROFILES[first_type] as Dictionary).duplicate(true)
 	if services.size() == 1:
+		out["pay_per_user"] = float(out.get("pay_per_user", 0.0)) * MarketManager.get_price(first_type)
 		return out
 	var sums := {}
 	for k in _BLEND_KEYS:
@@ -4721,7 +4758,8 @@ func _blend_service_profiles(services: Array) -> Dictionary:
 		total_w += w
 		for k in _BLEND_KEYS:
 			var fallback := 0.5 if k == "mbps_per_user" else 0.0
-			sums[k] = float(sums[k]) + w * float(p.get(k, fallback))
+			var price_f := MarketManager.get_price(str(sd["type"])) if k == "pay_per_user" else 1.0
+			sums[k] = float(sums[k]) + w * float(p.get(k, fallback)) * price_f
 		base_sum += float(p.get("base_users", 0))
 		max_sum += float(p.get("max_users", 0))
 		growth_sum += float(p.get("growth_rate", 0.0))
@@ -4822,6 +4860,7 @@ func _create_support_ticket(rack_id: String, rack: Dictionary, issue_key: String
 	}
 	_rpc_play_sfx.rpc("ticket_notify")
 	post_event_f("🎧 Neues Support-Ticket %s von %s: %s", [tid, cname, {"text": title, "args": title_args}], "warn")
+	MailManager.on_ticket(support_tickets[tid])
 
 
 ## Antwortfrist eines Tickets in Sekunden (nach Priorität).
@@ -4875,6 +4914,8 @@ func _recalculate_networks_and_metrics() -> void:
 	max_watts = int(POWER_TIERS[power_tier]["watts"])
 	if halle_nord_owned:
 		max_watts += HALLE_NORD_EXTRA_WATTS
+	if FinanceManager.is_power_blocked():
+		max_watts = maxi(FinanceManager.BLOCK_POWER_MIN, int(float(max_watts) * FinanceManager.BLOCK_POWER_FACTOR))
 
 	for rid in racks.keys():
 		racks[rid]["powered"] = false
@@ -5084,6 +5125,8 @@ func _recalculate_networks_and_metrics() -> void:
 	if halle_nord_owned:
 		max_bandwidth_mbps += HALLE_NORD_EXTRA_MBPS
 		max_bandwidth_cu += 600
+	if FinanceManager.is_blocked("internet"):
+		max_bandwidth_mbps = maxf(10.0, max_bandwidth_mbps * FinanceManager.BLOCK_NET_FACTOR)
 	total_watts = watts
 	total_ram_gb = sum_ram
 	total_cpu_score = sum_cpu
@@ -5094,6 +5137,8 @@ func _recalculate_networks_and_metrics() -> void:
 	total_compute = mini(compute, max_bandwidth_cu)
 	used_compute = req_compute
 	revenue_bonus_mult = (1.0 + minf(bonus_sum + cable_mgmt_bonus, 0.92)) * get_level_revenue_mult()
+	if FinanceManager.is_blocked("license"):
+		revenue_bonus_mult *= FinanceManager.BLOCK_LICENSE_FACTOR
 
 
 # ==============================================================================
@@ -6508,6 +6553,7 @@ func _rpc_req_checkout_cart(entries: Array, express: bool = false) -> void:
 	_broadcast_sim_tick()
 	_rpc_play_sfx.rpc("cash")
 	var tmeta: Dictionary = DELIVERY_TIER_META.get(order_tier, DELIVERY_TIER_META[1])
+	MailManager.on_order(queue_items.size(), total_cost, shipping_fee, get_scheduled_delivery_label(), express or van_phase == "arriving")
 	if express or van_phase == "arriving":
 		post_event_f("🛒 %s bestellte %d Artikel ($%.0f + $%.0f Express-Lieferung) — %s %s ist sofort unterwegs!", [
 			NetworkManager.get_player_name(peer_id), queue_items.size(), total_cost, shipping_fee,
@@ -6648,7 +6694,10 @@ func _rpc_req_set_rack_rental(rack_id: String, rental_type: String) -> void:
 func _rpc_req_reply_ticket(ticket_id: String, action: String) -> void:
 	if not multiplayer.is_server():
 		return
-	var peer_id := _get_sender_id()
+	do_reply_ticket(ticket_id, action, _get_sender_id())
+
+
+func do_reply_ticket(ticket_id: String, action: String, peer_id: int) -> void:
 	if not support_tickets.has(ticket_id):
 		return
 	var t: Dictionary = support_tickets[ticket_id]
@@ -6991,6 +7040,13 @@ func _tick_grid_outage(dt: float) -> void:
 		_start_grid_outage(randf_range(GRID_OUTAGE_MIN_SEC, GRID_OUTAGE_MAX_SEC))
 
 
+## Sekunden bis zum nächsten geplanten Netzausfall (0 = unbekannt). Nur auf dem Host gültig.
+func get_next_outage_in() -> float:
+	if day_number < GRID_OUTAGE_FIRST_DAY or grid_outage_left > 0.0:
+		return 0.0
+	return maxf(0.0, _grid_outage_cooldown)
+
+
 func _roll_grid_outage_cooldown() -> float:
 	return randf_range(0.8, 2.2) * float(DAY_LENGTH_SECONDS)
 
@@ -7264,14 +7320,25 @@ func _rpc_req_repair_slot(rack_id: String, slot_idx: int, amount: float) -> void
 func _rpc_req_toggle_contract(contract_id: String) -> void:
 	if not multiplayer.is_server():
 		return
-	var peer_id := _get_sender_id()
+	do_toggle_contract(contract_id, _get_sender_id())
+
+
+func do_toggle_contract(contract_id: String, peer_id: int) -> void:
 	if not contracts.has(contract_id):
 		return
 	var c: Dictionary = contracts[contract_id]
 	var now_active := not bool(c["active"])
-	if now_active and get_active_contract_count() >= 4:
+	if now_active and (get_active_contract_count() >= get_max_contracts_limit() or MarketManager.is_contract_taken(c)):
 		_rpc_play_sfx.rpc_id(peer_id, "error")
 		return
+	if now_active and str(c.get("bid_rival", "")) != "":
+		# Gegengebot: Der Kunde bleibt, zahlt aber etwas weniger.
+		c["payout_orig"] = int(c["payout_per_cycle"])
+		c["payout_per_cycle"] = MarketManager.contract_payout(c)
+	elif not now_active and c.has("payout_orig"):
+		c["payout_per_cycle"] = int(c["payout_orig"])
+		c.erase("payout_orig")
+	MarketManager.clear_bid(c)
 	c["active"] = now_active
 	c["status"] = "ok" if now_active else "idle"
 	if bool(c.get("random", false)):
