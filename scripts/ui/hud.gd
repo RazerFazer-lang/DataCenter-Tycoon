@@ -140,6 +140,7 @@ func _ready() -> void:
 	_build_ui()
 
 	GameState.state_updated.connect(_refresh_all)
+	GameState.cable_hint.connect(func(m: String): show_toast(m, true))
 	GameState.racks_changed.connect(_refresh_checklist)
 	GameState.cables_changed.connect(_refresh_checklist)
 	GameState.crates_changed.connect(_refresh_checklist)

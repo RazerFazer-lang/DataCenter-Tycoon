@@ -36,6 +36,7 @@ var active_slot: int = 1
 var _slot_cables: Array = [{}, {}, {}, {}]
 var relocating_rack_id: String = ""
 var place_rot_y: float = 0.0
+var _ghost_strip_link: String = ""
 var _rot_manual: bool = false   # selbst gedreht: die Wand bestimmt die Richtung nicht mehr
 var hold_yaw: float = 0.0       # Drehung der getragenen Ware
 var _hold_cid: String = ""
@@ -1951,6 +1952,16 @@ func _update_placement_preview(delta: float) -> void:
 		_ghost_rot_y = place_rot_y
 		_ghost_valid = GameState.can_place_item_at(item_type, _ghost_pos, _ghost_rot_y, ignore_rid)
 
+	# Leisten rasten an das Ende einer anderen Leiste und sind dann ohne Kabel verbunden.
+	_ghost_strip_link = ""
+	if is_placeable and GameState.is_strip_type(item_type):
+		var sn := StripRules.snap_spot("power" if item_type == "prop_power_strip" else "network", _ghost_pos, wall_strip, ignore_rid)
+		if not sn.is_empty():
+			_ghost_pos = sn["pos"]
+			_ghost_rot_y = float(sn["rot_y"])
+			_ghost_valid = GameState.can_place_item_at(item_type, _ghost_pos, _ghost_rot_y, ignore_rid)
+			_ghost_strip_link = str(sn["other"])
+
 	# Echtes 3D-Hologramm-Modell bei Typwechsel aufbauen
 	var gkey := ("%s|%s" % [item_type, "drop" if _ghost_is_drop_preview else "place"])
 	if _ghost_model_key != gkey:
@@ -2026,6 +2037,8 @@ func _cable_target_state(endpoint: String) -> int:
 			return CableRenderer.TARGET_INVALID
 	if GameState.count_cables_on(cable_active_type, cable_start_id) >= GameState.get_max_ports(cable_active_type, cable_start_id):
 		return CableRenderer.TARGET_INVALID
+	if not bool(_strip_plan(endpoint)["ok"]):
+		return CableRenderer.TARGET_INVALID
 	for cid in GameState.cables.keys():
 		var c: Dictionary = GameState.cables[cid]
 		if str(c.get("cable_type", "")) != cable_active_type:
@@ -2035,6 +2048,23 @@ func _cable_target_state(endpoint: String) -> int:
 		if (a == cable_start_id and b == endpoint) or (a == endpoint and b == cable_start_id):
 			return CableRenderer.TARGET_INVALID
 	return CableRenderer.TARGET_VALID
+
+
+## Prüft wie der Server, ob das Kabel so an eine Leiste darf (Seite, Eingang, Ausgang).
+func _strip_plan(endpoint: String) -> Dictionary:
+	return StripRules.plan(cable_active_type, cable_start_id, cable_start_slot, endpoint, _aimed_socket_idx(cable_active_type, endpoint))
+
+
+## Name einer Buchse an einer Leiste für die Hinweise.
+func _strip_socket_name(ctype: String, eid: String, slot: int) -> String:
+	match StripRules.slot_kind(ctype, eid, slot):
+		"in":
+			return tr("Eingang (weiß)")
+		"out":
+			return tr("Ausgang (rot)")
+		"top":
+			return (tr("Steckdose %d/%d") if ctype == "power" else tr("Port %d/%d")) % [slot + 1, StripRules.top_count(ctype)]
+	return ""
 
 
 ## Zieht das Kabel am anvisierten Port (slot_idx) oder zuletzt gesteckte Kabel ab und nimmt das freie Ende in die Hand.
@@ -2075,6 +2105,15 @@ func _unplug_into_hand(cable_type: String, endpoint_id: String, slot_idx: int = 
 		cable_active_type = cable_type
 
 
+func _strip_sub(ctype: String, eid: String, slot: int) -> String:
+	match StripRules.slot_kind(ctype, eid, slot):
+		"in":
+			return tr("Hier kommt der Strom vom Kasten oder vom Ausgang der Leiste davor an") if ctype == "power" else tr("Hier kommt der Uplink vom Router oder von der LAN-Leiste davor an")
+		"out":
+			return tr("Führt zum Eingang der nächsten Leiste (oder Leiste direkt anstecken)")
+	return tr("Oben nur Geräte: Racks, USV, Kühlung") if ctype == "power" else tr("Oben nur Racks")
+
+
 func _cable_label(cable_type: String) -> String:
 	match cable_type:
 		"power":
@@ -2102,6 +2141,9 @@ func _fill_context_prompt() -> void:
 		if endpoint != "":
 			if cable_start_id == endpoint:
 				current_prompt = tr("[E / Rechtsklick] %s abbrechen") % label
+			elif not bool(_strip_plan(endpoint)["ok"]):
+				current_prompt = tr(str(_strip_plan(endpoint)["msg"]))
+				current_sub_prompt = tr("[Rechtsklick / Q] Kabel loslassen")
 			elif _cable_target_state(endpoint) == CableRenderer.TARGET_INVALID:
 				current_prompt = tr("%s: %s ist voll oder schon verbunden") % [label, endpoint.to_upper()]
 				current_sub_prompt = tr("[Rechtsklick / Q] Kabel loslassen")
@@ -2136,6 +2178,8 @@ func _fill_context_prompt() -> void:
 			_clear_rack_hover()
 			if _ghost_valid:
 				current_prompt = tr("[Linksklick / E] %s hier platzieren") % tr(str(cat["name"]))
+				if _ghost_strip_link != "":
+					current_prompt = tr("[Linksklick / E] %s direkt anstecken (ohne Kabel verbunden)") % tr(str(cat["name"]))
 			elif item_type == GameState.INDOOR_UNIT_TYPE:
 				current_prompt = tr("Hier geht es nicht – auf eine freie Innenwand zielen (nicht über dem Garagentor)")
 			elif GameState.is_heat_pump_type(item_type):
@@ -2259,7 +2303,18 @@ func _fill_context_prompt() -> void:
 			var max_p := GameState.get_max_ports("power", eid)
 			var p_slot := _get_target_slot_idx(target, "power", eid)
 			var p_lbl := tr("Stromleiste") if GameState.is_power_strip_decor(eid) else eid.to_upper()
-			if p_slot >= 0:
+			if p_slot >= 0 and StripRules.role("power", eid) == "strip":
+				var nm_p := _strip_socket_name("power", eid, p_slot)
+				var occ_s := GameState.get_cable_on_slot("power", eid, p_slot)
+				if StripRules.is_linked("power", eid, p_slot):
+					current_prompt = tr("%s: direkt mit der Nachbarleiste verbunden") % nm_p
+				elif not occ_s.is_empty():
+					var peer_s := str(occ_s.get("to_id", "")) if str(occ_s.get("from_id", "")) == eid else str(occ_s.get("from_id", ""))
+					current_prompt = tr("[E / Rechtsklick] Kabel aus %s ziehen (↔ %s)") % [nm_p, peer_s.to_upper()]
+				else:
+					current_prompt = tr("[E] Stromkabel an %s anstecken") % nm_p
+				current_sub_prompt = _strip_sub("power", eid, p_slot)
+			elif p_slot >= 0:
 				var occ_p := GameState.get_cable_on_slot("power", eid, p_slot)
 				if not occ_p.is_empty():
 					var peer_p := str(occ_p.get("to_id", "")) if str(occ_p.get("from_id", "")) == eid else str(occ_p.get("from_id", ""))
@@ -2279,7 +2334,18 @@ func _fill_context_prompt() -> void:
 			var max_np := GameState.get_max_ports("network", eid)
 			var n_slot := _get_target_slot_idx(target, "network", eid)
 			var n_lbl := tr("LAN-Leiste") if GameState.is_lan_strip_decor(eid) else (tr("Router") if eid == GameState.WALL_ROUTER_ID else eid.to_upper())
-			if n_slot >= 0:
+			if n_slot >= 0 and StripRules.role("network", eid) == "strip":
+				var nm_n := _strip_socket_name("network", eid, n_slot)
+				var occ_l := GameState.get_cable_on_slot("network", eid, n_slot)
+				if StripRules.is_linked("network", eid, n_slot):
+					current_prompt = tr("%s: direkt mit der Nachbarleiste verbunden") % nm_n
+				elif not occ_l.is_empty():
+					var peer_l := str(occ_l.get("to_id", "")) if str(occ_l.get("from_id", "")) == eid else str(occ_l.get("from_id", ""))
+					current_prompt = tr("[E / Rechtsklick] Kabel aus %s ziehen (↔ %s)") % [nm_n, peer_l.to_upper()]
+				else:
+					current_prompt = tr("[E] Netzwerkkabel an %s anstecken") % nm_n
+				current_sub_prompt = _strip_sub("network", eid, n_slot)
+			elif n_slot >= 0:
 				var occ_n := GameState.get_cable_on_slot("network", eid, n_slot)
 				if not occ_n.is_empty():
 					var peer_n := str(occ_n.get("to_id", "")) if str(occ_n.get("from_id", "")) == eid else str(occ_n.get("from_id", ""))

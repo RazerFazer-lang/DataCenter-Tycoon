@@ -21,6 +21,9 @@ var _switch_node: Node3D
 var _switch_mat: StandardMaterial3D
 var _led_mats: Array[StandardMaterial3D] = []
 var _act_mats: Array[StandardMaterial3D] = []
+## LEDs an Ein- und Ausgang: [Eingang, Ausgang]
+var _side_mats: Array[StandardMaterial3D] = []
+var _side_state := Vector2i.ZERO
 var _disp: Label3D
 var _strip_accum: float = 1.0
 ## Je Buchse: 0 leer, 1 gesteckt, 2 gesteckt und in Betrieb.
@@ -326,7 +329,7 @@ func _build_power_strip() -> void:
 	var mdl := ModelLoader.instantiate_custom_model("power_strip")
 	if mdl != null:
 		add_child(mdl)
-		_bind_strip(mdl, "PS_Switch", "PS_Led", "", 6)
+		_bind_strip(mdl, "PS_Switch", "PS_Led", "", 6, "PS_")
 		_add_strip_display(Vector3(0.2660, 0.0538, 0.0), 0.046)
 	else:
 		_box(self, Vector3(0.0, 0.025, 0.0), Vector3(0.60, 0.050, 0.110), _mat(Color(0.72, 0.75, 0.79), 0.35, 0.80))
@@ -344,6 +347,7 @@ func _build_power_strip() -> void:
 		})
 		area.position = Vector3(sx, 0.068, 0.0)
 		add_child(area)
+	_add_side_sockets("power_port", 6)
 	_add_collider(Vector3(0.0, 0.028, 0.0), Vector3(0.66, 0.056, 0.13))
 	_add_info_area(Vector3(0.30, 0.05, 0.0), Vector3(0.10, 0.11, 0.16))
 	_add_switch_area(Vector3(-0.275, 0.06, 0.0), Vector3(0.062, 0.12, 0.16))
@@ -355,7 +359,7 @@ func _build_lan_strip() -> void:
 	var mdl := ModelLoader.instantiate_custom_model("lan_strip")
 	if mdl != null:
 		add_child(mdl)
-		_bind_strip(mdl, "LS_Switch", "LS_Link", "LS_Act", 8)
+		_bind_strip(mdl, "LS_Switch", "LS_Link", "LS_Act", 8, "LS_")
 		_add_strip_display(Vector3(0.2580, 0.0512, 0.0), 0.044)
 	else:
 		_box(self, Vector3(0.0, 0.025, 0.0), Vector3(0.56, 0.048, 0.125), _mat(Color(0.16, 0.19, 0.24), 0.38, 0.75))
@@ -373,6 +377,7 @@ func _build_lan_strip() -> void:
 		})
 		area.position = Vector3(px, 0.066, 0.0)
 		add_child(area)
+	_add_side_sockets("net_port", 8)
 	_add_collider(Vector3(0.0, 0.028, 0.0), Vector3(0.62, 0.056, 0.14))
 	_add_info_area(Vector3(0.27, 0.05, 0.0), Vector3(0.08, 0.11, 0.17))
 	_add_switch_area(Vector3(-0.268, 0.06, 0.0), Vector3(0.050, 0.12, 0.17))
@@ -389,6 +394,20 @@ func _box(parent: Node3D, pos: Vector3, sz: Vector3, mat: Material) -> MeshInsta
 	mi.position = pos
 	parent.add_child(mi)
 	return mi
+
+
+## Eingang (links, -X) und Ausgang (rechts, +X) als eigene Buchsen hinter den oberen.
+func _add_side_sockets(kind: String, first: int) -> void:
+	for k in 2:
+		var sx := StripRules.SIDE_X * (-1.0 if k == 0 else 1.0)
+		_socket_local_positions.append(Vector3(sx, StripRules.SIDE_Y, 0.0))
+		var area := _make_interact_area(Vector3(0.07, 0.07, 0.09), {
+			"interact_type": kind,
+			"entity_id": decor_id,
+			"slot_idx": first + k,
+		})
+		area.position = Vector3(sx - signf(sx) * 0.01, StripRules.SIDE_Y, 0.0)
+		add_child(area)
 
 
 func _add_collider(pos: Vector3, sz: Vector3) -> void:
@@ -411,7 +430,7 @@ func _add_switch_area(pos: Vector3, sz: Vector3) -> void:
 
 
 ## Wippe und LEDs an eigene Materialkopien binden, damit jede Leiste einzeln leuchtet.
-func _bind_strip(mdl: Node3D, sw_name: String, led_prefix: String, act_prefix: String, count: int) -> void:
+func _bind_strip(mdl: Node3D, sw_name: String, led_prefix: String, act_prefix: String, count: int, side_prefix: String = "") -> void:
 	_switch_node = mdl.find_child("Switch", true, false) as Node3D
 	_led_mats.clear()
 	_act_mats.clear()
@@ -425,7 +444,8 @@ func _bind_strip(mdl: Node3D, sw_name: String, led_prefix: String, act_prefix: S
 			if not (src is StandardMaterial3D):
 				continue
 			var rn := src.resource_name
-			if rn != sw_name and not rn.begins_with(led_prefix) and (act_prefix == "" or not rn.begins_with(act_prefix)):
+			var side := side_prefix != "" and (rn == side_prefix + "In" or rn == side_prefix + "Out")
+			if rn != sw_name and not rn.begins_with(led_prefix) and (act_prefix == "" or not rn.begins_with(act_prefix)) and not side:
 				continue
 			if not found.has(rn):
 				var d := (src as StandardMaterial3D).duplicate() as StandardMaterial3D
@@ -434,6 +454,10 @@ func _bind_strip(mdl: Node3D, sw_name: String, led_prefix: String, act_prefix: S
 				found[rn] = d
 			mi.set_surface_override_material(s, found[rn])
 	_switch_mat = found.get(sw_name)
+	_side_mats.clear()
+	if side_prefix != "" and found.has(side_prefix + "In") and found.has(side_prefix + "Out"):
+		_side_mats.append(found[side_prefix + "In"])
+		_side_mats.append(found[side_prefix + "Out"])
 	for i in range(count):
 		if found.has(led_prefix + str(i)):
 			_led_mats.append(found[led_prefix + str(i)])
@@ -480,6 +504,12 @@ func _process_strip(delta: float) -> void:
 		else:
 			m.emission = Color(0.12, 0.92, 0.34) if st == 2 else Color(0.98, 0.64, 0.10)
 			m.emission_energy_multiplier = 1.3
+	# Eingang leuchtet, wenn Strom/Netz ankommt; Ausgang, wenn er eine weitere Leiste versorgt.
+	for k in range(_side_mats.size()):
+		var lit := (_side_state.x if k == 0 else _side_state.y) == 2
+		var plugged := (_side_state.x if k == 0 else _side_state.y) == 1
+		_side_mats[k].emission = Color(0.12, 0.92, 0.34) if lit else Color(0.98, 0.64, 0.10)
+		_side_mats[k].emission_energy_multiplier = 1.3 if (lit or plugged) and not _tripped else 0.02
 	for i in range(_act_mats.size()):
 		var st2 := _port_state[i] if i < _port_state.size() else 0
 		var busy := _on and st2 == 2 and sin(_anim_t * (17.0 + float(i) * 5.3)) * cos(_anim_t * 7.1 + float(i)) > 0.05
@@ -492,6 +522,10 @@ func _refresh_strip_state(is_power: bool) -> void:
 	_port_state.resize(count)
 	_port_state.fill(0)
 	var live := 0
+	var fed := GameState.is_strip_fed(ctype, decor_id)
+	var down := GameState.feeds_next_strip(ctype, decor_id)
+	_side_state = Vector2i(2 if fed else (1 if StripRules.slot_used(ctype, decor_id, StripRules.in_slot(ctype)) else 0),
+		2 if (down and fed and _on) else (1 if StripRules.slot_used(ctype, decor_id, StripRules.out_slot(ctype)) else 0))
 	var smap: Dictionary = GameState.get_cable_slot_map(ctype, decor_id)
 	for cid in smap.keys():
 		var idx := int(smap[cid])
@@ -522,6 +556,10 @@ func _refresh_strip_state(is_power: bool) -> void:
 	elif is_power:
 		var w := GameState.get_strip_load(decor_id)
 		var lim := GameState.get_strip_limit(decor_id)
+		if not fed:
+			_disp.text = tr("KEIN\nSTROM")
+			_disp.modulate = Color(0.95, 0.66, 0.24)
+			return
 		_disp.text = "%d W\n%d %%" % [w, roundi(float(w) / float(maxi(1, lim)) * 100.0)]
 		_disp.modulate = Color(1.0, 0.36, 0.28) if w > lim else (Color(1.0, 0.76, 0.30) if float(w) > float(lim) * 0.85 else Color(0.46, 0.95, 0.60))
 	else:

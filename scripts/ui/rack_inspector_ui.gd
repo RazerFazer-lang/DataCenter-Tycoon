@@ -2085,10 +2085,22 @@ func _render_device_view(kind: String) -> void:
 					_set_status(tr("AUS"), UIStyle.COL_AMBER)
 				else:
 					_set_status(tr("EIN"), UIStyle.COL_GREEN)
+				if not GameState.is_strip_fed(ctype_d, _entity_id):
+					_set_status(tr("KEIN STROM") if ctype_d == "power" else tr("KEIN UPLINK"), UIStyle.COL_AMBER)
 				if ctype_d == "power":
 					var lim := GameState.get_strip_limit(_entity_id)
 					var lw := GameState.get_strip_load(_entity_id)
 					_add_kpi("STROMLAST", "%d / %d W" % [lw, lim], "", UIStyle.COL_RED if lw > lim else (UIStyle.COL_AMBER if float(lw) > float(lim) * 0.85 else UIStyle.COL_GREEN), float(lw) / float(maxi(lim, 1)))
+					var cw := GameState.get_chain_load(_entity_id)
+					var cl := StripRules.CHAIN_LIMIT_W
+					_add_kpi("KETTE", tr("%d / %d W • %d Leisten") % [cw, cl, maxi(1, GameState.get_chain_length(_entity_id))], "", UIStyle.COL_RED if cw > cl else (UIStyle.COL_AMBER if float(cw) > float(cl) * 0.85 else UIStyle.COL_GREEN), float(cw) / float(cl))
+					note = tr("Links weißer Eingang, rechts roter Ausgang zur nächsten Leiste. Oben nur Geräte. Jede Leiste trägt %d W, die ganze Kette am Abgang %d W.") % [lim, cl]
+				else:
+					var root := GameState.get_lan_chain_root(_entity_id)
+					var mb := float(GameState.lan_chain_mbps.get(root, 0.0))
+					var cap := maxf(1.0, GameState.max_bandwidth_mbps)
+					_add_kpi("KETTE", tr("%.0f / %.0f Mbit/s") % [mb, cap], "", UIStyle.COL_RED if mb > cap else UIStyle.COL_BLUE, mb / cap)
+					note = tr("Links weißer Eingang (Uplink), rechts roter Ausgang zur nächsten LAN-Leiste. Alle Leisten der Kette teilen sich den Router-Port.")
 			else:
 				var di: Dictionary = GameState.decor_items[_entity_id]
 				var dtype := str(di.get("item_type", ""))

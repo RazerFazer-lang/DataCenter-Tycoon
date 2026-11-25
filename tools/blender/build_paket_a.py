@@ -6,6 +6,8 @@
   Altpapier-Container (paper_bin.glb): Deckel als eigener Knoten "Lid".
   Leisten (power_strip.glb, lan_strip.glb): Buchsenpositionen wie in scripts/world/decor_prop.gd,
       Wippe "Switch", LED-Materialien PS_Led0..5 / LS_Link0..7 / LS_Act0..7, Displayglas.
+      Seitlich Eingang (-X, weiß) und Ausgang (+X, rot), Mitte bei x = ±0.371, y = 0.026 wie in
+      scripts/data/strip_rules.gd; LEDs PS_In/PS_Out bzw. LS_In/LS_Out, Pfeile in Stromrichtung.
   Notstrom (ups_small.glb, ups_cabinet.glb, ups_container.glb): LED-Materialien UPS_Bar0..9,
       UPS_Status, UPS_Mod0..n, Luefter Fan_0.., Warnleuchte UPS_Beacon.
 
@@ -540,6 +542,59 @@ def rail(pb, w, d, h, mat, y=0.0):
     pb.loft_x([(-w / 2, prof), (w / 2, prof)], mat, smooth=False)
 
 
+def _arrow(B, x, y, z, mat, size=0.010):
+    """Pfeil in +X (Stromrichtung) aus zwei schraegen Streifen."""
+    for s in (-1, 1):
+        B.box((x, y, z + s * size * 0.32), (size, 0.0012, size * 0.22), mat, rot_g_deg=(0, s * 38, 0), bevel=0.0)
+
+
+def side_power_sockets(B, plast, dark, brass, white, chrome):
+    """Kaltgeraete-Ein- und Ausgang an den Enden: links Eingang (C20, weiss), rechts Ausgang (C19, rot)."""
+    m_in = solid("PS_InFrame", (0.86, 0.86, 0.84), rough=0.45)
+    m_out = solid("PS_OutFrame", (0.78, 0.10, 0.07), rough=0.42)
+    hole = solid("PS_SideHole", (0.012, 0.013, 0.015), rough=0.7)
+    for s, frame in ((-1, m_in), (1, m_out)):
+        cx = s * 0.3465
+        # Gehaeuse auf der Endkappe, Steckgesicht bei x = +-0.371
+        B.box((cx, 0.027, 0.0), (0.049, 0.038, 0.062), frame, bevel=0.003)
+        B.box((s * 0.3695, 0.027, 0.0), (0.004, 0.026, 0.044), hole, bevel=0.0)
+        # Abgeschraegte Ecken oben wie bei C19/C20
+        for sz in (-1, 1):
+            B.box((s * 0.3690, 0.0375, sz * 0.0195), (0.006, 0.006, 0.006), frame, rot_g_deg=(sz * 45, 0, 0), bevel=0.0)
+        # Kontakte: Eingang hat drei flache Stifte, Ausgang drei Schlitze
+        for k, (py, pz) in enumerate(((0.021, -0.011), (0.021, 0.011), (0.031, 0.0))):
+            if s < 0:
+                B.box((s * 0.3640, 0.027 + (py - 0.026), pz), (0.012, 0.0055 if k < 2 else 0.0026, 0.0026 if k < 2 else 0.0055), brass, bevel=0.0)
+            else:
+                B.box((s * 0.3712, 0.027 + (py - 0.026), pz), (0.0015, 0.0065 if k < 2 else 0.0030, 0.0030 if k < 2 else 0.0065), dark, bevel=0.0)
+        for sz in (-0.024, 0.024):
+            B.cyl((s * 0.3712, 0.0115, sz), 0.0028, 0.0028, 0.0014, chrome, axis_g="x", seg=10)
+        led = make_emissive_mat("PS_In" if s < 0 else "PS_Out", (0.12, 0.92, 0.34), strength=0.1)
+        B.box((cx, 0.0465, -0.020), (0.010, 0.0020, 0.006), led, bevel=0.0)
+        _arrow(B, cx + 0.004, 0.0466, 0.012, white)
+
+
+def side_lan_ports(B, body, shield, hole, gold, white):
+    """Uplink-Ports an den Enden: links Eingang (weisser Rahmen), rechts Ausgang (roter Rahmen)."""
+    m_in = solid("LS_InFrame", (0.86, 0.86, 0.84), rough=0.45)
+    m_out = solid("LS_OutFrame", (0.78, 0.10, 0.07), rough=0.42)
+    for s, frame in ((-1, m_in), (1, m_out)):
+        cx = s * 0.3320
+        B.box((cx, 0.027, 0.0), (0.078, 0.038, 0.058), body, bevel=0.003)
+        B.box((s * 0.3685, 0.027, 0.0), (0.005, 0.034, 0.050), frame, bevel=0.0015)
+        # RJ45 quer zur Leiste, Oeffnung zeigt nach aussen
+        for sz in (-1, 1):
+            B.box((s * 0.3650, 0.027, sz * 0.0150), (0.013, 0.0300, 0.0040), shield, bevel=0.0006)
+        for sy in (-1, 1):
+            B.box((s * 0.3650, 0.027 + sy * 0.0130, 0.0), (0.013, 0.0040, 0.0300), shield, bevel=0.0006)
+        B.box((s * 0.3600, 0.027, 0.0), (0.0014, 0.022, 0.026), hole, bevel=0.0)
+        for k in range(8):
+            B.box((s * 0.3640, 0.0335, -0.0087 + 0.0025 * k), (0.0085, 0.0016, 0.0012), gold, bevel=0.0)
+        led = make_emissive_mat("LS_In" if s < 0 else "LS_Out", (0.12, 0.94, 0.36), strength=0.1)
+        B.box((cx - s * 0.012, 0.0465, -0.020), (0.010, 0.0020, 0.006), led, bevel=0.0)
+        _arrow(B, cx - s * 0.008, 0.0466, 0.012, white)
+
+
 def build_power_strip(lib):
     reset_scene()
     root = new_root("PowerStripRoot")
@@ -564,6 +619,7 @@ def build_power_strip(lib):
     B.box((0, 0.0425, 0), (0.590, 0.003, 0.084), plast, bevel=0.0)
     for sz in (-0.045, 0.045):
         B.box((0, 0.0424, sz), (0.596, 0.0022, 0.0035), yellow, bevel=0.0)
+    side_power_sockets(B, plast, dark, brass, white, chrome)
     for i in range(6):
         sx = -0.20 + 0.08 * i
         # Schuko-Topf: Kragen, schraeger Rand, 12 mm tiefe Mulde
@@ -633,6 +689,7 @@ def build_lan_strip(lib):
     B.box((-0.2610, 0.0482, 0.0), (0.030, 0.004, 0.050), plast, bevel=0.0012)
     B.box((0.2580, 0.0480, 0.0), (0.050, 0.003, 0.064), plast, bevel=0.0012)
     B.box((0.2580, 0.0500, 0.0), (0.044, 0.0016, 0.056), glass, bevel=0.0)
+    side_lan_ports(B, body, shield, hole, gold, white)
     B.build(root)
     S = PartBuilder("Switch", origin_g=Vector((-0.261, 0.0510, 0.0)))
     S.loft_x([(x, [(0.0475, -0.017), (0.0560, -0.017), (0.0525, 0.0), (0.0560, 0.017), (0.0475, 0.017)]) for x in (-0.2700, -0.2520)], sw, smooth=False)

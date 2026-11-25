@@ -849,7 +849,7 @@ func _sync_crates() -> void:
 
 
 func _sync_cables() -> void:
-	_cable_renderer.rebuild_cables(GameState.cables, get_port_world_pos, get_port_world_dir, _make_cable_socket_resolver())
+	_cable_renderer.rebuild_cables(GameState.cables, get_port_world_pos, get_port_world_dir, _make_cable_socket_resolver(), _make_cable_dir_resolver())
 
 
 ## Im Menü bleiben die Showcase-Kabel stehen; nur in einer laufenden Sitzung neu zeichnen.
@@ -875,6 +875,26 @@ func _make_cable_socket_resolver() -> Callable:
 		var idx := int(slots[cid])
 		if idx >= 0 and idx < socks.size():
 			return socks[idx]
+		return null
+
+
+## Seitenbuchsen der Leisten zeigen zur Seite, nicht nach oben.
+func _make_cable_dir_resolver() -> Callable:
+	var slot_maps := {}
+	return func(cid: String, ctype: String, eid: String) -> Variant:
+		if StripRules.role(ctype, eid) != "strip" or not _decor_nodes.has(eid):
+			return null
+		var key := ctype + "|" + eid
+		if not slot_maps.has(key):
+			slot_maps[key] = GameState.get_cable_slot_map(ctype, eid)
+		var idx := int((slot_maps[key] as Dictionary).get(cid, -1))
+		var dn: DecorProp = _decor_nodes[eid]
+		if not is_instance_valid(dn) or not dn.is_inside_tree():
+			return null
+		if idx == StripRules.in_slot(ctype):
+			return -dn.global_transform.basis.x
+		if idx == StripRules.out_slot(ctype):
+			return dn.global_transform.basis.x
 		return null
 
 

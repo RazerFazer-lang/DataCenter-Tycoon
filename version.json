@@ -1,9 +1,24 @@
 {
-  "version": "3.0.1",
-  "launcher_version": "3.0.1",
-  "codename": "v3.0.1 Mehr FPS, Drehen mit R & Server-Admin",
-  "release_date": "2026-11-25",
+  "version": "3.1.0",
+  "launcher_version": "3.1.0",
+  "codename": "v3.1.0 Steckleisten mit Ein- und Ausgang",
+  "release_date": "2026-11-26",
   "changelog": [
+    {
+      "version": "v3.1.0",
+      "date": "2026-11-26",
+      "title": "Update 3.1: Steckleisten mit Ein- und Ausgang an der Seite, Ketten und A+B-Einspeisung",
+      "items": [
+        "[NEU / STROM] Neue Strom- und LAN-Leisten: links weißer Eingang, rechts roter Ausgang, LEDs und Pfeile in Stromrichtung.",
+        "[NEU / STROM] Leisten zu Ketten verbinden: vom Ausgang in den Eingang der nächsten, per Kabel oder direkt aneinander gesteckt (rastet ein). Oben kommen nur Geräte rein.",
+        "[GAMEPLAY] Jede Leiste trägt 11.000 W, die ganze Kette am Abgang des Kastens 22.000 W. Löst eine aus, ist alles dahinter aus.",
+        "[GAMEPLAY] Racks geben keinen Strom mehr weiter. Ein zweites Kabel an eine andere Leiste sichert das Rack ab (A+B-Einspeisung).",
+        "[GAMEPLAY] LAN-Leisten genauso: Uplink seitlich, Racks oben. Die Kette teilt sich den Router-Port.",
+        "[KOMFORT] Falsch gezielte Kabel landen automatisch an der richtigen freien Buchse, sonst erklärt ein Hinweis warum es nicht geht.",
+        "[SPIELSTAND] Alte Leistenkabel werden beim Laden umgesteckt. Was nicht mehr passt (z. B. Rack an Rack), wird abgezogen und gemeldet.",
+        "[CO-OP] Alle Mitspieler brauchen v3.1.0."
+      ]
+    },
     {
       "version": "v3.0.1",
       "date": "2026-11-25",

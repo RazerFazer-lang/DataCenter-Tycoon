@@ -163,7 +163,8 @@ func _process(delta: float) -> void:
 ## Ohne Richtung verlässt das Kabel den Port in Richtung des anderen Endes.
 ## cable_port_resolver (optional): Callable(cable_id, cable_type, endpoint_id) -> Vector3 oder null.
 ## Liefert eine eigene Buchse pro Kabel (z. B. Steckdosenleiste); bei null gilt port_resolver.
-func rebuild_cables(cables_dict: Dictionary, port_resolver: Callable, dir_resolver: Callable = Callable(), cable_port_resolver: Callable = Callable()) -> void:
+## cable_dir_resolver (optional): Callable(cable_id, cable_type, endpoint_id) -> Vector3 oder null, Richtung je Buchse.
+func rebuild_cables(cables_dict: Dictionary, port_resolver: Callable, dir_resolver: Callable = Callable(), cable_port_resolver: Callable = Callable(), cable_dir_resolver: Callable = Callable()) -> void:
 	var ids: Array = cables_dict.keys()
 	ids.sort()
 	var lane_idx := {"power": 0, "network": 0}
@@ -181,10 +182,17 @@ func rebuild_cables(cables_dict: Dictionary, port_resolver: Callable, dir_resolv
 			continue
 		var va: Vector3 = p_a
 		var vb: Vector3 = p_b
-		var n_a := _resolve_dir(dir_resolver, ctype, from_id, va, vb)
-		var n_b := _resolve_dir(dir_resolver, ctype, to_id, vb, va)
-		var up_a := _is_upward(dir_resolver, ctype, from_id)
-		var up_b := _is_upward(dir_resolver, ctype, to_id)
+		var dr := dir_resolver
+		if cable_dir_resolver.is_valid():
+			dr = func(ct: String, eid: String) -> Variant:
+				var v: Variant = cable_dir_resolver.call(cid, ct, eid)
+				if v is Vector3:
+					return v
+				return dir_resolver.call(ct, eid) if dir_resolver.is_valid() else null
+		var n_a := _resolve_dir(dr, ctype, from_id, va, vb)
+		var n_b := _resolve_dir(dr, ctype, to_id, vb, va)
+		var up_a := _is_upward(dr, ctype, from_id)
+		var up_b := _is_upward(dr, ctype, to_id)
 		var li := int(lane_idx.get(ctype, 0))
 		lane_idx[ctype] = li + 1
 		var lane := _lane_offset(ctype, li)

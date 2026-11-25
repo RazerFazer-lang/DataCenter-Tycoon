@@ -20,6 +20,7 @@ signal unpack_started(entity_id: String, item_type: String, carton_pos: Vector3)
 ## Deckel des Altpapier-Containers klappt ("garage" / "nord").
 signal paper_bin_used(site: String)
 signal strip_loads_changed
+signal cable_hint(message: String)
 signal room_level_changed
 signal halle_nord_changed
 signal delivery_site_changed
@@ -2055,6 +2056,7 @@ func load_from_save_data(data: Dictionary, save_id: String, display_name: String
 		for item in saved_pending:
 			pending_delivery_items.append(str(item))
 	_migrate_mounted_strips(data)
+	_migrate_strip_ports()
 	_migrate_shelves()
 	# Upgrade older v0.2/v0.3 saves cleanly with a starter cart
 	if not data.has("carts"):
@@ -2083,6 +2085,113 @@ func load_from_save_data(data: Dictionary, save_id: String, display_name: String
 	post_event_f("Spielstand '%s' geladen! (Tag %d • $%.0f • %d Racks • %d CU)", [
 		current_save_name, day_number, money, racks.size(), total_compute
 	], "good")
+
+
+## Seit den Seitenbuchsen: alte Kabel an Leisten auf die richtige Buchse stecken.
+## Leiste an Leiste: von der näher am Kasten liegenden aus dem Ausgang in den Eingang der anderen.
+## Kasten/Router kommt in den Eingang, Geräte oben. Was nicht mehr passt, wird abgezogen.
+## Gibt [umgesteckt, abgezogen] zurück.
+func _migrate_strip_ports() -> Array:
+	var moved := 0
+	var dropped: Array = []
+	for ctype in ["power", "network"]:
+		var depth := _cable_depths(ctype)
+		var ids: Array = []
+		for cid in cables.keys():
+			var c: Dictionary = cables[cid]
+			if str(c.get("cable_type", "")) == ctype:
+				ids.append(str(cid))
+		# Kabel nah am Kasten zuerst, damit die Kette von vorn aufgebaut wird.
+		ids.sort_custom(func(x, y):
+			var dx := mini(int(depth.get(str(cables[x]["from_id"]), 999)), int(depth.get(str(cables[x]["to_id"]), 999)))
+			var dy := mini(int(depth.get(str(cables[y]["from_id"]), 999)), int(depth.get(str(cables[y]["to_id"]), 999)))
+			return dx < dy if dx != dy else x < y)
+		var taken := {}
+		# Kabel ohne Leiste behalten ihre Buchsen.
+		for cid in ids:
+			var c: Dictionary = cables[cid]
+			for end in [["from_id", "from_slot"], ["to_id", "to_slot"]]:
+				var eid := str(c[end[0]])
+				if StripRules.role(ctype, eid) != "strip":
+					continue
+		for cid in ids:
+			var c: Dictionary = cables[cid]
+			var a := str(c["from_id"])
+			var b := str(c["to_id"])
+			var ra := StripRules.role(ctype, a)
+			var rb := StripRules.role(ctype, b)
+			if ctype == "power" and ra == "device" and rb == "device":
+				dropped.append(cid)
+				continue
+			if ra != "strip" and rb != "strip":
+				continue
+			var sa := -1
+			var sb := -1
+			if ra == "strip" and rb == "strip":
+				var a_up := int(depth.get(a, 999)) <= int(depth.get(b, 999))
+				sa = StripRules.out_slot(ctype) if a_up else StripRules.in_slot(ctype)
+				sb = StripRules.in_slot(ctype) if a_up else StripRules.out_slot(ctype)
+			else:
+				var s_is_a := ra == "strip"
+				var strip := a if s_is_a else b
+				var other := b if s_is_a else a
+				var orole := rb if s_is_a else ra
+				var feeds := orole == "source" or ((orole == "ups" or orole == "hub") and int(depth.get(other, 999)) < int(depth.get(strip, 999)))
+				var slot := StripRules.in_slot(ctype)
+				if not feeds:
+					slot = -1
+					for i in StripRules.top_count(ctype):
+						if not (taken.get(strip, {}) as Dictionary).has(i):
+							slot = i
+							break
+				if s_is_a:
+					sa = slot
+				else:
+					sb = slot
+			var ok := true
+			for pair in [[a, sa], [b, sb]]:
+				if int(pair[1]) < 0 and StripRules.role(ctype, str(pair[0])) == "strip":
+					ok = false
+				elif int(pair[1]) >= 0 and (taken.get(pair[0], {}) as Dictionary).has(int(pair[1])):
+					ok = false
+			if not ok:
+				dropped.append(cid)
+				continue
+			for pair in [[a, sa, "from_slot"], [b, sb, "to_slot"]]:
+				if int(pair[1]) < 0:
+					continue
+				if not taken.has(pair[0]):
+					taken[pair[0]] = {}
+				taken[pair[0]][int(pair[1])] = true
+				if int(c.get(pair[2], -1)) != int(pair[1]):
+					c[pair[2]] = int(pair[1])
+					moved += 1
+	for cid in dropped:
+		cables.erase(cid)
+	if moved > 0 or not dropped.is_empty():
+		post_event_f("🔌 Steckleisten haben jetzt Eingang (weiß) und Ausgang (rot) an der Seite: %d Kabel umgesteckt, %d Kabel abgezogen. Racks geben keinen Strom mehr weiter, sie hängen an Leisten oder am Kasten.", [moved, dropped.size()], "info")
+	return [moved, dropped.size()]
+
+
+## Abstand jedes Anschlusses zum Kasten bzw. Router über beliebige Kabel (alte Regeln).
+func _cable_depths(ctype: String) -> Dictionary:
+	var depth := {}
+	var queue: Array = []
+	for src in ([WALL_BREAKER_ID, HALL_C_BREAKER_ID, HALL_NORD_BREAKER_ID] if ctype == "power" else [WALL_ROUTER_ID, HALL_C_ROUTER_ID, HALL_NORD_ROUTER_ID]):
+		depth[src] = 0
+		queue.append(src)
+	while not queue.is_empty():
+		var cur := str(queue.pop_front())
+		for cid in cables.keys():
+			var c: Dictionary = cables[cid]
+			if str(c.get("cable_type", "")) != ctype:
+				continue
+			var other := str(c["to_id"]) if str(c["from_id"]) == cur else (str(c["from_id"]) if str(c["to_id"]) == cur else "")
+			if other == "" or depth.has(other):
+				continue
+			depth[other] = int(depth[cur]) + 1
+			queue.append(other)
+	return depth
 
 
 ## Spielstände vor v2.6: am Kasten bzw. Router montierte Leisten werden zu echten Leisten in Kisten.
@@ -3323,7 +3432,7 @@ func get_max_ports(cable_type: String, endpoint_id: String) -> int:
 		if endpoint_id == HALL_NORD_BREAKER_ID:
 			return 16
 		if is_power_strip_decor(endpoint_id):
-			return 6
+			return StripRules.POWER_TOP + 2
 		if racks.has(endpoint_id):
 			return 2
 		if coolers.has(endpoint_id):
@@ -3340,7 +3449,7 @@ func get_max_ports(cable_type: String, endpoint_id: String) -> int:
 		if endpoint_id == HALL_NORD_ROUTER_ID:
 			return 16
 		if is_lan_strip_decor(endpoint_id):
-			return 8
+			return StripRules.LAN_TOP + 2
 		if racks.has(endpoint_id):
 			return 1 + _count_rack_switches(endpoint_id) * 3
 		return 0
@@ -3545,12 +3654,20 @@ func is_strip_type(item_type: String) -> bool:
 const STRIP_WALL_MIN_Y := 0.28
 const STRIP_WALL_MAX_Y := 1.75
 ## Dauerlast in Watt: normale Leiste und Hauptleiste direkt am Stromkasten (Drehstrom-Zuleitung).
-const STRIP_LIMIT_W := 3500
-const STRIP_MAIN_LIMIT_W := 22000
+const STRIP_LIMIT_W := StripRules.STRIP_LIMIT_W
+const STRIP_MAIN_LIMIT_W := StripRules.CHAIN_LIMIT_W
 const STRIP_TRIP_SECONDS := 4.0
 var strip_loads: Dictionary = {}
 var _strip_over: Dictionary = {}
 var _strip_parent: Dictionary = {}
+## Gerät -> Liste der Anschlüsse, die es speisen (Racks mit A+B-Einspeisung haben zwei).
+var _strip_feeds: Dictionary = {}
+var _lan_parent: Dictionary = {}
+## Bandbreite je LAN-Kette (Mbit/s), gespeichert an der ersten Leiste am Router.
+var lan_chain_mbps: Dictionary = {}
+## Gesamtlast je Kette, gespeichert an der ersten Leiste am Kasten.
+var chain_loads: Dictionary = {}
+var _chain_over: Dictionary = {}
 
 
 func is_strip_on(did: String) -> bool:
@@ -3562,17 +3679,49 @@ func is_wall_strip(d: Dictionary) -> bool:
 
 
 func get_strip_limit(did: String) -> int:
-	if not is_power_strip_decor(did):
-		return 0
-	for cid in cables.keys():
-		var c: Dictionary = cables[cid]
-		if str(c.get("cable_type", "")) != "power":
-			continue
-		var a := str(c["from_id"])
-		var b := str(c["to_id"])
-		if (a == did or b == did) and ([WALL_BREAKER_ID, HALL_C_BREAKER_ID, HALL_NORD_BREAKER_ID].has(a) or [WALL_BREAKER_ID, HALL_C_BREAKER_ID, HALL_NORD_BREAKER_ID].has(b)):
-			return STRIP_MAIN_LIMIT_W
-	return STRIP_LIMIT_W
+	return StripRules.STRIP_LIMIT_W if is_power_strip_decor(did) else 0
+
+
+## Erste Leiste der Kette, in der diese Leiste hängt ("" = hängt nicht am Strom).
+func get_chain_root(did: String) -> String:
+	var cur := did
+	var root := ""
+	for i in 128:
+		if is_power_strip_decor(cur):
+			root = cur
+		if not _strip_parent.has(cur):
+			break
+		cur = str(_strip_parent[cur])
+	return root if StripRules.role("power", cur) == "source" else ""
+
+
+## Kommt an dieser Leiste Strom bzw. Netz an?
+func is_strip_fed(ctype: String, did: String) -> bool:
+	if ctype == "power":
+		return _strip_parent.has(did) and get_chain_root(did) != ""
+	return _lan_parent.has(did)
+
+
+## Versorgt diese Leiste über ihren Ausgang eine weitere?
+func feeds_next_strip(ctype: String, did: String) -> bool:
+	var parents := _strip_parent if ctype == "power" else _lan_parent
+	for k in parents.keys():
+		if str(parents[k]) == did and StripRules.is_strip(ctype, str(k)):
+			return true
+	return false
+
+
+func get_chain_load(did: String) -> int:
+	return int(chain_loads.get(get_chain_root(did), 0))
+
+
+func get_chain_length(did: String) -> int:
+	var root := get_chain_root(did)
+	var n := 0
+	for k in _strip_parent.keys():
+		if is_power_strip_decor(str(k)) and get_chain_root(str(k)) == root and root != "":
+			n += 1
+	return n
 
 
 func get_strip_load(did: String) -> int:
@@ -3609,8 +3758,23 @@ func _after_strip_change() -> void:
 	_broadcast_sim_tick()
 
 
-## Überlastete Leisten lösen nach ein paar Sekunden aus (nur Host).
+## Überlastete Leisten lösen nach ein paar Sekunden aus (nur Host). Ist die ganze Kette zu viel
+## für den Abgang, fällt die erste Leiste am Kasten und alles dahinter ist aus.
 func _tick_strips(dt: float) -> void:
+	for root_v in chain_loads.keys():
+		var root := str(root_v)
+		if not is_power_strip_decor(root) or not is_strip_on(root) or int(chain_loads[root]) <= StripRules.CHAIN_LIMIT_W:
+			_chain_over.erase(root)
+			continue
+		_chain_over[root] = float(_chain_over.get(root, 0.0)) + dt
+		if float(_chain_over[root]) >= STRIP_TRIP_SECONDS:
+			_chain_over.erase(root)
+			decor_items[root]["on"] = false
+			decor_items[root]["tripped"] = true
+			post_event_f("LEISTENKETTE AUSGELÖST: %d W am Abgang, höchstens %d W. Die ganze Kette ist aus. Last auf einen zweiten Abgang verteilen und an der ersten Leiste wieder einschalten.", [int(chain_loads[root]), StripRules.CHAIN_LIMIT_W], "alert")
+			_after_strip_change()
+			_rpc_play_sfx.rpc("breaker_trip")
+			return
 	for did_v in strip_loads.keys():
 		var did := str(did_v)
 		if not is_power_strip_decor(did) or not is_strip_on(did):
@@ -3619,6 +3783,7 @@ func _tick_strips(dt: float) -> void:
 		if get_strip_load(did) <= get_strip_limit(did):
 			_strip_over.erase(did)
 			continue
+		# Eine Leiste weiter oben in der Kette ist schon aus? Dann hat diese keine Last mehr.
 		_strip_over[did] = float(_strip_over.get(did, 0.0)) + dt
 		if float(_strip_over[did]) >= STRIP_TRIP_SECONDS:
 			_strip_over.erase(did)
@@ -3630,22 +3795,63 @@ func _tick_strips(dt: float) -> void:
 			return
 
 
-## Last aller Geräte den Kabelweg zurück bis zum Stromkasten auf die Leisten verteilen.
+## Last je Leiste (nur die Geräte oben in ihren Buchsen) und je Kette (alles am Abgang).
 func _compute_strip_loads(device_watts: Dictionary) -> void:
 	var loads := {}
+	var chains := {}
 	for did in decor_items.keys():
 		if is_power_strip_decor(str(did)):
 			loads[did] = 0
 	for dev in device_watts.keys():
-		var cur := str(dev)
-		var guard := 0
-		while _strip_parent.has(cur) and guard < 64:
-			guard += 1
-			cur = str(_strip_parent[cur])
-			if loads.has(cur):
-				loads[cur] = int(loads[cur]) + int(device_watts[dev])
+		var feeds: Array = _strip_feeds.get(str(dev), [])
+		if feeds.is_empty():
+			continue
+		var share := float(device_watts[dev]) / float(feeds.size())
+		for f in feeds:
+			if loads.has(f):
+				loads[f] = int(loads[f]) + roundi(share)
+			var root := get_chain_root(str(f)) if is_power_strip_decor(str(f)) else ""
+			if root != "":
+				chains[root] = int(chains.get(root, 0)) + roundi(share)
 	strip_loads = loads
+	chain_loads = chains
 	strip_loads_changed.emit()
+
+
+## Bandbreite, die über jede LAN-Kette läuft (alle Racks hinter der ersten Leiste am Router).
+func _compute_lan_chains() -> void:
+	var out := {}
+	for rid in racks.keys():
+		var rack: Dictionary = racks[rid]
+		if not bool(rack.get("networked", false)):
+			continue
+		var r_rent := str(rack.get("rental_type", "none"))
+		if r_rent == "none" or not HardwareCatalog.RENTAL_PROFILES.has(r_rent):
+			continue
+		var mbps := float(rack.get("active_users", 0)) * float((HardwareCatalog.RENTAL_PROFILES[r_rent] as Dictionary).get("mbps_per_user", 0.5))
+		var cur := str(rid)
+		var root := ""
+		for i in 128:
+			if not _lan_parent.has(cur):
+				break
+			cur = str(_lan_parent[cur])
+			if is_lan_strip_decor(cur):
+				root = cur
+		if root != "":
+			out[root] = float(out.get(root, 0.0)) + mbps
+	lan_chain_mbps = out
+
+
+func get_lan_chain_root(did: String) -> String:
+	var cur := did
+	var root := ""
+	for i in 128:
+		if is_lan_strip_decor(cur):
+			root = cur
+		if not _lan_parent.has(cur):
+			break
+		cur = str(_lan_parent[cur])
+	return root
 
 
 ## Montageplatz einer Leiste an einer Wand. Leer = hier geht es nicht.
@@ -3699,7 +3905,13 @@ func can_place_strip_on_wall(pos: Vector3, rot_y: float, ignore_id: String = "")
 		return false
 	var n := Vector3(sin(rot_y), 0.0, cos(rot_y)).round()
 	var spot := get_strip_wall_spot(pos, n)
-	if spot.is_empty() or (spot["pos"] as Vector3).distance_to(pos) > 0.05:
+	if spot.is_empty():
+		return false
+	# Entlang der Wand darf die Leiste frei sitzen (zusammengesteckte Leisten liegen nicht im Raster).
+	var off := (spot["pos"] as Vector3) - pos
+	var along_dir := Vector3(absf(n.z), 0.0, absf(n.x))
+	off -= along_dir * off.dot(along_dir)
+	if off.length() > 0.05:
 		return false
 	if absf(n.z) > 0.5:
 		var local_z := pos.z - HALLE_NORD_ORIGIN.z if pos.z < -100.0 else pos.z
@@ -3726,6 +3938,11 @@ func can_place_strip_on_wall(pos: Vector3, rot_y: float, ignore_id: String = "")
 func snap_place_pos(item_type: String, pos: Vector3) -> Vector3:
 	if is_strip_type(item_type) and pos.y >= STRIP_WALL_MIN_Y:
 		return pos
+	# Direkt an eine andere Leiste gesteckt: genau dort bleiben.
+	if is_strip_type(item_type):
+		var sn := StripRules.snap_spot("power" if item_type == "prop_power_strip" else "network", pos, false)
+		if not sn.is_empty() and (sn["pos"] as Vector3).distance_to(pos) < 0.02:
+			return sn["pos"]
 	# Einrichtung rastet schon in der Vorschau ein (DecorSpec.snap_pose).
 	if DecorSpec.SIZES.has(item_type):
 		return pos if DecorSpec.is_wall_sign(item_type) else Vector3(pos.x, 0.0, pos.z)
@@ -3764,6 +3981,14 @@ func can_place_strip_at(pos: Vector3, ignore_id: String = "") -> bool:
 		var gap := 0.24 if is_strip_type(str(d.get("item_type", ""))) else 0.62
 		if Vector2(dpos.x - pos.x, dpos.z - pos.z).length() < gap:
 			return false
+		# Leisten direkt hintereinander: Enden berühren sich, aber nicht seitlich daneben.
+		if is_strip_type(str(d.get("item_type", ""))):
+			var rel := Vector2(pos.x - dpos.x, pos.z - dpos.z)
+			var ax := StripRules.axis(d)
+			var along := rel.dot(Vector2(ax.x, ax.z))
+			var across := absf(rel.cross(Vector2(ax.x, ax.z)))
+			if across < 0.13 and absf(along) < StripRules.LINK_PITCH - 0.02:
+				return false
 	return true
 
 
@@ -5067,24 +5292,28 @@ func _recalculate_networks_and_metrics() -> void:
 		bus_visited[src] = true
 		bus_queue.append(src)
 
+	var p_edges := StripRules.edges("power")
 	while not bus_queue.is_empty():
 		var curr := str(bus_queue.pop_front())
-		for cab_id in cables.keys():
-			var cab: Dictionary = cables[cab_id]
-			if str(cab["cable_type"]) != "power":
-				continue
+		for e in p_edges:
 			var other := ""
-			if str(cab["from_id"]) == curr:
-				other = str(cab["to_id"])
-			elif str(cab["to_id"]) == curr:
-				other = str(cab["from_id"])
-			if other == "" or bus_visited.has(other):
+			var cs := -1
+			var os := -1
+			if str(e[0]) == curr:
+				other = str(e[2])
+				cs = int(e[1])
+				os = int(e[3])
+			elif str(e[2]) == curr:
+				other = str(e[0])
+				cs = int(e[3])
+				os = int(e[1])
+			if other == "" or bus_visited.has(other) or not StripRules.flows("power", curr, cs, other, os):
 				continue
 			bus_visited[other] = true
 			if ups_units.has(other):
 				ups_units[other]["connected"] = true
 				bus_queue.append(other)
-			elif racks.has(other) or (is_power_strip_decor(other) and is_strip_on(other)):
+			elif is_power_strip_decor(other) and is_strip_on(other):
 				bus_queue.append(other)
 
 	# Determine if UPS backup is keeping the power bus alive during a breaker outage
@@ -5098,6 +5327,7 @@ func _recalculate_networks_and_metrics() -> void:
 	var power_alive := breaker_on or ups_backup_active
 
 	_strip_parent = {}
+	_strip_feeds = {}
 	if power_alive:
 		var p_visited: Dictionary = {}
 		var p_queue: Array = []
@@ -5106,22 +5336,31 @@ func _recalculate_networks_and_metrics() -> void:
 			p_queue.append(src)
 		while not p_queue.is_empty():
 			var curr := str(p_queue.pop_front())
-			for cab_id in cables.keys():
-				var cab: Dictionary = cables[cab_id]
-				if str(cab["cable_type"]) != "power":
-					continue
+			for e in p_edges:
 				var other := ""
-				if str(cab["from_id"]) == curr:
-					other = str(cab["to_id"])
-				elif str(cab["to_id"]) == curr:
-					other = str(cab["from_id"])
-				if other == "" or p_visited.has(other):
+				var cs := -1
+				var os := -1
+				if str(e[0]) == curr:
+					other = str(e[2])
+					cs = int(e[1])
+					os = int(e[3])
+				elif str(e[2]) == curr:
+					other = str(e[0])
+					cs = int(e[3])
+					os = int(e[1])
+				if other == "" or not StripRules.flows("power", curr, cs, other, os):
+					continue
+				# A+B-Einspeisung: ein Rack an zwei Leisten teilt seine Last auf beide auf.
+				if racks.has(other) and p_visited.has(other):
+					(_strip_feeds[other] as Array).append(curr)
+					continue
+				if p_visited.has(other):
 					continue
 				p_visited[other] = true
 				_strip_parent[other] = curr
+				_strip_feeds[other] = [curr]
 				if racks.has(other):
 					racks[other]["powered"] = true
-					p_queue.append(other)
 				elif coolers.has(other):
 					coolers[other]["powered"] = true
 				elif ups_units.has(other) or (is_power_strip_decor(other) and is_strip_on(other)):
@@ -5139,6 +5378,7 @@ func _recalculate_networks_and_metrics() -> void:
 					coolers[cid]["powered"] = true
 
 		# BFS Network from Wall Router (+ Hall C Router if unlocked)
+		_lan_parent = {}
 		var n_visited: Dictionary = {WALL_ROUTER_ID: true}
 		var n_queue: Array = [WALL_ROUTER_ID]
 		if room_level >= 2:
@@ -5148,6 +5388,7 @@ func _recalculate_networks_and_metrics() -> void:
 			n_visited[HALL_NORD_ROUTER_ID] = true
 			n_queue.append(HALL_NORD_ROUTER_ID)
 
+		var n_edges := StripRules.edges("network")
 		while not n_queue.is_empty():
 			var curr := str(n_queue.pop_front())
 			var can_forward := (
@@ -5159,18 +5400,22 @@ func _recalculate_networks_and_metrics() -> void:
 			)
 			if not can_forward:
 				continue
-			for cab_id in cables.keys():
-				var cab: Dictionary = cables[cab_id]
-				if str(cab["cable_type"]) != "network":
-					continue
+			for e in n_edges:
 				var other := ""
-				if str(cab["from_id"]) == curr:
-					other = str(cab["to_id"])
-				elif str(cab["to_id"]) == curr:
-					other = str(cab["from_id"])
-				if other == "" or n_visited.has(other):
+				var cs := -1
+				var os := -1
+				if str(e[0]) == curr:
+					other = str(e[2])
+					cs = int(e[1])
+					os = int(e[3])
+				elif str(e[2]) == curr:
+					other = str(e[0])
+					cs = int(e[3])
+					os = int(e[1])
+				if other == "" or n_visited.has(other) or not StripRules.flows("network", curr, cs, other, os):
 					continue
 				n_visited[other] = true
+				_lan_parent[other] = curr
 				if racks.has(other):
 					racks[other]["networked"] = true
 					n_queue.append(other)
@@ -5240,6 +5485,7 @@ func _recalculate_networks_and_metrics() -> void:
 				watts += chw
 				device_watts[uid] = chw
 	_compute_strip_loads(device_watts)
+	_compute_lan_chains()
 
 	var req_compute := 0
 	for cid in contracts.keys():
@@ -7034,6 +7280,12 @@ func _rpc_req_connect_cable(cable_type: String, from_id: String, to_id: String, 
 		_rpc_play_sfx.rpc_id(peer_id, "error")
 		return
 
+	var rule := StripRules.plan(cable_type, from_id, from_slot, to_id, to_slot)
+	if not bool(rule["ok"]):
+		_rpc_cable_hint.rpc_id(peer_id, str(rule["msg"]))
+		_rpc_play_sfx.rpc_id(peer_id, "error")
+		return
+
 	if count_cables_on(cable_type, from_id) >= get_max_ports(cable_type, from_id):
 		post_event_f("Kein freier %s-Port an %s (Rack-Switch oder Upgrade nötig).", [
 			_cable_type_label(cable_type), from_id.to_upper()
@@ -7048,8 +7300,8 @@ func _rpc_req_connect_cable(cable_type: String, from_id: String, to_id: String, 
 		_rpc_play_sfx.rpc_id(peer_id, "error")
 		return
 
-	var use_from_slot := pick_free_slot(cable_type, from_id, from_slot)
-	var use_to_slot := pick_free_slot(cable_type, to_id, to_slot)
+	var use_from_slot := int(rule["a_slot"]) if StripRules.role(cable_type, from_id) == "strip" else pick_free_slot(cable_type, from_id, from_slot)
+	var use_to_slot := int(rule["b_slot"]) if StripRules.role(cable_type, to_id) == "strip" else pick_free_slot(cable_type, to_id, to_slot)
 	var cab_id := _alloc_id("cable")
 	cables[cab_id] = {
 		"id": cab_id, "cable_type": cable_type, "from_id": from_id, "to_id": to_id,
@@ -7064,6 +7316,12 @@ func _rpc_req_connect_cable(cable_type: String, from_id: String, to_id: String, 
 	_rpc_play_sfx.rpc("cable")
 	var label := "%skabel" % _cable_type_label(cable_type)
 	post_event_f("%s verband %s: %s ↔ %s", [NetworkManager.get_player_name(peer_id), label, from_id.to_upper(), to_id.to_upper()], "info")
+
+
+## Hinweis nur für den Spieler, der falsch gesteckt hat.
+@rpc("authority", "call_local", "reliable")
+func _rpc_cable_hint(msg: String) -> void:
+	cable_hint.emit(tr(msg))
 
 
 ## Verleihende Racks behalten diesen Anteil ihrer Hardware als Reserve für die eigenen Mieter.
@@ -8227,6 +8485,10 @@ func _broadcast_sim_tick() -> void:
 		"ups_backup_active": ups_backup_active,
 		"avg_ups_charge": avg_ups_charge,
 		"strip_loads": strip_loads.duplicate(),
+		"chain_loads": chain_loads.duplicate(),
+		"lan_chain_mbps": lan_chain_mbps.duplicate(),
+		"strip_parent": _strip_parent.duplicate(),
+		"lan_parent": _lan_parent.duplicate(),
 		"overload_timer": overload_timer,
 		"power_tier": power_tier,
 		"router_tier": router_tier,
@@ -8288,6 +8550,14 @@ func _rpc_sync_sim_tick(packet: Dictionary) -> void:
 		ups_backup_active = bool(packet["ups_backup_active"])
 		grid_outage_left = float(packet.get("grid_outage_left", 0.0))
 		avg_ups_charge = float(packet["avg_ups_charge"])
+		if packet.get("chain_loads", null) is Dictionary:
+			chain_loads = (packet["chain_loads"] as Dictionary).duplicate()
+		if packet.get("lan_chain_mbps", null) is Dictionary:
+			lan_chain_mbps = (packet["lan_chain_mbps"] as Dictionary).duplicate()
+		if packet.get("strip_parent", null) is Dictionary and not multiplayer.is_server():
+			_strip_parent = (packet["strip_parent"] as Dictionary).duplicate()
+		if packet.get("lan_parent", null) is Dictionary and not multiplayer.is_server():
+			_lan_parent = (packet["lan_parent"] as Dictionary).duplicate()
 		if packet.get("strip_loads", null) is Dictionary:
 			strip_loads = (packet["strip_loads"] as Dictionary).duplicate()
 			strip_loads_changed.emit()
