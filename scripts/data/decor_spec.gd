@@ -93,7 +93,8 @@ static func walls(nord: bool) -> Array:
 
 
 ## Lage fürs Aufstellen: feines Raster, an Wände und an gleiche Nachbarn eingerastet.
-static func snap_pose(item_type: String, pos: Vector3, rot: float, ignore_id: String = "") -> Dictionary:
+## keep_rot: der Spieler hat selbst gedreht. Dann rasten nur Wände ein, zu denen die Drehung passt.
+static func snap_pose(item_type: String, pos: Vector3, rot: float, ignore_id: String = "", keep_rot: bool = false) -> Dictionary:
 	var nord: bool = GameState.halle_nord_owned and pos.z < -100.0
 	var fp := footprint(item_type)
 	var p := Vector3(snappedf(pos.x, GRID), 0.0, snappedf(pos.z, GRID))
@@ -103,6 +104,8 @@ static func snap_pose(item_type: String, pos: Vector3, rot: float, ignore_id: St
 		var found := {}
 		for w in walls(nord):
 			var n: Vector2 = w["n"]
+			if keep_rot and absf(angle_difference(atan2(n.x, n.y), rot)) > 0.1:
+				continue
 			var dist: float = (p.x - float(w["at"])) * n.x if n.x != 0.0 else (p.z - float(w["at"])) * n.y
 			var back := dist - fp.y * 0.5
 			if absf(back) < best or (dist > 0.0 and back < 0.0 and dist < best + fp.y * 0.5):

@@ -56,6 +56,7 @@ func _ready() -> void:
 	_build_ground()
 	_build_bounds()
 	_build_fence_and_gate()
+	add_to_group("outdoor_world")
 	_build_back_door()
 	_build_roof()
 	_build_garden()
@@ -63,6 +64,7 @@ func _ready() -> void:
 	_build_season_fx()
 	wildlife = Wildlife.new()
 	add_child(wildlife)
+	MeshMerger.set_outside(wildlife)
 	OutdoorManager.changed.connect(_refresh)
 	_refresh()
 
@@ -432,6 +434,8 @@ func _build_roof() -> void:
 	_area("dish", Vector3(-3.4, ROOF_Y + 0.9, 1.2), Vector3(1.2, 1.8, 1.2))
 	_solid(Vector3(-3.4, ROOF_Y + 0.6, 1.2), Vector3(0.3, 1.2, 0.3))
 	var ws := _place("weather_station", Vector3(-0.6, ROOF_Y, 2.4), 180.0)
+	if ws != null:
+		MeshMerger.set_outside(ws)
 	_cups = ws.find_child("Cups", true, false) as Node3D
 	_vane = ws.find_child("Vane", true, false) as Node3D
 	_area("station", Vector3(-0.6, ROOF_Y + 1.0, 2.4), Vector3(0.8, 2.0, 0.7))

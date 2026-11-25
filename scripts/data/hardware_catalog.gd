@@ -545,18 +545,29 @@ static func get_category_parts(cat: String) -> Array:
 	return []
 
 
+static var _by_id: Dictionary = {}   # Kategorie -> {id -> Bauteil}
+
+
+static func _index(cat: String) -> Dictionary:
+	if not _by_id.has(cat):
+		var ix := {}
+		for p in get_category_parts(cat):
+			var pid := str((p as Dictionary)["id"])
+			if not ix.has(pid):
+				ix[pid] = p
+		_by_id[cat] = ix
+	return _by_id[cat]
+
+
 static func get_part(cat: String, part_id: String) -> Dictionary:
 	# Leerer Steckplatz: kein Ersatzteil unterschieben.
 	if part_id.is_empty():
 		return {}
-	if PARTS.has(cat):
-		var arr: Array = PARTS[cat]
-		for p in arr:
-			var pd: Dictionary = p
-			if str(pd["id"]) == part_id:
-				return pd
-		if not arr.is_empty():
-			return arr[0]
+	var ix := _index(cat)
+	if ix.has(part_id):
+		return ix[part_id]
+	if not ix.is_empty():
+		return PARTS[cat][0]
 	return {}
 
 
@@ -598,13 +609,9 @@ static func normalize_components(raw_upgrades: Dictionary, server_type: String =
 			if pid.is_empty():
 				res[cat] = ""
 				continue
-			var found := false
-			for p in get_category_parts(cat):
-				if str((p as Dictionary)["id"]) == pid:
-					res[cat] = pid
-					found = true
-					break
-			if not found:
+			if _index(cat).has(pid):
+				res[cat] = pid
+			else:
 				res[cat] = DEFAULT_PARTS[cat] if legacy else ""
 		elif val is int or val is float:
 			var legacy_tier := clampi(int(val), 0, 3)
@@ -633,9 +640,8 @@ static func is_stock_default_part(part_id: String) -> bool:
 
 static func find_part_category(part_id: String) -> String:
 	for cat in CATEGORY_ORDER:
-		for p in get_category_parts(cat):
-			if str((p as Dictionary)["id"]) == part_id:
-				return cat
+		if _index(cat).has(part_id):
+			return cat
 	return ""
 
 

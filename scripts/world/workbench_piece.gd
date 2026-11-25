@@ -61,6 +61,7 @@ var tool_active: bool = false
 var _order: Array = []
 var _pending: Dictionary = {}      # task_id -> {t, v}: lokal erledigt, vom Host noch nicht bestätigt
 var _job_key: String = ""
+var _turn_over: Dictionary = {}   # job_key -> Vierteldrehungen der CPU
 var _shell: Node3D
 var _ghost: Node3D
 var _ghost_item: String = ""
@@ -994,7 +995,21 @@ func set_progress(item_id: String, p: float) -> void:
 
 ## Die neue CPU liegt zufällig gedreht bereit (0 = richtig herum).
 func cpu_turns() -> int:
-	return 1 + absi(hash(_job_key)) % 3
+	return int(_turn_over.get(_job_key, 1 + absi(hash(_job_key)) % 3))
+
+
+## Merkt sich, wie herum der Spieler die CPU abgelegt hat.
+func set_cpu_turns(turns: int) -> void:
+	_turn_over = {_job_key: posmod(turns, 4)}
+
+
+## Dreht ein abgelegtes Teil sichtbar in seine neue Lage.
+func respin_item(item_id: String) -> void:
+	if items.has(item_id):
+		var it: Item = items[item_id]
+		it.from = it.cur
+		it.t = 0.0
+		_moving = true
 
 
 func wipe_paste(t: float) -> void:

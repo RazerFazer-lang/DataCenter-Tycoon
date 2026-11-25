@@ -57,6 +57,9 @@ var _base: PackedFloat32Array = []
 var _flows: Array[ShaderMaterial] = []
 var _fans: Array = []
 var _ov: ShaderMaterial
+var _ov_meshes: Array[MeshInstance3D] = []
+var _ov_on := false
+var _sent := Vector2(-1.0, -1.0)
 var _haze: MeshInstance3D
 var _hz: ShaderMaterial
 var _t := 0.0
@@ -101,10 +104,26 @@ func _scan(n: Node, dup: Dictionary, hot: bool) -> void:
 					_base.append(maxf(0.6, m.emission_energy_multiplier))
 				mi.set_surface_override_material(s, dup[m.resource_name])
 			if _ov != null and h:
-				mi.material_overlay = _ov
+				_ov_meshes.append(mi)
 	for c in n.get_children():
 		if c != self:
 			_scan(c, dup, h)
+
+
+## Gehört dieses Netz zu den Teilen mit Staub und Hitze?
+func overlays(mi: MeshInstance3D) -> bool:
+	return _ov_meshes.has(mi)
+
+
+## Für zusammengefasste Netze (MeshMerger).
+func add_overlay_mesh(mi: MeshInstance3D) -> void:
+	_ov_meshes.append(mi)
+	mi.material_overlay = _ov if _ov_on else null
+
+
+func drop_overlay_mesh(mi: MeshInstance3D) -> void:
+	_ov_meshes.erase(mi)
+	mi.material_overlay = null
 
 
 func _process(delta: float) -> void:
@@ -136,8 +155,17 @@ func _process(delta: float) -> void:
 					n.rotation.z += delta * _speed
 	if _ov != null:
 		var heat := clampf((temp - HOT) / (GLOW - HOT), 0.0, 1.0)
-		_ov.set_shader_parameter("heat", heat)
-		_ov.set_shader_parameter("dust", clampf(dust / 100.0, 0.0, 1.0))
+		var now := Vector2(heat, clampf(dust / 100.0, 0.0, 1.0))
+		if not now.is_equal_approx(_sent):
+			_sent = now
+			_ov.set_shader_parameter("heat", now.x)
+			_ov.set_shader_parameter("dust", now.y)
+			var want := now.x > 0.001 or now.y > 0.001
+			if want != _ov_on:
+				_ov_on = want
+				for m in _ov_meshes:
+					if is_instance_valid(m):
+						m.material_overlay = _ov if want else null
 		_update_haze(heat)
 
 

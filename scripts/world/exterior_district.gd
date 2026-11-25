@@ -78,6 +78,7 @@ func _ready() -> void:
 	_build_background_ring_traffic()
 	_build_distant_highway_stream()
 	_build_sky_life()
+	MeshMerger.set_outside(self)
 	_build_weather_vfx()
 
 

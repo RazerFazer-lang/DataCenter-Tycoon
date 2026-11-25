@@ -35,6 +35,7 @@ var _cam_from_fov: float = 75.0
 var _cam_t: float = 0.0
 var _zoom: float = 1.0
 var _orbit: Vector2 = Vector2.ZERO
+var _orbit_goal: float = NAN     # Ziel der Blickdrehung mit [R]
 var _pan: Vector2 = Vector2.ZERO
 var _orbiting: bool = false
 var _tool_blend: float = 0.0
@@ -105,6 +106,7 @@ func open_workbench() -> void:
 	_lmb = false
 	_zoom = 1.0
 	_orbit = Vector2.ZERO
+	_orbit_goal = NAN
 	_pan = Vector2.ZERO
 	_tool_blend = 0.0
 	_cam_t = 0.0
@@ -588,6 +590,10 @@ func _process(delta: float) -> void:
 	if _action.is_empty() or str(_action.get("phase", "")) == "drag":
 		var reach := Vector2(0.10, 0.08) + Vector2(0.26, 0.20) * (1.0 - clampf(_zoom, 0.0, 1.0)) + Vector2(0.14, 0.06) * _tool_blend
 		_pan = _pan.lerp(m * reach, clampf(delta * 2.6, 0.0, 1.0))
+	if not is_nan(_orbit_goal):
+		_orbit.x = lerpf(_orbit.x, _orbit_goal, clampf(delta * 7.0, 0.0, 1.0))
+		if absf(_orbit.x - _orbit_goal) < 0.004:
+			_orbit_goal = NAN
 	var view := _view_xf()
 	if _cam_t < 1.0:
 		var e := _cam_t * _cam_t * (3.0 - 2.0 * _cam_t)
@@ -721,17 +727,17 @@ func _hit_score(dist: float, bias: float) -> float:
 
 
 func _update_hint() -> void:
-	var base := tr("Rechte Maustaste ziehen: Blick drehen  •  Mausrad: Zoom  •  [H] Hilfe an/aus")
+	var base := SettingsManager.remap_prompt_keys(tr("Rechte Maustaste oder [R]: Blick drehen  •  Mausrad: Zoom  •  [H] Hilfe an/aus"))
 	if not _action.is_empty():
 		match str(_action.get("phase", "")):
 			"drag":
-				base = tr("An die markierte Stelle führen und gedrückt halten, bis es einrastet")
+				base = SettingsManager.remap_prompt_keys(tr("An die markierte Stelle führen und gedrückt halten, bis es einrastet  •  [R] drehen"))
 				if int(_action.get("turns", 0)) != 0:
-					base = tr("Goldenes Dreieck auf die Ecke des Sockels ausrichten: [R] drehen")
+					base = SettingsManager.remap_prompt_keys(tr("Goldenes Dreieck auf die Ecke des Sockels ausrichten: [R] drehen"))
 			"press":
 				base = tr("Weiter drücken…")
 				if int(_action.get("turns", 0)) != 0:
-					base = tr("Sitzt nicht! Loslassen und mit [R] drehen – mit Gewalt brechen die Pins")
+					base = SettingsManager.remap_prompt_keys(tr("Sitzt nicht! Mit [R] drehen – mit Gewalt brechen die Pins"))
 			"hold":
 				if str(_action["kind"]) == "screw":
 					var tv := float(_action["t"])
@@ -773,6 +779,7 @@ func _gui_input(event: InputEvent) -> void:
 		var mm := event as InputEventMouseMotion
 		_mouse = mm.position
 		if _orbiting:
+			_orbit_goal = NAN
 			_orbit.x = clampf(_orbit.x - mm.relative.x * 0.005, -0.75, 0.75)
 			_orbit.y = clampf(_orbit.y + mm.relative.y * 0.004, -0.35, 0.45)
 	elif event is InputEventMouseButton:
@@ -799,6 +806,10 @@ func _gui_input(event: InputEvent) -> void:
 func _unhandled_key_input(event: InputEvent) -> void:
 	if not visible or not (event is InputEventKey) or not event.pressed or event.echo:
 		return
+	if event.is_action_pressed("rotate_item"):
+		_rotate_key()
+		get_viewport().set_input_as_handled()
+		return
 	match (event as InputEventKey).keycode:
 		KEY_1:
 			_select_tool("")
@@ -810,11 +821,6 @@ func _unhandled_key_input(event: InputEvent) -> void:
 			_select_tool(AssemblyPlan.TOOL_TWEEZERS)
 		KEY_5:
 			_select_tool(AssemblyPlan.TOOL_METER)
-		KEY_R:
-			if not _action.is_empty() and _action.has("turns"):
-				_action["turns"] = (int(_action["turns"]) + 1) % 4
-				_action["t"] = 0.0
-				SfxManager.play("part_touch", -14.0, 1.2)
 		KEY_V:
 			_view_parts()
 		KEY_H:
@@ -824,6 +830,36 @@ func _unhandled_key_input(event: InputEvent) -> void:
 		_:
 			return
 	get_viewport().set_input_as_handled()
+
+
+## [R]: das Teil in der Hand drehen, sonst die CPU unter dem Zeiger, sonst den Blick.
+func _rotate_key() -> void:
+	if not _action.is_empty():
+		if str(_action.get("phase", "")) in ["drag", "press", "carry"]:
+			_action["spin"] = int(_action.get("spin", 0)) + 1
+			if _action.has("turns"):
+				_action["turns"] = (int(_action["turns"]) + 1) % 4
+				_action["t"] = 0.0
+			SfxManager.play("part_touch", -11.0, 1.2)
+		return
+	var item_id := str(_cand.get("item", "")) if not _cand.is_empty() else ""
+	if item_id != "" and piece.items.has(item_id):
+		var it: WorkbenchPiece.Item = piece.items[item_id]
+		if bool(it.spec.get("turns", false)) and it.state == "rest" and str((_cand["task"] as Dictionary)["kind"]) == "place":
+			piece.set_cpu_turns(piece.cpu_turns() + 1)
+			piece.respin_item(item_id)
+			SfxManager.play("part_touch", -11.0, 1.2)
+			return
+	var now := _orbit.x if is_nan(_orbit_goal) else _orbit_goal
+	_orbit_goal = 0.72 if absf(now) < 0.2 else (-0.72 if now > 0.0 else 0.0)
+	SfxManager.play("click", -14.0, 1.1)
+
+
+## Sichtbare Drehung des Teils in der Hand, läuft weich nach.
+func _spin_angle(delta: float) -> float:
+	var v := lerpf(float(_action.get("spin_v", 0.0)), float(_action.get("spin", 0)), 1.0 - exp(-delta * 16.0))
+	_action["spin_v"] = v
+	return v * PI * 0.5
 
 
 func _select_tool(tool_id: String) -> void:
@@ -910,6 +946,7 @@ func _start_drag(item_id: String) -> void:
 	_action["snapped"] = false
 	if bool(it.spec.get("turns", false)):
 		_action["turns"] = int(_action.get("turns", piece.cpu_turns()))
+		_action["turns0"] = int(_action["turns"])
 	var ground := _on_plane(it.cur.origin.y)
 	_action["grab"] = Vector3(it.cur.origin.x - ground.x, 0.0, it.cur.origin.z - ground.z).limit_length(0.12)
 	SfxManager.play("pickup", -13.0, 1.25)
@@ -948,6 +985,9 @@ func _cancel_action() -> void:
 			piece.wipe_paste(0.0)
 		elif str(_action["kind"]) != "paste":
 			piece.set_progress(item_id, -1.0)
+		# Losgelassen bleibt die CPU so liegen, wie man sie gedreht hat.
+		if _action.has("turns"):
+			piece.set_cpu_turns(int(_action["turns"]))
 		piece.release_item(item_id)
 		piece.clear_ghost()
 	if str(_action["phase"]) in ["drag", "press", "carry"]:
@@ -1039,7 +1079,7 @@ func _run_action(delta: float) -> void:
 		"carry":
 			var it: WorkbenchPiece.Item = piece.items[item_id]
 			var p := _on_plane(DRAG_H)
-			var b := piece.seat_xf(it).basis
+			var b := Basis(Vector3.UP, _spin_angle(delta)) * piece.seat_xf(it).basis
 			piece.hold_item(item_id, Transform3D(b, p - b * Vector3(0.0, it.aabb.get_center().y, 0.0)))
 
 
@@ -1118,8 +1158,9 @@ func _run_drag(delta: float, task: Dictionary, item_id: String, hold: float) -> 
 	var seat := piece.seat_xf(it)
 	piece.show_ghost(item_id)
 	var turns := int(_action.get("turns", 0))
-	if turns != 0:
-		seat.basis = seat.basis * Basis(Vector3.UP, float(turns) * PI * 0.5)
+	var spin := _spin_angle(delta)
+	if _action.has("turns"):
+		seat.basis = seat.basis * Basis(Vector3.UP, float(int(_action["turns0"])) * PI * 0.5 + spin)
 	var raise := 0.016 if str(task["kind"]) == "plug" or str(it.spec["kind"]) == "screw" else 0.026
 	var axis := seat.basis.y.normalized()
 	var hover := Transform3D(seat.basis, seat.origin + axis * raise)
@@ -1158,7 +1199,9 @@ func _run_drag(delta: float, task: Dictionary, item_id: String, hold: float) -> 
 	var target := _on_plane(DRAG_H)
 	var k := clampf(1.0 - (dist - SNAP_IN) / 0.22, 0.0, 1.0)
 	var rb: Basis = _action["rest_basis"]
-	var b := rb.orthonormalized().slerp(seat.basis.orthonormalized(), k).scaled(Vector3.ONE * WorkbenchPiece.S)
+	# Im Griff dreht [R] jedes Teil. Am Steckplatz richten sich alle außer der CPU von selbst aus.
+	var free := Basis(Vector3.UP, spin) * rb.orthonormalized()
+	var b := free.slerp(seat.basis.orthonormalized(), k).scaled(Vector3.ONE * WorkbenchPiece.S)
 	var pos := target + (_action["grab"] as Vector3) * (1.0 - k)
 	# Mitte des Teils an den Mauszeiger, nicht der Drehpunkt
 	pos -= b * it.aabb.get_center() * 0.85

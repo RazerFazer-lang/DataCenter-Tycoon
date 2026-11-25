@@ -2761,7 +2761,27 @@ func get_slot_sloppiness(slot: Dictionary) -> float:
 	return float(100 - get_build_quality(slot)) / 100.0
 
 
+## Serverwerte hängen nur an Gehäuse, Bauteilen, Bauqualität und Forschung. Sie werden im Takt
+## hunderte Male gebraucht und deshalb gemerkt.
+var _stats_cache: Dictionary = {}
+var _stats_research: Dictionary = {}
+
+
 func get_slot_stats(slot: Dictionary) -> Dictionary:
+	if _stats_research != research_levels:
+		_stats_research = research_levels.duplicate()
+		_stats_cache.clear()
+	var key := [slot.get("item_type", ""), slot.get("build_quality", 100), slot.get("components", {})]
+	var hit: Variant = _stats_cache.get(key)
+	if hit == null:
+		if _stats_cache.size() > 512:
+			_stats_cache.clear()
+		hit = _compute_slot_stats(slot)
+		_stats_cache[key.duplicate(true)] = hit
+	return (hit as Dictionary).duplicate()
+
+
+func _compute_slot_stats(slot: Dictionary) -> Dictionary:
 	var item_type := str(slot.get("item_type", ""))
 	if item_type == "" or not ITEM_CATALOG.has(item_type):
 		return {
@@ -5318,8 +5338,13 @@ func request_pickup_crate(crate_id: String) -> void:
 	_rpc_req_pickup_crate.rpc_id(1, crate_id)
 
 
-func request_drop_crate(drop_pos: Vector3) -> void:
-	_rpc_req_drop_crate.rpc_id(1, drop_pos)
+func request_drop_crate(drop_pos: Vector3, yaw: float = 0.0) -> void:
+	_rpc_req_drop_crate.rpc_id(1, drop_pos, yaw)
+
+
+## Etwas Aufgestelltes am Platz um 90° drehen (kind: crate, cart, rack, ups, cooler, decor).
+func request_rotate(kind: String, entity_id: String, dir: int) -> void:
+	_rpc_req_rotate.rpc_id(1, kind, entity_id, dir)
 
 
 func request_place_held_structure(pos: Vector3, rot_y: float) -> void:
@@ -5880,10 +5905,10 @@ func _rpc_req_pickup_crate(crate_id: String) -> void:
 
 
 @rpc("any_peer", "call_local", "reliable")
-func _rpc_req_drop_crate(drop_pos: Vector3) -> void:
+func _rpc_req_drop_crate(drop_pos: Vector3, yaw: float = 0.0) -> void:
 	if not multiplayer.is_server():
 		return
-	if not SecurityGuard.is_finite_vec3(drop_pos):
+	if not SecurityGuard.is_finite_vec3(drop_pos) or not SecurityGuard.is_finite_float(yaw):
 		return
 	var peer_id := _get_sender_id()
 	var held := get_player_held_crate(peer_id)
@@ -5892,8 +5917,100 @@ func _rpc_req_drop_crate(drop_pos: Vector3) -> void:
 	var cid := str(held["id"])
 	crates[cid]["held_by"] = 0
 	crates[cid]["pos"] = _clamp_drop_pos(drop_pos)
+	crates[cid]["rot"] = snappedf(fposmod(yaw, TAU), 0.01)
 	_broadcast_crates()
 	_rpc_play_sfx.rpc_id(peer_id, "drop")
+
+
+@rpc("any_peer", "call_local", "reliable")
+func _rpc_req_rotate(kind: String, entity_id: String, dir: int) -> void:
+	if not multiplayer.is_server():
+		return
+	var peer_id := _get_sender_id()
+	if not SecurityGuard.check_rate_limit(peer_id, "rotate", 20, 4.0):
+		return
+	if server_rotate(kind, entity_id, 1 if dir >= 0 else -1):
+		_rpc_play_sfx.rpc("place")
+	else:
+		_rpc_play_sfx.rpc_id(peer_id, "error")
+
+
+## Dreht nur, wenn am Platz genug Raum ist. Kabel und Inhalt bleiben dran (nur Host).
+func server_rotate(kind: String, entity_id: String, dir: int) -> bool:
+	var groups := {"crate": crates, "cart": carts, "rack": racks, "ups": ups_units, "cooler": coolers, "decor": decor_items}
+	if not groups.has(kind) or not (groups[kind] as Dictionary).has(entity_id):
+		return false
+	var e: Dictionary = (groups[kind] as Dictionary)[entity_id]
+	var key := "rot" if kind == "crate" else "rot_y"
+	var rot := snappedf(fposmod(float(e.get(key, 0.0)) + PI * 0.5 * float(dir), TAU), 0.0001)
+	var pos: Vector3 = e.get("pos", Vector3.ZERO)
+	match kind:
+		"crate":
+			if int(e.get("held_by", 0)) != 0:
+				return false
+		"cart":
+			if int(e.get("pushed_by", 0)) != 0:
+				return false
+		"rack":
+			if not _turn_room(pos, Vector2(0.45, 0.49), rot):
+				return false
+		"ups":
+			var us: Vector3 = UpsProp.SIZES.get(str(e.get("ups_type", "ups")), Vector3(0.5, 1.0, 0.64))
+			if not _turn_room(pos, Vector2(us.x, us.z) * 0.5, rot):
+				return false
+		"cooler":
+			var ct := str(e.get("cooler_type", "cooler"))
+			if ct == INDOOR_UNIT_TYPE:
+				return false
+			var cs: Vector3 = CoolerProp.GHOST_SIZES.get(ct, Vector3(1.0, 1.0, 0.5))
+			if not is_heat_pump_type(ct) and not _turn_room(pos, Vector2(cs.x, cs.z) * 0.5, rot):
+				return false
+		"decor":
+			var dt := str(e.get("item_type", ""))
+			if DecorSpec.is_wall_sign(dt) or bool(e.get("wall", false)):
+				return false
+			# An der zweiten Werkbank arbeitet gerade jemand: stehen lassen.
+			if int((bench_states.get(entity_id, {}) as Dictionary).get("worker", 0)) != 0:
+				return false
+			if DecorSpec.SIZES.has(dt) and not DecorSpec.can_place(dt, pos, rot, entity_id):
+				return false
+	e[key] = rot
+	if kind == "crate":
+		_broadcast_crates()
+		return true
+	_recalculate_networks_and_metrics()
+	match kind:
+		"cart":
+			_broadcast_carts()
+		"rack":
+			_broadcast_racks()
+		"ups":
+			_broadcast_ups()
+		"cooler":
+			_broadcast_coolers()
+		"decor":
+			_broadcast_decor_items()
+	if kind != "cart":
+		_broadcast_cables()
+		_broadcast_sim_tick()
+	return true
+
+
+## Platz zum Drehen: innerhalb der Wände und nicht in Einrichtung hinein.
+func _turn_room(pos: Vector3, half: Vector2, rot: float) -> bool:
+	if not (halle_nord_owned and pos.z < -100.0):
+		for k in DecorSpec.corners(pos, rot, half * 2.0):
+			if k.x < WALL_FACE_WEST_X or k.x > _interior_max_x() or k.y < WALL_FACE_NORTH_Z or k.y > WALL_FACE_SOUTH_Z:
+				return false
+	for did in decor_items.keys():
+		var d: Dictionary = decor_items[did]
+		var dt := str(d.get("item_type", ""))
+		if not DecorSpec.SIZES.has(dt) or DecorSpec.is_wall_sign(dt):
+			continue
+		var dp: Vector3 = d["pos"]
+		if DecorSpec.rects_overlap(Vector2(pos.x, pos.z), half, rot, Vector2(dp.x, dp.z), DecorSpec.footprint(dt) * 0.5, float(d.get("rot_y", 0.0))):
+			return false
+	return true
 
 
 ## Hält eine Ablageposition im begehbaren Bereich (Garage/Hallen bzw. Halle Nord) und außerhalb von Geräten.
@@ -5959,9 +6076,6 @@ func _rpc_req_place_held_structure(pos: Vector3, rot_y: float) -> void:
 	if item_type == INDOOR_UNIT_TYPE:
 		# Wandgeräte behalten Höhe und Wandabstand aus get_wall_mount_spot().
 		snapped = pos
-	elif is_heat_pump_type(item_type):
-		# Außengeräte zeigen immer mit dem Lüfter zur Straße.
-		rot_y = 0.0
 	if not can_place_item_at(item_type, snapped, rot_y):
 		_rpc_play_sfx.rpc_id(peer_id, "error")
 		return
@@ -7720,7 +7834,7 @@ func _cart_store(cart_id: String, crate: Dictionary) -> void:
 	var data: Array = c.get("data", []) if c.get("data", []) is Array else []
 	data.resize(items.size())
 	var copy := crate.duplicate(true)
-	for k in ["id", "pos", "held_by", "held_slot", "tech"]:
+	for k in ["id", "pos", "rot", "held_by", "held_slot", "tech"]:
 		copy.erase(k)
 	data.append(copy)
 	c["data"] = data

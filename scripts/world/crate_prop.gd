@@ -36,6 +36,7 @@ func apply_data(data: Dictionary) -> void:
 		_set_interactable(false)
 	else:
 		visible = true
+		rotation.y = float(data.get("rot", 0.0))
 		# Nachrutschen im Stapel sieht man, statt dass der Karton springt.
 		var np: Vector3 = data["pos"]
 		if _settle != null and _settle.is_valid():

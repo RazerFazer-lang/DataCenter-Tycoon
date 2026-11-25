@@ -6,6 +6,8 @@ extends Node
 signal rights_changed
 signal log_changed
 signal teleport_requested(pos: Vector3, yaw: float)
+## Antwort des Servers auf die Anmeldung mit dem Admin-Passwort.
+signal login_result(ok: bool, text: String)
 
 const LOG_MAX := 60
 const RATE_HITS := 20
@@ -25,18 +27,34 @@ const COMMANDS: Array[String] = [
 
 ## Freigeschaltete Verbindungen (peer_id -> true). Der Host steht nie darin, er ist immer Admin.
 var _granted: Dictionary = {}
+## Auf dedizierten Servern: mit dem Admin-Passwort angemeldet. Sie dürfen alles, was sonst der Host darf.
+var _owners: Dictionary = {}
+## Admin-Passwort aus der server.cfg (nur auf dem Server gefüllt, geht nie über das Netz).
+var server_password: String = ""
+## Client: Der Server nimmt ein Admin-Passwort an.
+var login_available: bool = false
+var _login_nonces: Dictionary = {}
+var _pending_login: String = ""
+var _crypto := Crypto.new()
+const LOGIN_TRIES := 5
+const LOGIN_WINDOW := 120.0
 ## Neueste Einträge zuerst: {time, who, text, ok}
 var log_entries: Array = []
 
 
 func _ready() -> void:
 	NetworkManager.player_left.connect(_on_player_left)
+	NetworkManager.player_joined.connect(_on_player_joined)
 	NetworkManager.disconnected_from_session.connect(func(_r: String): _reset())
 	NetworkManager.connection_succeeded.connect(_reset)
 
 
 func _reset() -> void:
 	_granted.clear()
+	_owners.clear()
+	_login_nonces.clear()
+	_pending_login = ""
+	login_available = false
 	log_entries.clear()
 	rights_changed.emit()
 	log_changed.emit()
@@ -45,9 +63,104 @@ func _reset() -> void:
 func _on_player_left(peer_id: int) -> void:
 	if not _is_host():
 		return
-	if _granted.has(peer_id):
+	_login_nonces.erase(peer_id)
+	if _granted.has(peer_id) or _owners.has(peer_id):
 		_granted.erase(peer_id)
+		_owners.erase(peer_id)
 		_sync_rights()
+
+
+func _on_player_joined(peer_id: int, _info: Dictionary) -> void:
+	if not _is_host() or peer_id == 1 or not _is_reachable(peer_id):
+		return
+	if NetworkManager.is_dedicated and server_password != "":
+		_rpc_login_available.rpc_id(peer_id)
+	if not _granted.is_empty() or not _owners.is_empty():
+		_rpc_sync_rights.rpc_id(peer_id, _granted.duplicate(), _owners.duplicate())
+
+
+@rpc("authority", "call_remote", "reliable")
+func _rpc_login_available() -> void:
+	login_available = true
+	rights_changed.emit()
+
+
+# ------------------------------------------------------------------ Anmeldung mit Passwort
+
+## Meldet sich auf einem dedizierten Server als Admin an. Über das Netz geht nur ein
+## einmaliger Beweis aus einem Zufallswert des Servers, nie das Passwort.
+func login(password: String) -> void:
+	if not login_available or password.is_empty():
+		return
+	_pending_login = password.left(64)
+	_rpc_login_start.rpc_id(1)
+
+
+@rpc("any_peer", "call_remote", "reliable")
+func _rpc_login_start() -> void:
+	if not _is_host() or not NetworkManager.is_dedicated or server_password == "":
+		return
+	var sender := multiplayer.get_remote_sender_id()
+	if not NetworkManager.players.has(sender):
+		return
+	if not SecurityGuard.check_rate_limit(sender, "admin_login", LOGIN_TRIES, LOGIN_WINDOW):
+		_rpc_login_result.rpc_id(sender, false, "Zu viele Versuche. Warte zwei Minuten.")
+		return
+	var nonce := _crypto.generate_random_bytes(16).hex_encode()
+	_login_nonces[sender] = nonce
+	_rpc_login_nonce.rpc_id(sender, nonce)
+
+
+@rpc("authority", "call_remote", "reliable")
+func _rpc_login_nonce(nonce: String) -> void:
+	if _pending_login == "":
+		return
+	var proof := _login_proof(nonce.left(64), _pending_login)
+	_pending_login = ""
+	_rpc_login_proof.rpc_id(1, proof)
+
+
+@rpc("any_peer", "call_remote", "reliable")
+func _rpc_login_proof(proof: String) -> void:
+	if not _is_host():
+		return
+	var sender := multiplayer.get_remote_sender_id()
+	if not _login_nonces.has(sender):
+		return
+	var nonce := str(_login_nonces[sender])
+	_login_nonces.erase(sender) # Ein Versuch je Zufallswert.
+	if server_password == "" or not NetworkManager.players.has(sender) or proof != _login_proof(nonce, server_password):
+		_log(sender, "Admin-Anmeldung abgelehnt", false)
+		_rpc_login_result.rpc_id(sender, false, "Falsches Passwort.")
+		return
+	_owners[sender] = true
+	_sync_rights()
+	_log(sender, "Als Admin angemeldet", true)
+	GameState.post_event_f("🛡️ %s ist jetzt Admin für diese Sitzung.", [NetworkManager.get_player_name(sender)], "info")
+	_rpc_login_result.rpc_id(sender, true, "")
+
+
+@rpc("authority", "call_remote", "reliable")
+func _rpc_login_result(ok: bool, text: String) -> void:
+	login_result.emit(ok, tr(text) if text != "" else "")
+
+
+func _login_proof(nonce: String, password: String) -> String:
+	return ("admin:%s:%s" % [nonce, password]).sha256_text()
+
+
+## Serverkonsole: Rechte geben oder nehmen. Gibt false zurück, wenn sich nichts geändert hat.
+func set_admin_from_console(peer_id: int, on: bool) -> bool:
+	if not _is_host() or not NetworkManager.players.has(peer_id) or peer_id == 1 or on == is_admin(peer_id):
+		return false
+	if on:
+		_owners[peer_id] = true
+	else:
+		_granted.erase(peer_id)
+		_owners.erase(peer_id)
+	_sync_rights()
+	GameState.post_event_f("🛡️ %s ist jetzt Admin für diese Sitzung." if on else "🛡️ %s ist kein Admin mehr.", [NetworkManager.get_player_name(peer_id)], "info")
+	return true
 
 
 func _is_host() -> bool:
@@ -57,7 +170,18 @@ func _is_host() -> bool:
 func is_admin(peer_id: int) -> bool:
 	if peer_id == 1:
 		return true
-	return _granted.has(peer_id)
+	return _granted.has(peer_id) or _owners.has(peer_id)
+
+
+## Host oder auf einem dedizierten Server mit dem Admin-Passwort angemeldet.
+func is_owner(peer_id: int) -> bool:
+	return peer_id == 1 or _owners.has(peer_id)
+
+
+func is_local_owner() -> bool:
+	if not NetworkManager.is_in_session or multiplayer.multiplayer_peer == null:
+		return false
+	return is_owner(multiplayer.get_unique_id())
 
 
 ## Darf dieser Spieler das Menü öffnen?
@@ -102,7 +226,7 @@ func execute(sender: int, cmd: String, args: Dictionary) -> bool:
 		return false
 	if not COMMANDS.has(cmd) or args.size() > 4:
 		return false
-	if HOST_ONLY.has(cmd) and sender != 1:
+	if HOST_ONLY.has(cmd) and not is_owner(sender):
 		_log(sender, "Abgelehnt, nur Host: %s" % cmd, false)
 		return false
 	var text := _run(sender, cmd, args)
@@ -164,7 +288,7 @@ func _run_player(sender: int, cmd: String, args: Dictionary) -> String:
 	var pname := NetworkManager.get_player_name(pid)
 	match cmd:
 		"grant":
-			if pid == 1 or _granted.has(pid):
+			if is_admin(pid):
 				return ""
 			_granted[pid] = true
 			_sync_rights()
@@ -179,7 +303,7 @@ func _run_player(sender: int, cmd: String, args: Dictionary) -> String:
 			return "%s die Admin-Rechte entzogen" % pname
 		"kick", "ban":
 			# Host und andere Admins sind geschützt. Nur der Host darf Admins entfernen.
-			if pid == 1 or pid == sender or (is_admin(pid) and sender != 1):
+			if is_owner(pid) or pid == sender or (is_admin(pid) and not is_owner(sender)):
 				return ""
 			if cmd == "kick":
 				NetworkManager.kick_player(pid)
@@ -422,13 +546,14 @@ func _is_reachable(peer_id: int) -> bool:
 
 
 func _sync_rights() -> void:
-	_rpc_sync_rights.rpc(_granted.duplicate())
+	_rpc_sync_rights.rpc(_granted.duplicate(), _owners.duplicate())
 
 
 @rpc("authority", "call_local", "reliable")
-func _rpc_sync_rights(data: Dictionary) -> void:
+func _rpc_sync_rights(data: Dictionary, owners: Dictionary) -> void:
 	if not _is_host():
 		_granted = data.duplicate()
+		_owners = owners.duplicate()
 	rights_changed.emit()
 
 

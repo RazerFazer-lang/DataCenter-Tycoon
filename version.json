@@ -1,9 +1,23 @@
 {
-  "version": "3.0.0",
-  "launcher_version": "3.0.0",
-  "codename": "v3.0.0 Eigene Figuren, Leben draußen & neue Bauteile",
+  "version": "3.0.1",
+  "launcher_version": "3.0.1",
+  "codename": "v3.0.1 Mehr FPS, Drehen mit R & Server-Admin",
   "release_date": "2026-11-25",
   "changelog": [
+    {
+      "version": "v3.0.1",
+      "date": "2026-11-25",
+      "title": "Update 3.0.1: Mehr FPS bei gleichem Bild, Drehen mit R überall & Admin auf dedizierten Servern",
+      "items": [
+        "[PERFORMANCE] Deutlich mehr FPS bei gleichem Bild, gemessen auf Ultra: draußen bis zu 88 %, in der Garage rund 40 %. Wolken, Racks, Lampen und Schatten wurden optimiert.",
+        "[PERFORMANCE] Kein Ruckler mehr im Sekundentakt: Der Simulationstakt braucht bei 20 vollen Racks nur noch ein Drittel der Zeit.",
+        "[FIX] [R] dreht jetzt überall: Hologramme auch an Wänden und bei Außengeräten, getragene Ware und Aufgestelltes direkt am Platz.",
+        "[FIX] Werkbank: Teile drehen sich sofort sichtbar in der Hand, die CPU merkt sich ihre Drehung beim Loslassen. Ohne Teil dreht [R] den Blick.",
+        "[FIX] Techniker laufen nicht mehr durch Wände, geschlossene Tore und große Möbel. Sie nutzen Tor und Hintertür.",
+        "[NEU / SERVER] Admin auf dedizierten Servern: admin_password in die server.cfg eintragen und im Spiel mit [F10] anmelden. Konsole: admin und unadmin.",
+        "[CO-OP] Alle Mitspieler brauchen v3.0.1."
+      ]
+    },
     {
       "version": "v3.0.0",
       "date": "2026-11-25",

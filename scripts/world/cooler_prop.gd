@@ -53,6 +53,19 @@ func setup(id: String, p_cooler_type: String = "cooler", p_showcase: bool = fals
 	is_showcase_only = p_showcase
 	_build_geometry()
 	_setup_audio()
+	_merge_static()
+
+
+## Gehäuse, Gitter und Schläuche sind dutzende Einzelkörper: zu einem Netz je Material zusammenfassen.
+func _merge_static() -> void:
+	var keep: Array = []
+	for r in _fan_rotors:
+		MeshMerger.merge_primitives(r)
+		MeshMerger.no_shadow(r)
+		keep.append(r)
+	if _flap != null:
+		keep.append(_flap)
+	MeshMerger.merge_primitives(self, keep)
 
 
 func is_indoor() -> bool:

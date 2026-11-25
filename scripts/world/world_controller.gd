@@ -136,8 +136,38 @@ func _prewarm_shaders() -> void:
 	_sync_room_level()
 
 
+# Lampen mit Helligkeit 0 kosten auf der Grafikkarte genauso viel wie helle: solange sie aus sind, ausblenden.
+var _gate_lights: Array = []
+var _gate_scan: float = 0.0
+var _gate_tick: float = 0.0
+
+
+func _update_light_gate(delta: float) -> void:
+	_gate_scan -= delta
+	if _gate_scan <= 0.0:
+		_gate_scan = 4.0
+		_gate_lights = find_children("*", "OmniLight3D", true, false)
+		_gate_lights.append_array(find_children("*", "SpotLight3D", true, false))
+	_gate_tick -= delta
+	if _gate_tick > 0.0:
+		return
+	_gate_tick = 0.06
+	for n in _gate_lights:
+		if not is_instance_valid(n):
+			continue
+		var l := n as Light3D
+		if l.light_energy <= 0.0005:
+			if l.visible:
+				l.visible = false
+				l.set_meta("gated", true)
+		elif l.has_meta("gated"):
+			l.remove_meta("gated")
+			l.visible = true
+
+
 func _process(delta: float) -> void:
 	_update_day_night_atmosphere()
+	_update_light_gate(delta)
 	_update_world_pings(delta)
 
 
@@ -318,6 +348,10 @@ func _apply_graphics_quality() -> void:
 var _sky_sun_dir_sent: Vector3 = Vector3.ZERO
 var _sky_day_sent: float = -1.0
 var _sky_sunset_sent: float = -1.0
+var _sky_cov_sent: float = -1.0
+var _sky_dark_sent: float = -1.0
+var _sky_half_sent: bool = true
+var _sky_half_set: bool = false
 # Startwerte wie im Sky-Shader: get_shader_parameter() liefert null, solange nie ein Wert gesetzt wurde.
 var _cloud_coverage: float = 0.48
 var _cloud_darkness: float = 0.0
@@ -412,8 +446,22 @@ func _update_day_night_atmosphere() -> void:
 				target_dark = 0.85
 		_cloud_coverage = lerpf(_cloud_coverage, target_cov, 0.03)
 		_cloud_darkness = lerpf(_cloud_darkness, target_dark, 0.03)
-		sky_sh.set_shader_parameter("cloud_coverage", _cloud_coverage)
-		sky_sh.set_shader_parameter("cloud_darkness", _cloud_darkness)
+		if absf(_cloud_coverage - _sky_cov_sent) > 0.0015 or absf(_cloud_darkness - _sky_dark_sent) > 0.0015:
+			_sky_cov_sent = _cloud_coverage
+			_sky_dark_sent = _cloud_darkness
+			sky_sh.set_shader_parameter("cloud_coverage", _cloud_coverage)
+			sky_sh.set_shader_parameter("cloud_darkness", _cloud_darkness)
+		# Drinnen sieht man nur wenig Himmel: dort ist volle Auflösung billiger als der Zwischendurchgang.
+		var half := out_on
+		if out_cam != null and out_cam.global_position.z < -100.0:
+			var hp := out_cam.global_position - GameState.HALLE_NORD_ORIGIN
+			half = absf(hp.x) > 10.1 or absf(hp.z) > 6.1
+		elif out_cam != null and GameState.garage_door_open and out_cam.global_position.z > 3.0:
+			half = true
+		if half != _sky_half_sent or not _sky_half_set:
+			_sky_half_sent = half
+			_sky_half_set = true
+			sky_sh.set_shader_parameter("half_clouds", half)
 	var snowing: bool = OutdoorManager.is_snowing()
 	var is_wet: bool = (w_now == "rain" or w_now == "storm") and not snowing
 	env.fog_density = 0.0062 if w_now == "storm" else (0.0044 if w_now == "rain" else 0.0022)

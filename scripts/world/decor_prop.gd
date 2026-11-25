@@ -287,6 +287,7 @@ func _build_generic() -> void:
 				for f in mdl.find_children("Fan_*", "Node3D", true, false):
 					if not (f.get_parent() is MeshInstance3D):
 						_fans.append(f as Node3D)
+						MeshMerger.no_shadow(f)
 		"prop_tool_cart":
 			_info_lbl = _small_label(Vector3(0.255, 0.925, 0.2565), 22, 0.0016, Color(0.95, 0.95, 0.92))
 	if item_type == "prop_logo_sign":

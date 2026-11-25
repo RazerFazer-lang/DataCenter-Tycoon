@@ -124,6 +124,8 @@ var _garage_door_was_moving: bool = false
 
 func _ready() -> void:
 	_build_architecture()
+	if _own_hall_interior_loaded:
+		_build_occluders()
 	_build_structural_details()
 	_build_exterior_environment()
 	_build_delivery_zone()
@@ -144,6 +146,7 @@ func _ready() -> void:
 	add_child(TechnicianNpc.new())
 	add_child(AmbientNpcSystem.new())
 	apply_graphics_quality(SettingsManager.graphics_quality)
+	MeshMerger.small_no_shadow(self)
 	GameState.panel_states_changed.connect(_on_panel_states_changed)
 	GameState.garage_door_changed.connect(_on_garage_door_changed)
 	GameState.halle_nord_changed.connect(_sync_halle_nord_visibility)
@@ -589,6 +592,25 @@ func _build_architecture() -> void:
 	)
 
 
+## Fensterlose Wandteile und das Dach verdecken alles dahinter: drinnen wird die Straße nicht mitgezeichnet,
+## draußen nicht die Racks. Fensterbänder (ab 2,5 m), Tor und Hintertür bleiben offen.
+func _build_occluders() -> void:
+	for o in [
+		[Vector3(8.0, 1.87, -4.65), Vector3(27.0, 3.74, 0.06)],
+		[Vector3(-3.95, 1.22, 4.65), Vector3(3.1, 2.44, 0.06)],
+		[Vector3(11.95, 1.22, 4.65), Vector3(19.1, 2.44, 0.06)],
+		[Vector3(-5.67, 1.22, -0.75), Vector3(0.06, 2.44, 7.6)],
+		[Vector3(21.67, 1.22, 0.0), Vector3(0.06, 2.44, 9.0)],
+		[Vector3(8.0, 3.97, 0.0), Vector3(27.0, 0.05, 9.0)],
+	]:
+		var inst := OccluderInstance3D.new()
+		var box := BoxOccluder3D.new()
+		box.size = o[1]
+		inst.occluder = box
+		inst.position = o[0]
+		add_child(inst)
+
+
 func _build_expansion_wall(wname: String, x_pos: float, sign_text: String, sign_col: Color) -> StaticBody3D:
 	var wall := StaticBody3D.new()
 	wall.name = wname
@@ -906,6 +928,10 @@ func _build_lighting() -> void:
 		spot.spot_angle = 72.0
 		spot.spot_attenuation = 1.15
 		spot.shadow_enabled = false
+		# Wehende Blätter, Autos und Vögel draußen liegen hinter der Wand. Ohne sie bleiben die Schatten
+		# dieser Lampen stehen und müssen nicht in jedem Bild neu gezeichnet werden.
+		spot.light_cull_mask = 0xFFFFFFFF & ~MeshMerger.OUTSIDE_LAYER
+		spot.shadow_caster_mask = 0xFFFFFFFF & ~MeshMerger.OUTSIDE_LAYER
 		add_child(spot)
 		_ceiling_lights.append(spot)
 
@@ -2159,6 +2185,7 @@ func _dress_desk(model: Node) -> void:
 	for f in model.find_children("PcFan*", "Node3D", true, false):
 		if not (f.get_parent() is MeshInstance3D):
 			_pc_fans.append(f as Node3D)
+			MeshMerger.no_shadow(f)
 	for mi_n in model.find_children("*", "MeshInstance3D", true, false):
 		var mi := mi_n as MeshInstance3D
 		for i in mi.mesh.get_surface_count():

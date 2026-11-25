@@ -62,6 +62,7 @@ func setup(id: String, p_rack_type: String = "rack", p_showcase: bool = false) -
 	is_showcase_only = p_showcase
 	_ensure_shared_fx_assets()
 	_build_rack_geometry()
+	MeshMerger.small_no_shadow(self)
 	if not is_showcase_only:
 		# Tür- und Seitenwandzustand kommt vom Server (Co-op synchronisiert).
 		_apply_synced_panel_states(false)
@@ -140,7 +141,7 @@ func apply_data(data: Dictionary) -> void:
 func _apply_graphics_setting() -> void:
 	var q := SettingsManager.graphics_quality
 	if _fire_light != null:
-		_fire_light.visible = (q >= 1)
+		_fire_light.visible = false
 	if _interior_light != null:
 		_interior_light.visible = (q >= 1)
 	for hf in _heat_fx:
@@ -150,6 +151,9 @@ func _apply_graphics_setting() -> void:
 
 var _age: float = 0.0
 var _prev_powered: bool = false
+var _behind_dt: float = 0.0
+var _last_active: int = 0
+var _last_gpu: float = 0.0
 var _power_up_t: float = 0.0
 var _fx_players: Array[AudioStreamPlayer3D] = []
 ## Teile, die gerade einfahren: {node, base, from, t, dur, light}
@@ -298,6 +302,13 @@ func _process(delta: float) -> void:
 		_prev_powered = powered
 	_power_up_t = maxf(0.0, _power_up_t - delta)
 	_update_part_fx(delta)
+	for mv in _slot_visuals:
+		var left := float((mv as Dictionary).get("merge_in", 0.0))
+		if left > 0.0:
+			(mv as Dictionary)["merge_in"] = left - delta
+			if left - delta <= 0.0 and str(mv["hw_sig"]) != "" and (mv["hw_holder"] as Node3D).get_child_count() > 0:
+				var kids: Array = (mv["hw_holder"] as Node3D).get_children()
+				MeshMerger.instance().queue_server(kids[kids.size() - 1] as Node3D, str(mv["hw_sig"]), mv["hw_fans"], mv["hw_fx"])
 	var networked := bool(_rack_data.get("networked", false))
 	var temp := float(_rack_data.get("temp", 22.0))
 	var slots: Array = _rack_data.get("slots", [])
@@ -348,6 +359,15 @@ func _process(delta: float) -> void:
 		if not any_slot_burning:
 			_update_fan_audio(delta, 0, 0.0, temp)
 			return
+
+	# Hinter der Kamera: nur zehnmal je Sekunde nachrechnen, man sieht es nicht.
+	if not is_showcase_only and cam != null and cam_dist > 3.0 and (global_position - cam.global_position).dot(-cam.global_transform.basis.z) < -1.5:
+		_behind_dt += delta
+		if _behind_dt < 0.1:
+			_update_fan_audio(delta, _last_active, _last_gpu, temp)
+			return
+		delta = _behind_dt
+	_behind_dt = 0.0
 
 	# 3. Pro-Einschub Live-LEDs, Mainboard-POST-Codes, BMC-Heartbeat, Funken & Feuer/Rauch
 	var active_servers := 0
@@ -574,7 +594,8 @@ func _process(delta: float) -> void:
 				(m_t as StandardMaterial3D).emission_energy_multiplier = 1.8
 
 	# Feuer- ODER Kurzschluss-Funkenlicht (kein Dauer-Neon am Boden!)
-	if _fire_light != null and _fire_light.visible:
+	if _fire_light != null and SettingsManager.graphics_quality >= 1:
+		_fire_light.visible = has_fire or spark_flash > 0.01
 		if has_fire:
 			_fire_light.light_color = Color(1.0, 0.40, 0.10)
 			_fire_light.light_energy = 1.65 + 0.50 * sin(_anim_time * 18.0)
@@ -584,6 +605,8 @@ func _process(delta: float) -> void:
 		else:
 			_fire_light.light_energy = 0.0
 
+	_last_active = active_servers
+	_last_gpu = gpu_weight
 	_update_fan_audio(delta, active_servers, gpu_weight, temp)
 
 
@@ -738,8 +761,11 @@ func _refresh_visuals() -> void:
 				srv_mesh.add_child(fx)
 				vis["hw_fx"] = fx
 				vis["hw_sig"] = sig
+				# Nach der Einbau-Animation zu wenigen Netzen zusammenfassen.
+				vis["merge_in"] = 0.15
 				if _age > 1.5 and not is_showcase_only:
 					_start_install_fx(vis, srv_mesh, old_sig, sig)
+					vis["merge_in"] = 2.5
 
 			var stats := GameState.get_slot_stats(slot)
 			rack_ram_gb += int(stats.get("ram_gb", 0))
@@ -1462,6 +1488,7 @@ func _setup_custom_shell(shell: Node3D, total_h: float) -> void:
 		var nm := String(n3.name)
 		if nm.contains("Fan_Roof"):
 			_roof_fans.append(n3)
+			MeshMerger.no_shadow(n3)
 		elif nm.contains("Hinge_"):
 			var side := signf(n3.position.x)
 			var fallback_deg := -105.0 if nm.ends_with("RearDoor_R") else 105.0

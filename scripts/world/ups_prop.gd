@@ -393,6 +393,8 @@ func _bind(model: Node) -> void:
 		for c in n.get_children():
 			stack.append(c)
 		var nm := String(n.name)
+		if nm.begins_with("FanX_") or nm.begins_with("Fan_"):
+			MeshMerger.no_shadow(n)
 		if nm.begins_with("FanX_"):
 			_fans.append([n, Vector3.RIGHT])
 		elif nm.begins_with("Fan_"):

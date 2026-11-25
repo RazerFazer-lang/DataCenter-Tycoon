@@ -219,6 +219,7 @@ static func _add(root: Node3D, id: String, species: String, sd: float, from: flo
 	for n in m.find_children("*", "MeshInstance3D", true, false):
 		var mi := n as MeshInstance3D
 		mi.material_override = leaf_mat(species) if str(mi.name).begins_with("Leaves") else bark_mat(species)
+		mi.layers = MeshMerger.OUTSIDE_LAYER
 		if DisplayServer.get_name() != "headless":
 			mi.set_instance_shader_parameter("seed", sd)
 		mi.visibility_range_begin = from

@@ -45,6 +45,7 @@ var _hand_accum: float = 0.0
 var _skips: Dictionary = {}
 var _job: Dictionary = {}          # {kind, rack, slot, crate, fixed}
 var _warned: Dictionary = {}
+var _unreachable: Dictionary = {}  # Kiste/Rack -> Zeitpunkt, bis zu dem es liegen bleibt
 var _post_wait: float = 0.0
 var _rng := RandomNumberGenerator.new()
 
@@ -65,6 +66,9 @@ func reset() -> void:
 	_job = {}
 	_skips = {}
 	_warned = {}
+	_unreachable = {}
+	_outdoor_read = false
+	_outdoor_cells = []
 	_after = Callable()
 	_yield_left = 0.0
 	if not view.is_empty():
@@ -253,7 +257,12 @@ func _run_after() -> void:
 # ------------------------------------------------------------------ Wege
 
 func _walk_to(target: Vector3, text: String, after: Callable) -> void:
-	_path = find_path(_pos, target)
+	var way := find_path(_pos, target)
+	if way.is_empty():
+		_no_way()
+		return
+	_path = way
+	_use_back_door(way)
 	var length := 0.0
 	for i in range(1, _path.size()):
 		length += (_path[i] as Vector3).distance_to(_path[i - 1])
@@ -261,6 +270,34 @@ func _walk_to(target: Vector3, text: String, after: Callable) -> void:
 	_wait = 0.0
 	_after = after
 	_set_phase("walk", text, _path, _path_dur)
+
+
+## Kein Weg dorthin (Tor zu, Ware hinter dem Zaun): Auftrag liegen lassen und später wieder versuchen.
+func _no_way() -> void:
+	for k in ["crate", "rack"]:
+		if str(_job.get(k, "")) != "":
+			_unreachable[str(_job[k])] = Time.get_ticks_msec() + 60000
+	_drop_carried()
+	_job = {}
+	_yield_left = 3.0
+	_warn_once("noway", tr("kommt nicht an die Ware. Ist das Garagentor zu?"))
+	_set_phase("idle", tr("wartet, der Weg ist versperrt"))
+
+
+## Führt der Weg durch die Hintertür, macht der Techniker sie auf.
+func _is_unreachable(id: String) -> bool:
+	return Time.get_ticks_msec() < int(_unreachable.get(id, 0))
+
+
+func _use_back_door(way: Array) -> void:
+	if bool(OutdoorManager.state.get("door", false)):
+		return
+	for p in way:
+		if BACK_DOOR.has_point(Vector2((p as Vector3).x, (p as Vector3).z)):
+			OutdoorManager.state["door"] = true
+			OutdoorManager.broadcast()
+			GameState._rpc_play_sfx.rpc("van_door")
+			return
 
 
 func _advance_walk(delta: float) -> void:
@@ -272,48 +309,194 @@ func _advance_walk(delta: float) -> void:
 		_run_after()
 
 
-## Weg um Racks, Geräte und Werkbank herum (Raster 0,4 m). Ohne freien Weg geht es geradeaus.
+const CELL := 0.4
+const BODY_R := 0.24
+## Durchgänge in den Außenwänden: Garagentor und Hintertür (Rasterzellen dürfen dort frei sein).
+const GATE_HALF_X := 1.9
+const BACK_DOOR := Rect2(-6.3, 3.4, 1.4, 0.5)
+
+## Weg um Wände, Racks, Geräte und Einrichtung herum (Raster 0,4 m, ganzes Grundstück).
+## Wände und ein geschlossenes Tor sind immer dicht. Ist der Weg nur zugestellt, zwängt sich der
+## Techniker zwischen den Möbeln durch. Leer heißt: dort kommt man nicht hin.
 func find_path(a: Vector3, b: Vector3) -> Array:
-	const CELL := 0.4
+	for with_things in [true, false]:
+		var grid := _build_grid(with_things)
+		var sa := _free_cell(grid, a)
+		var sb := _free_cell(grid, b)
+		if sa == Vector2i.MAX or sb == Vector2i.MAX:
+			continue
+		var ids := grid.get_id_path(sa, sb)
+		if ids.is_empty():
+			continue
+		var out: Array = [a]
+		for id in ids:
+			out.append(Vector3(id.x * CELL, 0.0, id.y * CELL))
+		# Das letzte Stück nur, wenn das Ziel selbst frei liegt.
+		if sb == _cell(b):
+			out[out.size() - 1] = b if out.size() > 2 else out[out.size() - 1]
+			if out[out.size() - 1] != b:
+				out.append(b)
+		return out
+	return []
+
+
+func _cell(p: Vector3) -> Vector2i:
+	return Vector2i(int(roundf(p.x / CELL)), int(roundf(p.z / CELL)))
+
+
+## Nächste freie Zelle auf derselben Seite der Wand (höchstens 1,2 m entfernt).
+func _free_cell(grid: AStarGrid2D, p: Vector3) -> Vector2i:
+	var c := _cell(p)
+	var inside := OutdoorWorld.HALL.grow(-0.3).has_point(Vector2(p.x, p.z))
+	var best := Vector2i.MAX
+	var best_d := INF
+	for x in range(c.x - 3, c.x + 4):
+		for y in range(c.y - 3, c.y + 4):
+			var id := Vector2i(x, y)
+			if not grid.is_in_boundsv(id) or grid.is_point_solid(id):
+				continue
+			var w := Vector2(x * CELL, y * CELL)
+			if OutdoorWorld.HALL.grow(-0.3).has_point(w) != inside:
+				continue
+			var d := w.distance_to(Vector2(p.x, p.z))
+			if d < best_d:
+				best_d = d
+				best = id
+	return best
+
+
+func _build_grid(with_things: bool) -> AStarGrid2D:
 	var grid := AStarGrid2D.new()
-	var max_x := 5.0 if GameState.room_level == 0 else (11.8 if GameState.room_level == 1 else 20.8)
-	var min_c := Vector2i(int(floorf(-5.0 / CELL)), int(floorf(-4.0 / CELL)))
-	var max_c := Vector2i(int(ceilf(max_x / CELL)), int(ceilf(8.8 / CELL)))
-	grid.region = Rect2i(min_c, max_c - min_c + Vector2i.ONE)
+	var plot := OutdoorWorld.PLOT.grow(-0.5)
+	var lo := Vector2i(int(ceilf(plot.position.x / CELL)), int(ceilf(plot.position.y / CELL)))
+	var hi := Vector2i(int(floorf(plot.end.x / CELL)), int(floorf(plot.end.y / CELL)))
+	grid.region = Rect2i(lo, hi - lo + Vector2i.ONE)
 	grid.cell_size = Vector2(CELL, CELL)
 	grid.diagonal_mode = AStarGrid2D.DIAGONAL_MODE_ONLY_IF_NO_OBSTACLES
 	grid.update()
-	var blocks: Array = []
-	for d in [GameState.racks, GameState.ups_units, GameState.decor_items]:
-		for it in (d as Dictionary).values():
-			var p: Variant = (it as Dictionary).get("pos", null)
-			if p is Vector3 and (p as Vector3).z > -100.0:
-				blocks.append([p, 0.62])
-	blocks.append([Vector3(-4.95, 0.0, 2.25), 0.70])
-	blocks.append([Vector3(2.78, 0.0, -3.4), 0.95])
-	for bl in blocks:
-		var c: Vector3 = bl[0]
-		var r: float = bl[1]
-		for x in range(int(floorf((c.x - r) / CELL)), int(ceilf((c.x + r) / CELL)) + 1):
-			for y in range(int(floorf((c.z - r) / CELL)), int(ceilf((c.z + r) / CELL)) + 1):
-				var id := Vector2i(x, y)
-				if grid.is_in_boundsv(id) and Vector2(x * CELL - c.x, y * CELL - c.z).length() < r:
-					grid.set_point_solid(id, true)
-	# Wand zwischen Halle und Einfahrt: nur durchs Tor.
-	for x in range(min_c.x, max_c.x + 1):
-		if absf(x * CELL) > 1.8:
-			for y in [int(roundf(4.4 / CELL)), int(roundf(4.8 / CELL))]:
-				if grid.is_in_boundsv(Vector2i(x, y)):
-					grid.set_point_solid(Vector2i(x, y), true)
-	var sa := Vector2i(int(roundf(a.x / CELL)), int(roundf(a.z / CELL))).clamp(min_c, max_c)
-	var sb := Vector2i(int(roundf(b.x / CELL)), int(roundf(b.z / CELL))).clamp(min_c, max_c)
-	grid.set_point_solid(sa, false)
-	grid.set_point_solid(sb, false)
-	var out: Array = [a]
-	for id in grid.get_id_path(sa, sb, true):
-		out.append(Vector3(id.x * CELL, 0.0, id.y * CELL))
-	out.append(b)
-	return out
+	# Feste Gegenstände drinnen und draußen
+	for k in DecorSpec.GARAGE_BLOCKS:
+		if absf(float(k[0])) > 0.01 or float(k[1]) < 3.0: # der freigehaltene Torbereich ist kein Hindernis
+			if not Rect2(-5.8, 3.0, 1.6, 1.2).has_point(Vector2(float(k[0]), float(k[1]))): # Platz vor der Hintertür
+				_block(grid, Vector2(float(k[0]), float(k[1])), Vector2(float(k[2]), float(k[3])), 0.0)
+	for id in _outdoor_solid():
+		if grid.is_in_boundsv(id):
+			grid.set_point_solid(id, true)
+	if with_things:
+		_block_things(grid)
+	# Außenwände mit Tor und Hintertür, dazu die noch geschlossenen Trennwände.
+	var gate_open := GameState.garage_door_open
+	_wall_x(grid, -5.6, -4.6, 4.6)
+	_wall_x(grid, 21.6, -4.6, 4.6)
+	_wall_z(grid, -4.6, -5.6, 21.6)
+	_wall_z(grid, 4.6, -5.6, -GATE_HALF_X if gate_open else 0.0)
+	_wall_z(grid, 4.6, GATE_HALF_X if gate_open else 0.0, 21.6)
+	if GameState.room_level < 1:
+		_wall_x(grid, 5.5, -4.6, 4.6)
+	if GameState.room_level < 2:
+		_wall_x(grid, 12.5, -4.6, 4.6)
+	for x in range(int(floorf(BACK_DOOR.position.x / CELL)), int(ceilf(BACK_DOOR.end.x / CELL)) + 1):
+		for y in range(int(floorf(BACK_DOOR.position.y / CELL)), int(ceilf(BACK_DOOR.end.y / CELL)) + 1):
+			if BACK_DOOR.has_point(Vector2(x * CELL, y * CELL)) and grid.is_in_boundsv(Vector2i(x, y)):
+				grid.set_point_solid(Vector2i(x, y), false)
+	return grid
+
+
+func _block_things(grid: AStarGrid2D) -> void:
+	for r in GameState.racks.values():
+		_block_entity(grid, r, Vector2(0.45, 0.49))
+	for u in GameState.ups_units.values():
+		var us: Vector3 = UpsProp.SIZES.get(str((u as Dictionary).get("ups_type", "ups")), Vector3(0.5, 1.0, 0.64))
+		_block_entity(grid, u, Vector2(us.x, us.z) * 0.5)
+	for c in GameState.coolers.values():
+		var ct := str((c as Dictionary).get("cooler_type", "cooler"))
+		if ct != GameState.INDOOR_UNIT_TYPE:
+			var cs: Vector3 = CoolerProp.GHOST_SIZES.get(ct, Vector3(1.0, 1.0, 0.5))
+			_block_entity(grid, c, Vector2(cs.x, cs.z) * 0.5)
+	for d in GameState.decor_items.values():
+		var dt := str((d as Dictionary).get("item_type", ""))
+		# Durch die Kaltgang-Portale geht man hindurch, Schilder hängen an der Wand.
+		if DecorSpec.SIZES.has(dt) and not DecorSpec.is_wall_sign(dt) and dt != "prop_cold_aisle_gate":
+			_block_entity(grid, d, DecorSpec.footprint(dt) * 0.5)
+	for k in GameState.carts.values():
+		if int((k as Dictionary).get("pushed_by", 0)) == 0:
+			_block_entity(grid, k, Vector2(0.36, 0.52))
+
+
+func _block_entity(grid: AStarGrid2D, e: Dictionary, half: Vector2) -> void:
+	var p: Variant = e.get("pos", null)
+	if p is Vector3 and (p as Vector3).z > -100.0:
+		_block(grid, Vector2((p as Vector3).x, (p as Vector3).z), half, float(e.get("rot_y", 0.0)))
+
+
+## Rechteck samt Körperbreite sperren.
+func _block(grid: AStarGrid2D, c: Vector2, half: Vector2, rot: float) -> void:
+	var h := half + Vector2(BODY_R, BODY_R)
+	var reach := h.length()
+	var ax := Vector2(cos(rot), -sin(rot))
+	var az := Vector2(sin(rot), cos(rot))
+	for x in range(int(floorf((c.x - reach) / CELL)), int(ceilf((c.x + reach) / CELL)) + 1):
+		for y in range(int(floorf((c.y - reach) / CELL)), int(ceilf((c.y + reach) / CELL)) + 1):
+			var id := Vector2i(x, y)
+			var d := Vector2(x * CELL, y * CELL) - c
+			if grid.is_in_boundsv(id) and absf(d.dot(ax)) < h.x and absf(d.dot(az)) < h.y:
+				grid.set_point_solid(id, true)
+
+
+func _wall_x(grid: AStarGrid2D, wx: float, z0: float, z1: float) -> void:
+	_block(grid, Vector2(wx, (z0 + z1) * 0.5), Vector2(0.12, (z1 - z0) * 0.5), 0.0)
+
+
+func _wall_z(grid: AStarGrid2D, wz: float, x0: float, x1: float) -> void:
+	_block(grid, Vector2((x0 + x1) * 0.5, wz), Vector2((x1 - x0) * 0.5, 0.12), 0.0)
+
+
+## Bäume, Beete, Container und Geländer draußen: einmal aus den Kollisionen gelesen.
+var _outdoor_cells: Array = []
+var _outdoor_read := false
+
+func _outdoor_solid() -> Array:
+	if _outdoor_read:
+		return _outdoor_cells
+	var w3d := get_viewport().find_world_3d()
+	if w3d == null or w3d.direct_space_state == null or get_tree().get_first_node_in_group("outdoor_world") == null:
+		return []
+	var space := w3d.direct_space_state
+	_outdoor_read = true
+	var sh := BoxShape3D.new()
+	sh.size = Vector3(0.44, 1.0, 0.44)
+	var q := PhysicsShapeQueryParameters3D.new()
+	q.shape = sh
+	q.collision_mask = 1
+	var skip: Array[RID] = []
+	for n in get_tree().get_nodes_in_group("players"):
+		if n is CollisionObject3D:
+			skip.append((n as CollisionObject3D).get_rid())
+	q.exclude = skip
+	var plot := OutdoorWorld.PLOT.grow(-0.5)
+	var hall := OutdoorWorld.HALL.grow(0.5)
+	for x in range(int(ceilf(plot.position.x / CELL)), int(floorf(plot.end.x / CELL)) + 1):
+		for y in range(int(ceilf(plot.position.y / CELL)), int(floorf(plot.end.y / CELL)) + 1):
+			var w := Vector2(x * CELL, y * CELL)
+			if hall.has_point(w):
+				continue
+			q.transform = Transform3D(Basis.IDENTITY, Vector3(w.x, 0.85, w.y))
+			for hit in space.intersect_shape(q, 4):
+				var col := hit["collider"] as Node
+				# Nur Festes: Geräte und Ware stehen schon in den Daten, Fahrzeuge fahren weg.
+				if col is StaticBody3D and not _belongs_to_entity(col):
+					_outdoor_cells.append(Vector2i(x, y))
+					break
+	return _outdoor_cells
+
+
+func _belongs_to_entity(n: Node) -> bool:
+	var p := n
+	while p != null:
+		if p is CoolerProp or p is UpsProp or p is RackProp or p is DecorProp or p is CartProp or p is CrateProp or p is DeliveryVan:
+			return true
+		p = p.get_parent()
+	return false
 
 
 func _rack_front(rack_id: String) -> Vector3:
@@ -342,8 +525,12 @@ func _travel(target: Vector3, text: String, after: Callable) -> void:
 
 func _idle(text: String) -> void:
 	if _pos.distance_to(HOME) > 0.4:
-		_walk_to(HOME, text, func(): _set_phase("idle", text))
-	elif str(view.get("text", "")) != text or _phase != "idle":
+		var way := find_path(_pos, HOME)
+		# Steht sein Platz voll, wartet er so nah dran, wie es geht.
+		if not way.is_empty() and (way[way.size() - 1] as Vector3).distance_to(_pos) > 0.45:
+			_walk_to(HOME, text, func(): _set_phase("idle", text))
+			return
+	if str(view.get("text", "")) != text or _phase != "idle":
 		_set_phase("idle", text)
 
 
@@ -443,21 +630,36 @@ func choose_spare(rcat: String, kit_cat: String = "") -> String:
 func _try_own_crate() -> bool:
 	for cid in GameState.crates.keys():
 		var c: Dictionary = GameState.crates[cid]
-		if bool(c.get("tech", false)) and int(c.get("held_by", 0)) == 0:
+		if bool(c.get("tech", false)) and int(c.get("held_by", 0)) == 0 and not _is_unreachable(str(cid)):
 			_job = {"kind": "crate", "crate": cid}
 			_walk_to(_stand_near(c.get("pos", Vector3.ZERO)), tr("holt den Server"), _pick_crate_to_bench)
 			return true
 	return false
 
 
+## Freier Platz neben der Ware, möglichst nah am Techniker.
 func _stand_near(p: Vector3) -> Vector3:
-	return p + Vector3(0.0, 0.0, -0.6 if p.z > 5.0 else 0.6)
+	var grid := _build_grid(true)
+	var best := p + Vector3(0.0, 0.0, -0.6 if p.z > 5.0 else 0.6)
+	var best_d := INF
+	for k in 8:
+		var s := p + Vector3(0.6, 0.0, 0.0).rotated(Vector3.UP, TAU * float(k) / 8.0)
+		var id := _cell(s)
+		if not grid.is_in_boundsv(id) or grid.is_point_solid(id):
+			continue
+		if OutdoorWorld.HALL.grow(-0.3).has_point(Vector2(s.x, s.z)) != OutdoorWorld.HALL.grow(-0.3).has_point(Vector2(p.x, p.z)):
+			continue
+		var d := s.distance_to(_pos)
+		if d < best_d:
+			best_d = d
+			best = s
+	return best
 
 
 func _try_build_box() -> bool:
 	for cid in GameState.crates.keys():
 		var c: Dictionary = GameState.crates[cid]
-		if str(c.get("item_type", "")) == "slot_build_box" and int(c.get("held_by", 0)) == 0:
+		if str(c.get("item_type", "")) == "slot_build_box" and int(c.get("held_by", 0)) == 0 and not _is_unreachable(str(cid)):
 			var p: Vector3 = c.get("pos", Vector3.ZERO)
 			if _is_remote(p):
 				continue
@@ -496,6 +698,8 @@ func _put_crate_on_bench() -> void:
 
 func _try_fetch_crashed() -> bool:
 	for rid in GameState.racks.keys():
+		if _is_unreachable(str(rid)):
+			continue
 		var slots: Array = GameState.racks[rid].get("slots", [])
 		for i in range(slots.size()):
 			var s: Dictionary = slots[i]
@@ -516,7 +720,7 @@ func _try_fetch_crashed() -> bool:
 func _try_fetch_service() -> bool:
 	for rid in GameState.racks.keys():
 		var r: Dictionary = GameState.racks[rid]
-		if not (r.get("services", []) as Array).is_empty():
+		if _is_unreachable(str(rid)) or not (r.get("services", []) as Array).is_empty():
 			continue
 		var slots: Array = r.get("slots", [])
 		for i in range(slots.size()):

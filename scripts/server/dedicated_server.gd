@@ -10,6 +10,7 @@ const SECTION := "server"
 const DEFAULT_NAME := "DataCenter Server"
 const DEFAULT_WORLD := "Server DataCenter"
 const STDIN_BUFFER := 1024
+const MIN_ADMIN_PW := 6
 const STOP_COMMANDS: Array[String] = ["stop", "quit", "exit"]
 
 var _port: int = 0
@@ -46,6 +47,10 @@ func _ready() -> void:
 	if world_name.is_empty():
 		world_name = DEFAULT_WORLD
 	var use_upnp := bool(cfg.get_value(SECTION, "upnp", true))
+	AdminManager.server_password = str(cfg.get_value(SECTION, "admin_password", "")).strip_edges().left(64)
+	if AdminManager.server_password != "" and AdminManager.server_password.length() < MIN_ADMIN_PW:
+		_log("admin_password ist zu kurz (mindestens %d Zeichen) und wird ignoriert." % MIN_ADMIN_PW)
+		AdminManager.server_password = ""
 
 	# Gilt nur für diese Sitzung, die settings.cfg bleibt unverändert.
 	SettingsManager.autosave_enabled = true
@@ -66,7 +71,8 @@ func _ready() -> void:
 
 	_log("Server läuft. Spielstand: %s" % ProjectSettings.globalize_path(SaveManager.get_save_path(GameState.current_save_id)))
 	_log("Passwort: %s | Plätze: %d | Autosave aktiv" % ["an" if not password.is_empty() else "aus", NetworkManager.MAX_PLAYERS])
-	_log("Befehle: help, status, players, kick <ID|Name>, save, stop")
+	_log("Admin-Anmeldung im Spiel [F10]: %s" % ("an" if AdminManager.server_password != "" else "aus (admin_password in der server.cfg eintragen)"))
+	_log("Befehle: help, status, players, admin <ID|Name>, unadmin <ID|Name>, kick <ID|Name>, save, stop")
 	_start_console()
 
 
@@ -102,13 +108,14 @@ func _load_config(path: String) -> ConfigFile:
 		cfg.set_value(SECTION, "name", DEFAULT_NAME)
 		cfg.set_value(SECTION, "port", NetworkManager.DEFAULT_PORT)
 		cfg.set_value(SECTION, "password", "")
+		cfg.set_value(SECTION, "admin_password", Crypto.new().generate_random_bytes(6).hex_encode())
 		cfg.set_value(SECTION, "world", DEFAULT_WORLD)
 		cfg.set_value(SECTION, "upnp", true)
 		var save_err := cfg.save(path)
 		if save_err != OK:
 			_log("server.cfg konnte nicht angelegt werden (Fehler %d), nutze Standardwerte." % save_err)
 		else:
-			_log("Neue server.cfg mit Standardwerten angelegt.")
+			_log("Neue server.cfg mit Standardwerten und zufälligem Admin-Passwort angelegt.")
 		return cfg
 	var err := cfg.load(path)
 	if err != OK:
@@ -161,13 +168,17 @@ func _handle_command(line: String) -> void:
 	var arg := parts[1].strip_edges() if parts.size() > 1 else ""
 	match cmd:
 		"help":
-			_log("help | status | players | kick <ID|Name> | save | stop")
+			_log("help | status | players | admin <ID|Name> | unadmin <ID|Name> | kick <ID|Name> | save | stop")
 		"status":
 			_print_status()
 		"players", "list":
 			_print_players()
 		"kick":
 			_kick(arg)
+		"admin":
+			_set_admin(arg, true)
+		"unadmin":
+			_set_admin(arg, false)
 		"save":
 			var result := GameState.save_current_world()
 			if not bool(result.get("ok", false)):
@@ -196,7 +207,7 @@ func _print_players() -> void:
 	for pid in NetworkManager.players.keys():
 		var info: Dictionary = NetworkManager.players[pid]
 		var ping := NetworkManager.get_player_ping(int(pid))
-		_log("  ID %d | %s | %s" % [int(pid), str(info.get("name", "Spieler")), ("%d ms" % ping) if ping >= 0 else "– ms"])
+		_log("  ID %d | %s%s | %s" % [int(pid), str(info.get("name", "Spieler")), " (Admin)" if AdminManager.is_admin(int(pid)) else "", ("%d ms" % ping) if ping >= 0 else "– ms"])
 
 
 func _kick(target: String) -> void:
@@ -210,6 +221,20 @@ func _kick(target: String) -> void:
 	var player_name := str((NetworkManager.players[peer_id] as Dictionary).get("name", "Spieler"))
 	NetworkManager.kick_player(peer_id)
 	_log("%s (ID %d) wird gekickt." % [player_name, peer_id])
+
+
+func _set_admin(target: String, on: bool) -> void:
+	if target.is_empty():
+		_log("Aufruf: %s <ID|Name>" % ("admin" if on else "unadmin"))
+		return
+	var peer_id := _find_peer(target)
+	if peer_id <= 1:
+		_log("Kein Spieler '%s' gefunden. 'players' zeigt alle IDs." % target)
+		return
+	if AdminManager.set_admin_from_console(peer_id, on):
+		_log("%s (ID %d) ist jetzt %s." % [NetworkManager.get_player_name(peer_id), peer_id, "Admin" if on else "kein Admin mehr"])
+	else:
+		_log("Keine Änderung.")
 
 
 func _find_peer(target: String) -> int:

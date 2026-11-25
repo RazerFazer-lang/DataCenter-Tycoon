@@ -306,6 +306,7 @@ func _button(pressed: bool) -> void:
 func _key(code: Key) -> void:
 	var ev := InputEventKey.new()
 	ev.keycode = code
+	ev.physical_keycode = code
 	ev.pressed = true
 	root.push_input(ev, true)
 

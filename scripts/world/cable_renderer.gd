@@ -651,6 +651,7 @@ func _add_part(parent: Node3D, mesh: Mesh, mat: Material, pos: Vector3, rot: Vec
 	mi.material_override = mat
 	mi.position = pos
 	mi.rotation = rot
+	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	parent.add_child(mi)
 
 

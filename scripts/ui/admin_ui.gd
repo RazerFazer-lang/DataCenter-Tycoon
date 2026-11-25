@@ -14,6 +14,7 @@ var _body: VBoxContainer
 var _search: String = ""
 var _list_box: VBoxContainer
 var _confirm_key: String = ""
+var _login_msg: Label
 
 
 func _ready() -> void:
@@ -62,6 +63,7 @@ func _ready() -> void:
 
 	AdminManager.rights_changed.connect(_on_rights_changed)
 	AdminManager.log_changed.connect(_on_log_changed)
+	AdminManager.login_result.connect(_on_login_result)
 	NetworkManager.players_changed.connect(func(): if visible and _tab == "players": refresh())
 
 
@@ -75,9 +77,38 @@ func _on_rights_changed() -> void:
 	if not visible:
 		return
 	if not AdminManager.is_local_admin():
-		close_requested.emit()
-		return
+		if not AdminManager.login_available:
+			close_requested.emit()
+			return
 	refresh()
+
+
+func _on_login_result(ok: bool, text: String) -> void:
+	if ok or not visible or _login_msg == null or not is_instance_valid(_login_msg):
+		return
+	_login_msg.text = text
+
+
+## Dedizierter Server: Anmeldung mit dem Admin-Passwort aus der server.cfg.
+func _build_login() -> void:
+	_body.add_child(_label(tr("Dieser Server hat keinen Host-Spieler. Melde dich mit dem Admin-Passwort aus der server.cfg an."), 14))
+	var row := _row(tr("Admin-Passwort"))
+	var le := LineEdit.new()
+	le.secret = true
+	le.max_length = 64
+	le.custom_minimum_size = Vector2(320, 34)
+	UIStyle.style_line_edit(le)
+	row.add_child(le)
+	var go := func():
+		if _login_msg != null and is_instance_valid(_login_msg):
+			_login_msg.text = tr("Prüfe …") if le.text != "" else ""
+		AdminManager.login(le.text)
+		le.text = ""
+	row.add_child(_btn(tr("Anmelden"), go))
+	le.text_submitted.connect(func(_t: String): go.call())
+	_login_msg = _label("", 13, UIStyle.COL_AMBER)
+	_body.add_child(_login_msg)
+	le.grab_focus.call_deferred()
 
 
 func _on_log_changed() -> void:
@@ -87,6 +118,10 @@ func _on_log_changed() -> void:
 
 func refresh() -> void:
 	_clear(_tab_row)
+	if not AdminManager.is_local_admin():
+		_clear(_body)
+		_build_login()
+		return
 	for t in TABS:
 		var id := str(t[0])
 		var b := _btn(tr(str(t[1])), func():
@@ -117,7 +152,7 @@ func refresh() -> void:
 
 func _build_players() -> void:
 	var me := multiplayer.get_unique_id()
-	var host := AdminManager.is_local_host()
+	var host := AdminManager.is_local_owner()
 	for pid_v in NetworkManager.players.keys():
 		var pid := int(pid_v)
 		var card := _card()
@@ -136,12 +171,12 @@ func _build_players() -> void:
 		row.add_child(_cmd_btn(tr("Zur Garage"), "send_site", {"peer": pid, "site": "garage"}))
 		if GameState.halle_nord_owned:
 			row.add_child(_cmd_btn(tr("Zur Halle Nord"), "send_site", {"peer": pid, "site": "halle_nord"}))
-		if host and pid != 1:
+		if host and not AdminManager.is_owner(pid):
 			if AdminManager.is_admin(pid):
 				row.add_child(_cmd_btn(tr("Admin entziehen"), "revoke", {"peer": pid}))
 			else:
 				row.add_child(_confirm_btn(tr("Zum Admin machen"), "grant", {"peer": pid}))
-		if pid != 1 and pid != me and (host or not AdminManager.is_admin(pid)):
+		if not AdminManager.is_owner(pid) and pid != me and (host or not AdminManager.is_admin(pid)):
 			row.add_child(_confirm_btn(tr("Kicken"), "kick", {"peer": pid}, UIStyle.COL_AMBER))
 			row.add_child(_confirm_btn(tr("Bannen"), "ban", {"peer": pid}, UIStyle.COL_RED))
 	if host:

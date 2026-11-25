@@ -37,6 +37,12 @@
       "items": [
         {
           "tag": "neu",
+          "version": "v3.0.1",
+          "title": "Mehr FPS, Drehen mit R & Server-Admin",
+          "desc": "Deutlich mehr FPS bei gleichem Bild, [R] dreht überall, Techniker meiden Wände und dedizierte Server haben eine Admin-Anmeldung."
+        },
+        {
+          "tag": "neu",
           "version": "v3.0",
           "title": "Eigene Figuren, Leben draußen & neue Bauteile",
           "desc": "Eigene Figuren mit Editor, Spind und Gesten-Rad, begehbares Grundstück mit Dach, Garten, Tieren und vier Jahreszeiten sowie 185 neue Bauteil-Modelle mit Effekten und 3D-Ansicht."

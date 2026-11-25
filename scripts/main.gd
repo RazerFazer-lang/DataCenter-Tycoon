@@ -392,7 +392,7 @@ func _on_relocate_rack_requested(rack_id: String) -> void:
 
 
 func _open_admin() -> void:
-	if not AdminManager.is_local_admin():
+	if not AdminManager.is_local_admin() and not AdminManager.login_available:
 		return
 	# Nicht über andere Vollbild-Ansichten legen.
 	if terminal_ui.visible or rack_inspector.visible or workbench_ui.visible or _pc_entering:

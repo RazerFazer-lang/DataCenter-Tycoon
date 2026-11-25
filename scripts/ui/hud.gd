@@ -179,7 +179,7 @@ func set_pause_visible(show_pause: bool) -> void:
 		if is_host and not NetworkManager.public_ip.is_empty():
 			_pause_world_lbl.text += "  •  " + tr("IP für Freunde: %s (Port %d)") % [NetworkManager.public_ip, NetworkManager.hosted_port]
 		_save_section.visible = is_host
-		_pause_admin_btn.visible = AdminManager.is_local_admin()
+		_pause_admin_btn.visible = AdminManager.is_local_admin() or AdminManager.login_available
 		_refresh_pause_players()
 		_save_name_input.text = GameState.current_save_name
 		_pause_master_slider.set_value_no_signal(SettingsManager.master_volume * 100.0)

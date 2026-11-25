@@ -36,6 +36,9 @@ var active_slot: int = 1
 var _slot_cables: Array = [{}, {}, {}, {}]
 var relocating_rack_id: String = ""
 var place_rot_y: float = 0.0
+var _rot_manual: bool = false   # selbst gedreht: die Wand bestimmt die Richtung nicht mehr
+var hold_yaw: float = 0.0       # Drehung der getragenen Ware
+var _hold_cid: String = ""
 
 var ui_locked: bool = false
 var is_seated_at_pc: bool = false
@@ -77,6 +80,7 @@ var _vm_from := Vector3.ZERO
 var _last_aim := Vector3.ZERO
 var _emote_wheel: EmoteWheel
 var _held_half_w := 0.24
+var _held_half_xz := Vector2(0.23, 0.23)
 var _held_item_type_cached: String = ""
 var _held_extinguisher: Node3D
 var _foam_root: Node3D
@@ -479,12 +483,10 @@ func _unhandled_input(event: InputEvent) -> void:
 		var mb := event as InputEventMouseButton
 		if _ghost_root != null and _ghost_root.visible and not _ghost_is_drop_preview:
 			if mb.button_index == MOUSE_BUTTON_WHEEL_UP:
-				place_rot_y = fmod(place_rot_y + PI * 0.5, TAU)
-				SfxManager.play("click", -12.0, 1.18)
+				_handle_rotate(1)
 				return
 			elif mb.button_index == MOUSE_BUTTON_WHEEL_DOWN:
-				place_rot_y = fmod(place_rot_y - PI * 0.5 + TAU, TAU)
-				SfxManager.play("click", -12.0, 0.94)
+				_handle_rotate(-1)
 				return
 
 	# Kontext-Interaktion: Tasten 1-4 wählen den aktiven Slot, die Aufnahme legt fest, was darin liegt.
@@ -497,8 +499,7 @@ func _unhandled_input(event: InputEvent) -> void:
 	elif event.is_action_pressed("tool_slot_4"):
 		_select_slot(4)
 	elif event.is_action_pressed("rotate_item"):
-		place_rot_y = fmod(place_rot_y + PI * 0.5, TAU)
-		SfxManager.play("click", -10.0, 1.15)
+		_handle_rotate(1)
 	elif event.is_action_pressed("drop_item"):
 		_handle_drop()
 	elif event.is_action_pressed("inspect_rack"):
@@ -554,6 +555,71 @@ func _select_slot(slot: int) -> void:
 	active_slot = slot
 	GameState.request_set_active_slot(slot)
 	SfxManager.play("click", -10.0, 1.0)
+
+
+## [R]: dreht das Hologramm, die Ware in den Händen oder das angeschaute Ding am Platz.
+func _handle_rotate(dir: int) -> void:
+	var step := PI * 0.5 * float(dir)
+	var held := GameState.get_player_held_crate(peer_id)
+	var placing := relocating_rack_id != ""
+	if not placing and not held.is_empty():
+		placing = str(GameState.ITEM_CATALOG[str(held["item_type"])]["category"]) == "placeable"
+	if placing:
+		var t := _ghost_model_key.get_slice("|", 0)
+		if _follows_wall(t):
+			SfxManager.play("error", -14.0)
+			return
+		if _ghost_root != null and _ghost_root.visible and DecorSpec.WALL_SNAP.has(t):
+			# Von der Richtung aus weiterdrehen, die man gerade sieht.
+			_rot_manual = true
+			place_rot_y = fposmod(_ghost_rot_y + step, TAU)
+		else:
+			place_rot_y = fposmod(place_rot_y + step, TAU)
+		SfxManager.play("click", -10.0, 1.15 if dir > 0 else 0.94)
+		return
+	if not held.is_empty():
+		hold_yaw = fposmod(hold_yaw + step, TAU)
+		SfxManager.play("click", -10.0, 1.15 if dir > 0 else 0.94)
+		return
+	var kind := _rotatable_kind(_get_aimed_interactable())
+	if kind != "":
+		var target := _get_aimed_interactable()
+		act("press", (target as Node3D).global_position)
+		GameState.request_rotate(kind, str(target.get_meta("entity_id")), dir)
+
+
+## Was an der Wand hängt, richtet sich nach der Wand.
+func _follows_wall(item_type: String) -> bool:
+	if _ghost_root == null or not _ghost_root.visible:
+		return false
+	return item_type == GameState.INDOOR_UNIT_TYPE or DecorSpec.is_wall_sign(item_type) or (GameState.is_strip_type(item_type) and _ghost_pos.y >= GameState.STRIP_WALL_MIN_Y)
+
+
+## Kann man das angeschaute Ding mit leeren Händen am Platz drehen? "" = nein.
+func _rotatable_kind(target: Object) -> String:
+	if target == null or not (target is Node3D) or cable_start_id != "" or GameState.is_player_holding_anything(peer_id):
+		return ""
+	if not GameState.get_player_pushed_cart(peer_id).is_empty():
+		return ""
+	var itype := str(target.get_meta("interact_type", ""))
+	var eid := str(target.get_meta("entity_id", ""))
+	match itype:
+		"crate":
+			return "crate" if GameState.crates.has(eid) else ""
+		"rack_slot", "rack_panel":
+			return "rack" if GameState.racks.has(eid) else ""
+		"cart":
+			return "cart" if GameState.carts.has(eid) else ""
+		"ups_unit":
+			return "ups" if GameState.ups_units.has(eid) else ""
+		"cooler_unit":
+			return "cooler" if GameState.coolers.has(eid) and not GameState.is_indoor_unit(eid) else ""
+	if GameState.decor_items.has(eid):
+		var d: Dictionary = GameState.decor_items[eid]
+		if DecorSpec.is_wall_sign(str(d.get("item_type", ""))) or bool(d.get("wall", false)):
+			return ""
+		return "decor"
+	return ""
 
 
 func _handle_inspect() -> void:
@@ -1098,7 +1164,7 @@ func _handle_drop() -> void:
 			drop_pos = _safe_drop_pos()
 		_cam_weight_dip = maxf(_cam_weight_dip, 0.042)
 		act("place", drop_pos + Vector3(0.0, 0.3, 0.0))
-		GameState.request_drop_crate(drop_pos)
+		GameState.request_drop_crate(drop_pos, rotation.y + hold_yaw)
 
 
 ## Sicherer Vorwärts-Check gegen feste Hindernisse (Racks/Wände), damit das Item NIE in einem Rack verschwindet!
@@ -1791,6 +1857,7 @@ func _update_placement_preview(delta: float) -> void:
 		is_placeable = true
 	else:
 		if held.is_empty():
+			_rot_manual = false
 			_ghost_root.visible = false
 			_ghost_has_visual_pose = false
 			return
@@ -1825,7 +1892,7 @@ func _update_placement_preview(delta: float) -> void:
 			_ghost_has_visual_pose = false
 			return
 		_ghost_pos = Vector3(hpos.x, hpos.y, hpos.z)
-		_ghost_rot_y = rotation.y
+		_ghost_rot_y = rotation.y + hold_yaw
 		_ghost_valid = true
 	elif item_type == GameState.INDOOR_UNIT_TYPE:
 		var spot: Dictionary = GameState.get_wall_mount_spot(hpos, hnormal)
@@ -1860,7 +1927,7 @@ func _update_placement_preview(delta: float) -> void:
 				_ghost_has_visual_pose = false
 				return
 			floor_hit = hpos + hnormal * DecorSpec.footprint(item_type).y * 0.5
-		var pose := DecorSpec.snap_pose(item_type, Vector3(floor_hit.x, 0.0, floor_hit.z), place_rot_y, ignore_rid)
+		var pose := DecorSpec.snap_pose(item_type, Vector3(floor_hit.x, 0.0, floor_hit.z), place_rot_y, ignore_rid, _rot_manual)
 		_ghost_pos = pose["pos"]
 		_ghost_rot_y = float(pose["rot_y"])
 		_ghost_valid = GameState.can_place_item_at(item_type, _ghost_pos, _ghost_rot_y, ignore_rid)
@@ -1881,12 +1948,14 @@ func _update_placement_preview(delta: float) -> void:
 			_ghost_has_visual_pose = false
 			return
 		_ghost_pos = GameState.snap_place_pos(item_type, hpos)
-		_ghost_rot_y = 0.0 if GameState.is_heat_pump_type(item_type) else place_rot_y
+		_ghost_rot_y = place_rot_y
 		_ghost_valid = GameState.can_place_item_at(item_type, _ghost_pos, _ghost_rot_y, ignore_rid)
 
 	# Echtes 3D-Hologramm-Modell bei Typwechsel aufbauen
 	var gkey := ("%s|%s" % [item_type, "drop" if _ghost_is_drop_preview else "place"])
 	if _ghost_model_key != gkey:
+		if _ghost_model_key.get_slice("|", 0) != item_type:
+			_rot_manual = false
 		_rebuild_ghost_model(item_type, held, _ghost_is_drop_preview)
 		_ghost_model_key = gkey
 
@@ -2017,6 +2086,12 @@ func _cable_label(cable_type: String) -> String:
 
 
 func _update_context_prompt() -> void:
+	_fill_context_prompt()
+	if relocating_rack_id == "" and current_prompt != "" and _rotatable_kind(_get_aimed_interactable()) != "":
+		current_sub_prompt += ("  •  " if current_sub_prompt != "" else "") + tr("[R] Drehen")
+
+
+func _fill_context_prompt() -> void:
 	current_prompt = ""
 	current_sub_prompt = ""
 
@@ -2067,8 +2142,8 @@ func _update_context_prompt() -> void:
 				current_prompt = tr("Hier geht es nicht – nur auf dem Rasen rechts vom Garagentor aufstellen")
 			else:
 				current_prompt = tr("Platz blockiert – freien Bereich in der Garage wählen")
-			if item_type == GameState.INDOOR_UNIT_TYPE or GameState.is_heat_pump_type(item_type):
-				current_sub_prompt = tr("[Q] Karton ablegen")
+			if _follows_wall(item_type):
+				current_sub_prompt = tr("Richtet sich nach der Wand  •  [Q] Karton ablegen")
 			else:
 				current_sub_prompt = tr("[R / Mausrad] Drehen (90°)  •  [Q] Karton ablegen")
 			return
@@ -2079,7 +2154,7 @@ func _update_context_prompt() -> void:
 
 	if target == null:
 		if not held.is_empty() and _ghost_root != null and _ghost_root.visible and _ghost_is_drop_preview:
-			current_sub_prompt = tr("[Q] %s am markierten Punkt abstellen") % GameState.get_crate_display_label(held)
+			current_sub_prompt = tr("[R] Drehen  •  [Q] %s am markierten Punkt abstellen") % GameState.get_crate_display_label(held)
 			return
 		var pc := GameState.get_player_pushed_cart(peer_id)
 		if not pc.is_empty():
@@ -2459,7 +2534,14 @@ func _update_held_visuals() -> void:
 			if is_local:
 				for vi in model.find_children("*", "VisualInstance3D", true, false):
 					(vi as VisualInstance3D).layers = FpArms.LAYER
-			_held_half_w = clampf(_visual_half_width(model) + 0.01, 0.10, 0.40)
+			_held_half_xz = Vector2(_visual_half_width(model), _visual_half_width(model, true))
+		if _hold_cid != str(held_crate["id"]):
+			_hold_cid = str(held_crate["id"])
+			hold_yaw = 0.0
+			_held_item_holder.rotation.y = 0.0
+		_held_item_holder.rotation.y = lerp_angle(_held_item_holder.rotation.y, hold_yaw, clampf(get_process_delta_time() * 14.0, 0.0, 1.0))
+		var across := absf(sin(_held_item_holder.rotation.y))
+		_held_half_w = clampf(lerpf(_held_half_xz.x, _held_half_xz.y, across) + 0.01, 0.10, 0.40)
 	else:
 		_held_item_holder.visible = false
 		if _held_item_type_cached != "":
@@ -2505,7 +2587,7 @@ func _build_human() -> void:
 			(l as Label3D).visible = false
 
 
-static func _visual_half_width(n: Node3D) -> float:
+static func _visual_half_width(n: Node3D, depth: bool = false) -> float:
 	var hw := 0.0
 	for mi_n in n.find_children("*", "MeshInstance3D", true, false):
 		var mi := mi_n as MeshInstance3D
@@ -2518,7 +2600,7 @@ static func _visual_half_width(n: Node3D) -> float:
 				xf = (p as Node3D).transform * xf
 			p = p.get_parent()
 		var ab := (Transform3D(Basis.from_scale(n.scale), Vector3.ZERO) * xf) * mi.mesh.get_aabb()
-		hw = maxf(hw, maxf(absf(ab.position.x), absf(ab.end.x)))
+		hw = maxf(hw, maxf(absf(ab.position.z), absf(ab.end.z)) if depth else maxf(absf(ab.position.x), absf(ab.end.x)))
 	return hw
 
 
