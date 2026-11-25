@@ -1,9 +1,25 @@
 {
-  "version": "2.6.0",
-  "launcher_version": "2.6.0",
-  "codename": "v2.6.0 Admin-Menü, Profi-Kühlung, echte Leisten & eigene Marken",
+  "version": "2.7.0",
+  "launcher_version": "2.7.0",
+  "codename": "v2.7.0 Neue Kartons, Leisten 2.0, Rack-Start & Notstrom",
   "release_date": "2026-11-25",
   "changelog": [
+    {
+      "version": "v2.7.0",
+      "date": "2026-11-25",
+      "title": "Update 2.7: Neue Kartons mit Auspacken, Leisten 2.0, gestaffelter Rack-Start & echter Notstrom",
+      "items": [
+        "[NEU / KARTONS] 8 neue Blender-Kartons je Warenart mit Auspack-Animation. Der leere Karton bleibt liegen und bringt im Altpapier-Container vor der Garage und an Halle Nord ein paar Dollar.",
+        "[NEU / LEISTEN] Strom- und LAN-Leisten mit Hauptschalter, LEDs mit echtem Zustand und Anzeige. Montage am Boden und an der Wand.",
+        "[GAMEPLAY] Überlast: Eine Stromleiste löst über 3.500 W nach 4 Sekunden aus. Direkt am Sicherungskasten sind es 22.000 W.",
+        "[GAMEPLAY] Rack-Start: Nach jedem Stromausfall klackt das Relais, und die Server fahren nacheinander mit Selbsttest und Piepton hoch. Eine USV verhindert das.",
+        "[NEU] Einbau: Teile gleiten mit Klick, Lichtreflex und LED-Test ein.",
+        "[NEU / NOTSTROM] 3 USV-Größen: 2 kWh für $700, Schrank mit 9 kWh für $3.200 und Batterie-Container mit 40 kWh für $12.000. Echte Kapazität nach Last, Restzeit auf dem Display, Alterung mit Akkutausch, Überlast-Abschaltung und Wärme.",
+        "[AUDIO] Neue Geräusche für Klebeband, Karton, Relais, Leistenschalter, USV-Umschaltung und Alarm.",
+        "[FIX] Der Rollwagen behält bei Kisten jetzt Menge und Inhalt.",
+        "[CO-OP] Alle Mitspieler brauchen v2.7.0."
+      ]
+    },
     {
       "version": "v2.6.0",
       "date": "2026-11-25",

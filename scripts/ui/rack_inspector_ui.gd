@@ -207,7 +207,7 @@ func _coarse_str(v: Variant) -> String:
 		var d: Dictionary = v
 		var out := PackedStringArray()
 		for k in d.keys():
-			if str(k) == "boot_left":
+			if str(k) == "boot_left" or str(k) == "boot_wait":
 				continue
 			out.append("%s:%s" % [str(k), _coarse_str(d[k])])
 		return "{" + ",".join(out) + "}"
@@ -2021,8 +2021,10 @@ func _render_device_view(kind: String) -> void:
 			var charge := float(u.get("charge", 0.0))
 			var dis := bool(u.get("discharging", false))
 			var conn := bool(u.get("connected", false))
-			_title_lbl.text = tr("%s  —  USV-Notstrom-Batterie") % _entity_id.to_upper()
-			if dis:
+			_title_lbl.text = "%s  —  %s" % [_entity_id.to_upper(), tr(str(GameState.ITEM_CATALOG[GameState.get_ups_type(u)]["name"]))]
+			if bool(u.get("tripped", false)):
+				_set_status(tr("ÜBERLASTET"), UIStyle.COL_RED)
+			elif dis:
 				_set_status(tr("NOTSTROM"), UIStyle.COL_AMBER)
 			elif conn:
 				_set_status(tr("VERBUNDEN"), UIStyle.COL_GREEN)
@@ -2030,8 +2032,12 @@ func _render_device_view(kind: String) -> void:
 				_set_status(tr("NICHT VERKABELT"), UIStyle.COL_AMBER)
 			var ch_col := UIStyle.COL_RED if charge < 20.0 else (UIStyle.COL_AMBER if charge < 50.0 else UIStyle.COL_GREEN)
 			_add_kpi("LADESTAND", "%.0f %%" % charge, "", ch_col, charge / 100.0)
-			_add_kpi("BETRIEB", tr("Entlädt") if dis else tr("Bereitschaft"), "", UIStyle.COL_AMBER if dis else UIStyle.COL_BLUE, -1.0, "power")
-			note = tr("Übernimmt bei Blackout sofort unterbrechungsfrei die Stromversorgung.")
+			_add_kpi("BETRIEB", tr("Entlädt") if dis else tr("Bereitschaft"), tr("Reicht ca. %d Min.") % GameState.get_ups_runtime_minutes(), UIStyle.COL_AMBER if dis else UIStyle.COL_BLUE, -1.0, "power")
+			var uspec := GameState.get_ups_spec(u)
+			var uhealth := GameState.get_ups_health(u)
+			_add_kpi("KAPAZITÄT", "%d / %d Wh" % [int(GameState.get_ups_stored_wh(u)), int(GameState.get_ups_capacity(u))], tr("bis %d W Abgabe") % int(uspec["out"]), UIStyle.COL_BLUE, -1.0, "power")
+			_add_kpi("AKKU-ZUSTAND", "%.0f %%" % uhealth, tr("sinkt mit jeder Entladung"), UIStyle.COL_RED if uhealth < 55.0 else (UIStyle.COL_AMBER if uhealth < 80.0 else UIStyle.COL_GREEN), uhealth / 100.0)
+			note = tr("Übernimmt bei Blackout sofort unterbrechungsfrei die Stromversorgung. Ist die Last höher als die Abgabe aller Geräte, schalten sie ab.")
 		"cart":
 			var cart: Dictionary = GameState.carts[_entity_id]
 			var items: Array = cart.get("items", [])
@@ -2050,6 +2056,17 @@ func _render_device_view(kind: String) -> void:
 				var max_d := GameState.get_max_ports(ctype_d, _entity_id)
 				_add_kpi("ANSCHLÜSSE", tr("%d / %d belegt") % [used_d, max_d], "", UIStyle.COL_AMBER if used_d >= max_d else UIStyle.COL_BLUE, float(used_d) / float(maxi(max_d, 1)))
 				note = tr("Beim Umsetzen bleiben alle Kabel stecken.")
+				var dd: Dictionary = GameState.decor_items[_entity_id]
+				if bool(dd.get("tripped", false)):
+					_set_status(tr("AUSGELÖST"), UIStyle.COL_RED)
+				elif not GameState.is_strip_on(_entity_id):
+					_set_status(tr("AUS"), UIStyle.COL_AMBER)
+				else:
+					_set_status(tr("EIN"), UIStyle.COL_GREEN)
+				if ctype_d == "power":
+					var lim := GameState.get_strip_limit(_entity_id)
+					var lw := GameState.get_strip_load(_entity_id)
+					_add_kpi("STROMLAST", "%d / %d W" % [lw, lim], "", UIStyle.COL_RED if lw > lim else (UIStyle.COL_AMBER if float(lw) > float(lim) * 0.85 else UIStyle.COL_GREEN), float(lw) / float(maxi(lim, 1)))
 			else:
 				note = tr("Umsetzen ist kostenlos. Eingelagerte Kisten bleiben im Regal.")
 
@@ -2072,6 +2089,18 @@ func _render_device_view(kind: String) -> void:
 	brow.add_theme_constant_override("separation", 10)
 	v.add_child(brow)
 
+	if kind == "ups":
+		var uu: Dictionary = GameState.ups_units[_entity_id]
+		var swap_cost := GameState.get_ups_swap_cost(uu)
+		var swap_btn := _make_btn(tr("Akkus tauschen ($%d)") % swap_cost, "ups_swap", Vector2(0, 44))
+		swap_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		_style_btn(swap_btn, Color(0.14, 0.20, 0.16), UIStyle.COL_GREEN)
+		swap_btn.disabled = GameState.get_ups_health(uu) > 95.0 or GameState.money < float(swap_cost) or bool(uu.get("discharging", false))
+		swap_btn.pressed.connect(func():
+			SfxManager.play("click", -8.0)
+			GameState.request_swap_ups_cells(_entity_id))
+		brow.add_child(swap_btn)
+
 	if kind == "cooler" or kind == "ups":
 		var pack_btn := _make_btn(tr("[E]  Abbauen und in die Hand nehmen"), "primary", Vector2(0, 44))
 		pack_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -2081,6 +2110,15 @@ func _render_device_view(kind: String) -> void:
 			close_requested.emit()
 		)
 		brow.add_child(pack_btn)
+
+	if kind == "decor" and (GameState.is_power_strip_decor(_entity_id) or GameState.is_lan_strip_decor(_entity_id)):
+		var sw_btn := _make_btn(tr("Ausschalten") if GameState.is_strip_on(_entity_id) else tr("Einschalten"), "strip_sw", Vector2(0, 44))
+		sw_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		_style_btn(sw_btn, Color(0.20, 0.17, 0.10), UIStyle.COL_AMBER)
+		sw_btn.pressed.connect(func():
+			GameState.request_toggle_strip(_entity_id)
+			get_tree().create_timer(0.15).timeout.connect(_queue_refresh))
+		brow.add_child(sw_btn)
 
 	if kind == "decor":
 		var mv_btn := _make_btn(tr("[E]  Umsetzen"), "primary", Vector2(0, 44))

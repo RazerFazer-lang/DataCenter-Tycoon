@@ -6,6 +6,7 @@ extends Node3D
 
 var cart_id: String = ""
 var pushed_by: int = 0
+var _data: Array = []
 var _items: Array = []
 
 var _target_pos: Vector3 = Vector3.ZERO
@@ -28,6 +29,7 @@ func setup(id: String) -> void:
 
 func apply_data(data: Dictionary) -> void:
 	pushed_by = int(data.get("pushed_by", 0))
+	_data = (data.get("data", []) as Array).duplicate() if data.get("data", []) is Array else []
 	_items = (data.get("items", []) as Array).duplicate()
 	var dpos: Vector3 = data["pos"]
 	var drot: float = float(data.get("rot_y", 0.0))
@@ -107,7 +109,18 @@ func _refresh_cargo_visuals() -> void:
 			var item_type := str(_items[i])
 			var cat: Dictionary = GameState.ITEM_CATALOG.get(item_type, {"name": item_type, "color": Color.WHITE})
 			box_root.visible = true
-			(vis["stripe_mat"] as StandardMaterial3D).albedo_color = cat["color"]
+			if str(vis["item"]) != item_type:
+				vis["item"] = item_type
+				var holder: Node3D = vis["holder"]
+				for c in holder.get_children():
+					c.queue_free()
+				var full: Dictionary = _data[i] if i < _data.size() and _data[i] is Dictionary else {}
+				if full.is_empty():
+					full = {"item_type": item_type}
+				if GameState.is_repair_kit(item_type) or item_type == "server_tray" or item_type == "slot_build_box" or int(full.get("pack_count", 1)) > 1:
+					holder.add_child(StorageShelfProp.build_stored_visual(full))
+				else:
+					holder.add_child(HardwareMeshFactory.build_item_visual(item_type, full))
 			(vis["lbl"] as Label3D).text = tr(str(cat["name"])).left(14)
 		else:
 			box_root.visible = false
@@ -171,16 +184,17 @@ func _build_geometry() -> void:
 		root.position = so
 		root.visible = false
 		add_child(root)
-		_add_box(root, Vector3.ZERO, Vector3(0.38, 0.34, 0.42), card_mat)
-		var smat := _mat(Color(0.2, 0.7, 0.95), 0.42, 0.15)
-		_add_box(root, Vector3(0.0, 0.06, 0.0), Vector3(0.395, 0.07, 0.435), smat)
+		var holder := Node3D.new()
+		holder.position.y = -0.17
+		holder.scale = Vector3.ONE * 0.62
+		root.add_child(holder)
 		var lbl := Label3D.new()
 		lbl.font_size = 15
 		lbl.pixel_size = 0.0032
 		lbl.billboard = BaseMaterial3D.BILLBOARD_ENABLED
 		lbl.position = Vector3(0.0, 0.28, 0.0)
 		root.add_child(lbl)
-		_slot_visuals.append({"root": root, "stripe_mat": smat, "lbl": lbl})
+		_slot_visuals.append({"root": root, "holder": holder, "item": "", "lbl": lbl})
 
 	_label = Label3D.new()
 	_label.text = "ROLLWAGEN (0/4)"

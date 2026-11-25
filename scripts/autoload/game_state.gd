@@ -15,6 +15,11 @@ signal carts_changed
 signal crates_changed
 signal cables_changed
 signal extinguisher_changed
+## Auspacken: ein Gerät kommt aus seinem Karton (nur Anzeige, das Gerät steht schon).
+signal unpack_started(entity_id: String, item_type: String, carton_pos: Vector3)
+## Deckel des Altpapier-Containers klappt ("garage" / "nord").
+signal paper_bin_used(site: String)
+signal strip_loads_changed
 signal room_level_changed
 signal halle_nord_changed
 signal delivery_site_changed
@@ -252,6 +257,16 @@ const ITEM_CATALOG := {
 		"heat": 0.0,
 		"color": Color(0.18, 0.44, 0.62),
 		"desc": "Ab Firmen-Level 3 • 6 Einschub-Slots | Max. 6.000W PDU | Aktiv-Kühlung (-4°C)",
+	},
+	"empty_carton": {
+		"name": "Leerer Karton",
+		"category": "junk",
+		"price": 0,
+		"watts": 0,
+		"compute": 0,
+		"heat": 0.0,
+		"color": Color(0.64, 0.51, 0.37),
+		"desc": "Verpackung. Gehört in den Altpapier-Container vor der Garage.",
 	},
 	"old_fuse": {
 		"name": "Alte Schraubsicherung",
@@ -500,14 +515,36 @@ const ITEM_CATALOG := {
 		"desc": "Wandgerät der Goldis-Wärmepumpe | Bläst die Kälte in den Raum | Kein Kabel nötig, läuft sobald ein Außengerät Strom hat",
 	},
 	"ups": {
-		"name": "USV-Notstrom-Batterie",
+		"name": "USV-Notstrom klein (2 kWh)",
 		"category": "placeable",
 		"price": 700,
-		"watts": 120,
+		"watts": 300,
 		"compute": 0,
 		"heat": 1.0,
 		"color": Color(0.95, 0.68, 0.14),
-		"desc": "Übernimmt bei Blackout sofort unterbrechungsfrei Strom!",
+		"desc": "Übernimmt bei Blackout sofort | 2.000 Wh | bis 3.000 W | Lädt mit 300 W",
+	},
+	"ups_cabinet": {
+		"name": "USV-Schrank (9 kWh)",
+		"category": "placeable",
+		"price": 3200,
+		"unlock_level": 2,
+		"watts": 1500,
+		"compute": 0,
+		"heat": 3.0,
+		"color": Color(0.90, 0.62, 0.16),
+		"desc": "Batterieschrank mit sechs Akku-Einschüben | 9.000 Wh | bis 9.000 W | Lädt mit 1.500 W",
+	},
+	"ups_container": {
+		"name": "Batterie-Container (40 kWh)",
+		"category": "placeable",
+		"price": 12000,
+		"unlock_level": 4,
+		"watts": 6000,
+		"compute": 0,
+		"heat": 8.0,
+		"color": Color(0.86, 0.46, 0.14),
+		"desc": "Großspeicher mit eigener Klimatisierung | 40.000 Wh | bis 30.000 W | Lädt mit 6.000 W, braucht 2 m Platz",
 	},
 	"cart": {
 		"name": "Schwerlast-Rollwagen",
@@ -1178,7 +1215,6 @@ var _next_entity_num: int = 1
 var _next_ticket_num: int = 101
 var _sim_accum: float = 0.0
 var _autosave_accum: float = 0.0
-var _ups_beep_accum: float = 0.0
 var _phone_ring_accum: float = 0.0
 var _call_cooldown: float = 18.0
 var _van_unload_accum: float = 0.0
@@ -1475,7 +1511,7 @@ func is_heavy_delivery_item(item_type: String) -> bool:
 		var parts := base.split(":")
 		if parts.size() >= 2:
 			base = parts[1]
-	return base == "rack" or base == "rack_pro" or base == "ups" or base == "cart" or is_heat_pump_type(base) or is_floor_cooler_type(base)
+	return base == "rack" or base == "rack_pro" or is_ups_type(base) or base == "cart" or is_heat_pump_type(base) or is_floor_cooler_type(base)
 
 
 ## Berechnet die Liefer-Kategorie (1 = Lieferwagen, 2 = Kastenwagen 7,5t, 3 = Schwerlast-LKW 18t).
@@ -1882,7 +1918,6 @@ func initialize_new_world(save_id: String = "mein_datacenter", save_name: String
 	_next_ticket_num = 101
 	_delivery_slot_cursor = 0
 	_autosave_accum = 0.0
-	_ups_beep_accum = 0.0
 	_phone_ring_accum = 0.0
 	_call_cooldown = 20.0
 
@@ -2036,6 +2071,11 @@ func _rpc_notify_saved(display_name: String, is_autosave: bool) -> void:
 
 func clear_local_state() -> void:
 	clock_scale = 1.0
+	_rack_power_prev.clear()
+	_strip_over.clear()
+	_strip_parent.clear()
+	strip_loads.clear()
+	_ups_over = 0.0
 	is_active = false
 	FinanceManager.reset()
 	racks.clear()
@@ -2091,7 +2131,6 @@ func clear_local_state() -> void:
 	overload_timer = 0.0
 	_sim_accum = 0.0
 	_autosave_accum = 0.0
-	_ups_beep_accum = 0.0
 	_phone_ring_accum = 0.0
 	_call_cooldown = 20.0
 	_van_unload_accum = 0.0
@@ -2916,7 +2955,7 @@ func get_device_sell_value(kind: String, eid: String) -> int:
 		var dtype := str((decor_items[eid] as Dictionary).get("item_type", ""))
 		return int(roundf(float((ITEM_CATALOG.get(dtype, {}) as Dictionary).get("price", 0)) * SELL_REFUND_RATIO))
 	if kind == "ups" and ups_units.has(eid):
-		return int(roundf(float(ITEM_CATALOG["ups"]["price"]) * SELL_REFUND_RATIO))
+		return int(roundf(float(ITEM_CATALOG[get_ups_type(ups_units[eid])]["price"]) * SELL_REFUND_RATIO * (0.5 + 0.5 * get_ups_health(ups_units[eid]) / 100.0)))
 	if kind == "cart" and carts.has(eid):
 		var total := int(ITEM_CATALOG["cart"]["price"])
 		var c_items: Array = carts[eid].get("items", [])
@@ -3204,6 +3243,97 @@ const WALL_FACE_EAST_X := 21.475
 const GARAGE_DOOR_HALF_WIDTH := 2.2
 
 
+## Notstrom: Kapazität (Wh), höchste Abgabe (W), Ladeleistung (W), Wärme und Preis für neue Akkus.
+const UPS_TYPES := {
+	"ups": {"cap": 2000.0, "out": 3000.0, "charge_w": 300.0, "heat": 0.8, "swap": 250},
+	"ups_cabinet": {"cap": 9000.0, "out": 9000.0, "charge_w": 1500.0, "heat": 3.0, "swap": 1100},
+	"ups_container": {"cap": 40000.0, "out": 30000.0, "charge_w": 6000.0, "heat": 8.0, "swap": 4200},
+}
+## Eine echte Sekunde ist eine Spielminute, 60 davon sind eine Stunde für die Wh-Rechnung.
+const UPS_SECONDS_PER_HOUR := 60.0
+const UPS_WEAR_PER_CYCLE := 0.6
+const UPS_MIN_HEALTH := 25.0
+var _ups_over: float = 0.0
+
+
+func is_ups_type(item_type: String) -> bool:
+	return UPS_TYPES.has(item_type)
+
+
+func get_ups_type(u: Dictionary) -> String:
+	var t := str(u.get("ups_type", "ups"))
+	return t if UPS_TYPES.has(t) else "ups"
+
+
+func get_ups_spec(u: Dictionary) -> Dictionary:
+	return UPS_TYPES[get_ups_type(u)]
+
+
+func get_ups_health(u: Dictionary) -> float:
+	return clampf(float(u.get("health", 100.0)), UPS_MIN_HEALTH, 100.0)
+
+
+## Nutzbare Kapazität in Wh, Alterung eingerechnet.
+func get_ups_capacity(u: Dictionary) -> float:
+	return float(get_ups_spec(u)["cap"]) * get_ups_health(u) / 100.0
+
+
+func get_ups_stored_wh(u: Dictionary) -> float:
+	return get_ups_capacity(u) * clampf(float(u.get("charge", 0.0)), 0.0, 100.0) / 100.0
+
+
+func is_ups_ready(u: Dictionary) -> bool:
+	return bool(u.get("connected", false)) and float(u.get("charge", 0.0)) > 0.2 and not bool(u.get("tripped", false))
+
+
+## Gesamte Abgabeleistung aller bereiten Notstrom-Geräte.
+func get_ups_total_out() -> float:
+	var sum := 0.0
+	for uid in ups_units.keys():
+		if is_ups_ready(ups_units[uid]):
+			sum += float(get_ups_spec(ups_units[uid])["out"])
+	return sum
+
+
+## Restzeit in Spielminuten bei aktueller Last (alle bereiten Geräte zusammen).
+func get_ups_runtime_minutes() -> int:
+	var wh := 0.0
+	for uid in ups_units.keys():
+		if is_ups_ready(ups_units[uid]):
+			wh += get_ups_stored_wh(ups_units[uid])
+	return int(wh / maxf(50.0, float(total_watts) * 1.06) * 60.0)
+
+
+func request_swap_ups_cells(uid: String) -> void:
+	_rpc_req_swap_ups_cells.rpc_id(1, uid)
+
+
+func get_ups_swap_cost(u: Dictionary) -> int:
+	return int(get_ups_spec(u)["swap"])
+
+
+@rpc("any_peer", "call_local", "reliable")
+func _rpc_req_swap_ups_cells(uid: String) -> void:
+	if not multiplayer.is_server():
+		return
+	var peer_id := _get_sender_id()
+	if not ups_units.has(uid) or not SecurityGuard.check_rate_limit(peer_id, "ups_swap", 4, 5.0):
+		return
+	var u: Dictionary = ups_units[uid]
+	var cost := get_ups_swap_cost(u)
+	if money < float(cost) or get_ups_health(u) > 95.0 or bool(u.get("discharging", false)):
+		_rpc_play_sfx.rpc_id(peer_id, "error")
+		return
+	money -= float(cost)
+	u["health"] = 100.0
+	u["charge"] = minf(float(u.get("charge", 0.0)), 40.0)
+	_recalculate_networks_and_metrics()
+	_broadcast_ups()
+	_broadcast_sim_tick()
+	_rpc_play_sfx.rpc("upgrade")
+	post_event_f("%s hat die Akkus von %s getauscht (-$%d).", [NetworkManager.get_player_name(peer_id), uid.to_upper(), cost], "good")
+
+
 ## Außengeräte (Rasen). Brauchen ein Goldis Innengerät.
 func is_heat_pump_type(item_type: String) -> bool:
 	return item_type == "cooler" or item_type == "chiller" or item_type == "cool_k90" or item_type == "cool_tower"
@@ -3232,8 +3362,25 @@ func can_place_item_at(item_type: String, pos: Vector3, rot_y: float = 0.0, igno
 	if item_type == INDOOR_UNIT_TYPE:
 		return can_place_wall_unit_at(pos, rot_y)
 	if is_strip_type(item_type):
+		if pos.y >= STRIP_WALL_MIN_Y:
+			return can_place_strip_on_wall(pos, rot_y, ignore_rack_id)
 		return can_place_strip_at(pos, ignore_rack_id)
+	if item_type == "ups_container":
+		return can_place_at(pos, ignore_rack_id) and _is_wide_spot_free(pos)
 	return can_place_at(pos, ignore_rack_id)
+
+
+## Der Batterie-Container ist 2 m breit und braucht rundum Platz.
+func _is_wide_spot_free(pos: Vector3) -> bool:
+	for group in [racks, coolers, ups_units]:
+		for gid in (group as Dictionary).keys():
+			var entry: Dictionary = (group as Dictionary)[gid]
+			if str(entry.get("cooler_type", "")) == INDOOR_UNIT_TYPE:
+				continue
+			var gpos: Vector3 = entry["pos"]
+			if Vector2(gpos.x - pos.x, gpos.z - pos.z).length() < 1.7:
+				return false
+	return true
 
 
 ## Strom- und LAN-Leisten sind flach: feineres Raster und weniger Abstand zu Geräten.
@@ -3241,7 +3388,191 @@ func is_strip_type(item_type: String) -> bool:
 	return item_type == "prop_power_strip" or item_type == "prop_lan_strip"
 
 
+## Leisten an der Wand: Höhe über dem Boden ab hier, darunter liegt die Leiste.
+const STRIP_WALL_MIN_Y := 0.28
+const STRIP_WALL_MAX_Y := 1.75
+## Dauerlast in Watt: normale Leiste und Hauptleiste direkt am Stromkasten (Drehstrom-Zuleitung).
+const STRIP_LIMIT_W := 3500
+const STRIP_MAIN_LIMIT_W := 22000
+const STRIP_TRIP_SECONDS := 4.0
+var strip_loads: Dictionary = {}
+var _strip_over: Dictionary = {}
+var _strip_parent: Dictionary = {}
+
+
+func is_strip_on(did: String) -> bool:
+	return bool((decor_items.get(did, {}) as Dictionary).get("on", true))
+
+
+func is_wall_strip(d: Dictionary) -> bool:
+	return bool(d.get("wall", false))
+
+
+func get_strip_limit(did: String) -> int:
+	if not is_power_strip_decor(did):
+		return 0
+	for cid in cables.keys():
+		var c: Dictionary = cables[cid]
+		if str(c.get("cable_type", "")) != "power":
+			continue
+		var a := str(c["from_id"])
+		var b := str(c["to_id"])
+		if (a == did or b == did) and ([WALL_BREAKER_ID, HALL_C_BREAKER_ID, HALL_NORD_BREAKER_ID].has(a) or [WALL_BREAKER_ID, HALL_C_BREAKER_ID, HALL_NORD_BREAKER_ID].has(b)):
+			return STRIP_MAIN_LIMIT_W
+	return STRIP_LIMIT_W
+
+
+func get_strip_load(did: String) -> int:
+	return int(strip_loads.get(did, 0))
+
+
+func request_toggle_strip(did: String) -> void:
+	_rpc_req_toggle_strip.rpc_id(1, did)
+
+
+@rpc("any_peer", "call_local", "reliable")
+func _rpc_req_toggle_strip(did: String) -> void:
+	if not multiplayer.is_server():
+		return
+	var peer_id := _get_sender_id()
+	if not (is_power_strip_decor(did) or is_lan_strip_decor(did)) or not SecurityGuard.check_rate_limit(peer_id, "strip", 8, 4.0):
+		return
+	var d: Dictionary = decor_items[did]
+	var on := not is_strip_on(did)
+	d["on"] = on
+	if on:
+		d["tripped"] = false
+		_strip_over.erase(did)
+	_after_strip_change()
+	_rpc_play_sfx.rpc("strip_switch")
+
+
+func _after_strip_change() -> void:
+	_recalculate_networks_and_metrics()
+	_broadcast_decor_items()
+	_broadcast_racks()
+	_broadcast_coolers()
+	_broadcast_ups()
+	_broadcast_sim_tick()
+
+
+## Überlastete Leisten lösen nach ein paar Sekunden aus (nur Host).
+func _tick_strips(dt: float) -> void:
+	for did_v in strip_loads.keys():
+		var did := str(did_v)
+		if not is_power_strip_decor(did) or not is_strip_on(did):
+			_strip_over.erase(did)
+			continue
+		if get_strip_load(did) <= get_strip_limit(did):
+			_strip_over.erase(did)
+			continue
+		_strip_over[did] = float(_strip_over.get(did, 0.0)) + dt
+		if float(_strip_over[did]) >= STRIP_TRIP_SECONDS:
+			_strip_over.erase(did)
+			decor_items[did]["on"] = false
+			decor_items[did]["tripped"] = true
+			post_event_f("STROMLEISTE AUSGELÖST: %d W bei höchstens %d W. Last verteilen und am Schalter wieder einschalten.", [get_strip_load(did), get_strip_limit(did)], "alert")
+			_after_strip_change()
+			_rpc_play_sfx.rpc("breaker_trip")
+			return
+
+
+## Last aller Geräte den Kabelweg zurück bis zum Stromkasten auf die Leisten verteilen.
+func _compute_strip_loads(device_watts: Dictionary) -> void:
+	var loads := {}
+	for did in decor_items.keys():
+		if is_power_strip_decor(str(did)):
+			loads[did] = 0
+	for dev in device_watts.keys():
+		var cur := str(dev)
+		var guard := 0
+		while _strip_parent.has(cur) and guard < 64:
+			guard += 1
+			cur = str(_strip_parent[cur])
+			if loads.has(cur):
+				loads[cur] = int(loads[cur]) + int(device_watts[dev])
+	strip_loads = loads
+	strip_loads_changed.emit()
+
+
+## Montageplatz einer Leiste an einer Wand. Leer = hier geht es nicht.
+func get_strip_wall_spot(hit: Vector3, normal: Vector3) -> Dictionary:
+	if absf(normal.y) > 0.3:
+		return {}
+	var n := Vector3(signf(normal.x), 0.0, 0.0) if absf(normal.x) > absf(normal.z) else Vector3(0.0, 0.0, signf(normal.z))
+	var y := clampf(roundf(hit.y * 10.0) / 10.0, STRIP_WALL_MIN_Y + 0.02, STRIP_WALL_MAX_Y)
+	for w in _strip_walls():
+		var wn: Vector3 = w["n"]
+		if not wn.is_equal_approx(n):
+			continue
+		var on_x := absf(wn.z) > 0.5
+		var plane: float = w["at"]
+		if absf((hit.z if on_x else hit.x) - plane) > WALL_HIT_TOLERANCE:
+			continue
+		var along := clampf(roundf((hit.x if on_x else hit.z) * 4.0) / 4.0, float(w["lo"]), float(w["hi"]))
+		if absf(along - (hit.x if on_x else hit.z)) > 0.6:
+			continue
+		var pos := Vector3(along, y, plane) if on_x else Vector3(plane, y, along)
+		return {"pos": pos, "rot_y": atan2(wn.x, wn.z)}
+	return {}
+
+
+func _strip_walls() -> Array:
+	var out: Array = []
+	var max_x := _interior_max_x() - 0.5
+	out.append({"n": Vector3(0, 0, 1), "at": WALL_FACE_NORTH_Z, "lo": -5.0, "hi": max_x})
+	out.append({"n": Vector3(0, 0, -1), "at": WALL_FACE_SOUTH_Z, "lo": -5.0, "hi": max_x})
+	out.append({"n": Vector3(1, 0, 0), "at": WALL_FACE_WEST_X, "lo": -4.0, "hi": 4.0})
+	if room_level >= 2:
+		out.append({"n": Vector3(-1, 0, 0), "at": WALL_FACE_EAST_X, "lo": -4.0, "hi": 4.0})
+	if halle_nord_owned:
+		var o := HALLE_NORD_ORIGIN
+		out.append({"n": Vector3(0, 0, 1), "at": o.z - 5.86, "lo": -9.3, "hi": 9.3})
+		out.append({"n": Vector3(0, 0, -1), "at": o.z + 5.86, "lo": -9.3, "hi": 9.3})
+		out.append({"n": Vector3(1, 0, 0), "at": -9.86, "lo": o.z - 5.3, "hi": o.z + 5.3})
+		out.append({"n": Vector3(-1, 0, 0), "at": 9.86, "lo": o.z - 5.3, "hi": o.z + 5.3})
+	return out
+
+
+## Was schon an der Wand hängt: [x, y, halbe Breite, halbe Höhe] je Wandebene z.
+const STRIP_WALL_KEEPOUT := [
+	[-4.475, -4.2, 1.15, 0.55, 0.85], [-4.475, -2.8, 1.25, 0.45, 0.60], [-4.475, -1.0, 1.6, 0.60, 0.45],
+	[-4.475, 14.6, 1.55, 0.75, 0.70], [-4.475, 16.6, 1.6, 0.75, 0.50],
+]
+
+
+func can_place_strip_on_wall(pos: Vector3, rot_y: float, ignore_id: String = "") -> bool:
+	if pos.y < STRIP_WALL_MIN_Y or pos.y > STRIP_WALL_MAX_Y + 0.01:
+		return false
+	var n := Vector3(sin(rot_y), 0.0, cos(rot_y)).round()
+	var spot := get_strip_wall_spot(pos, n)
+	if spot.is_empty() or (spot["pos"] as Vector3).distance_to(pos) > 0.05:
+		return false
+	if absf(n.z) > 0.5:
+		var local_z := pos.z - HALLE_NORD_ORIGIN.z if pos.z < -100.0 else pos.z
+		# Tore frei lassen
+		if n.z < 0.0 and local_z > 4.0 and absf(pos.x) < 2.75:
+			return false
+		if pos.z > -100.0:
+			for k in STRIP_WALL_KEEPOUT:
+				if absf(pos.z - float(k[0])) < 0.2 and absf(pos.x - float(k[1])) < float(k[3]) + 0.34 and absf(pos.y - float(k[2])) < float(k[4]) + 0.07:
+					return false
+	for did in decor_items.keys():
+		if str(did) == ignore_id:
+			continue
+		var d: Dictionary = decor_items[did]
+		if is_wall_strip(d) and (d["pos"] as Vector3).distance_to(pos) < 0.72 and absf((d["pos"] as Vector3).y - pos.y) < 0.14:
+			return false
+	for cid in coolers.keys():
+		var c: Dictionary = coolers[cid]
+		if str(c.get("cooler_type", "")) == INDOOR_UNIT_TYPE and (c["pos"] as Vector3).distance_to(pos) < 0.75:
+			return false
+	return true
+
+
 func snap_place_pos(item_type: String, pos: Vector3) -> Vector3:
+	if is_strip_type(item_type) and pos.y >= STRIP_WALL_MIN_Y:
+		return pos
 	var f := 4.0 if is_strip_type(item_type) else 2.0
 	return Vector3(roundf(pos.x * f) / f, 0.0, roundf(pos.z * f) / f)
 
@@ -3270,7 +3601,7 @@ func can_place_strip_at(pos: Vector3, ignore_id: String = "") -> bool:
 			if Vector2(gpos.x - pos.x, gpos.z - pos.z).length() < 0.62:
 				return false
 	for did in decor_items.keys():
-		if str(did) == ignore_id:
+		if str(did) == ignore_id or is_wall_strip(decor_items[did]):
 			continue
 		var d: Dictionary = decor_items[did]
 		var dpos: Vector3 = d.get("pos", Vector3.ZERO)
@@ -3550,7 +3881,8 @@ func get_company_value() -> int:
 	for cid in coolers.keys():
 		var cooler: Dictionary = coolers[cid]
 		hardware += _catalog_price(str(cooler.get("cooler_type", "cooler")))
-	hardware += _catalog_price("ups") * float(ups_units.size())
+	for uu in ups_units.values():
+		hardware += _catalog_price(get_ups_type(uu))
 
 	var upgrades := 0.0
 	for i in range(1, clampi(power_tier, 0, POWER_TIERS.size() - 1) + 1):
@@ -3715,28 +4047,46 @@ func _run_simulation_step(dt: float) -> void:
 		var u: Dictionary = ups_units[uid]
 		if bool(u.get("connected", false)):
 			connected_ups_ids.append(uid)
-			if not breaker_on and float(u["charge"]) > 0.2:
+			if not breaker_on and is_ups_ready(u):
 				active_backup_ids.append(uid)
 
 	if breaker_on:
+		_ups_over = 0.0
+		for uid in ups_units.keys():
+			ups_units[uid]["discharging"] = false
+			if bool(ups_units[uid].get("tripped", false)):
+				ups_units[uid]["tripped"] = false
+				ups_dirty = true
 		for uid in connected_ups_ids:
 			var u: Dictionary = ups_units[uid]
-			u["discharging"] = false
 			if float(u["charge"]) < 100.0:
-				u["charge"] = minf(100.0, float(u["charge"]) + 3.8 * dt)
+				var add_wh := float(get_ups_spec(u)["charge_w"]) * 0.92 * dt / UPS_SECONDS_PER_HOUR
+				u["charge"] = minf(100.0, float(u["charge"]) + add_wh / get_ups_capacity(u) * 100.0)
 				ups_dirty = true
 	else:
 		if not active_backup_ids.is_empty():
-			var load_drain := (1.15 + float(total_watts) / 2400.0) / float(active_backup_ids.size())
+			var total_out := get_ups_total_out()
+			var need_wh := (float(total_watts) * 1.06 + 20.0 * float(active_backup_ids.size())) * dt / UPS_SECONDS_PER_HOUR
 			for uid in active_backup_ids:
 				var u: Dictionary = ups_units[uid]
+				var spec := get_ups_spec(u)
+				var wh := need_wh * float(spec["out"]) / maxf(1.0, total_out)
 				u["discharging"] = true
-				u["charge"] = maxf(0.0, float(u["charge"]) - load_drain * dt)
+				u["charge"] = maxf(0.0, float(u["charge"]) - wh / get_ups_capacity(u) * 100.0)
+				u["health"] = maxf(UPS_MIN_HEALTH, get_ups_health(u) - wh / float(spec["cap"]) * UPS_WEAR_PER_CYCLE)
 				ups_dirty = true
-			_ups_beep_accum += dt
-			if _ups_beep_accum >= 4.0:
-				_ups_beep_accum = 0.0
-				_rpc_play_sfx.rpc("ups_beep")
+			# Mehr Last als die Geräte liefern können: nach 3 s schalten sie ab.
+			if float(total_watts) > total_out * 1.05:
+				_ups_over += dt
+				if _ups_over >= 3.0:
+					_ups_over = 0.0
+					for uid in active_backup_ids:
+						ups_units[uid]["tripped"] = true
+						ups_units[uid]["discharging"] = false
+					post_event_f("NOTSTROM ÜBERLASTET: %d W bei höchstens %d W. Die Geräte haben abgeschaltet.", [total_watts, int(total_out)], "alert")
+					active_backup_ids.clear()
+			else:
+				_ups_over = maxf(0.0, _ups_over - dt)
 		else:
 			for uid in ups_units.keys():
 				ups_units[uid]["discharging"] = false
@@ -3757,6 +4107,8 @@ func _run_simulation_step(dt: float) -> void:
 
 	if ups_dirty:
 		_broadcast_ups()
+
+	_tick_strips(dt)
 
 	# 2. Power Overload check (only trips when breaker is ON)
 	if breaker_on and total_watts > max_watts:
@@ -3783,6 +4135,11 @@ func _run_simulation_step(dt: float) -> void:
 	# 3. Room & Rack Temperature + Cooling
 	var total_heat_gen := 0.0
 	var total_cooling := 0.0
+	# Ladende und speisende Batterien geben Wärme ab
+	for uid in ups_units.keys():
+		var uh: Dictionary = ups_units[uid]
+		if bool(uh.get("discharging", false)) or (breaker_on and bool(uh.get("connected", false)) and float(uh["charge"]) < 99.5):
+			total_heat_gen += float(get_ups_spec(uh)["heat"])
 
 	for rid in racks.keys():
 		var rack: Dictionary = racks[rid]
@@ -4558,20 +4915,20 @@ func _recalculate_networks_and_metrics() -> void:
 			if ups_units.has(other):
 				ups_units[other]["connected"] = true
 				bus_queue.append(other)
-			elif racks.has(other) or is_power_strip_decor(other):
+			elif racks.has(other) or (is_power_strip_decor(other) and is_strip_on(other)):
 				bus_queue.append(other)
 
 	# Determine if UPS backup is keeping the power bus alive during a breaker outage
 	var has_charged_ups := false
 	for uid in ups_units.keys():
-		var u: Dictionary = ups_units[uid]
-		if bool(u["connected"]) and float(u["charge"]) > 0.2:
+		if is_ups_ready(ups_units[uid]):
 			has_charged_ups = true
 			break
 
 	ups_backup_active = (not breaker_on) and has_charged_ups
 	var power_alive := breaker_on or ups_backup_active
 
+	_strip_parent = {}
 	if power_alive:
 		var p_visited: Dictionary = {}
 		var p_queue: Array = []
@@ -4592,12 +4949,13 @@ func _recalculate_networks_and_metrics() -> void:
 				if other == "" or p_visited.has(other):
 					continue
 				p_visited[other] = true
+				_strip_parent[other] = curr
 				if racks.has(other):
 					racks[other]["powered"] = true
 					p_queue.append(other)
 				elif coolers.has(other):
 					coolers[other]["powered"] = true
-				elif ups_units.has(other) or is_power_strip_decor(other):
+				elif ups_units.has(other) or (is_power_strip_decor(other) and is_strip_on(other)):
 					p_queue.append(other)
 
 		# Goldis Innengeräte laufen, sobald mindestens ein Außengerät Strom hat.
@@ -4627,7 +4985,7 @@ func _recalculate_networks_and_metrics() -> void:
 				curr == WALL_ROUTER_ID
 				or curr == HALL_C_ROUTER_ID
 				or curr == HALL_NORD_ROUTER_ID
-				or is_lan_strip_decor(curr)
+				or (is_lan_strip_decor(curr) and is_strip_on(curr))
 				or (racks.has(curr) and bool(racks[curr]["powered"]) and _count_rack_switches(curr) > 0)
 			)
 			if not can_forward:
@@ -4659,11 +5017,15 @@ func _recalculate_networks_and_metrics() -> void:
 	var sum_gpu := 0
 	var sum_sto := 0.0
 	var sum_mbps := 0.0
+	var device_watts := {}
+	if multiplayer.is_server():
+		_apply_rack_power_changes()
 
 	for rid in racks.keys():
 		var rack: Dictionary = racks[rid]
 		if not bool(rack["powered"]):
 			continue
+		var rack_w0 := watts
 		var r_rent := str(rack.get("rental_type", "none"))
 		if bool(rack["networked"]) and r_rent != "none" and HardwareCatalog.RENTAL_PROFILES.has(r_rent):
 			var rprof: Dictionary = HardwareCatalog.RENTAL_PROFILES[r_rent]
@@ -4686,6 +5048,7 @@ func _recalculate_networks_and_metrics() -> void:
 					sum_sto += float(stats["storage_tb"])
 			elif st == "burning":
 				watts += int(stats["watts"])
+		device_watts[rid] = watts - rack_w0
 
 	# Kaltgang-/Warmgang-Airflow & Kabelmanagement-Bonus live berechnen
 	_recompute_layout_bonuses()
@@ -4695,14 +5058,19 @@ func _recalculate_networks_and_metrics() -> void:
 	for cid in coolers.keys():
 		if bool(coolers[cid]["powered"]):
 			var ctype := str(coolers[cid].get("cooler_type", "cooler"))
-			watts += int(roundf(float(ITEM_CATALOG[ctype]["watts"]) * heatwave_cooler_mult * airflow_watt_save))
+			var cw := int(roundf(float(ITEM_CATALOG[ctype]["watts"]) * heatwave_cooler_mult * airflow_watt_save))
+			watts += cw
+			device_watts[cid] = cw
 
-	# Charging UPS draws 120W while below 100%
+	# Ladende Notstrom-Batterien ziehen ihre Ladeleistung
 	if breaker_on:
 		for uid in ups_units.keys():
 			var u: Dictionary = ups_units[uid]
 			if bool(u["connected"]) and float(u["charge"]) < 99.5:
-				watts += int(ITEM_CATALOG["ups"]["watts"])
+				var chw := int(get_ups_spec(u)["charge_w"])
+				watts += chw
+				device_watts[uid] = chw
+	_compute_strip_loads(device_watts)
 
 	var req_compute := 0
 	for cid in contracts.keys():
@@ -4987,8 +5355,6 @@ func _on_slot_panel_toggled(rack_id: String, slot_idx: int, opened: bool) -> voi
 	_broadcast_sim_tick()
 	if opened and was_on:
 		_rpc_play_sfx.rpc("server_off")
-	elif not opened and str(slot.get("state", "")) == "ok":
-		_rpc_play_sfx.rpc("server_latch")
 
 
 func _close_slot_panel(rack_id: String, slot_idx: int) -> void:
@@ -4996,6 +5362,41 @@ func _close_slot_panel(rack_id: String, slot_idx: int) -> void:
 	if shared_open_panels.has(key):
 		shared_open_panels.erase(key)
 		_rpc_sync_panel.rpc(key, false)
+
+
+## Abstand zwischen zwei Servern beim Start eines ganzen Racks.
+const RACK_BOOT_STAGGER := 1.5
+const RACK_BOOT_FIRST := 1.2
+## Letzter bekannter Stromzustand je Rack. Fehlt ein Rack, gilt der erste Wert nicht als Wechsel.
+var _rack_power_prev: Dictionary = {}
+
+
+## Strom weg = alle Server aus. Strom da = Server fahren der Reihe nach hoch (nur Host).
+func _apply_rack_power_changes() -> void:
+	for rid_v in racks.keys():
+		var rid := str(rid_v)
+		var now := bool(racks[rid]["powered"])
+		if _rack_power_prev.has(rid) and bool(_rack_power_prev[rid]) != now:
+			var k := 0
+			for i in range((racks[rid]["slots"] as Array).size()):
+				var slot: Dictionary = racks[rid]["slots"][i]
+				if str(slot.get("item_type", "")) == "" or str(slot.get("state", "ok")) != "ok":
+					continue
+				slot["offline"] = true
+				slot.erase("boot_wait")
+				if now and not is_slot_extended(rid, i):
+					var t := get_boot_seconds(str(slot["item_type"]))
+					slot["boot_left"] = t
+					slot["boot_total"] = t
+					slot["boot_wait"] = RACK_BOOT_FIRST + float(k) * RACK_BOOT_STAGGER
+					k += 1
+				else:
+					slot.erase("boot_left")
+					slot.erase("boot_total")
+		_rack_power_prev[rid] = now
+	for old in _rack_power_prev.keys():
+		if not racks.has(old):
+			_rack_power_prev.erase(old)
 
 
 ## Hält den Stromzustand aller Einschübe passend zur Schiene (nur Host).
@@ -5010,6 +5411,7 @@ func _refresh_slot_power() -> void:
 				slot["offline"] = true
 				slot.erase("boot_left")
 				slot.erase("boot_total")
+				slot.erase("boot_wait")
 			elif bool(slot.get("offline", false)):
 				if str(slot.get("state", "ok")) != "ok":
 					slot.erase("boot_left")
@@ -5022,12 +5424,19 @@ func _refresh_slot_power() -> void:
 
 func _update_slot_boot(dt: float) -> void:
 	var done := false
+	var woke := false
 	for rid in racks.keys():
 		if not bool(racks[rid].get("powered", false)):
 			continue
 		for slot_v in racks[rid]["slots"]:
 			var slot: Dictionary = slot_v
 			if not slot.has("boot_left"):
+				continue
+			if float(slot.get("boot_wait", 0.0)) > 0.0:
+				slot["boot_wait"] = float(slot["boot_wait"]) - dt
+				if float(slot["boot_wait"]) <= 0.0:
+					slot.erase("boot_wait")
+					woke = true
 				continue
 			slot["boot_left"] = float(slot["boot_left"]) - dt
 			if float(slot["boot_left"]) <= 0.0:
@@ -5039,7 +5448,8 @@ func _update_slot_boot(dt: float) -> void:
 		_recalculate_networks_and_metrics()
 		_broadcast_racks()
 		_broadcast_sim_tick()
-		_rpc_play_sfx.rpc("server_ready")
+	elif woke:
+		_broadcast_racks()
 
 
 @rpc("authority", "call_local", "reliable")
@@ -5394,6 +5804,7 @@ func _rpc_req_place_held_structure(pos: Vector3, rot_y: float) -> void:
 	var item_type := str(held["item_type"])
 	if str(ITEM_CATALOG[item_type]["category"]) != "placeable":
 		return
+	var new_id := ""
 	var snapped := snap_place_pos(item_type, pos)
 	if item_type == INDOOR_UNIT_TYPE:
 		# Wandgeräte behalten Höhe und Wandabstand aus get_wall_mount_spot().
@@ -5413,12 +5824,14 @@ func _rpc_req_place_held_structure(pos: Vector3, rot_y: float) -> void:
 		crates.erase(held_cid)
 	if item_type == "rack" or item_type == "rack_pro":
 		var rid := _alloc_rack_id()
+		new_id = rid
 		racks[rid] = _make_rack_data(rid, item_type, snapped, rot_y)
 		_recalculate_networks_and_metrics()
 		_broadcast_racks()
 		post_event_f("%s hat %s (%s) aufgestellt.", [NetworkManager.get_player_name(peer_id), get_rack_display_name(rid), ITEM_CATALOG[item_type]["name"]], "info")
 	elif is_heat_pump_type(item_type) or is_floor_cooler_type(item_type) or item_type == INDOOR_UNIT_TYPE:
 		var cid := _alloc_id("cooler")
+		new_id = cid
 		coolers[cid] = {
 			"id": cid,
 			"cooler_type": item_type,
@@ -5434,14 +5847,17 @@ func _rpc_req_place_held_structure(pos: Vector3, rot_y: float) -> void:
 			post_event_f("%s hat %s aufgestellt (Stromkabel oben anschließen!).", [NetworkManager.get_player_name(peer_id), ITEM_CATALOG[item_type]["name"]], "info")
 		else:
 			post_event_f("%s hat %s auf den Rasen gestellt (Stromkabel seitlich anschließen!).", [NetworkManager.get_player_name(peer_id), ITEM_CATALOG[item_type]["name"]], "info")
-	elif item_type == "ups":
+	elif is_ups_type(item_type):
 		var uid := _alloc_id("ups")
+		new_id = uid
 		ups_units[uid] = {
 			"id": uid,
+			"ups_type": item_type,
+			"health": clampf(float((held.get("ups", {}) as Dictionary).get("health", 100.0)), UPS_MIN_HEALTH, 100.0),
 			"pos": snapped,
 			"rot_y": rot_y,
 			"connected": false,
-			"charge": 25.0, # Ships with 25% factory pre-charge
+			"charge": clampf(float((held.get("ups", {}) as Dictionary).get("charge", 25.0)), 0.0, 100.0), # ab Werk 25 % geladen
 			"discharging": false,
 		}
 		_recalculate_networks_and_metrics()
@@ -5449,6 +5865,7 @@ func _rpc_req_place_held_structure(pos: Vector3, rot_y: float) -> void:
 		post_event_f("%s hat USV-Notstrom %s aufgestellt (mit Stromkabel [2] verbinden!).", [NetworkManager.get_player_name(peer_id), uid.to_upper()], "good")
 	elif is_decor_type(item_type):
 		var did := _alloc_id("decor")
+		new_id = did
 		var stored: Array = []
 		if item_type == "prop_storage_shelf":
 			stored = [null, null, null, null]
@@ -5457,6 +5874,7 @@ func _rpc_req_place_held_structure(pos: Vector3, rot_y: float) -> void:
 			"item_type": item_type,
 			"pos": snapped,
 			"rot_y": rot_y,
+			"wall": is_strip_type(item_type) and snapped.y >= STRIP_WALL_MIN_Y,
 			"stored_items": stored,
 		}
 		_recalculate_networks_and_metrics()
@@ -5466,6 +5884,103 @@ func _rpc_req_place_held_structure(pos: Vector3, rot_y: float) -> void:
 	_broadcast_crates()
 	_broadcast_sim_tick()
 	_rpc_play_sfx.rpc("place")
+	if pcount <= 1 and not bool(held.get("unboxed", false)):
+		var drop := _carton_drop_pos(snapped, rot_y)
+		_rpc_unpack_fx.rpc(new_id, item_type, drop)
+		_spawn_empty_carton(CartonFactory.kind_for(item_type), drop, UNPACK_SECONDS)
+
+
+# --- Auspacken und Altpapier ---
+
+const UNPACK_SECONDS := 2.1
+const EMPTY_CARTONS_MAX := 30
+
+
+@rpc("authority", "call_local", "reliable")
+func _rpc_unpack_fx(entity_id: String, item_type: String, carton_pos: Vector3) -> void:
+	unpack_started.emit(entity_id, item_type, carton_pos)
+
+
+## Freier Platz vor dem Gerät für den leeren Karton.
+func _carton_drop_pos(pos: Vector3, rot_y: float) -> Vector3:
+	var fwd := Vector3(sin(rot_y), 0.0, cos(rot_y))
+	var side := Vector3(fwd.z, 0.0, -fwd.x)
+	var base := Vector3(pos.x, 0.0, pos.z)
+	for off in [fwd * 1.15, fwd * 1.15 + side * 0.8, fwd * 1.15 - side * 0.8, side * 1.2, -side * 1.2, -fwd * 1.2]:
+		var p := _clamp_drop_pos(base + (off as Vector3))
+		if Vector2(p.x - base.x, p.z - base.z).length() < 0.8:
+			continue
+		var free := true
+		for c in crates.values():
+			var cd: Dictionary = c
+			if int(cd.get("held_by", 0)) == 0 and (cd["pos"] as Vector3).distance_to(p) < 0.6:
+				free = false
+				break
+		if free:
+			return p
+	return _clamp_drop_pos(base + fwd * 1.15)
+
+
+func _spawn_empty_carton(kind: String, pos: Vector3, delay: float = 0.0) -> void:
+	if not multiplayer.is_server():
+		return
+	if delay > 0.0:
+		get_tree().create_timer(delay).timeout.connect(_spawn_empty_carton.bind(kind, pos, 0.0))
+		return
+	if not is_active:
+		return
+	var n := 0
+	for c in crates.values():
+		if str((c as Dictionary).get("item_type", "")) == "empty_carton":
+			n += 1
+	if n >= EMPTY_CARTONS_MAX:
+		return
+	var cid := _alloc_id("crate")
+	crates[cid] = {"id": cid, "item_type": "empty_carton", "carton": kind, "pos": pos, "held_by": 0, "pack_count": 1}
+	_broadcast_crates()
+
+
+func request_dump_carton(site: String) -> void:
+	_rpc_req_dump_carton.rpc_id(1, site)
+
+
+## Leeren Karton aus der Hand oder alle vom geschobenen Rollwagen in den Container werfen.
+@rpc("any_peer", "call_local", "reliable")
+func _rpc_req_dump_carton(site: String) -> void:
+	if not multiplayer.is_server():
+		return
+	var peer_id := _get_sender_id()
+	if site != "garage" and site != "nord":
+		return
+	var sum := 0
+	var held := get_player_held_crate(peer_id)
+	if str(held.get("item_type", "")) == "empty_carton":
+		sum += CartonFactory.refund(str(held.get("carton", "deco")))
+		crates.erase(str(held["id"]))
+		_broadcast_crates()
+	else:
+		var cart := get_player_pushed_cart(peer_id)
+		if not cart.is_empty():
+			var cart_id := str(cart["id"])
+			var items: Array = carts[cart_id]["items"]
+			for i in range(items.size() - 1, -1, -1):
+				if str(items[i]) == "empty_carton":
+					sum += CartonFactory.refund(str(_cart_take(cart_id, i).get("carton", "deco")))
+					items.remove_at(i)
+			if sum > 0:
+				_broadcast_carts()
+	if sum <= 0:
+		_rpc_play_sfx.rpc_id(peer_id, "error")
+		return
+	money += float(sum)
+	_broadcast_sim_tick()
+	_rpc_paper_bin.rpc(site)
+	_rpc_play_sfx.rpc_id(peer_id, "cash")
+
+
+@rpc("authority", "call_local", "reliable")
+func _rpc_paper_bin(site: String) -> void:
+	paper_bin_used.emit(site)
 
 
 @rpc("any_peer", "call_local", "reliable")
@@ -5544,13 +6059,15 @@ func _rpc_req_pack_device(kind: String, entity_id: String) -> void:
 		return
 
 	var item_type := ""
+	var ups_back := {}
 	if kind == "cooler" and coolers.has(entity_id):
 		item_type = str(coolers[entity_id].get("cooler_type", "cooler"))
 		_disconnect_all_cables_of(entity_id)
 		coolers.erase(entity_id)
 		_broadcast_coolers()
 	elif kind == "ups" and ups_units.has(entity_id):
-		item_type = "ups"
+		item_type = get_ups_type(ups_units[entity_id])
+		ups_back = {"charge": float(ups_units[entity_id].get("charge", 0.0)), "health": get_ups_health(ups_units[entity_id])}
 		_disconnect_all_cables_of(entity_id)
 		ups_units.erase(entity_id)
 		_broadcast_ups()
@@ -5558,7 +6075,9 @@ func _rpc_req_pack_device(kind: String, entity_id: String) -> void:
 		return
 
 	var cid := _alloc_id("crate")
-	crates[cid] = {"id": cid, "item_type": item_type, "pos": Vector3.ZERO, "held_by": peer_id, "held_slot": get_active_slot(peer_id)}
+	crates[cid] = {"id": cid, "item_type": item_type, "pos": Vector3.ZERO, "held_by": peer_id, "held_slot": get_active_slot(peer_id), "unboxed": true}
+	if ups_back.size() > 0:
+		crates[cid]["ups"] = ups_back
 	_recalculate_networks_and_metrics()
 	_broadcast_cables()
 	_broadcast_crates()
@@ -5626,11 +6145,15 @@ func _rpc_req_install_module(rack_id: String, slot_idx: int) -> void:
 		crates[held_mod_cid]["pack_count"] = mod_pcount - 1
 	else:
 		crates.erase(held_mod_cid)
+		if not bool(held.get("unboxed", false)):
+			_spawn_empty_carton("server", _carton_drop_pos(racks[rack_id]["pos"], float(racks[rack_id].get("rot_y", 0.0))), 0.6)
+			_rpc_play_sfx.rpc("carton_open")
 	slots[slot_idx] = {
 		"item_type": item_type,
 		"state": "ok",
 		"repair_progress": 0.0,
 		"fire_level": 0.0,
+		"offline": true, # fährt nach dem Einbau erst hoch
 		"components": _default_components(item_type),
 	}
 	_recalculate_networks_and_metrics()
@@ -5666,7 +6189,7 @@ func _rpc_req_remove_module(rack_id: String, slot_idx: int) -> void:
 
 	slots[slot_idx] = _make_empty_slot()
 	var cid := _alloc_id("crate")
-	crates[cid] = {"id": cid, "item_type": item_type, "pos": Vector3.ZERO, "held_by": peer_id, "held_slot": get_active_slot(peer_id)}
+	crates[cid] = {"id": cid, "item_type": item_type, "pos": Vector3.ZERO, "held_by": peer_id, "held_slot": get_active_slot(peer_id), "unboxed": true}
 	_recalculate_networks_and_metrics()
 	_broadcast_racks()
 	_broadcast_crates()
@@ -6718,6 +7241,7 @@ func _rpc_req_repair_slot(rack_id: String, slot_idx: int, amount: float) -> void
 	if float(slot["repair_progress"]) >= 1.0:
 		var full_ok := bool(slot.get("_using_kit", false))
 		slot["state"] = "ok"
+		slot["offline"] = true # nach der Reparatur neu hochfahren
 		slot["repair_progress"] = 0.0
 		slot["faulty_part"] = ""
 		slot["diagnosed"] = false
@@ -6962,6 +7486,7 @@ func _rpc_req_load_held_crate_to_cart(cart_id: String) -> void:
 		_rpc_play_sfx.rpc_id(peer_id, "error")
 		return
 	var item_type := str(held["item_type"])
+	_cart_store(cart_id, held)
 	crates.erase(str(held["id"]))
 	items.append(item_type)
 	_broadcast_crates()
@@ -6988,6 +7513,7 @@ func _rpc_req_load_ground_crate_to_pushed_cart(crate_id: String) -> void:
 		_rpc_play_sfx.rpc_id(peer_id, "error")
 		return
 	var item_type := str(crates[crate_id]["item_type"])
+	_cart_store(cid, crates[crate_id])
 	crates.erase(crate_id)
 	items.append(item_type)
 	_broadcast_crates()
@@ -7007,12 +7533,38 @@ func _rpc_req_unload_cart_to_hands(cart_id: String) -> void:
 	if items.is_empty():
 		_rpc_play_sfx.rpc_id(peer_id, "error")
 		return
+	var full := _cart_take(cart_id, items.size() - 1)
 	var item_type := str(items.pop_back())
 	var crate_id := _alloc_id("crate")
-	crates[crate_id] = {"id": crate_id, "item_type": item_type, "pos": Vector3.ZERO, "held_by": peer_id, "held_slot": get_active_slot(peer_id)}
+	var crate: Dictionary = full if str(full.get("item_type", "")) == item_type else {}
+	crate.merge({"id": crate_id, "item_type": item_type, "pos": Vector3.ZERO, "held_by": peer_id, "held_slot": get_active_slot(peer_id)}, true)
+	crates[crate_id] = crate
 	_broadcast_carts()
 	_broadcast_crates()
 	_rpc_play_sfx.rpc_id(peer_id, "pickup")
+
+
+## Merkt sich den ganzen Inhalt einer aufgeladenen Kiste (Menge, Bauteile, Akku-Zustand), nicht nur ihre Art.
+func _cart_store(cart_id: String, crate: Dictionary) -> void:
+	var c: Dictionary = carts[cart_id]
+	var items: Array = c["items"]
+	var data: Array = c.get("data", []) if c.get("data", []) is Array else []
+	data.resize(items.size())
+	var copy := crate.duplicate(true)
+	for k in ["id", "pos", "held_by", "held_slot", "tech"]:
+		copy.erase(k)
+	data.append(copy)
+	c["data"] = data
+
+
+func _cart_take(cart_id: String, idx: int) -> Dictionary:
+	var c: Dictionary = carts[cart_id]
+	var data: Variant = c.get("data", [])
+	if not (data is Array) or idx < 0 or idx >= (data as Array).size():
+		return {}
+	var v: Variant = (data as Array)[idx]
+	(data as Array).remove_at(idx)
+	return (v as Dictionary).duplicate(true) if v is Dictionary else {}
 
 
 # ==============================================================================
@@ -7380,6 +7932,8 @@ func _broadcast_sim_tick() -> void:
 			"connected": bool(ups_units[uid]["connected"]),
 			"charge": float(ups_units[uid]["charge"]),
 			"discharging": bool(ups_units[uid]["discharging"]),
+			"health": get_ups_health(ups_units[uid]),
+			"tripped": bool(ups_units[uid].get("tripped", false)),
 		}
 
 	var packet := {
@@ -7388,6 +7942,7 @@ func _broadcast_sim_tick() -> void:
 		"grid_outage_left": grid_outage_left,
 		"ups_backup_active": ups_backup_active,
 		"avg_ups_charge": avg_ups_charge,
+		"strip_loads": strip_loads.duplicate(),
 		"overload_timer": overload_timer,
 		"power_tier": power_tier,
 		"router_tier": router_tier,
@@ -7448,6 +8003,9 @@ func _rpc_sync_sim_tick(packet: Dictionary) -> void:
 		ups_backup_active = bool(packet["ups_backup_active"])
 		grid_outage_left = float(packet.get("grid_outage_left", 0.0))
 		avg_ups_charge = float(packet["avg_ups_charge"])
+		if packet.get("strip_loads", null) is Dictionary:
+			strip_loads = (packet["strip_loads"] as Dictionary).duplicate()
+			strip_loads_changed.emit()
 		overload_timer = float(packet["overload_timer"])
 		power_tier = int(packet["power_tier"])
 		router_tier = clampi(int(packet.get("router_tier", 0)), 0, ROUTER_TIERS.size() - 1)
@@ -7535,6 +8093,8 @@ func _rpc_sync_sim_tick(packet: Dictionary) -> void:
 				ups_units[uid]["connected"] = bool(usync[uid]["connected"])
 				ups_units[uid]["charge"] = float(usync[uid]["charge"])
 				ups_units[uid]["discharging"] = bool(usync[uid]["discharging"])
+				ups_units[uid]["health"] = float(usync[uid].get("health", 100.0))
+				ups_units[uid]["tripped"] = bool(usync[uid].get("tripped", false))
 	state_updated.emit()
 
 
@@ -8165,6 +8725,8 @@ func _rpc_req_workbench_unpack() -> void:
 	if str(workbench_state.get("mode", "")) != "build_box":
 		return
 	server_workbench_unpack()
+	_spawn_empty_carton("build", Vector3(-3.7, 0.0, 3.1))
+	_rpc_play_sfx.rpc("carton_open")
 
 
 func server_workbench_unpack() -> void:
@@ -9387,6 +9949,7 @@ func _rpc_req_relocate_decor(decor_id: String, pos: Vector3, rot_y: float) -> vo
 		return
 	d["pos"] = snapped
 	d["rot_y"] = rot_y
+	d["wall"] = is_strip_type(itype) and snapped.y >= STRIP_WALL_MIN_Y
 	_recalculate_networks_and_metrics()
 	_broadcast_decor_items()
 	_broadcast_cables()

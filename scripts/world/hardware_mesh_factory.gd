@@ -804,37 +804,17 @@ static func build_workbench_display() -> Node3D:
 
 
 ## Builds a realistic 3D handheld / crate-interior hardware model for ANY catalog item!
-static func build_item_visual(item_type: String) -> Node3D:
+static func build_item_visual(item_type: String, data: Dictionary = {}) -> Node3D:
 	if item_type == "old_fuse":
 		var blown := ModelLoader.instantiate_custom_model("fuse_d02_blown")
 		if blown != null:
 			return blown
-	if GameState.is_slot_upgradeable(item_type) or item_type == "net_switch":
-		var comps := {"cpu": 1, "gpu": (1 if GameState.get_chassis_visual(item_type) == "gpu_server" else 0), "ram": 1, "storage": 1, "cooling": 0, "psu": 0}
-		var srv := build_open_server_chassis(item_type, comps)
-		srv.scale = Vector3(0.76, 0.76, 0.76)
-		return srv
+	if item_type == "empty_carton":
+		return CartonFactory.build(str(data.get("carton", "deco")), "", 1.0)
+	if GameState.ITEM_CATALOG.has(item_type):
+		return CartonFactory.build(CartonFactory.kind_for(item_type), TranslationServer.translate(str(GameState.ITEM_CATALOG[item_type]["name"])))
 
-	# Larger floor equipment (rack, rack_pro, cooler, chiller, ups, cart): realistic packaged hardware crate with metal straps!
-	var root := Node3D.new()
-	var card := MatLib.get_mat("cardboard")
-	var strap := MatLib.get_mat("plastic_black")
-	var label_paper := MatLib.make_brushed_metal(Color(0.92, 0.92, 0.90), 0.72, 0.0)
-	var cat: Dictionary = GameState.ITEM_CATALOG.get(item_type, {"color": Color(0.4, 0.45, 0.5)})
-	var badge_mat := StandardMaterial3D.new()
-	badge_mat.albedo_color = (cat["color"] as Color).lerp(Color(0.32, 0.34, 0.36), 0.35)
-	badge_mat.roughness = 0.55
-
-	_box(root, Vector3(0.0, 0.18, 0.0), Vector3(0.56, 0.36, 0.56), card)
-	# Steel/polypropylene industrial packaging straps
-	_box(root, Vector3(-0.16, 0.18, 0.0), Vector3(0.022, 0.372, 0.572), strap)
-	_box(root, Vector3(0.16, 0.18, 0.0), Vector3(0.022, 0.372, 0.572), strap)
-	_box(root, Vector3(0.0, 0.18, 0.0), Vector3(0.572, 0.372, 0.022), strap)
-	# Printed white shipping spec sheet + muted category tag
-	_box(root, Vector3(-0.08, 0.22, 0.284), Vector3(0.24, 0.16, 0.008), label_paper)
-	_box(root, Vector3(-0.08, 0.17, 0.288), Vector3(0.18, 0.04, 0.006), badge_mat)
-	_box(root, Vector3(-0.08, 0.22, -0.284), Vector3(0.24, 0.16, 0.008), label_paper)
-	return root
+	return CartonFactory.build("deco", item_type)
 
 
 static func _box(parent: Node3D, pos: Vector3, size: Vector3, mat: Material) -> MeshInstance3D:

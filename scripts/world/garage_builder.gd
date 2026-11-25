@@ -95,6 +95,7 @@ var _pc_audio: AudioStreamPlayer3D
 var _extinguisher_mesh_root: Node3D
 ## Station ("garage" / "nord") -> Knoten des hängenden Löschers.
 var _extinguisher_mounts: Dictionary = {}
+var _paper_lids: Dictionary = {}
 var _blink_time: float = 0.0
 var _emergency_lights_extra: Array[OmniLight3D] = []
 var _emergency_lamp_mats: Array[StandardMaterial3D] = []
@@ -123,6 +124,7 @@ func _ready() -> void:
 	_build_reflection_probes()
 	_build_breaker_box()
 	_build_extinguisher_station(self, "garage", Vector3(-2.8, 1.22, -4.36), 0.0)
+	_build_paper_bin(self, "garage", Vector3(-4.95, 0.0, 5.75), 0.0)
 	_build_wall_router()
 	_build_hall_c_subpanel()
 	_build_terminal_desk()
@@ -138,6 +140,7 @@ func _ready() -> void:
 	GameState.panel_states_changed.connect(_on_panel_states_changed)
 	GameState.garage_door_changed.connect(_on_garage_door_changed)
 	GameState.halle_nord_changed.connect(_sync_halle_nord_visibility)
+	GameState.paper_bin_used.connect(_on_paper_bin_used)
 	GameState.building_upgrades_changed.connect(_sync_building_upgrades_visuals)
 	_garage_door_target = 1.0 if GameState.garage_door_open else 0.0
 	_garage_door_open_t = _garage_door_target
@@ -1655,6 +1658,36 @@ func _add_scrap_fuse() -> void:
 		i += 1
 
 
+## Altpapier-Container: Deckel klappt auf, sobald jemand Kartons einwirft.
+func _build_paper_bin(parent: Node3D, site: String, pos: Vector3, yaw_deg: float) -> void:
+	var root := Node3D.new()
+	root.position = pos
+	root.rotation_degrees.y = yaw_deg
+	parent.add_child(root)
+	var mdl := ModelLoader.instantiate_custom_model("paper_bin")
+	if mdl != null:
+		root.add_child(mdl)
+		_paper_lids[site] = mdl.find_child("Lid", true, false)
+	_add_collider_box(root, Vector3(0.0, 0.66, 0.0), Vector3(1.34, 1.32, 1.04))
+	var area := _make_interact_area(Vector3(1.5, 1.5, 1.2), {
+		"interact_type": "paper_bin",
+		"entity_id": site,
+	})
+	area.position = Vector3(0.0, 0.75, 0.0)
+	root.add_child(area)
+
+
+func _on_paper_bin_used(site: String) -> void:
+	var lid: Variant = _paper_lids.get(site)
+	if not is_instance_valid(lid):
+		return
+	SfxManager.play("carton_open", -6.0, 0.8)
+	var tw := create_tween()
+	tw.tween_property(lid, "rotation:x", -1.15, 0.28).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+	tw.tween_interval(0.35)
+	tw.tween_property(lid, "rotation:x", 0.0, 0.42).set_trans(Tween.TRANS_BOUNCE).set_ease(Tween.EASE_OUT)
+
+
 func _build_extinguisher_station(parent: Node3D, station: String, pos: Vector3, yaw_deg: float) -> void:
 	var root := Node3D.new()
 	root.position = pos
@@ -2700,6 +2733,7 @@ func _build_halle_nord_site() -> void:
 	exit_lbl.rotation_degrees.y = 180.0
 
 	_build_extinguisher_station(hn, "nord", Vector3(-3.45, 1.22, 5.80), 180.0)
+	_build_paper_bin(hn, "nord", Vector3(-3.35, 0.0, 6.95), 90.0)
 
 	# ---------------------------------------------------------------- 4. SCHALTANLAGE 400V (16 Steckdosen) + 42U CORE-RACK (16 Ports)
 	var p_root := Node3D.new()

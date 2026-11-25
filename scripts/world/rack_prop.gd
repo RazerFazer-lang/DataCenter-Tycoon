@@ -148,6 +148,125 @@ func _apply_graphics_setting() -> void:
 			hf.visible = (q >= 1)
 
 
+var _age: float = 0.0
+var _prev_powered: bool = false
+var _power_up_t: float = 0.0
+var _fx_players: Array[AudioStreamPlayer3D] = []
+## Teile, die gerade einfahren: {node, base, from, t, dur, light}
+var _part_fx: Array = []
+const PART_ORDER: Array[String] = ["cpu", "gpu", "ram", "storage", "cooling", "psu"]
+
+
+func _any_slot_booting(slots: Array) -> bool:
+	for s in slots:
+		if bool((s as Dictionary).get("offline", false)) and float((s as Dictionary).get("boot_total", 0.0)) > 0.0:
+			return true
+	return false
+
+
+## Strom kommt: Relais klackt, Innenlicht flackert, PDU-LED geht an. Strom weg: alles läuft aus.
+func _on_power_changed(on: bool) -> void:
+	if on:
+		_power_up_t = 1.2
+		_play_3d("rack_relay", Vector3(0.0, 1.9, -0.3), -2.0, randf_range(0.96, 1.04))
+	else:
+		_power_up_t = 0.0
+		_play_3d("server_off", Vector3(0.0, 1.2, 0.0), -5.0, 0.9)
+	_refresh_visuals()
+
+
+func _play_3d(sfx: String, at: Vector3, db: float, pitch: float) -> void:
+	var gain := SettingsManager.get_effective_sfx_gain()
+	var st := SfxManager.get_sound_stream(sfx)
+	if st == null or gain <= 0.005:
+		return
+	var p: AudioStreamPlayer3D = null
+	for q in _fx_players:
+		if not q.playing:
+			p = q
+			break
+	if p == null:
+		if _fx_players.size() >= 4:
+			p = _fx_players[0]
+		else:
+			p = AudioStreamPlayer3D.new()
+			p.max_distance = 16.0
+			p.unit_size = 3.0
+			p.attenuation_model = AudioStreamPlayer3D.ATTENUATION_INVERSE_DISTANCE
+			add_child(p)
+			_fx_players.append(p)
+	p.position = at
+	p.stream = st
+	p.volume_db = db + linear_to_db(gain)
+	p.pitch_scale = pitch
+	p.play()
+
+
+## Neues Teil gleitet an seinen Platz, ein ganzer Einschub kommt von vorn auf der Schiene.
+func _start_install_fx(vis: Dictionary, srv: Node3D, old_sig: String, new_sig: String) -> void:
+	var a := old_sig.split(":")
+	var b := new_sig.split(":")
+	if old_sig == "" or a[0] != b[0]:
+		_add_part_fx(srv, Vector3(0.0, 0.0, 0.62), 0.75, vis, "snap")
+		return
+	for i in range(PART_ORDER.size()):
+		var k := i + 1
+		# Reihenfolge in hw_sig: cpu, gpu, ram, storage, cooling, psu
+		if k >= a.size() or k >= b.size() or a[k] == b[k] or b[k] == "":
+			continue
+		for n in _collect_nodes(srv):
+			if n is Node3D and n.has_meta("part_cat") and str(n.get_meta("part_cat")) == PART_ORDER[i]:
+				var off := Vector3(0.0, 0.24, 0.0)
+				if PART_ORDER[i] == "psu":
+					off = Vector3(0.0, 0.02, -0.30)
+				elif PART_ORDER[i] == "storage":
+					off = Vector3(0.0, 0.12, 0.18)
+				_add_part_fx(n as Node3D, off, 0.85, vis, "clip")
+
+
+func _add_part_fx(node: Node3D, off: Vector3, dur: float, vis: Dictionary, snd: String) -> void:
+	_part_fx.append({"node": node, "base": node.position, "off": off, "t": 0.0, "dur": dur, "vis": vis, "snd": snd})
+	node.position += off
+	_play_3d("part_slide", Vector3(0.0, 1.1, 0.3), -8.0, randf_range(0.95, 1.1))
+
+
+func _update_part_fx(delta: float) -> void:
+	for i in range(_part_fx.size() - 1, -1, -1):
+		var fx: Dictionary = _part_fx[i]
+		if not is_instance_valid(fx["node"]):
+			_part_fx.remove_at(i)
+			continue
+		var n: Node3D = fx["node"]
+		fx["t"] = float(fx["t"]) + delta
+		var u := clampf(float(fx["t"]) / float(fx["dur"]), 0.0, 1.0)
+		# erst zügig heran, kurz vor dem Einrasten langsamer, dann ein kleiner Ruck
+		var e := 1.0 - pow(1.0 - u, 2.4)
+		var shake := sin(u * 60.0) * 0.0012 * smoothstep(0.80, 0.95, u) * (1.0 - u)
+		n.position = (fx["base"] as Vector3) + (fx["off"] as Vector3) * (1.0 - e) + Vector3(shake, 0.0, 0.0)
+		if u >= 1.0:
+			n.position = fx["base"]
+			_part_fx.remove_at(i)
+			(fx["vis"] as Dictionary)["led_test"] = 0.5
+			_play_3d(str(fx["snd"]), to_local(n.global_position), -3.0, randf_range(0.96, 1.05))
+			_glint(n)
+
+
+## Kurzer Lichtreflex auf dem eingerasteten Teil.
+func _glint(n: Node3D) -> void:
+	if SettingsManager.graphics_quality < 1:
+		return
+	var l := OmniLight3D.new()
+	l.light_color = Color(0.82, 0.92, 1.0)
+	l.omni_range = 0.9
+	l.light_energy = 2.6
+	l.shadow_enabled = false
+	add_child(l)
+	l.global_position = n.global_position + Vector3(0.0, 0.14, 0.10)
+	var tw := create_tween()
+	tw.tween_property(l, "light_energy", 0.0, 0.38).set_ease(Tween.EASE_OUT)
+	tw.tween_callback(l.queue_free)
+
+
 func _setup_fan_audio() -> void:
 	_fan_audio = AudioStreamPlayer3D.new()
 	_fan_audio.position = Vector3(0.0, 1.15, 0.0)
@@ -172,6 +291,13 @@ func _process(delta: float) -> void:
 		return
 
 	var powered := bool(_rack_data.get("powered", false))
+	_age += delta
+	if powered != _prev_powered:
+		if _age > 1.5 and not is_showcase_only:
+			_on_power_changed(powered)
+		_prev_powered = powered
+	_power_up_t = maxf(0.0, _power_up_t - delta)
+	_update_part_fx(delta)
 	var networked := bool(_rack_data.get("networked", false))
 	var temp := float(_rack_data.get("temp", 22.0))
 	var slots: Array = _rack_data.get("slots", [])
@@ -201,6 +327,9 @@ func _process(delta: float) -> void:
 	var target_inner := 0.0
 	if powered and (panel_open or cam_dist < 7.5 or is_showcase_only):
 		target_inner = 1.05 if panel_open else 0.52
+	if _power_up_t > 0.0:
+		# Innenlicht flackert beim Einschalten an
+		target_inner *= 1.0 if sin(_power_up_t * 46.0) * sin(_power_up_t * 17.0) > -0.15 else 0.1
 	_smooth_interior_energy = lerpf(_smooth_interior_energy, target_inner, clampf(delta * 6.0, 0.0, 1.0))
 	if _interior_light != null:
 		_interior_light.visible = SettingsManager.graphics_quality >= 1 and _smooth_interior_energy > 0.02
@@ -272,7 +401,15 @@ func _process(delta: float) -> void:
 			continue
 
 		var offline := bool(slot.get("offline", false)) and st == "ok"
-		var booting := offline and powered and float(slot.get("boot_total", 0.0)) > 0.0
+		var waiting := offline and powered and float(slot.get("boot_wait", 0.0)) > 0.0
+		var booting := offline and powered and float(slot.get("boot_total", 0.0)) > 0.0 and not waiting
+		if _age > 1.5 and not is_showcase_only:
+			if booting and not bool(vis.get("was_booting", false)):
+				_play_3d("server_latch", sroot.position if sroot != null else Vector3.UP, -3.0, randf_range(0.94, 1.08))
+			if bool(vis.get("was_booting", false)) and not offline and powered and st == "ok":
+				_play_3d("server_ready", sroot.position if sroot != null else Vector3.UP, -8.0, 1.0)
+				vis["led_test"] = 0.45
+		vis["was_booting"] = booting
 		vis["boot_t"] = (float(vis.get("boot_t", 0.0)) + delta) if booting else 0.0
 		if booting:
 			# Lüfter laufen beim Einschalten kurz auf Vollgas, danach ruhig weiter
@@ -305,7 +442,7 @@ func _process(delta: float) -> void:
 					else:
 						fnode.rotation.z += delta * speed
 
-		_set_leds_lit(vis, powered and (not offline or booting))
+		_set_leds_lit(vis, powered and (not offline or booting or waiting))
 		if st == "burning":
 			has_fire = true
 			smoke_fx.emitting = true
@@ -354,6 +491,15 @@ func _process(delta: float) -> void:
 			spark_fx.emitting = false
 			if booting:
 				_show_boot_leds(vis, slot, i)
+			elif waiting:
+				# Warten auf den Start: nur die Wartungs-LED blinkt langsam
+				led_mat.emission_energy_multiplier = 0.02
+				for hm_w in hdd_mats:
+					(hm_w as StandardMaterial3D).emission_energy_multiplier = 0.02
+				nic_mat.emission_energy_multiplier = 0.02
+				bmc_mat.emission = Color(0.96, 0.62, 0.12)
+				bmc_mat.emission_energy_multiplier = 0.9 if fmod(_anim_time, 1.0) < 0.18 else 0.04
+				post_lbl.visible = false
 			elif not powered or offline:
 				led_mat.emission = Color(0.14, 0.14, 0.16)
 				led_mat.emission_energy_multiplier = 0.02
@@ -407,6 +553,17 @@ func _process(delta: float) -> void:
 				post_lbl.text = "A0" if (i % 2 == 0) else "AA"
 				post_lbl.modulate = Color(0.96, 0.38, 0.14)
 				post_lbl.visible = true
+
+	# LED-Test nach Einbau oder Start: alle LEDs kurz voll an
+	for vt in _slot_visuals:
+		var left := float((vt as Dictionary).get("led_test", 0.0))
+		if left <= 0.0:
+			continue
+		(vt as Dictionary)["led_test"] = left - delta
+		_set_leds_lit(vt, true)
+		for m_t in [vt["led_mat"], vt["nic_mat"], vt["bmc_mat"]] + (vt["hdd_mats"] as Array):
+			if m_t != null:
+				(m_t as StandardMaterial3D).emission_energy_multiplier = 1.8
 
 	# Feuer- ODER Kurzschluss-Funkenlicht (kein Dauer-Neon am Boden!)
 	if _fire_light != null and _fire_light.visible:
@@ -560,6 +717,7 @@ func _refresh_visuals() -> void:
 				str(comps.get("psu", "")),
 			]
 			if str(vis["hw_sig"]) != sig:
+				var old_sig := str(vis["hw_sig"])
 				_clear_children(hw_holder)
 				var fans: Array = vis["hw_fans"]
 				fans.clear()
@@ -568,6 +726,8 @@ func _refresh_visuals() -> void:
 				_optimize_detail_subtree(srv_mesh, true, DETAIL_RANGE_END)
 				hw_holder.add_child(srv_mesh)
 				vis["hw_sig"] = sig
+				if _age > 1.5 and not is_showcase_only:
+					_start_install_fx(vis, srv_mesh, old_sig, sig)
 
 			var stats := GameState.get_slot_stats(slot)
 			rack_ram_gb += int(stats.get("ram_gb", 0))
@@ -583,7 +743,10 @@ func _refresh_visuals() -> void:
 				slot_lbl.text = tr("DEFEKT · Schacht ziehen → Werkbank")
 				slot_lbl.modulate = Color(0.96, 0.34, 0.30)
 			elif bool(slot.get("offline", false)):
-				if float(slot.get("boot_total", 0.0)) > 0.0:
+				if powered and float(slot.get("boot_wait", 0.0)) > 0.0:
+					slot_lbl.text = tr("WARTET AUF START …")
+					slot_lbl.modulate = Color(0.70, 0.74, 0.80)
+				elif float(slot.get("boot_total", 0.0)) > 0.0:
 					slot_lbl.text = tr("FÄHRT HOCH …") if powered else tr("KEIN STROM")
 					slot_lbl.modulate = Color(0.98, 0.74, 0.24)
 				else:
@@ -606,6 +769,9 @@ func _refresh_visuals() -> void:
 	elif not powered:
 		status_col = Color(0.55, 0.58, 0.62)
 		status_txt = "OFFLINE"
+	elif _any_slot_booting(slots):
+		status_col = Color(0.98, 0.74, 0.24)
+		status_txt = "SELBSTTEST"
 	elif any_fault:
 		status_col = Color(1.0, 0.30, 0.22)
 		status_txt = "STÖRUNG"

@@ -1091,7 +1091,7 @@ func _render_shop_app() -> void:
 		_add_shop_section(left_list, tr("Kühlung"), tr("Hält die Raumtemperatur unter Kontrolle."))
 		_populate_physical_shop_list(left_list, ["cooler", "chiller", "indoor_unit", "cool_k90", "cool_inrow", "cool_tower", "cool_cdu"])
 		_add_shop_section(left_list, tr("Stromversorgung"), tr("Der Stromkasten hat nur eine Steckdose: mit Stromleisten verteilst du weiter."))
-		_populate_physical_shop_list(left_list, ["prop_power_strip", "ups"])
+		_populate_physical_shop_list(left_list, ["prop_power_strip", "ups", "ups_cabinet", "ups_container"])
 		_add_fuse_shop_card(left_list)
 		_add_shop_section(left_list, tr("Netzwerk-Zubehör"), tr("Mehr Netzwerkdosen über LAN-Leisten."))
 		_populate_physical_shop_list(left_list, ["prop_lan_strip"])

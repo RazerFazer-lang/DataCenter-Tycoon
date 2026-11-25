@@ -525,6 +525,7 @@ func _build_van_geometry() -> void:
 		var col := i % 3
 		var row := i / 3
 		var box := _add_box(self, Vector3(-0.56 + float(col) * 0.56, 0.90 + float(row) * 0.46, -0.08), Vector3(0.46, 0.40, 0.46), c_mat)
+		_dress_cargo(box, i)
 		_cargo_boxes.append(box)
 
 	_cargo_light = OmniLight3D.new()
@@ -658,6 +659,17 @@ func _build_driver_door(paint: Material, navy: Material, amber: Material, trim: 
 	_add_box(_cab_door, Vector3(-0.94, 1.69, 0.0), Vector3(0.04, 0.66, 0.05), paint)
 
 
+## Fracht als echte Kartons verschiedener Art.
+func _dress_cargo(box: MeshInstance3D, i: int) -> void:
+	box.mesh = null
+	var kinds := ["parcel", "server", "deco", "build", "ups", "cooler"]
+	var c := CartonFactory.build(kinds[(i * 5 + 1) % kinds.size()])
+	c.scale = Vector3.ONE * 0.78
+	c.position.y = -0.20
+	c.rotation.y = float(i % 3) * 0.06 - 0.06
+	box.add_child(c)
+
+
 func _add_box(parent: Node3D, pos: Vector3, size: Vector3, mat: Material) -> MeshInstance3D:
 	var mi := MeshInstance3D.new()
 	var bm := BoxMesh.new()
@@ -730,6 +742,7 @@ func _bind_custom_fleet_model(root: Node3D, tier: int, staff_n: int) -> void:
 		var col := i % cols
 		var row := i / cols
 		var box := _add_box(_vehicle_root, Vector3(start_x + float(col) * 0.58, floor_y + float(row) * 0.46, -0.04), Vector3(0.46, 0.40, 0.46), c_mat)
+		_dress_cargo(box, i)
 		_cargo_boxes.append(box)
 
 	# Personal-Team erstellen (Stufe 1: 1 Fahrer, Stufe 2: 2 Mitarbeiter, Stufe 3: 3 Logistiker!)

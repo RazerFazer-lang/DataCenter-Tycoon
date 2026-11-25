@@ -87,6 +87,7 @@ func _ready() -> void:
 	# Router-Upgrade verschiebt die LAN-Buchse: Kabel nach dem Neubau des Modells neu zeichnen.
 	_garage.router_visuals_rebuilt.connect(_on_router_visuals_rebuilt, CONNECT_DEFERRED)
 	GameState.extinguisher_changed.connect(_sync_extinguisher)
+	GameState.unpack_started.connect(_on_unpack_started)
 	GameState.room_level_changed.connect(_sync_room_level)
 	GameState.state_updated.connect(_on_state_updated)
 	GameState.world_ping_received.connect(_on_world_ping_received)
@@ -610,6 +611,22 @@ func _sync_room_level() -> void:
 	_garage.set_room_level(GameState.room_level)
 
 
+## Auspacken: Klebeband ab, Klappen auf, das Gerät kommt heraus, der leere Karton rutscht zur Seite.
+func _on_unpack_started(entity_id: String, item_type: String, carton_pos: Vector3) -> void:
+	# Das Gerät selbst wird erst mit dem nächsten Abgleich gebaut.
+	await get_tree().process_frame
+	await get_tree().process_frame
+	var node: Node3D = null
+	for group in [_rack_nodes, _cooler_nodes, _ups_nodes, _decor_nodes]:
+		if (group as Dictionary).has(entity_id):
+			node = (group as Dictionary)[entity_id]
+	if node == null or not is_instance_valid(node):
+		return
+	var fx := UnpackFx.new()
+	add_child(fx)
+	fx.start(node, CartonFactory.kind_for(item_type), carton_pos)
+
+
 func _sync_extinguisher() -> void:
 	for st in GameState.EXT_STATIONS:
 		_garage.set_extinguisher_mounted(st, GameState.get_extinguisher_at_station(st) != "")
@@ -674,7 +691,7 @@ func _sync_ups() -> void:
 			var up := UpsProp.new()
 			up.name = uid
 			_ups_container.add_child(up)
-			up.setup(uid)
+			up.setup(uid, str((GameState.ups_units[uid] as Dictionary).get("ups_type", "ups")))
 			_ups_nodes[uid] = up
 		(_ups_nodes[uid] as UpsProp).apply_data(GameState.ups_units[uid])
 	_sync_cables()
@@ -847,6 +864,8 @@ func get_port_world_dir(_cable_type: String, endpoint_id: String) -> Variant:
 	if _decor_nodes.has(endpoint_id):
 		var dn: DecorProp = _decor_nodes[endpoint_id]
 		if is_instance_valid(dn) and dn.is_inside_tree():
+			if dn.is_on_wall():
+				return dn.global_transform.basis.y
 			# Buchsen zeigen nach oben (y > 0.5), das Kabel läuft quer zur Leiste weg.
 			return dn.global_transform.basis.z + Vector3.UP
 		return Vector3.UP

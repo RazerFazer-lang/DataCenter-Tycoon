@@ -37,6 +37,12 @@
       "items": [
         {
           "tag": "neu",
+          "version": "v2.7",
+          "title": "Neue Kartons, Leisten 2.0, Rack-Start & Notstrom",
+          "desc": "8 Kartonmodelle mit Auspack-Animation und Altpapier-Container, Leisten mit Schalter, Anzeige und Überlastschutz für Boden und Wand, gestaffelter Rack-Start und 3 USV-Größen mit echter Kapazität."
+        },
+        {
+          "tag": "neu",
           "version": "v2.6",
           "title": "Admin-Menü, Profi-Kühlung, echte Leisten & eigene Marken",
           "desc": "Abgesichertes Admin-Menü, 4 Profi-Kühlgeräte, stromlose Einschübe mit Hochfahren, ein Steckplatz am Stromkasten, neuer Feuerlöscher, 10 Firmenstufen und Verion OS."

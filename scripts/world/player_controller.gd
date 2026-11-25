@@ -1029,6 +1029,10 @@ func _handle_primary_interact() -> void:
 			teleport_between_sites()
 		"decor_shelf_slot":
 			GameState.request_decor_shelf_interact(str(target.get_meta("decor_id", "")), int(target.get_meta("slot_idx", 0)))
+		"strip_switch":
+			GameState.request_toggle_strip(eid)
+		"paper_bin":
+			GameState.request_dump_carton(eid)
 		"parts_cabinet":
 			GameState.request_refill_maint_kits()
 		"wall_breaker":
@@ -1543,6 +1547,7 @@ func _update_placement_preview(delta: float) -> void:
 	var hpos: Vector3 = hit["position"]
 	var hnormal: Vector3 = hit["normal"]
 	_ghost_is_drop_preview = not is_placeable
+	var wall_strip := false
 
 	if not is_placeable:
 		if hnormal.y < 0.7:
@@ -1566,6 +1571,17 @@ func _update_placement_preview(delta: float) -> void:
 			_ghost_pos = spot["pos"]
 			_ghost_rot_y = float(spot["rot_y"])
 			_ghost_valid = true
+	elif GameState.is_strip_type(item_type) and absf(hnormal.y) < 0.3:
+		wall_strip = true
+		var sspot: Dictionary = GameState.get_strip_wall_spot(hpos, hnormal)
+		if sspot.is_empty():
+			_ghost_pos = hpos
+			_ghost_rot_y = atan2(hnormal.x, hnormal.z)
+			_ghost_valid = false
+		else:
+			_ghost_pos = sspot["pos"]
+			_ghost_rot_y = float(sspot["rot_y"])
+			_ghost_valid = GameState.can_place_item_at(item_type, _ghost_pos, _ghost_rot_y, ignore_rid)
 	else:
 		if hnormal.y < 0.7:
 			_ghost_root.visible = false
@@ -1594,7 +1610,7 @@ func _update_placement_preview(delta: float) -> void:
 
 	_ghost_root.visible = true
 	_ghost_root.position = _ghost_visual_pos
-	_ghost_root.rotation.y = _ghost_visual_rot
+	_ghost_root.basis = Basis(Vector3.UP, _ghost_visual_rot) * (Basis(Vector3.RIGHT, PI * 0.5) if wall_strip else Basis.IDENTITY)
 
 	if _ghost_is_drop_preview:
 		_ghost_holo_mat.set_shader_parameter("holo_color", Color(0.28, 0.78, 1.0, 0.36))
@@ -1912,6 +1928,21 @@ func _update_context_prompt() -> void:
 			else:
 				current_prompt = tr("[E] Feuerlöscher nehmen")
 				current_sub_prompt = tr("Füllung: %d %%") % roundi(GameState.get_extinguisher_fill(p_ext) * 100.0)
+		"strip_switch":
+			var sd: Dictionary = GameState.decor_items.get(eid, {})
+			if bool(sd.get("tripped", false)):
+				current_prompt = tr("[E] Ausgelöste Leiste wieder einschalten")
+			else:
+				current_prompt = tr("[E] Leiste ausschalten") if GameState.is_strip_on(eid) else tr("[E] Leiste einschalten")
+			if GameState.is_power_strip_decor(eid):
+				current_sub_prompt = tr("Last: %d / %d W") % [GameState.get_strip_load(eid), GameState.get_strip_limit(eid)]
+		"paper_bin":
+			if str(held.get("item_type", "")) == "empty_carton":
+				current_prompt = tr("[E] Karton einwerfen (+$%d)") % CartonFactory.refund(str(held.get("carton", "deco")))
+			elif not GameState.get_player_pushed_cart(peer_id).is_empty():
+				current_prompt = tr("[E] Leere Kartons vom Rollwagen einwerfen")
+			else:
+				current_prompt = tr("Altpapier: leere Kartons hier einwerfen")
 		"extinguisher_item":
 			current_prompt = tr("[E] Feuerlöscher aufheben")
 			current_sub_prompt = tr("Füllung: %d %%") % roundi(GameState.get_extinguisher_fill(eid) * 100.0)
@@ -1971,7 +2002,7 @@ func _update_context_prompt() -> void:
 				var ch := float(GameState.ups_units[eid]["charge"])
 				var ups_state := tr("NOTSTROM!") if bool(GameState.ups_units[eid].get("discharging", false)) else (tr("LÄDT/BEREIT") if bool(GameState.ups_units[eid].get("connected", false)) else tr("KEIN KABEL"))
 				current_prompt = tr("[E / F] USV-Batterie %s (%.0f%%, %s) — Umsetzen / Verkaufen") % [eid.to_upper(), ch, ups_state]
-				current_sub_prompt = tr("Auf gelbe Buchse oben zielen für Stromkabel")
+				current_sub_prompt = tr("Auf die gelbe Buchse unten zielen für Stromkabel")
 		"storage_shelf_slot":
 			var s_idx := int(target.get_meta("slot_index", 0))
 			var skey := "%s:%d" % [eid, s_idx]
@@ -2144,7 +2175,8 @@ func _update_held_visuals() -> void:
 			if pcount > 1 or GameState.is_repair_kit(item_type) or item_type == "slot_build_box" or item_type == "server_tray":
 				model = StorageShelfProp.build_stored_visual(held_crate)
 			else:
-				model = HardwareMeshFactory.build_item_visual(item_type)
+				model = HardwareMeshFactory.build_item_visual(item_type, held_crate)
+				model.scale = Vector3(0.82, 0.82, 0.82)
 			if pcount > 1:
 				model.scale = Vector3(0.96, 0.96, 0.96)
 				model.position = Vector3(0.0, -0.06, -0.02)
@@ -2732,17 +2764,17 @@ func _rebuild_ghost_model(item_type: String, held: Dictionary, is_drop_preview: 
 		if GameState.is_repair_kit(item_type) or item_type == "slot_build_box" or item_type == "server_tray":
 			model = StorageShelfProp.build_stored_visual(held)
 		else:
-			model = HardwareMeshFactory.build_item_visual(item_type)
-			model.scale = Vector3(0.75, 0.75, 0.75)
+			model = HardwareMeshFactory.build_item_visual(item_type, held)
 	elif item_type == "rack_pro":
 		model = ModelLoader.instantiate_custom_model("rack_pro")
 		fp_size = Vector2(0.94, 0.94)
 	elif item_type == "rack":
 		model = ModelLoader.instantiate_custom_model("rack_std")
 		fp_size = Vector2(0.94, 0.94)
-	elif item_type == "ups":
-		model = ModelLoader.instantiate_custom_model("ups_unit")
-		fp_size = Vector2(0.76, 0.62)
+	elif GameState.is_ups_type(item_type):
+		model = ModelLoader.instantiate_custom_model(str(UpsProp.MODELS[item_type]))
+		var us: Vector3 = UpsProp.SIZES[item_type]
+		fp_size = Vector2(us.x, us.z)
 	elif DECOR_GHOSTS.has(item_type):
 		model = ModelLoader.instantiate_custom_model(str(DECOR_GHOSTS[item_type][0]))
 		fp_size = DECOR_GHOSTS[item_type][1]

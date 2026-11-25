@@ -8,7 +8,7 @@ const MIX_RATE := 44100
 # Erzeugte Klänge werden hier gespeichert, damit nur der erste Start rechnen muss (~870 ms gemessen).
 const SFX_CACHE_DIR := "user://sfx_cache"
 # Erhöhen, wenn sich ein Generator oder seine Parameter ändern, sonst bleiben die alten Klänge im Cache.
-const SFX_CACHE_VERSION := 16
+const SFX_CACHE_VERSION := 17
 const EXTERNAL_AUDIO_DIR := "res://assets/audio"
 
 var _sounds: Dictionary = {}
@@ -62,6 +62,14 @@ func _generate_sounds() -> void:
 	_sounds["server_latch"] = _gen_server_power(true)
 	_sounds["server_off"] = _gen_server_power(false)
 	_sounds["server_ready"] = _gen_soft_chime([1318.51], 0.07, 0.10)
+	# Kartons
+	_sounds["tape_rip"] = _gen_tape_rip(0.42)
+	_sounds["carton_open"] = _gen_carton_flap(0.46)
+	# Rack-Start, Leisten, Notstrom
+	_sounds["rack_relay"] = _gen_click_burst([[0.0, 180.0, 0.60, 34.0], [0.012, 920.0, 0.34, 110.0], [0.16, 210.0, 0.46, 40.0], [0.30, 1400.0, 0.20, 160.0]], 0.50, 0.30)
+	_sounds["strip_switch"] = _gen_click_burst([[0.0, 1500.0, 0.46, 170.0], [0.016, 620.0, 0.40, 90.0]], 0.09, 0.26)
+	_sounds["ups_transfer"] = _gen_click_burst([[0.0, 130.0, 0.70, 26.0], [0.010, 760.0, 0.40, 80.0], [0.085, 150.0, 0.55, 30.0], [0.092, 1100.0, 0.26, 120.0]], 0.42, 0.34)
+	_sounds["ups_alarm"] = _gen_soft_chime([2093.0], 0.10, 0.13)
 	# Werkbank: Schraubendreher, Clips, Steckplätze, Paste
 	_sounds["screw_tick"] = _gen_click_burst([[0.0, 2300.0, 0.30, 260.0], [0.006, 1500.0, 0.20, 210.0]], 0.035, 0.30)
 	_sounds["screw_tight"] = _gen_click_burst([[0.0, 900.0, 0.36, 60.0], [0.045, 1650.0, 0.42, 120.0], [0.052, 520.0, 0.30, 50.0]], 0.16, 0.26)
@@ -833,6 +841,48 @@ func _gen_heavy_steel_place() -> AudioStreamWAV:
 		var metal := (sin(TAU * 420.0 * t) * 0.15 + sin(TAU * 695.0 * t) * 0.09) * env_ring
 		var rattle := lp * 0.40 * exp(-u * 9.0)
 		s[i] = clampf((thud + metal + rattle) * 0.60, -0.95, 0.95)
+	return _make_wav(s)
+
+
+## Paketband reißt ab: viele kurze Klebe-Rupfer, die höher werden.
+func _gen_tape_rip(duration: float) -> AudioStreamWAV:
+	var count := int(MIX_RATE * duration)
+	var s := PackedFloat32Array()
+	s.resize(count)
+	var lp := 0.0
+	var lp2 := 0.0
+	var grain := 0.0
+	for i in range(count):
+		var p := float(i) / float(count)
+		if randf() < 0.010 + 0.02 * p:
+			grain = randf_range(0.5, 1.0)
+		grain *= 0.9965
+		var w := randf_range(-1.0, 1.0)
+		lp = lerpf(lp, w, 0.45 + 0.35 * p)
+		lp2 = lerpf(lp2, lp, 0.10)
+		s[i] = clampf((lp - lp2) * (0.18 + 0.62 * grain) * minf(1.0, p * 14.0) * (1.0 - smoothstep(0.90, 1.0, p)), -0.95, 0.95)
+	return _make_wav(s)
+
+
+## Pappklappen: dumpfes Biegen und Anschlagen.
+func _gen_carton_flap(duration: float) -> AudioStreamWAV:
+	var count := int(MIX_RATE * duration)
+	var s := PackedFloat32Array()
+	s.resize(count)
+	var lp := 0.0
+	var lp2 := 0.0
+	for i in range(count):
+		var t := float(i) / float(MIX_RATE)
+		var w := randf_range(-1.0, 1.0)
+		lp = lerpf(lp, w, 0.16)
+		lp2 = lerpf(lp2, lp, 0.03)
+		var v := 0.0
+		for hit in [[0.02, 1.0], [0.15, 0.8], [0.27, 0.55]]:
+			var ht: float = t - float(hit[0])
+			if ht >= 0.0:
+				v += ((lp - lp2) * 0.9 + sin(TAU * 128.0 * ht) * 0.30 + sin(TAU * 236.0 * ht) * 0.14) * exp(-ht * 26.0) * float(hit[1])
+		var scrape := (lp - lp2) * 0.18 * sin(clampf(t / duration, 0.0, 1.0) * PI)
+		s[i] = clampf((v + scrape) * 0.75, -0.95, 0.95)
 	return _make_wav(s)
 
 

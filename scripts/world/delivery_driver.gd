@@ -635,8 +635,7 @@ func _build_body() -> void:
 			_skel_bones = RigHelper.map_bones(skel)
 			_skel_cur.resize(J_COUNT)
 			_held_box = _add_box(_body, Vector3(0.0, 1.18, -0.47), Vector3(0.42, 0.30, 0.34), cardboard)
-			_add_box(_held_box, Vector3(0.0, 0.151, 0.0), Vector3(0.06, 0.005, 0.345), tape_mat)
-			_add_box(_held_box, Vector3(0.10, 0.03, -0.172), Vector3(0.13, 0.09, 0.004), label_mat)
+			_dress_held_box()
 			_held_box.visible = false
 			return
 		var p_body := custom.find_child("Pivot_Body", true, false) as Node3D
@@ -664,8 +663,7 @@ func _build_body() -> void:
 			_elbow_l = p_el
 			_elbow_r = p_er
 			_held_box = _add_box(_torso, Vector3(0.0, 0.30, -0.47), Vector3(0.42, 0.30, 0.34), cardboard)
-			_add_box(_held_box, Vector3(0.0, 0.151, 0.0), Vector3(0.06, 0.005, 0.345), tape_mat)
-			_add_box(_held_box, Vector3(0.10, 0.03, -0.172), Vector3(0.13, 0.09, 0.004), label_mat)
+			_dress_held_box()
 			_held_box.visible = false
 			return
 		custom.free()
@@ -760,8 +758,7 @@ func _build_body() -> void:
 
 	# Karton zwischen beiden Händen (am Oberkörper, damit er beim Bücken mitgeht)
 	_held_box = _add_box(_torso, Vector3(0.0, 0.30, -0.47), Vector3(0.42, 0.30, 0.34), cardboard)
-	_add_box(_held_box, Vector3(0.0, 0.151, 0.0), Vector3(0.06, 0.005, 0.345), tape_mat)
-	_add_box(_held_box, Vector3(0.10, 0.03, -0.172), Vector3(0.13, 0.09, 0.004), label_mat)
+	_dress_held_box()
 	_held_box.visible = false
 
 
@@ -809,6 +806,14 @@ func _build_arm(side_x: float, sleeve_mat: Material, cuff_mat: Material, skin_ma
 	thumb.rotation_degrees = Vector3(22.0, 0.0, 10.0 * inward)
 	var parts: Array[Node3D] = [shoulder, elbow]
 	return parts
+
+
+## Getragenes Paket als echter Karton.
+func _dress_held_box() -> void:
+	_held_box.mesh = null
+	var c := CartonFactory.build("parcel")
+	c.position.y = -0.14
+	_held_box.add_child(c)
 
 
 func _add_box(parent: Node3D, pos: Vector3, size: Vector3, mat: Material) -> MeshInstance3D:

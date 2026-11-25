@@ -330,19 +330,9 @@ static func build_stored_visual(data: Dictionary) -> Node3D:
 		l_front.position = Vector3(0.0, 0.095, 0.126)
 		root.add_child(l_front)
 	elif itype == "slot_build_box":
-		var box_m := ModelLoader.instantiate_custom_model("delivery_build_box")
-		if box_m != null:
-			box_m.scale = Vector3(0.88, 0.88, 0.88)
-			root.add_child(box_m)
-		var fl := Label3D.new()
-		fl.text = GameState.get_crate_display_label(data)
-		fl.font_size = 22
-		fl.pixel_size = 0.0013
-		fl.modulate = Color(0.08, 0.10, 0.14)
-		fl.outline_size = 0
-		fl.shaded = false
-		fl.position = Vector3(0.0, 0.105, 0.180)
-		root.add_child(fl)
+		var box_m := CartonFactory.build("build", GameState.get_crate_display_label(data))
+		box_m.scale = Vector3(0.80, 0.80, 0.80)
+		root.add_child(box_m)
 	elif itype == "server_tray":
 		var td: Dictionary = data.get("tray_data", {}) as Dictionary
 		var mb_id := str(td.get("mainboard_id", "web_server"))
@@ -352,8 +342,8 @@ static func build_stored_visual(data: Dictionary) -> Node3D:
 		srv.scale = Vector3(0.56, 0.56, 0.56)
 		root.add_child(srv)
 	else:
-		var item_v := HardwareMeshFactory.build_item_visual(itype)
-		item_v.scale = Vector3(0.55, 0.55, 0.55)
+		var item_v := HardwareMeshFactory.build_item_visual(itype, data)
+		item_v.scale = Vector3(0.62, 0.62, 0.62)
 		root.add_child(item_v)
 	return root
 

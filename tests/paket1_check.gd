@@ -261,6 +261,9 @@ func _slot_power() -> void:
 	gs.request_connect_cable("power", gs.WALL_BREAKER_ID, strip, 0, 5)
 	await wait(3)
 	chk("Rack läuft über die Leiste", bool(rack["powered"]))
+	# Erster Strom: die Server fahren der Reihe nach hoch
+	for i in 80:
+		gs._update_slot_boot(0.5)
 	var w_on: int = gs.get_rack_hardware_summary(rid)["watts"]
 	gs.request_toggle_slot_extended(rid, 0)
 	await wait(2)
