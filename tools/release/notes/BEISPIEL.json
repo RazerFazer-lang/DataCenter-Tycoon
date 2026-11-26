@@ -1,0 +1,9 @@
+{
+  "title": "Name des Updates",
+  "items": [
+    "[NEU] Was neu ist, in einem Satz aus Sicht der Spieler.",
+    "[FIX] Was repariert ist.",
+    "[CO-OP] Alle Mitspieler brauchen die neue Version."
+  ],
+  "roadmap": "Ein Satz für die Spalte „Fertig“ in der Launcher-Roadmap."
+}

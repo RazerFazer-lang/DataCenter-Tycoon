@@ -16,8 +16,16 @@ public sealed record UpdateCheckResult(
     long AssetSizeBytes,
     string Notes,
     string ReleasePageUrl = "",
-    string ErrorMessage = ""
-);
+    string ErrorMessage = "",
+    // Kleines Update (.delta) von genau der installierten Version, falls im Release vorhanden.
+    string DeltaUrl = "",
+    long DeltaSizeBytes = 0,
+    string DeltaSha256Url = "",
+    string DeltaFromVersion = ""
+)
+{
+    public bool HasDelta => !string.IsNullOrWhiteSpace(DeltaUrl);
+}
 
 public sealed record LauncherUpdateCheckResult(
     bool Success,
@@ -125,6 +133,7 @@ public static class UpdateService
             string dlUrl = "";
             long assetSize = 0;
             string notes = "";
+            var delta = DeltaAsset.None;
 
             if (root.TryGetProperty("tag_name", out var tagProp))
             {
@@ -148,6 +157,7 @@ public static class UpdateService
                             break;
                         }
                     }
+                    delta = FindDeltaAsset(assets, installedVersion, latest);
                 }
             }
             else
@@ -163,7 +173,8 @@ public static class UpdateService
             }
 
             bool newer = string.IsNullOrWhiteSpace(installedVersion) || IsNewerVersion(latest, installedVersion);
-            return new UpdateCheckResult(true, newer, latest, dlUrl, assetSize, notes, releasePage);
+            return new UpdateCheckResult(true, newer, latest, dlUrl, assetSize, notes, releasePage,
+                DeltaUrl: delta.Url, DeltaSizeBytes: delta.Size, DeltaSha256Url: delta.Sha256Url, DeltaFromVersion: delta.From);
         }
         catch (Exception ex)
         {
@@ -172,13 +183,57 @@ public static class UpdateService
         }
     }
 
+    private sealed record DeltaAsset(string Url, long Size, string Sha256Url, string From)
+    {
+        public static readonly DeltaAsset None = new("", 0, "", "");
+    }
+
+    /// <summary>
+    /// Sucht im Release ein kleines Update "DataCenterTycoon-v{to}-from-v{from}-win64.delta",
+    /// dessen "from" der installierten und dessen "to" der Release-Version entspricht (+ optional ".sha256").
+    /// </summary>
+    private static DeltaAsset FindDeltaAsset(JsonElement assets, string installedVersion, string targetVersion)
+    {
+        if (string.IsNullOrWhiteSpace(installedVersion) || assets.ValueKind != JsonValueKind.Array)
+            return DeltaAsset.None;
+
+        string url = "", name = "", from = "";
+        long size = 0;
+        foreach (var a in assets.EnumerateArray())
+        {
+            var n = a.TryGetProperty("name", out var np) ? (np.GetString() ?? "") : "";
+            if (!DeltaPatch.TryParseAssetName(n, out var f, out var t)) continue;
+            if (!DeltaPatch.VersionsEqual(f, installedVersion) || !DeltaPatch.VersionsEqual(t, targetVersion)) continue;
+            if (!a.TryGetProperty("browser_download_url", out var up)) continue;
+            url = up.GetString() ?? "";
+            size = a.TryGetProperty("size", out var sp) ? sp.GetInt64() : 0;
+            name = n;
+            from = f;
+            break;
+        }
+        if (string.IsNullOrWhiteSpace(url))
+            return DeltaAsset.None;
+
+        string shaUrl = "";
+        foreach (var a in assets.EnumerateArray())
+        {
+            var n = a.TryGetProperty("name", out var np) ? (np.GetString() ?? "") : "";
+            if (n.Equals(name + ".sha256", StringComparison.OrdinalIgnoreCase) && a.TryGetProperty("browser_download_url", out var up))
+            {
+                shaUrl = up.GetString() ?? "";
+                break;
+            }
+        }
+        return new DeltaAsset(url, size, shaUrl, from);
+    }
+
     private static async Task<UpdateCheckResult> CheckGitHubGameReleaseAsync(string repo, string installedVersion)
     {
         var releasePage = $"https://github.com/{repo}/releases";
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
 
         // Sowohl /releases/latest (kein Listen-Cache!) als auch /releases?per_page=15 abfragen und das neueste nehmen.
-        var best = (Found: false, Version: installedVersion, DlUrl: "", Size: 0L, Notes: "", Page: releasePage);
+        var best = (Found: false, Version: installedVersion, DlUrl: "", Size: 0L, Notes: "", Page: releasePage, Delta: DeltaAsset.None);
         foreach (var endpoint in new[]
         {
             $"https://api.github.com/repos/{repo}/releases/latest",
@@ -223,6 +278,7 @@ public static class UpdateService
                 var candPage = relElem.TryGetProperty("html_url", out var htmlProp) ? (htmlProp.GetString() ?? releasePage) : releasePage;
                 string candUrl = "";
                 long candSize = 0;
+                var candDelta = DeltaAsset.None;
                 if (relElem.TryGetProperty("assets", out var assets) && assets.ValueKind == JsonValueKind.Array)
                 {
                     foreach (var a in assets.EnumerateArray())
@@ -238,10 +294,11 @@ public static class UpdateService
                             break;
                         }
                     }
+                    candDelta = FindDeltaAsset(assets, installedVersion, candVer);
                 }
 
                 if (!best.Found || IsNewerVersion(candVer, best.Version))
-                    best = (true, candVer, candUrl, candSize, candNotes, candPage);
+                    best = (true, candVer, candUrl, candSize, candNotes, candPage, candDelta);
             }
             catch
             {
@@ -254,7 +311,8 @@ public static class UpdateService
                 "Kein veröffentlichtes GitHub Release gefunden.");
 
         bool newer = string.IsNullOrWhiteSpace(installedVersion) || IsNewerVersion(best.Version, installedVersion);
-        return new UpdateCheckResult(true, newer, best.Version, best.DlUrl, best.Size, best.Notes, best.Page);
+        return new UpdateCheckResult(true, newer, best.Version, best.DlUrl, best.Size, best.Notes, best.Page,
+            DeltaUrl: best.Delta.Url, DeltaSizeBytes: best.Delta.Size, DeltaSha256Url: best.Delta.Sha256Url, DeltaFromVersion: best.Delta.From);
     }
 
     public static async Task<(bool Ok, string Message, string InstalledExe)> DownloadAndInstallAsync(
@@ -358,7 +416,6 @@ public static class UpdateService
                 // Installation erhalten, falls Kopieren oder Tauschen fehlschlägt.
                 var targetDir = Path.TrimEndingDirectorySeparator(Path.GetFullPath(installDir));
                 var newDir = targetDir + ".new";
-                var oldDir = targetDir + ".old";
 
                 if (Directory.Exists(newDir))
                     Directory.Delete(newDir, recursive: true);
@@ -372,34 +429,12 @@ public static class UpdateService
                     File.WriteAllText(vFile, JsonSerializer.Serialize(new { version = versionHint }));
                 }
 
-                if (Directory.Exists(oldDir))
-                    Directory.Delete(oldDir, recursive: true);
-
-                bool hadOld = Directory.Exists(targetDir);
-                if (hadOld)
-                    Directory.Move(targetDir, oldDir);
-
-                try
-                {
-                    Directory.Move(newDir, targetDir);
-                }
-                catch
-                {
-                    if (hadOld && !Directory.Exists(targetDir) && Directory.Exists(oldDir))
-                        Directory.Move(oldDir, targetDir);
-                    throw;
-                }
-
-                try { if (Directory.Exists(oldDir)) Directory.Delete(oldDir, recursive: true); } catch { }
+                SwapInNewDirectory(targetDir);
             });
 
             try { Directory.Delete(stagingDir, recursive: true); } catch { }
 
-            var exe = Directory.GetFiles(installDir, "*.exe", SearchOption.AllDirectories)
-                .FirstOrDefault(f =>
-                    !LauncherConfig.IsSelfExecutable(f) &&
-                    !Path.GetFileName(f).Contains("console", StringComparison.OrdinalIgnoreCase) &&
-                    !Path.GetFileName(f).Contains("launcher", StringComparison.OrdinalIgnoreCase));
+            var exe = FindInstalledGameExe(installDir);
 
             if (string.IsNullOrWhiteSpace(exe))
                 return (false, "In der ZIP-Datei wurde keine Spiel-.exe (DataCenterTycoon.exe) gefunden!", "");
@@ -412,6 +447,277 @@ public static class UpdateService
             try { if (Directory.Exists(stagingDir)) Directory.Delete(stagingDir, recursive: true); } catch { }
             return (false, $"Installation fehlgeschlagen: {ex.Message}", "");
         }
+    }
+
+    /// <summary>
+    /// Tauscht den fertig vorbereiteten Ordner "&lt;targetDir&gt;.new" gegen targetDir.
+    /// Die alte Installation wird erst zu "&lt;targetDir&gt;.old" und nur bei Erfolg gelöscht;
+    /// schlägt der Tausch fehl, kommt sie zurück.
+    /// </summary>
+    private static void SwapInNewDirectory(string targetDir)
+    {
+        var newDir = targetDir + ".new";
+        var oldDir = targetDir + ".old";
+
+        if (Directory.Exists(oldDir))
+            Directory.Delete(oldDir, recursive: true);
+
+        bool hadOld = Directory.Exists(targetDir);
+        if (hadOld)
+            Directory.Move(targetDir, oldDir);
+
+        try
+        {
+            Directory.Move(newDir, targetDir);
+        }
+        catch
+        {
+            if (hadOld && !Directory.Exists(targetDir) && Directory.Exists(oldDir))
+                Directory.Move(oldDir, targetDir);
+            throw;
+        }
+
+        if (hadOld)
+            KeepUserFolders(oldDir, targetDir);
+        try { if (Directory.Exists(oldDir)) Directory.Delete(oldDir, recursive: true); } catch { }
+    }
+
+    /// <summary>Ordner im Spielordner, die den Spielern gehören und kein Update löschen darf.</summary>
+    private static readonly string[] UserFolders = ["custom_models"];
+
+    /// <summary>
+    /// Holt eigene Dateien (z. B. eigene .glb-Modelle) aus der alten Installation in die neue.
+    /// Was das Release selbst mitbringt, bleibt so, wie es ist.
+    /// </summary>
+    internal static void KeepUserFolders(string oldDir, string newDir)
+    {
+        foreach (var name in UserFolders)
+        {
+            var from = Path.Combine(oldDir, name);
+            if (!Directory.Exists(from))
+                continue;
+            foreach (var file in Directory.GetFiles(from, "*", SearchOption.AllDirectories))
+            {
+                var dest = Path.Combine(newDir, name, Path.GetRelativePath(from, file));
+                if (File.Exists(dest))
+                    continue;
+                try
+                {
+                    Directory.CreateDirectory(Path.GetDirectoryName(dest)!);
+                    File.Move(file, dest);
+                }
+                catch { }
+            }
+        }
+    }
+
+    private static string? FindInstalledGameExe(string installDir) =>
+        Directory.GetFiles(installDir, "*.exe", SearchOption.AllDirectories)
+            .FirstOrDefault(f =>
+                !LauncherConfig.IsSelfExecutable(f) &&
+                !Path.GetFileName(f).Contains("console", StringComparison.OrdinalIgnoreCase) &&
+                !Path.GetFileName(f).Contains("launcher", StringComparison.OrdinalIgnoreCase));
+
+    // --- KLEINE UPDATES (REL-02) ---
+
+    /// <summary>
+    /// Ein kleines Update passt, wenn das Release eine .delta-Datei von genau der Version hat,
+    /// die laut version.json im Spielordner installiert ist.
+    /// </summary>
+    public static bool CanUseDelta(UpdateCheckResult update, string installDir)
+    {
+        if (!update.HasDelta || string.IsNullOrWhiteSpace(installDir) || !Directory.Exists(installDir))
+            return false;
+        var installed = DeltaPatch.ReadInstalledVersion(installDir);
+        return installed != null && DeltaPatch.VersionsEqual(installed, update.DeltaFromVersion);
+    }
+
+    /// <summary>
+    /// Installiert ein Update: wenn möglich als kleines Update (.delta), sonst – oder wenn dabei etwas
+    /// schiefgeht – automatisch über die komplette ZIP. allowDelta = false erzwingt die komplette ZIP (z. B. Reparatur).
+    /// </summary>
+    public static async Task<(bool Ok, string Message, string InstalledExe)> DownloadAndInstallUpdateAsync(
+        UpdateCheckResult update,
+        string installDir,
+        bool allowDelta,
+        IProgress<(double Percent, string Status)> progress,
+        CancellationToken ct = default)
+    {
+        string fallbackReason = "";
+        if (allowDelta && CanUseDelta(update, installDir))
+        {
+            var (outcome, msg, exe) = await TryDeltaUpdateAsync(update, installDir, progress, ct);
+            switch (outcome)
+            {
+                case DeltaOutcome.Installed:
+                    return (true, msg, exe);
+                case DeltaOutcome.Cancelled:
+                    return (false, "Download abgebrochen.", "");
+                case DeltaOutcome.SwapFailed:
+                    // Der Tausch ist bei ZIP und Delta derselbe: ein zweiter Versuch mit der ZIP hilft hier nicht.
+                    return (false, msg, "");
+                default:
+                    fallbackReason = msg;
+                    progress.Report((2, $"Kleines Update ging nicht ({msg}) – lade komplettes Paket..."));
+                    break;
+            }
+        }
+
+        var fullProgress = fallbackReason.Length == 0
+            ? progress
+            : new RelayProgress(p => progress.Report((p.Percent, $"Komplettes Paket: {p.Status}")));
+        var res = await DownloadAndInstallAsync(update.DownloadUrl, installDir, update.LatestVersion, fullProgress, ct);
+        if (res.Ok && fallbackReason.Length > 0)
+            return (true, $"{res.Message} (Kleines Update ging nicht: {fallbackReason} – komplettes Paket geladen.)", res.InstalledExe);
+        return res;
+    }
+
+    private enum DeltaOutcome { Installed, Fallback, Cancelled, SwapFailed }
+
+    private static async Task<(DeltaOutcome Outcome, string Message, string InstalledExe)> TryDeltaUpdateAsync(
+        UpdateCheckResult update,
+        string installDir,
+        IProgress<(double Percent, string Status)> progress,
+        CancellationToken ct)
+    {
+        var tempDelta = Path.Combine(Path.GetTempPath(), $"dct_delta_{Guid.NewGuid():N}.delta");
+        var targetDir = Path.TrimEndingDirectorySeparator(Path.GetFullPath(installDir));
+        var newDir = targetDir + ".new";
+
+        try
+        {
+            progress.Report((2, $"Lade kleines Update ({FormatMb(update.DeltaSizeBytes)} statt {FormatMb(update.AssetSizeBytes)})..."));
+            await DownloadToFileAsync(update.DeltaUrl, tempDelta, progress, 3.0, 84.0, "Lädt kleines Update", ct);
+
+            if (!string.IsNullOrWhiteSpace(update.DeltaSha256Url))
+            {
+                progress.Report((84, "Prüfe Prüfsumme des kleinen Updates..."));
+                var expected = await FetchSha256Async(update.DeltaSha256Url, ct);
+                if (expected == null)
+                    return (DeltaOutcome.Fallback, "Prüfsummen-Datei unlesbar", "");
+                var actual = await Task.Run(() => DeltaPatch.HashFileHex(tempDelta, ct), ct);
+                if (!string.Equals(expected, actual, StringComparison.OrdinalIgnoreCase))
+                    return (DeltaOutcome.Fallback, "Prüfsumme stimmt nicht", "");
+            }
+
+            if (Directory.Exists(newDir))
+                Directory.Delete(newDir, recursive: true);
+
+            var applyProgress = new RelayProgress(p =>
+                progress.Report((85.0 + Math.Clamp(p.Percent, 0, 100) * 0.11, p.Status)));
+            await DeltaPatch.ApplyAsync(tempDelta, targetDir, newDir, applyProgress, ct);
+        }
+        catch (OperationCanceledException)
+        {
+            TryDeleteDir(newDir);
+            return (DeltaOutcome.Cancelled, "Download abgebrochen.", "");
+        }
+        catch (Exception ex)
+        {
+            TryDeleteDir(newDir);
+            return (DeltaOutcome.Fallback, ex.Message.TrimEnd('.'), "");
+        }
+        finally
+        {
+            try { if (File.Exists(tempDelta)) File.Delete(tempDelta); } catch { }
+        }
+
+        try
+        {
+            progress.Report((97, "Installiere Spiel in Zielordner..."));
+            await Task.Run(() => SwapInNewDirectory(targetDir));
+        }
+        catch (Exception ex)
+        {
+            TryDeleteDir(newDir);
+            return (DeltaOutcome.SwapFailed, $"Installation fehlgeschlagen: {ex.Message}", "");
+        }
+
+        var exe = FindInstalledGameExe(installDir);
+        if (string.IsNullOrWhiteSpace(exe))
+            return (DeltaOutcome.SwapFailed, "Nach dem Update wurde keine Spiel-.exe (DataCenterTycoon.exe) gefunden!", "");
+
+        progress.Report((100, "Installation abgeschlossen! Bereit zum Spielen."));
+        return (DeltaOutcome.Installed, $"Spiel erfolgreich aktualisiert! (Kleines Update: {FormatMb(update.DeltaSizeBytes)} statt {FormatMb(update.AssetSizeBytes)})", exe);
+    }
+
+    /// <summary>"14 MB" bzw. "0.8 MB" – wie die übrigen Größenangaben im Launcher (1 MB = 1024 × 1024 Bytes).</summary>
+    public static string FormatMb(long bytes)
+    {
+        double mb = bytes / 1048576.0;
+        return mb >= 10 ? $"{mb:F0} MB" : $"{mb:F1} MB";
+    }
+
+    private static async Task DownloadToFileAsync(
+        string url,
+        string path,
+        IProgress<(double Percent, string Status)> progress,
+        double pctFrom,
+        double pctTo,
+        string label,
+        CancellationToken ct)
+    {
+        using var resp = await Http.GetAsync(url, HttpCompletionOption.ResponseHeadersRead, ct);
+        resp.EnsureSuccessStatusCode();
+        var totalBytes = resp.Content.Headers.ContentLength ?? -1L;
+        var sw = Stopwatch.StartNew();
+
+        await using var remote = await resp.Content.ReadAsStreamAsync(ct);
+        await using var local = File.Create(path);
+        var buffer = new byte[81920];
+        long downloaded = 0;
+        long lastReportMs = 0;
+        int read;
+        while ((read = await remote.ReadAsync(buffer, ct)) > 0)
+        {
+            await local.WriteAsync(buffer.AsMemory(0, read), ct);
+            downloaded += read;
+            if (sw.ElapsedMilliseconds - lastReportMs < 120) continue;
+            lastReportMs = sw.ElapsedMilliseconds;
+            double mbDone = downloaded / 1048576.0;
+            double speed = sw.Elapsed.TotalSeconds > 0.2 ? mbDone / sw.Elapsed.TotalSeconds : 0.0;
+            if (totalBytes > 0)
+            {
+                double pct = pctFrom + (pctTo - pctFrom) * Math.Clamp((double)downloaded / totalBytes, 0, 1);
+                progress.Report((pct, $"{label}: {mbDone:F1} / {totalBytes / 1048576.0:F1} MB  ({speed:F1} MB/s)"));
+            }
+            else
+            {
+                progress.Report(((pctFrom + pctTo) / 2, $"{label}: {mbDone:F1} MB  ({speed:F1} MB/s)"));
+            }
+        }
+    }
+
+    /// <summary>Liest "&lt;hex&gt;  &lt;name&gt;" und gibt den Hex-Wert zurück (oder null).</summary>
+    private static async Task<string?> FetchSha256Async(string url, CancellationToken ct)
+    {
+        try
+        {
+            using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            cts.CancelAfter(TimeSpan.FromSeconds(20));
+            var text = await Http.GetStringAsync(url, cts.Token);
+            var first = text.Trim().Split([' ', '\t', '\r', '\n'], StringSplitOptions.RemoveEmptyEntries).FirstOrDefault() ?? "";
+            return Regex.IsMatch(first, "^[0-9a-fA-F]{64}$") ? first.ToLowerInvariant() : null;
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private static void TryDeleteDir(string dir)
+    {
+        try { if (Directory.Exists(dir)) Directory.Delete(dir, recursive: true); } catch { }
+    }
+
+    /// <summary>Leitet Fortschritt direkt weiter (ohne eigenen SynchronizationContext).</summary>
+    private sealed class RelayProgress(Action<(double Percent, string Status)> report) : IProgress<(double Percent, string Status)>
+    {
+        public void Report((double Percent, string Status) value) => report(value);
     }
 
     public static (bool Ok, string Message) UninstallGame(string installDir)
@@ -1005,11 +1311,15 @@ public static class UpdateService
             Directory.CreateDirectory(workDir);
             var userData = LauncherConfig.GetGodotUserDataDir();
             var logFile = Path.Combine(userData, "logs", "godot.log");
-            if (File.Exists(logFile))
-                File.Copy(logFile, Path.Combine(workDir, "godot.log"), overwrite: true);
 
-            if (File.Exists(LauncherConfig.ConfigPath))
-                File.Copy(LauncherConfig.ConfigPath, Path.Combine(workDir, "launcher_config.json"), overwrite: true);
+            // Textdateien bereinigt einpacken: Profilpfad, Benutzername, fremde IPs, Passwörter/Tokens raus.
+            var logText = ReadTextShared(logFile);
+            if (logText != null)
+                File.WriteAllText(Path.Combine(workDir, "godot.log"), CrashReport.ScrubForCurrentUser(logText), new UTF8Encoding(false));
+
+            var configText = ReadTextShared(LauncherConfig.ConfigPath);
+            if (configText != null)
+                File.WriteAllText(Path.Combine(workDir, "launcher_config.json"), CrashReport.ScrubForCurrentUser(configText), new UTF8Encoding(false));
 
             var sysInfo = new StringBuilder();
             sysInfo.AppendLine("DataCenter Tycoon Co-op — Diagnose-Bericht");
@@ -1020,9 +1330,10 @@ public static class UpdateService
             sysInfo.AppendLine($"OS:               {Environment.OSVersion}");
             sysInfo.AppendLine($"64-Bit OS:        {Environment.Is64BitOperatingSystem}");
             sysInfo.AppendLine($"CPU-Kerne:        {Environment.ProcessorCount}");
+            sysInfo.AppendLine($"Grafikkarte:      {GetGpuName(logText)}");
             sysInfo.AppendLine($".NET Runtime:     {Environment.Version}");
             sysInfo.AppendLine($"Gesamtspielzeit:  {config.FormatPlayTime()}");
-            File.WriteAllText(Path.Combine(workDir, "system_info.txt"), sysInfo.ToString(), Encoding.UTF8);
+            File.WriteAllText(Path.Combine(workDir, "system_info.txt"), CrashReport.ScrubForCurrentUser(sysInfo.ToString()), Encoding.UTF8);
 
             var desktop = Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory);
             var outZip = Path.Combine(desktop, $"DataCenterTycoon_Diagnose_{DateTime.Now:yyyy-MM-dd_HH-mm}.zip");
@@ -1035,6 +1346,49 @@ public static class UpdateService
         {
             try { if (Directory.Exists(workDir)) Directory.Delete(workDir, true); } catch { }
             return (false, $"Diagnose-Export fehlgeschlagen: {ex.Message}", "");
+        }
+    }
+
+    /// <summary>Liest eine Textdatei, auch wenn das Spiel sie gerade offen hat (oder null).</summary>
+    private static string? ReadTextShared(string path)
+    {
+        try
+        {
+            if (!File.Exists(path)) return null;
+            using var fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+            using var reader = new StreamReader(fs, Encoding.UTF8, detectEncodingFromByteOrderMarks: true);
+            return reader.ReadToEnd();
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    /// <summary>Grafikkarte: erst aus Godots Startzeile im Log, sonst aus der Windows-Registry.</summary>
+    public static string GetGpuName(string? logText = null)
+    {
+        var fromLog = CrashReport.FindGpuInLog(logText);
+        if (!string.IsNullOrWhiteSpace(fromLog))
+            return fromLog;
+        try
+        {
+            const string classKey = @"SYSTEM\CurrentControlSet\Control\Class\{4d36e968-e325-11ce-bfc1-08002be10318}";
+            using var cls = Microsoft.Win32.Registry.LocalMachine.OpenSubKey(classKey);
+            if (cls == null) return "unbekannt";
+            var names = new List<string>();
+            foreach (var sub in cls.GetSubKeyNames().Where(n => n.Length == 4 && n.All(char.IsAsciiDigit)))
+            {
+                using var k = cls.OpenSubKey(sub);
+                if (k?.GetValue("DriverDesc") is string desc && !string.IsNullOrWhiteSpace(desc)
+                    && !names.Contains(desc.Trim(), StringComparer.OrdinalIgnoreCase))
+                    names.Add(desc.Trim());
+            }
+            return names.Count > 0 ? string.Join(" / ", names) : "unbekannt";
+        }
+        catch
+        {
+            return "unbekannt";
         }
     }
 

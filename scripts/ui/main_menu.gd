@@ -87,6 +87,8 @@ var _load_password_input: LineEdit
 var _join_password_input: LineEdit
 var _server_list: VBoxContainer
 var _server_timer: Timer
+## Liste auf der Seite ERFOLGE.
+var _achievements_box: VBoxContainer
 
 
 func _ready() -> void:
@@ -108,6 +110,31 @@ func _ready() -> void:
 	_update_lan_scan()
 	visibility_changed.connect(_on_visibility_changed)
 	_play_intro.call_deferred()
+	_check_whats_new.call_deferred()
+
+
+## REL-06: Nach einem Update einmal zeigen, was neu ist.
+func _check_whats_new() -> void:
+	var current := UIStyle.game_version()
+	if DisplayServer.get_name() == "headless":
+		return
+	var returning := not SaveManager.list_saves().is_empty()
+	if WhatsNew.should_show(SettingsManager.last_seen_version, current, returning):
+		_open_whats_new(SettingsManager.last_seen_version)
+	elif SettingsManager.last_seen_version != current:
+		SettingsManager.remember_seen_version(current)
+
+
+## Zeigt die Neuigkeiten seit after ("" = die letzten Versionen).
+func _open_whats_new(after: String = "") -> void:
+	if get_node_or_null("WhatsNew") != null:
+		return
+	var current := UIStyle.game_version()
+	var dlg := WhatsNew.new()
+	dlg.name = "WhatsNew"
+	add_child(dlg)
+	dlg.setup(WhatsNew.entries_between(WhatsNew.load_changelog(), after, current), current)
+	dlg.closed.connect(func() -> void: SettingsManager.remember_seen_version(current))
 
 
 func refresh_on_show() -> void:
@@ -242,6 +269,8 @@ func _switch_page(page_id: String, animate: bool = true) -> void:
 		tw.tween_property(page, "modulate:a", 1.0, 0.2)
 	if page_id == "load_game":
 		_rebuild_saves_list()
+	elif page_id == "achievements":
+		_rebuild_achievements()
 	elif page_id == "join_game":
 		_rebuild_recent_ips()
 		_rebuild_server_list()
@@ -794,6 +823,7 @@ func _build_ui() -> void:
 	_skin_editor_panel = SkinEditorPanel.new()
 	_pages["skin_editor"] = _skin_editor_panel
 	_pages["settings"] = _build_settings_page()
+	_pages["achievements"] = _build_achievements_page()
 	for p in _pages.values():
 		stack.add_child(p as Control)
 
@@ -900,6 +930,7 @@ func _build_nav_column() -> Control:
 	_add_nav_button(nav_v, "load_game", "SPIELSTAND LADEN", "Gespeicherte Welt fortsetzen")
 	_add_nav_button(nav_v, "join_game", "CO-OP BEITRETEN", "Per IP mit Freunden spielen")
 	_add_nav_button(nav_v, "skin_editor", "FIGUR", "Gesicht, Kleidung und Outfits")
+	_add_nav_button(nav_v, "achievements", "ERFOLGE", "Was du schon geschafft hast")
 	_add_nav_button(nav_v, "settings", "EINSTELLUNGEN", "Grafik, Audio und Steuerung")
 
 	var spacer := Control.new()
@@ -930,6 +961,15 @@ func _build_footer() -> Control:
 	spacer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	spacer.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	footer.add_child(spacer)
+
+	var news_btn := Button.new()
+	news_btn.text = tr("Was ist neu?")
+	news_btn.flat = true
+	news_btn.focus_mode = Control.FOCUS_NONE
+	news_btn.add_theme_font_size_override("font_size", 11)
+	news_btn.add_theme_color_override("font_color", Color(UIStyle.COL_GOLD_TEXT, 0.85))
+	news_btn.pressed.connect(_open_whats_new)
+	footer.add_child(news_btn)
 
 	var ver_lbl := Label.new()
 	ver_lbl.text = "VERION-DIGITAL  •  v%s  •  LIVE-3D-SHOWCASE" % UIStyle.game_version()
@@ -1288,6 +1328,64 @@ func _build_join_game_page() -> Control:
 	_join_btn.pressed.connect(_on_join_pressed)
 	v.add_child(_join_btn)
 	return scroll
+
+
+## REL-07: Erfolge des Spielers über alle Welten.
+func _build_achievements_page() -> Control:
+	var scroll := ScrollContainer.new()
+	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	var v := VBoxContainer.new()
+	v.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	v.add_theme_constant_override("separation", 10)
+	scroll.add_child(v)
+	v.add_child(_page_heading("ERFOLGE", "Gelten für alle Spielstände. Im Co-op schaltet jeder Spieler sie selbst frei."))
+	_achievements_box = VBoxContainer.new()
+	_achievements_box.add_theme_constant_override("separation", 6)
+	v.add_child(_achievements_box)
+	_rebuild_achievements()
+	return scroll
+
+
+func _rebuild_achievements() -> void:
+	if _achievements_box == null:
+		return
+	for c in _achievements_box.get_children():
+		_achievements_box.remove_child(c)
+		c.queue_free()
+	var count := Label.new()
+	count.text = tr("%d von %d freigeschaltet") % [Achievements.unlocked_count(), Achievements.LIST.size()]
+	UIStyle.style_label(count, 13, UIStyle.COL_GOLD_TEXT)
+	_achievements_box.add_child(count)
+	for id in Achievements.LIST:
+		var a: Dictionary = Achievements.LIST[id]
+		var got := Achievements.is_unlocked(str(id))
+		var card := _make_card_panel(Color(0.09, 0.11, 0.12, 0.92) if got else Color(0.07, 0.075, 0.08, 0.85), Color(UIStyle.COL_ACCENT if got else UIStyle.COL_BORDER, 0.7))
+		card.name = "Erfolg_" + str(id)
+		var row := HBoxContainer.new()
+		row.add_theme_constant_override("separation", 14)
+		card.add_child(row)
+		var icon := Label.new()
+		icon.text = "🏆" if got else "🔒"
+		UIStyle.style_label(icon, 22, UIStyle.COL_TEXT_MAIN)
+		row.add_child(icon)
+		var txt := VBoxContainer.new()
+		txt.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		row.add_child(txt)
+		var nm := Label.new()
+		nm.text = tr(str(a["name"]))
+		UIStyle.style_label(nm, 15, UIStyle.COL_TEXT_MAIN if got else UIStyle.COL_TEXT_SUB)
+		txt.add_child(nm)
+		var ds := Label.new()
+		ds.text = tr(str(a["desc"]))
+		ds.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		UIStyle.style_label(ds, 12, UIStyle.COL_TEXT_SUB)
+		txt.add_child(ds)
+		if got:
+			var when := Label.new()
+			when.text = Time.get_date_string_from_unix_time(int(Achievements.done[id]))
+			UIStyle.style_label(when, 11, UIStyle.COL_TEXT_SUB)
+			row.add_child(when)
+		_achievements_box.add_child(card)
 
 
 func _build_settings_page() -> Control:

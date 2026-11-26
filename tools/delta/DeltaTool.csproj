@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- Baut und prüft kleine Updates (.delta). Nutzt dieselben Dateien wie der Launcher. -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net9.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AssemblyName>DeltaTool</AssemblyName>
+    <RootNamespace>DataCenterLauncher.DeltaTool</RootNamespace>
+    <InvariantGlobalization>true</InvariantGlobalization>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="../../launcher/DeltaPatch.cs" Link="Shared/DeltaPatch.cs" />
+    <Compile Include="../../launcher/CrashReport.cs" Link="Shared/CrashReport.cs" />
+  </ItemGroup>
+</Project>

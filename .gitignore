@@ -6,6 +6,8 @@
 dist/
 launcher/bin/
 launcher/obj/
+tools/delta/bin/
+tools/delta/obj/
 
 # Ausgaben der Probe-Skripte (Screenshots, Logs)
 tests/_*

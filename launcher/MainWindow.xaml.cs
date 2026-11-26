@@ -116,9 +116,12 @@ public partial class MainWindow : Window
 
             if (updateAvailable && _lastUpdateResult != null)
             {
+                var saving = GetDeltaSavingText();
                 SidebarStatusDot.Fill = (Brush)FindResource("AccentAmber");
                 SidebarStatusTitle.Text = $"Update v{_lastUpdateResult.LatestVersion}";
-                SidebarStatusDetail.Text = $"Installiert: v{ver} • Neuere Version verfügbar!";
+                SidebarStatusDetail.Text = saving != null
+                    ? $"Installiert: v{ver} • Update: {saving}"
+                    : $"Installiert: v{ver} • Neuere Version verfügbar!";
 
                 HeroStateBorder.Background = new SolidColorBrush(Color.FromRgb(56, 38, 12));
                 HeroStateBorder.BorderBrush = (Brush)FindResource("AccentAmber");
@@ -128,7 +131,11 @@ public partial class MainWindow : Window
                 MainActionBtn.Style = (Style)FindResource("UpdateActionButton");
                 MainActionBtn.Content = $"🔄  UPDATE (v{_lastUpdateResult.LatestVersion})";
                 LaunchStatusTitle.Text = $"Update auf v{_lastUpdateResult.LatestVersion} bereit";
-                LaunchStatusSub.Text = "Klicke auf Update, um die neueste Version für Co-op herunterzuladen.";
+                LaunchStatusSub.Text = saving != null
+                    ? $"Update: {saving} – es werden nur die geänderten Teile geladen."
+                    : _lastUpdateResult.AssetSizeBytes > 0
+                        ? $"Update: {UpdateService.FormatMb(_lastUpdateResult.AssetSizeBytes)} – klicke auf Update, um die neueste Version für Co-op herunterzuladen."
+                        : "Klicke auf Update, um die neueste Version für Co-op herunterzuladen.";
             }
             else
             {
@@ -210,7 +217,10 @@ public partial class MainWindow : Window
         }
         else if (updateAvailable && _lastUpdateResult != null)
         {
-            InstallUpdateBtn.Content = $"⬇ Update auf v{_lastUpdateResult.LatestVersion} installieren";
+            var saving = GetDeltaSavingText();
+            InstallUpdateBtn.Content = saving != null
+                ? $"⬇ Update auf v{_lastUpdateResult.LatestVersion} installieren ({saving})"
+                : $"⬇ Update auf v{_lastUpdateResult.LatestVersion} installieren";
             InstallUpdateBtn.IsEnabled = !_isBusy && !_isGameRunning && hasDlUrl;
         }
         else
@@ -221,6 +231,16 @@ public partial class MainWindow : Window
 
         RepairGameBtn.IsEnabled = !_isBusy && !_isGameRunning && installed;
         RefreshLauncherUpdateUI();
+    }
+
+    /// <summary>"6.0 MB statt 214 MB", wenn ein kleines Update zur installierten Version passt (sonst null).</summary>
+    private string? GetDeltaSavingText()
+    {
+        if (_lastUpdateResult is not { Success: true, UpdateAvailable: true } r) return null;
+        if (!_config.IsGameInstalled || !UpdateService.CanUseDelta(r, _config.InstallDir)) return null;
+        return r.AssetSizeBytes > 0
+            ? $"{UpdateService.FormatMb(r.DeltaSizeBytes)} statt {UpdateService.FormatMb(r.AssetSizeBytes)}"
+            : UpdateService.FormatMb(r.DeltaSizeBytes);
     }
 
     private void RefreshLauncherUpdateUI()
@@ -336,9 +356,12 @@ public partial class MainWindow : Window
         }
         else if (res.UpdateAvailable)
         {
+            var saving = GetDeltaSavingText();
             UpdateStatusText.Text = string.IsNullOrWhiteSpace(res.DownloadUrl)
                 ? $"Neue Version v{res.LatestVersion} gefunden, aber keine .zip Datei angehängt."
-                : $"🎉 Update auf v{res.LatestVersion} verfügbar! Klicke auf „Update installieren“.";
+                : saving != null
+                    ? $"🎉 Update auf v{res.LatestVersion} verfügbar! Kleines Update: {saving}. Klicke auf „Update installieren“."
+                    : $"🎉 Update auf v{res.LatestVersion} verfügbar! Klicke auf „Update installieren“.";
         }
         else
         {
@@ -409,10 +432,12 @@ public partial class MainWindow : Window
             UpdateStatusText.Text = p.Status;
         });
 
-        var (ok, msg, _) = await UpdateService.DownloadAndInstallAsync(
-            _lastUpdateResult.DownloadUrl,
+        // Kleines Update (.delta) bevorzugen, wenn es zur installierten Version passt; sonst und bei
+        // jedem Fehler automatisch die komplette ZIP. Die Reparatur lädt immer die komplette ZIP.
+        var (ok, msg, _) = await UpdateService.DownloadAndInstallUpdateAsync(
+            _lastUpdateResult,
             _config.InstallDir,
-            _lastUpdateResult.LatestVersion,
+            allowDelta: !forceRepair && _config.IsGameInstalled,
             progress,
             _downloadCts.Token);
 
@@ -524,10 +549,14 @@ public partial class MainWindow : Window
         RefreshLauncherState();
         WindowState = WindowState.Minimized;
         var sw = Stopwatch.StartNew();
+        var sessionStartUtc = DateTime.UtcNow;
+        try { sessionStartUtc = proc.StartTime.ToUniversalTime(); } catch { }
 
+        bool exited = false;
         try
         {
             await proc.WaitForExitAsync();
+            exited = true;
         }
         catch { }
 
@@ -536,15 +565,145 @@ public partial class MainWindow : Window
         _config.Save();
         _isGameRunning = false;
 
+        // Absturz erkennen: Exit-Code ungleich 0 oder Absturz-Meldung im Log dieser Sitzung.
+        // Normales Schließen (Exit-Code 0, keine Meldung) zählt nicht.
+        int exitCode = 0;
+        try { if (exited) exitCode = proc.ExitCode; } catch { }
+        var logText = CrashReport.ReadSessionLog(GetGodotLogPath(), sessionStartUtc);
+        CrashAnalysis? crash = null;
+        try
+        {
+            var analysis = CrashReport.Analyze(exitCode, logText, BuildCrashContext(logText, sw.Elapsed, ""));
+            if (analysis.IsCrash) crash = analysis;
+        }
+        catch { }
+
         Dispatcher.Invoke(() =>
         {
             if (WindowState == WindowState.Minimized)
                 WindowState = WindowState.Normal;
             Activate();
             RefreshLauncherState();
-            LaunchStatusTitle.Text = $"Sitzung beendet ({(int)sw.Elapsed.TotalMinutes} Min.)";
-            LaunchStatusSub.Text = $"Gesamtspielzeit: {_config.FormatPlayTime()}";
+            LaunchStatusTitle.Text = crash != null
+                ? $"Spiel ist abgestürzt ({(int)sw.Elapsed.TotalMinutes} Min.)"
+                : $"Sitzung beendet ({(int)sw.Elapsed.TotalMinutes} Min.)";
+            LaunchStatusSub.Text = crash != null
+                ? $"Grund: {crash.Reason}"
+                : $"Gesamtspielzeit: {_config.FormatPlayTime()}";
         });
+
+        if (crash != null)
+            OfferCrashReport(crash, exitCode, logText, sw.Elapsed);
+    }
+
+    // --- ABSTURZBERICHT (REL-05) ---
+
+    private static string GetGodotLogPath() =>
+        Path.Combine(LauncherConfig.GetGodotUserDataDir(), "logs", "godot.log");
+
+    /// <summary>GitHub-Repo für Issues: wie beim Bug-Melden-Knopf (Update-Quelle, sonst Standard-Repo).</summary>
+    private string GetIssueRepo()
+    {
+        var repo = UpdateService.NormalizeGitHubRepo(_config.UpdateManifestUrl);
+        return string.IsNullOrWhiteSpace(repo) ? LauncherConfig.DefaultReleaseSource : repo;
+    }
+
+    private CrashContext BuildCrashContext(string? logText, TimeSpan session, string zipName) =>
+        CrashContext.ForCurrentUser(
+            _config.InstalledGameVersion,
+            LauncherConfig.CurrentLauncherVersion,
+            GetIssueRepo(),
+            UpdateService.GetGpuName(logText),
+            session,
+            zipName);
+
+    private void OfferCrashReport(CrashAnalysis crash, int exitCode, string? logText, TimeSpan session)
+    {
+        var dlg = new CrashReportDialog(crash) { Owner = this };
+        if (dlg.ShowDialog() != true)
+        {
+            LaunchStatusSub.Text = "Kein Absturzbericht gesendet. Später geht das über „🐛 Bug melden“.";
+            return;
+        }
+
+        try
+        {
+            var (ok, msg, zipPath) = UpdateService.CreateDiagnosticZip(_config);
+            DiagStatusText.Text = msg;
+            if (ok && File.Exists(zipPath))
+                Process.Start(new ProcessStartInfo { FileName = "explorer.exe", Arguments = $"/select,\"{zipPath}\"", UseShellExecute = true });
+
+            var report = CrashReport.Analyze(exitCode, logText, BuildCrashContext(logText, session, ok ? Path.GetFileName(zipPath) : ""));
+            OpenUrlInBrowser(report.IssueUrl);
+            LaunchStatusSub.Text = ok
+                ? "Absturzbericht vorbereitet – ZIP auf GitHub anhängen und abschicken. Danke!"
+                : $"Absturzbericht vorbereitet (ohne ZIP: {msg})";
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show($"Absturzbericht konnte nicht geöffnet werden: {ex.Message}", "Absturzbericht", MessageBoxButton.OK, MessageBoxImage.Warning);
+        }
+    }
+
+    /// <summary>
+    /// Öffnet eine (lange) URL im Standardbrowser. Kurze Links gehen wie gewohnt über die Shell. Lange Links
+    /// (vorausgefülltes Issue) starten den Standardbrowser direkt, damit die Shell sie nicht kürzt;
+    /// klappt das nicht, leitet eine kleine HTML-Datei weiter.
+    /// </summary>
+    private static void OpenUrlInBrowser(string url)
+    {
+        if (url.Length <= 2000)
+        {
+            Process.Start(new ProcessStartInfo { FileName = url, UseShellExecute = true });
+            return;
+        }
+
+        try
+        {
+            using var choice = Registry.CurrentUser.OpenSubKey(@"Software\Microsoft\Windows\Shell\Associations\UrlAssociations\https\UserChoice");
+            var progId = choice?.GetValue("ProgId") as string;
+            using var cmdKey = string.IsNullOrWhiteSpace(progId) ? null : Registry.ClassesRoot.OpenSubKey($@"{progId}\shell\open\command");
+            var cmd = (cmdKey?.GetValue(null) as string)?.Trim();
+            if (!string.IsNullOrWhiteSpace(cmd) && (cmd.Contains("%1") || cmd.Contains("%L", StringComparison.OrdinalIgnoreCase)))
+            {
+                string exe, args;
+                if (cmd.StartsWith('"'))
+                {
+                    int end = cmd.IndexOf('"', 1);
+                    exe = cmd[1..end];
+                    args = cmd[(end + 1)..].Trim();
+                }
+                else
+                {
+                    int sp = cmd.IndexOf(' ');
+                    exe = sp < 0 ? cmd : cmd[..sp];
+                    args = sp < 0 ? "" : cmd[(sp + 1)..].Trim();
+                }
+                if (File.Exists(exe))
+                {
+                    // Die URL ist vollständig %-kodiert (keine Leerzeichen/Anführungszeichen) und kann direkt eingesetzt werden.
+                    args = args.Replace("%1", url).Replace("%L", url).Replace("%l", url);
+                    Process.Start(new ProcessStartInfo { FileName = exe, Arguments = args, UseShellExecute = false });
+                    return;
+                }
+            }
+        }
+        catch { }
+
+        try
+        {
+            var html = Path.Combine(Path.GetTempPath(), "DataCenterTycoon_Absturzbericht.html");
+            var safe = System.Net.WebUtility.HtmlEncode(url);
+            File.WriteAllText(html,
+                "<!doctype html><meta charset=\"utf-8\"><title>Absturzbericht</title>" +
+                $"<meta http-equiv=\"refresh\" content=\"0;url={safe}\">" +
+                $"<p>Weiter zu GitHub: <a href=\"{safe}\">Absturzbericht öffnen</a></p>");
+            Process.Start(new ProcessStartInfo { FileName = html, UseShellExecute = true });
+        }
+        catch
+        {
+            Process.Start(new ProcessStartInfo { FileName = url, UseShellExecute = true });
+        }
     }
 
     private bool LaunchGodotDev(IEnumerable<string> userArgs, out string error)
@@ -1865,10 +2024,7 @@ public partial class MainWindow : Window
         {
             Process.Start(new ProcessStartInfo { FileName = "explorer.exe", Arguments = $"/select,\"{zipPath}\"", UseShellExecute = true });
         }
-        var repo = UpdateService.NormalizeGitHubRepo(_config.UpdateManifestUrl);
-        var issueUrl = string.IsNullOrWhiteSpace(repo)
-            ? "https://github.com/RazerFazer-lang/DataCenter-Tycoon/issues/new"
-            : $"https://github.com/{repo}/issues/new";
+        var issueUrl = $"https://github.com/{GetIssueRepo()}/issues/new";
         Process.Start(new ProcessStartInfo { FileName = issueUrl, UseShellExecute = true });
     }
 

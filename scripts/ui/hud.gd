@@ -143,6 +143,9 @@ func _ready() -> void:
 
 	GameState.state_updated.connect(_refresh_all)
 	GameState.cable_hint.connect(func(m: String): show_toast(m, true))
+	Achievements.unlocked.connect(func(id: String):
+		show_toast("🏆 " + tr("Erfolg freigeschaltet: %s") % tr(str(Achievements.LIST[id]["name"])))
+		SfxManager.play("upgrade", -6.0))
 	GameState.racks_changed.connect(_refresh_checklist)
 	GameState.cables_changed.connect(_refresh_checklist)
 	GameState.crates_changed.connect(_refresh_checklist)

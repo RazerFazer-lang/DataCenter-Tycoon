@@ -1,0 +1,13 @@
+{
+  "title": "Launcher & Veröffentlichung",
+  "items": [
+    "[LAUNCHER] Kleine Updates: Der Launcher lädt nur noch, was sich geändert hat. Von v3.5.0 an sind Updates meist wenige MB statt über 200 MB. Klappt das einmal nicht, lädt er wie bisher das ganze Paket.",
+    "[LAUNCHER] Absturzbericht mit einem Klick: Nach einem Absturz bietet der Launcher an, einen fertig ausgefüllten Bericht auf GitHub zu öffnen. Benutzername, Pfade und IP-Adressen werden vorher entfernt.",
+    "[LAUNCHER] Eigene Modelle in custom_models bleiben bei Updates erhalten.",
+    "[NEU] Neu in dieser Version: Nach einem Update zeigt das Hauptmenü einmal, was sich geändert hat. Unten im Hauptmenü öffnet „Was ist neu?“ die Übersicht jederzeit.",
+    "[NEU] 19 Erfolge vom ersten Rack bis zum Marktführer, mit eigener Seite im Hauptmenü. Sie gelten für alle Spielstände.",
+    "[LAUNCHER] Die Roadmap im Launcher ist wieder aktuell.",
+    "[CO-OP] Alle Mitspieler brauchen v3.5.0."
+  ],
+  "roadmap": "Kleine Updates statt kompletter Download, Absturzbericht mit einem Klick, Neuigkeiten nach dem Update im Spiel und 19 Erfolge."
+}

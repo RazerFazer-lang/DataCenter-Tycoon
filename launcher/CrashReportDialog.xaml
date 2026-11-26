@@ -1,0 +1,46 @@
+<Window x:Class="DataCenterLauncher.CrashReportDialog"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Absturzbericht"
+        Width="540" SizeToContent="Height"
+        WindowStyle="None"
+        AllowsTransparency="True"
+        Background="Transparent"
+        WindowStartupLocation="CenterOwner"
+        ShowInTaskbar="False"
+        ResizeMode="NoResize"
+        MouseLeftButtonDown="Window_MouseLeftButtonDown">
+
+    <Border Margin="10" CornerRadius="13" Background="#F50D131F" BorderBrush="#2E4A6B" BorderThickness="1.5" Padding="24,20">
+        <Border.Effect>
+            <DropShadowEffect Color="#000000" BlurRadius="20" ShadowDepth="0" Opacity="0.78"/>
+        </Border.Effect>
+        <StackPanel>
+            <TextBlock Text="💥 Das Spiel ist abgestürzt" Foreground="{StaticResource TextMain}" FontSize="19" FontWeight="Bold" Margin="0,0,0,6"/>
+            <TextBlock Text="DataCenter Tycoon wurde unerwartet beendet. Mit einem Klick bereitest du einen Absturzbericht auf GitHub vor. Das hilft uns, den Fehler schnell zu finden."
+                       Foreground="{StaticResource TextMuted}" FontSize="12.5" TextWrapping="Wrap" Margin="0,0,0,16"/>
+
+            <Border Background="#2A1216" BorderBrush="#7A2630" BorderThickness="1" CornerRadius="9" Padding="14,12" Margin="0,0,0,10">
+                <StackPanel>
+                    <TextBlock x:Name="ReasonText" Text="Grund: –" FontWeight="SemiBold" Foreground="#FF8C8C" FontSize="13" TextWrapping="Wrap"/>
+                    <TextBlock x:Name="ErrorText" Text="" FontSize="11.5" Foreground="#D49A9A" FontFamily="Consolas" TextWrapping="Wrap" Margin="0,4,0,0"/>
+                </StackPanel>
+            </Border>
+
+            <Border Background="#151E2E" BorderBrush="{StaticResource BorderSubtle}" BorderThickness="1" CornerRadius="9" Padding="14,12" Margin="0,0,0,18">
+                <StackPanel>
+                    <TextBlock Text="So geht's" FontWeight="SemiBold" Foreground="{StaticResource TextMain}" FontSize="13" Margin="0,0,0,4"/>
+                    <TextBlock Foreground="{StaticResource TextMuted}" FontSize="11.5" TextWrapping="Wrap"
+                               Text="1. Der Launcher legt ein Diagnose-Paket (Log und Systeminfos) auf deinen Desktop.&#x0a;2. Dein Browser öffnet ein fertig ausgefülltes GitHub-Issue.&#x0a;3. Zieh die ZIP ins Textfeld und schick das Issue ab (GitHub-Konto nötig)."/>
+                    <TextBlock Foreground="{StaticResource TextMuted}" FontSize="11.5" TextWrapping="Wrap" Margin="0,8,0,0"
+                               Text="🔒 Benutzername, Pfade und IP-Adressen werden vorher entfernt. Gesendet wird erst, wenn du auf GitHub selbst abschickst."/>
+                </StackPanel>
+            </Border>
+
+            <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                <Button Style="{StaticResource SecondaryButton}" Content="Nicht jetzt" Margin="0,0,10,0" Padding="16,9" IsCancel="True" Click="NotNowBtn_Click"/>
+                <Button Style="{StaticResource UpdateActionButton}" Content="📨 Absturzbericht senden" FontSize="13.5" Padding="18,9" IsDefault="True" Click="SendBtn_Click"/>
+            </StackPanel>
+        </StackPanel>
+    </Border>
+</Window>

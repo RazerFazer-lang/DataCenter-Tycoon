@@ -6,35 +6,52 @@
       "title": "Geplant",
       "items": [
         {
-          "tag": "infrastruktur",
-          "version": "v2.3",
-          "title": "Halle D, zweite Etage & Glasfaser-Backbone",
-          "desc": "Noch größere mehrstöckige Rechenzentren mit Glasfaser-Trunks, Core-Switches und echtem BGP-Routing."
+          "tag": "neu",
+          "version": "v3.6",
+          "title": "Geführter Einstieg",
+          "desc": "Die ersten Schritte vom Karton bis zum ersten zahlenden Kunden, mit Hinweisen direkt im Spiel statt im Handbuch."
         },
         {
-          "tag": "coop",
-          "version": "v2.4",
-          "title": "Dedizierter Co-op-Server & Lobby-Browser",
-          "desc": "24/7-Dedicated-Server-Modus und öffentlicher bzw. passwortgeschützter Lobby-Browser direkt im Spiel & Launcher."
+          "tag": "gameplay",
+          "version": "v3.6",
+          "title": "Strompreis über den Tag & mehr Abgänge am Start-Kasten",
+          "desc": "Nachts ist Strom billiger, der Start-Kasten lässt sich ausbauen. Dazu eine Strom-Übersicht am PC."
+        },
+        {
+          "tag": "verbesserung",
+          "version": "v3.6",
+          "title": "Barrierefreiheit & Audio",
+          "desc": "Farbenblind-Modus, Kopfwippen abschaltbar, getrennte Lautstärken und Untertitel für Warntöne."
+        },
+        {
+          "tag": "gameplay",
+          "version": "v3.7",
+          "title": "Kredite, Investoren & Kundenbewertungen",
+          "desc": "Bilanz, Kredite und Investoren, dazu Bewertungen und SLA-Stufen für Kunden."
+        },
+        {
+          "tag": "infrastruktur",
+          "version": "v4.0",
+          "title": "Halle D, Wasserkühlung & Diesel-Notstrom",
+          "desc": "Mehrstöckige Halle D, flüssigkeitsgekühlte Kreisläufe, Diesel-Notstrom mit N+1-Redundanz und Glasfaser-Backbone."
         }
       ]
     },
     {
       "id": "in_progress",
       "title": "In Arbeit",
-      "items": [
-        {
-          "tag": "gameplay",
-          "version": "v2.3",
-          "title": "USV-Notstromaggregate, Wasserkühlung & N+1-Redundanz",
-          "desc": "Diesel-Notstromaggregate, flüssigkeitsgekühlte Rack-Kreisläufe, Lastspitzen-Tests und echte N+1-Umschaltungen."
-        }
-      ]
+      "items": []
     },
     {
       "id": "done",
       "title": "Fertig",
       "items": [
+        {
+          "tag": "neu",
+          "version": "v3.5.0",
+          "title": "Launcher & Veröffentlichung",
+          "desc": "Kleine Updates statt kompletter Download, Absturzbericht mit einem Klick, Neuigkeiten nach dem Update im Spiel und 19 Erfolge."
+        },
         {
           "tag": "neu",
           "version": "v3.4.0",

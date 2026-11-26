@@ -175,6 +175,8 @@ var recent_ips: Array[String] = ["127.0.0.1"]
 var client_id: String = ""
 ## Lobby: gespeicherte Server [{name, ip, port}].
 var saved_servers: Array = []
+## Version, deren Neuigkeiten der Spieler zuletzt gesehen hat (REL-06). "" = noch nie.
+var last_seen_version: String = ""
 const SAVED_SERVERS_MAX := 12
 
 ## Sprachcodes für TranslationServer. Die Namen bleiben unübersetzt, damit man die eigene Sprache immer findet.
@@ -314,6 +316,7 @@ func load_settings() -> void:
 	if recent_ips.is_empty():
 		recent_ips.append("127.0.0.1")
 	client_id = str(cfg.get_value("network", "client_id", "")).strip_edges().left(64)
+	last_seen_version = str(cfg.get_value("general", "last_seen_version", "")).strip_edges().left(24)
 	saved_servers.clear()
 	var raw_servers: Variant = cfg.get_value("network", "saved_servers", [])
 	if raw_servers is Array:
@@ -327,6 +330,15 @@ func load_settings() -> void:
 
 
 ## Legt die Kennung beim ersten Bedarf an und speichert sie.
+## Merkt sich die gesehene Version, ohne Fenster, Sprache und Bild neu anzuwenden.
+func remember_seen_version(version: String) -> void:
+	last_seen_version = version.strip_edges().left(24)
+	var cfg := ConfigFile.new()
+	cfg.load(SETTINGS_PATH)
+	cfg.set_value("general", "last_seen_version", last_seen_version)
+	cfg.save(SETTINGS_PATH)
+
+
 func get_client_id() -> String:
 	if client_id.length() < 16:
 		client_id = Crypto.new().generate_random_bytes(16).hex_encode()
@@ -367,6 +379,7 @@ func save_settings() -> void:
 	cfg.set_value("network", "recent_ips", recent_ips)
 	cfg.set_value("network", "client_id", client_id)
 	cfg.set_value("network", "saved_servers", saved_servers)
+	cfg.set_value("general", "last_seen_version", last_seen_version)
 	for action in key_bindings.keys():
 		cfg.set_value("keybinds", action, key_bindings[action])
 	cfg.save(SETTINGS_PATH)
