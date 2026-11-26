@@ -1084,33 +1084,38 @@ func _rpc_relay_action(peer_id: int, action: String, at: Vector3) -> void:
 		node.play_remote_action(action, at)
 
 
+## t: Sendezeit auf der Uhr des Absenders. Empfänger ordnen damit die Bewegung zeitlich ein (PlayerController).
 func send_local_pose(pos: Vector3, yaw: float, pitch: float, tool: int, spraying: bool) -> void:
 	if not NetworkManager.is_in_session:
 		return
+	var t := Time.get_ticks_msec()
 	if multiplayer.is_server():
-		_rpc_relay_pose.rpc(1, pos, yaw, pitch, tool, spraying)
+		_rpc_relay_pose.rpc(1, pos, yaw, pitch, tool, spraying, t)
 	else:
-		_rpc_submit_pose.rpc_id(1, pos, yaw, pitch, tool, spraying)
+		_rpc_submit_pose.rpc_id(1, pos, yaw, pitch, tool, spraying, t)
 
 
 @rpc("any_peer", "call_remote", "unreliable_ordered")
-func _rpc_submit_pose(pos: Vector3, yaw: float, pitch: float, tool: int, spraying: bool) -> void:
+func _rpc_submit_pose(pos: Vector3, yaw: float, pitch: float, tool: int, spraying: bool, t: int) -> void:
 	if not multiplayer.is_server():
 		return
 	var sid := multiplayer.get_remote_sender_id()
+	if not SecurityGuard.is_finite_vec3(pos):
+		return
+	SessionKeeper.note_pose(sid, pos, yaw)
 	var node := _ensure_remote_player(sid)
 	if node != null:
-		node.apply_remote_pose(pos, yaw, pitch, tool, spraying)
-	_rpc_relay_pose.rpc(sid, pos, yaw, pitch, tool, spraying)
+		node.apply_remote_pose(pos, yaw, pitch, tool, spraying, t)
+	_rpc_relay_pose.rpc(sid, pos, yaw, pitch, tool, spraying, t)
 
 
 @rpc("authority", "call_remote", "unreliable_ordered")
-func _rpc_relay_pose(peer_id: int, pos: Vector3, yaw: float, pitch: float, tool: int, spraying: bool) -> void:
+func _rpc_relay_pose(peer_id: int, pos: Vector3, yaw: float, pitch: float, tool: int, spraying: bool, t: int) -> void:
 	if peer_id == multiplayer.get_unique_id():
 		return
 	var node := _ensure_remote_player(peer_id)
 	if node != null:
-		node.apply_remote_pose(pos, yaw, pitch, tool, spraying)
+		node.apply_remote_pose(pos, yaw, pitch, tool, spraying, t)
 
 
 ## Liefert die Figur eines fremden Spielers und legt sie bei Bedarf an.

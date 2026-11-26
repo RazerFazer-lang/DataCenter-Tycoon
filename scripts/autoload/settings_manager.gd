@@ -171,6 +171,11 @@ var fullscreen: bool:
 		window_mode = WINDOW_BORDERLESS if value else WINDOW_WINDOWED
 var autosave_enabled: bool = true
 var recent_ips: Array[String] = ["127.0.0.1"]
+## Geheime Kennung dieses Spielers. Geht nie selbst übers Netz, nur ein Schlüssel je Welt daraus (Baurechte, Wiederverbinden).
+var client_id: String = ""
+## Lobby: gespeicherte Server [{name, ip, port}].
+var saved_servers: Array = []
+const SAVED_SERVERS_MAX := 12
 
 ## Sprachcodes für TranslationServer. Die Namen bleiben unübersetzt, damit man die eigene Sprache immer findet.
 const LANGUAGE_CODES: Array[String] = ["de", "en"]
@@ -308,6 +313,25 @@ func load_settings() -> void:
 				recent_ips.append(ip_str)
 	if recent_ips.is_empty():
 		recent_ips.append("127.0.0.1")
+	client_id = str(cfg.get_value("network", "client_id", "")).strip_edges().left(64)
+	saved_servers.clear()
+	var raw_servers: Variant = cfg.get_value("network", "saved_servers", [])
+	if raw_servers is Array:
+		for s_v in raw_servers:
+			if s_v is Dictionary and saved_servers.size() < SAVED_SERVERS_MAX:
+				var sd: Dictionary = s_v
+				var sp := int(sd.get("port", 0))
+				var sip := str(sd.get("ip", "")).strip_edges().left(64)
+				if not sip.is_empty() and sp >= 1024 and sp <= 65533:
+					saved_servers.append({"name": str(sd.get("name", sip)).left(28), "ip": sip, "port": sp})
+
+
+## Legt die Kennung beim ersten Bedarf an und speichert sie.
+func get_client_id() -> String:
+	if client_id.length() < 16:
+		client_id = Crypto.new().generate_random_bytes(16).hex_encode()
+		save_settings()
+	return client_id
 
 
 func save_settings() -> void:
@@ -341,6 +365,8 @@ func save_settings() -> void:
 	if LANGUAGE_CODES.has(language):
 		cfg.set_value("general", "language", language)
 	cfg.set_value("network", "recent_ips", recent_ips)
+	cfg.set_value("network", "client_id", client_id)
+	cfg.set_value("network", "saved_servers", saved_servers)
 	for action in key_bindings.keys():
 		cfg.set_value("keybinds", action, key_bindings[action])
 	cfg.save(SETTINGS_PATH)
@@ -703,6 +729,28 @@ func is_sharpness_active(scale_factor: float, upscaler_mode: int) -> bool:
 	if upscaler_mode == UPSCALER_FSR1:
 		return scale_factor < 1.0
 	return false
+
+
+## Lobby: gespeicherte Server [{name, ip, port}], höchstens SAVED_SERVERS_MAX.
+func add_saved_server(server_name: String, ip: String, port: int) -> bool:
+	var clean_ip := ip.strip_edges().left(64)
+	if clean_ip.is_empty() or port < 1024 or port > 65533:
+		return false
+	remove_saved_server(clean_ip, port)
+	var nm := SecurityGuard.sanitize_label(server_name, 28, clean_ip)
+	saved_servers.push_front({"name": nm, "ip": clean_ip, "port": port})
+	while saved_servers.size() > SAVED_SERVERS_MAX:
+		saved_servers.pop_back()
+	save_settings()
+	return true
+
+
+func remove_saved_server(ip: String, port: int) -> void:
+	for i in range(saved_servers.size() - 1, -1, -1):
+		var s: Dictionary = saved_servers[i]
+		if str(s.get("ip", "")) == ip.strip_edges() and int(s.get("port", 0)) == port:
+			saved_servers.remove_at(i)
+	save_settings()
 
 
 func record_recent_ip(ip: String) -> void:

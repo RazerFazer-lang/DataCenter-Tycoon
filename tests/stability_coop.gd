@@ -63,7 +63,7 @@ func _host() -> void:
 	var hud: Node = main.get("hud")
 	main.call("_open_pause")
 	var lbl: Label = hud.get("_pause_runs_lbl")
-	chk("Pausemenü sagt, dass die Welt weiterläuft", lbl != null and lbl.text == tr("Co-op: Die Welt läuft für alle weiter, auch während dieses Menü offen ist."), lbl.text if lbl else "")
+	chk("Pausemenü sagt, dass die Welt weiterläuft", lbl != null and lbl.text.begins_with(tr("Co-op: Die Welt läuft für alle weiter, auch während dieses Menü offen ist.")), lbl.text if lbl else "")
 	var t0: float = gs.time_of_day
 	var d0: int = gs.day_number
 	await create_timer(6.0).timeout

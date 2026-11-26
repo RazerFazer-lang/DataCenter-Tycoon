@@ -65,6 +65,7 @@ func _ready() -> void:
 	AdminManager.log_changed.connect(_on_log_changed)
 	AdminManager.login_result.connect(_on_login_result)
 	NetworkManager.players_changed.connect(func(): if visible and _tab == "players": refresh())
+	GameState.build_rights_changed.connect(func(): if visible and _tab == "players": refresh())
 
 
 func open() -> void:
@@ -171,6 +172,11 @@ func _build_players() -> void:
 		row.add_child(_cmd_btn(tr("Zur Garage"), "send_site", {"peer": pid, "site": "garage"}))
 		if GameState.halle_nord_owned:
 			row.add_child(_cmd_btn(tr("Zur Halle Nord"), "send_site", {"peer": pid, "site": "halle_nord"}))
+		if pid != 1 and not GameState.build_open and not AdminManager.is_admin(pid):
+			if GameState.can_build(pid):
+				row.add_child(_cmd_btn(tr("Baurecht entziehen"), "build_off", {"peer": pid}))
+			else:
+				row.add_child(_cmd_btn(tr("Bauen erlauben"), "build_on", {"peer": pid}))
 		if host and not AdminManager.is_owner(pid):
 			if AdminManager.is_admin(pid):
 				row.add_child(_cmd_btn(tr("Admin entziehen"), "revoke", {"peer": pid}))

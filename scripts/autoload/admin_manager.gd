@@ -18,7 +18,7 @@ const SITES: Array[String] = ["garage", "halle_nord"]
 ## Befehle, die nur der Host selbst geben darf.
 const HOST_ONLY: Array[String] = ["grant", "revoke"]
 const COMMANDS: Array[String] = [
-	"grant", "revoke", "kick", "ban", "goto", "bring", "send_site",
+	"grant", "revoke", "kick", "ban", "goto", "bring", "send_site", "build_on", "build_off",
 	"money_set", "money_add", "reputation", "level",
 	"time", "next_day", "weather", "time_scale",
 	"fire", "crash", "outage", "outage_end", "ddos", "repair_all", "clean_all",
@@ -27,6 +27,8 @@ const COMMANDS: Array[String] = [
 
 ## Freigeschaltete Verbindungen (peer_id -> true). Der Host steht nie darin, er ist immer Admin.
 var _granted: Dictionary = {}
+## Text des zuletzt ausgeführten Befehls (für die Serverkonsole).
+var last_result: String = ""
 ## Auf dedizierten Servern: mit dem Admin-Passwort angemeldet. Sie dürfen alles, was sonst der Host darf.
 var _owners: Dictionary = {}
 ## Admin-Passwort aus der server.cfg (nur auf dem Server gefüllt, geht nie über das Netz).
@@ -230,6 +232,7 @@ func execute(sender: int, cmd: String, args: Dictionary) -> bool:
 		_log(sender, "Abgelehnt, nur Host: %s" % cmd, false)
 		return false
 	var text := _run(sender, cmd, args)
+	last_result = text
 	if text == "":
 		if _is_reachable(sender):
 			GameState._rpc_play_sfx.rpc_id(sender, "error")
@@ -240,7 +243,7 @@ func execute(sender: int, cmd: String, args: Dictionary) -> bool:
 
 func _run(sender: int, cmd: String, args: Dictionary) -> String:
 	match cmd:
-		"grant", "revoke", "kick", "ban", "goto", "bring", "send_site":
+		"grant", "revoke", "kick", "ban", "goto", "bring", "send_site", "build_on", "build_off":
 			return _run_player(sender, cmd, args)
 		"money_set":
 			var v := _num(args, "v", 0.0, float(SecurityGuard.MAX_MONEY))
@@ -301,6 +304,10 @@ func _run_player(sender: int, cmd: String, args: Dictionary) -> String:
 			_sync_rights()
 			GameState.post_event_f("🛡️ %s ist kein Admin mehr.", [pname], "info")
 			return "%s die Admin-Rechte entzogen" % pname
+		"build_on", "build_off":
+			if not GameState.set_build_right(pid, cmd == "build_on"):
+				return ""
+			return ("%s darf bauen" if cmd == "build_on" else "%s darf nicht mehr bauen") % pname
 		"kick", "ban":
 			# Host und andere Admins sind geschützt. Nur der Host darf Admins entfernen.
 			if is_owner(pid) or pid == sender or (is_admin(pid) and not is_owner(sender)):
@@ -547,6 +554,7 @@ func _is_reachable(peer_id: int) -> bool:
 
 func _sync_rights() -> void:
 	_rpc_sync_rights.rpc(_granted.duplicate(), _owners.duplicate())
+	GameState.sync_build_rights()
 
 
 @rpc("authority", "call_local", "reliable")

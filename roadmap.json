@@ -37,6 +37,12 @@
       "items": [
         {
           "tag": "neu",
+          "version": "v3.3.0",
+          "title": "Co-op & Netzwerk",
+          "desc": "Server-Liste mit Live-Status ohne Internetdienst, automatisches Wiederverbinden, Host-Wechsel, Baurechte nach Freigabe, flüssigere Mitspieler und neue Serverbefehle."
+        },
+        {
+          "tag": "neu",
           "version": "v3.2.1",
           "title": "Stabilität & Fehler",
           "desc": "Klare Meldungen bei falschem Programmstand und fehlenden Ports, keine falschen „manipuliert“-Spielstände, Techniker laufen sichtbar in Halle Nord, liegengebliebene Aufträge im Personal-Fenster."

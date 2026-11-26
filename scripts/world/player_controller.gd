@@ -125,6 +125,17 @@ var _ui_unlock_cooldown: float = 0.0
 
 # Remote interpolation targets
 var _target_pos: Vector3 = Vector3.ZERO
+## Mitspieler: letzte Meldungen {t, pos, yaw, pitch} auf unserer Uhr (siehe apply_remote_pose).
+var _net_snaps: Array = []
+var _net_clock_off: float = 0.0
+var _net_jitter: float = 0.0
+## Verzögerung der Anzeige (ms), zwei Meldungsabstände plus Schwankung; Weiterrechnen höchstens so lange.
+const NET_INTERP_MIN_MS := 100.0
+const NET_INTERP_MAX_MS := 260.0
+const NET_EXTRAP_MS := 250.0
+const NET_SNAP_DIST := 6.0
+## Schneller läuft niemand (m/s), auch nicht beim Weiterrechnen.
+const NET_MAX_SPEED := 8.0
 var _target_yaw: float = 0.0
 var _target_pitch: float = 0.0
 var _remote_spraying: bool = false
@@ -243,14 +254,72 @@ func _on_settings_changed() -> void:
 		_camera.fov = SettingsManager.fov
 
 
-func apply_remote_pose(pos: Vector3, yaw: float, pitch: float, p_tool: int, spraying: bool) -> void:
+## t = Sendezeit auf der Uhr des Absenders (-1 = unbekannt, dann zählt die Ankunft).
+func apply_remote_pose(pos: Vector3, yaw: float, pitch: float, p_tool: int, spraying: bool, t: int = -1) -> void:
 	if is_local:
 		return
+	_remote_pose_flag = p_tool
+	_remote_spraying = spraying
+	var now := Time.get_ticks_msec()
+	if t < 0:
+		t = now
+	# Versatz zwischen seiner und unserer Uhr: der kleinste gesehene Wert (schnellstes Paket).
+	# Er darf langsam nach oben wandern, falls sich der Weg ändert oder die Uhren auseinanderlaufen.
+	var off := float(now - t)
+	if _net_snaps.is_empty() or off < _net_clock_off:
+		_net_clock_off = off
+	else:
+		_net_clock_off += (off - _net_clock_off) * 0.004
+	_net_jitter = lerpf(_net_jitter, off - _net_clock_off, 0.1)
+	var lt := float(t) + _net_clock_off
+	if not _net_snaps.is_empty():
+		var last: Dictionary = _net_snaps[_net_snaps.size() - 1]
+		if lt <= float(last["t"]):
+			return # älter als das, was wir schon haben
+		# Teleport, Standortwechsel: nicht durch die Welt gleiten.
+		if (last["pos"] as Vector3).distance_to(pos) > NET_SNAP_DIST:
+			_net_snaps.clear()
+			position = pos
+	_net_snaps.append({"t": lt, "pos": pos, "yaw": yaw, "pitch": pitch})
+	if _net_snaps.size() > 24:
+		_net_snaps.pop_front()
 	_target_pos = pos
 	_target_yaw = yaw
 	_target_pitch = pitch
-	_remote_pose_flag = p_tool
-	_remote_spraying = spraying
+
+
+## Wo der Mitspieler jetzt zu zeigen ist: etwas in der Vergangenheit zwischen zwei Meldungen,
+## damit Ruckeln im Netz nicht sichtbar wird. Fehlen Meldungen, geht es kurz in die alte Richtung weiter.
+func _remote_sample() -> Dictionary:
+	if _net_snaps.is_empty():
+		return {"pos": _target_pos, "yaw": _target_yaw, "pitch": _target_pitch}
+	var delay := clampf(NET_INTERP_MIN_MS + 2.0 * _net_jitter, NET_INTERP_MIN_MS, NET_INTERP_MAX_MS)
+	var rt := float(Time.get_ticks_msec()) - delay
+	var first: Dictionary = _net_snaps[0]
+	if rt <= float(first["t"]):
+		return first
+	for i in range(1, _net_snaps.size()):
+		var b: Dictionary = _net_snaps[i]
+		if rt <= float(b["t"]):
+			var a: Dictionary = _net_snaps[i - 1]
+			var k := (rt - float(a["t"])) / maxf(1.0, float(b["t"]) - float(a["t"]))
+			return {"pos": (a["pos"] as Vector3).lerp(b["pos"], k), "yaw": lerp_angle(float(a["yaw"]), float(b["yaw"]), k), "pitch": lerpf(float(a["pitch"]), float(b["pitch"]), k)}
+	# Nichts Neueres da: aus den letzten beiden Meldungen weiterrechnen, höchstens NET_EXTRAP_MS.
+	var last: Dictionary = _net_snaps[_net_snaps.size() - 1]
+	if _net_snaps.size() < 2:
+		return last
+	# Richtung über mindestens 80 ms schätzen: Zwei kurz nacheinander angekommene Meldungen ergäben sonst Unsinn.
+	var prev: Dictionary = _net_snaps[0]
+	for i in range(_net_snaps.size() - 2, -1, -1):
+		prev = _net_snaps[i]
+		if float(last["t"]) - float(prev["t"]) >= 80.0:
+			break
+	var dt := maxf(1.0, float(last["t"]) - float(prev["t"]))
+	var ahead := minf(rt - float(last["t"]), NET_EXTRAP_MS)
+	var vel := ((last["pos"] as Vector3) - (prev["pos"] as Vector3)) / dt
+	if vel.length() > NET_MAX_SPEED / 1000.0:
+		vel = vel.normalized() * NET_MAX_SPEED / 1000.0
+	return {"pos": (last["pos"] as Vector3) + vel * ahead, "yaw": float(last["yaw"]), "pitch": float(last["pitch"])}
 
 
 func enter_pc_seat() -> void:
@@ -718,9 +787,11 @@ func _physics_process(delta: float) -> void:
 
 	if not is_local:
 		var prev_pos := position
-		position = position.lerp(_target_pos, clampf(delta * 14.0, 0.0, 1.0))
-		rotation.y = lerp_angle(rotation.y, _target_yaw, clampf(delta * 14.0, 0.0, 1.0))
-		_head_pivot.rotation.x = lerpf(_head_pivot.rotation.x, _target_pitch, clampf(delta * 14.0, 0.0, 1.0))
+		var s := _remote_sample()
+		# Kleiner Rest an Glättung, falls eine Meldung doch einmal springt.
+		position = position.lerp(s["pos"], clampf(delta * 30.0, 0.0, 1.0))
+		rotation.y = lerp_angle(rotation.y, float(s["yaw"]), clampf(delta * 30.0, 0.0, 1.0))
+		_head_pivot.rotation.x = lerpf(_head_pivot.rotation.x, float(s["pitch"]), clampf(delta * 30.0, 0.0, 1.0))
 		_animate_avatar(delta, (position - prev_pos) / maxf(delta, 0.001), _remote_pose_flag)
 		_place_remote_held()
 		_update_foam_visuals(_remote_spraying)

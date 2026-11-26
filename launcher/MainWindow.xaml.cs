@@ -1271,6 +1271,130 @@ public partial class MainWindow : Window
     private void RefreshFavoriteServers()
     {
         HomeFavServersPanel.Children.Clear();
+        _favUi.Clear();
+        _lanPanel = new StackPanel();
+        try
+        {
+            BuildFavoriteRows();
+        }
+        finally
+        {
+            // LAN-Spiele unter den Favoriten, gefüllt von RefreshLobbyAsync.
+            HomeFavServersPanel.Children.Add(new TextBlock
+            {
+                Text = "IM LAN GEFUNDEN",
+                Foreground = (Brush)FindResource("TextMuted"),
+                FontSize = 10.5,
+                FontWeight = FontWeights.SemiBold,
+                Margin = new Thickness(0, 8, 0, 4)
+            });
+            HomeFavServersPanel.Children.Add(_lanPanel);
+            ShowLanGames(_lastLan);
+            StartLobbyTimer();
+            _ = RefreshLobbyAsync();
+        }
+    }
+
+    // --- LOBBY: Live-Status der Favoriten und LAN-Suche (ohne Internetdienst, siehe ServerQuery) ---
+
+    private readonly Dictionary<string, (TextBlock status, Button join)> _favUi = new();
+    private StackPanel? _lanPanel;
+    private List<ServerStatus> _lastLan = new();
+    private System.Windows.Threading.DispatcherTimer? _lobbyTimer;
+    private bool _lobbyBusy;
+
+    private void StartLobbyTimer()
+    {
+        if (_lobbyTimer != null) return;
+        _lobbyTimer = new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromSeconds(4) };
+        _lobbyTimer.Tick += async (_, _) => await RefreshLobbyAsync();
+        _lobbyTimer.Start();
+    }
+
+    private async Task RefreshLobbyAsync()
+    {
+        if (_lobbyBusy || _isGameRunning || !IsVisible || WindowState == WindowState.Minimized || PagePlay.Visibility != Visibility.Visible) return;
+        _lobbyBusy = true;
+        try
+        {
+            var favs = _config.FavoriteServers.ToList();
+            var lanTask = ServerQuery.DiscoverLanAsync();
+            var results = await Task.WhenAll(favs.Select(f => ServerQuery.QueryAsync(f.Ip, f.Port)));
+            for (int i = 0; i < favs.Count; i++) ApplyServerStatus($"{favs[i].Ip}:{favs[i].Port}", results[i]);
+            _lastLan = await lanTask;
+            ShowLanGames(_lastLan);
+        }
+        finally { _lobbyBusy = false; }
+    }
+
+    /// <summary>Text, Farbe und ob man beitreten kann.</summary>
+    private (string text, Color color, bool canJoin) DescribeStatus(ServerStatus? st)
+    {
+        if (st == null) return ("● nicht erreichbar", Color.FromRgb(224, 96, 88), true);
+        var text = $"● {st.World}  ·  {st.Host}  ·  {st.Players}/{st.Max}{(st.Password ? "  ·  🔒" : "")}  ·  {st.PingMs} ms";
+        var mine = _config.InstalledGameVersion;
+        if (!string.IsNullOrWhiteSpace(mine) && !string.IsNullOrWhiteSpace(st.Version) && st.Version != mine)
+            return ($"{text}  ·  andere Version {st.Version}", Color.FromRgb(230, 168, 60), false);
+        if (st.Players >= st.Max) return ($"{text}  ·  voll", Color.FromRgb(230, 168, 60), false);
+        return (text, Color.FromRgb(112, 196, 120), true);
+    }
+
+    private void ApplyServerStatus(string key, ServerStatus? st)
+    {
+        if (!_favUi.TryGetValue(key, out var ui)) return;
+        var (text, color, canJoin) = DescribeStatus(st);
+        ui.status.Text = text;
+        ui.status.Foreground = new SolidColorBrush(color);
+        ui.status.ToolTip = st?.Password == true ? "Diese Welt hat ein Passwort. Du gibst es im Spiel unter „Beitreten“ ein." : null;
+        ui.join.IsEnabled = canJoin;
+    }
+
+    private void ShowLanGames(List<ServerStatus> games)
+    {
+        if (_lanPanel == null) return;
+        _lanPanel.Children.Clear();
+        if (games.Count == 0)
+        {
+            _lanPanel.Children.Add(new TextBlock
+            {
+                Text = "Gerade kein Spiel im LAN gefunden. Läuft eins, erscheint es hier von selbst.",
+                Foreground = (Brush)FindResource("TextMuted"),
+                FontSize = 10.5,
+                TextWrapping = TextWrapping.Wrap
+            });
+            return;
+        }
+        foreach (var g in games)
+        {
+            var srv = new FavoriteServer { Name = string.IsNullOrWhiteSpace(g.World) ? g.Ip : g.World, Ip = g.Ip, Port = g.Port };
+            var (text, color, canJoin) = DescribeStatus(g);
+            var row = new Grid { Margin = new Thickness(0, 0, 0, 4) };
+            row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+            var tb = new TextBlock { Text = text, Foreground = new SolidColorBrush(color), FontSize = 11, VerticalAlignment = VerticalAlignment.Center, TextTrimming = TextTrimming.CharacterEllipsis, ToolTip = $"{g.Ip}:{g.Port}" };
+            Grid.SetColumn(tb, 0);
+            row.Children.Add(tb);
+            var btns = new StackPanel { Orientation = Orientation.Horizontal };
+            var join = new Button { Style = (Style)FindResource("PrimaryPlayButton"), Content = "⚡ Join", FontSize = 11, Padding = new Thickness(10, 3, 10, 3), Margin = new Thickness(6, 0, 6, 0), IsEnabled = canJoin };
+            join.Click += (_, _) => JoinFavoriteServer(srv);
+            btns.Children.Add(join);
+            var save = new Button { Style = (Style)FindResource("SecondaryButton"), Content = "★", FontSize = 10.5, Padding = new Thickness(7, 3, 7, 3), ToolTip = "Als Favorit speichern" };
+            save.Click += (_, _) =>
+            {
+                if (_config.FavoriteServers.Any(f => f.Ip == srv.Ip && f.Port == srv.Port)) return;
+                _config.FavoriteServers.Add(srv);
+                _config.Save();
+                RefreshFavoriteServers();
+            };
+            btns.Children.Add(save);
+            Grid.SetColumn(btns, 1);
+            row.Children.Add(btns);
+            _lanPanel.Children.Add(row);
+        }
+    }
+
+    private void BuildFavoriteRows()
+    {
         if (_config.FavoriteServers.Count == 0)
         {
             HomeFavServersPanel.Children.Add(new TextBlock
@@ -1303,6 +1427,8 @@ public partial class MainWindow : Window
             var info = new StackPanel { VerticalAlignment = VerticalAlignment.Center };
             info.Children.Add(new TextBlock { Text = srv.Name, Foreground = (Brush)FindResource("TextMain"), FontSize = 12, FontWeight = FontWeights.SemiBold });
             info.Children.Add(new TextBlock { Text = $"{srv.Ip}:{srv.Port}", Foreground = (Brush)FindResource("TextMuted"), FontSize = 10.5 });
+            var statusTb = new TextBlock { Text = "● frage an …", Foreground = (Brush)FindResource("TextMuted"), FontSize = 10.5, TextTrimming = TextTrimming.CharacterEllipsis };
+            info.Children.Add(statusTb);
             Grid.SetColumn(info, 0);
             grid.Children.Add(info);
 
@@ -1317,6 +1443,7 @@ public partial class MainWindow : Window
             };
             joinBtn.Click += (_, _) => JoinFavoriteServer(srv);
             btns.Children.Add(joinBtn);
+            _favUi[$"{srv.Ip}:{srv.Port}"] = (statusTb, joinBtn);
 
             var delBtn = new Button
             {

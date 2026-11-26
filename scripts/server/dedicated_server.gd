@@ -168,7 +168,8 @@ func _handle_command(line: String) -> void:
 	var arg := parts[1].strip_edges() if parts.size() > 1 else ""
 	match cmd:
 		"help":
-			_log("help | status | players | admin <ID|Name> | unadmin <ID|Name> | kick <ID|Name> | save | stop")
+			for h in HELP:
+				_log(h)
 		"status":
 			_print_status()
 		"players", "list":
@@ -183,6 +184,18 @@ func _handle_command(line: String) -> void:
 			var result := GameState.save_current_world()
 			if not bool(result.get("ok", false)):
 				_log("Speichern fehlgeschlagen: %s" % str(result.get("error", "unbekannt")))
+		"save-as", "saveas":
+			_save_as(arg)
+		"say":
+			_say(arg)
+		"time":
+			_time(arg)
+		"weather":
+			_weather(arg)
+		"speed":
+			_speed(arg)
+		"build":
+			_build(arg)
 		"stop", "quit", "exit":
 			stop_server()
 		_:
@@ -207,7 +220,13 @@ func _print_players() -> void:
 	for pid in NetworkManager.players.keys():
 		var info: Dictionary = NetworkManager.players[pid]
 		var ping := NetworkManager.get_player_ping(int(pid))
-		_log("  ID %d | %s%s | %s" % [int(pid), str(info.get("name", "Spieler")), " (Admin)" if AdminManager.is_admin(int(pid)) else "", ("%d ms" % ping) if ping >= 0 else "– ms"])
+		var loss := NetworkManager.get_player_loss(int(pid))
+		var tags := PackedStringArray()
+		if AdminManager.is_admin(int(pid)):
+			tags.append("Admin")
+		if not GameState.build_open and not GameState.can_build(int(pid)):
+			tags.append("ohne Baurecht")
+		_log("  ID %d | %s%s | %s | %.0f %% Verlust" % [int(pid), str(info.get("name", "Spieler")), (" (%s)" % ", ".join(tags)) if not tags.is_empty() else "", ("%d ms" % ping) if ping >= 0 else "– ms", loss])
 
 
 func _kick(target: String) -> void:
@@ -235,6 +254,86 @@ func _set_admin(target: String, on: bool) -> void:
 		_log("%s (ID %d) ist jetzt %s." % [NetworkManager.get_player_name(peer_id), peer_id, "Admin" if on else "kein Admin mehr"])
 	else:
 		_log("Keine Änderung.")
+
+
+func _save_as(arg: String) -> void:
+	var clean := SecurityGuard.sanitize_label(arg, 32, "")
+	if clean.is_empty():
+		_log("Aufruf: save-as <Name>  (speichert unter neuem Namen und macht damit weiter)")
+		return
+	var result := GameState.save_current_world(clean)
+	if bool(result.get("ok", false)):
+		_log("Gespeichert als '%s' (%s)." % [clean, str(result.get("save_id", ""))])
+	else:
+		_log("Speichern fehlgeschlagen: %s" % str(result.get("error", "unbekannt")))
+
+
+func _say(arg: String) -> void:
+	if arg.is_empty():
+		_log("Aufruf: say <Text>")
+		return
+	var sent: String = NetworkManager.server_say(arg)
+	if sent.is_empty():
+		_log("Nachricht leer oder vom Filter entfernt.")
+	else:
+		_log("[Chat] Server: %s" % sent)
+
+
+## time  |  time 14  |  time 14:30
+func _time(arg: String) -> void:
+	if arg.is_empty():
+		_log("Es ist %s Uhr (Tag %d), die Uhr läuft %dfach." % [GameState.get_time_string(), GameState.day_number, int(GameState.clock_scale)])
+		return
+	var hm := arg.split(":")
+	var h := hm[0].to_int() if hm[0].is_valid_int() else -1
+	var m := hm[1].to_int() if hm.size() > 1 and hm[1].is_valid_int() else 0
+	if h < 0 or h > 23 or m < 0 or m > 59:
+		_log("Aufruf: time <Stunde> oder time <hh:mm>, z. B. time 14:30")
+		return
+	_admin("time", {"v": float(h) + float(m) / 60.0})
+
+
+func _weather(arg: String) -> void:
+	var w := arg.to_lower()
+	if not AdminManager.WEATHERS.has(w):
+		_log("Wetter jetzt: %s. Aufruf: weather <%s>" % [GameState.weather_state, "|".join(AdminManager.WEATHERS)])
+		return
+	_admin("weather", {"v": w})
+
+
+func _speed(arg: String) -> void:
+	if not arg.is_valid_float() or not AdminManager.TIME_SCALES.has(arg.to_float()):
+		_log("Aufruf: speed <0|1|3|10>  (0 hält die Uhr an)")
+		return
+	_admin("time_scale", {"v": arg.to_float()})
+
+
+## build <ID|Name> on|off
+func _build(arg: String) -> void:
+	var parts := arg.split(" ", false)
+	if parts.size() != 2 or not ["on", "off", "an", "aus"].has(parts[1].to_lower()):
+		_log("Aufruf: build <ID|Name> on|off")
+		return
+	if GameState.build_open:
+		_log("Die Welt hat ein Passwort, da dürfen alle bauen.")
+		return
+	var peer_id := _find_peer(parts[0])
+	if peer_id <= 1:
+		_log("Kein Spieler '%s' gefunden. 'players' zeigt alle IDs." % parts[0])
+		return
+	var on: bool = ["on", "an"].has(parts[1].to_lower())
+	if GameState.set_build_right(peer_id, on):
+		_log("%s (ID %d) %s." % [NetworkManager.get_player_name(peer_id), peer_id, "darf jetzt bauen" if on else "darf nicht mehr bauen"])
+	else:
+		_log("Keine Änderung.")
+
+
+## Welt-Befehle laufen über den AdminManager (gleiche Prüfungen wie im Admin-Menü).
+func _admin(cmd: String, args: Dictionary) -> void:
+	if AdminManager.execute(1, cmd, args):
+		_log("OK: %s" % AdminManager.last_result)
+	else:
+		_log("Nicht ausgeführt: %s %s" % [cmd, str(args.get("v", ""))])
 
 
 func _find_peer(target: String) -> int:
@@ -282,6 +381,21 @@ func _on_player_left(peer_id: int) -> void:
 
 func _on_world_saved(display_name: String, is_autosave: bool) -> void:
 	_log("%s gespeichert: %s" % ["Autosave" if is_autosave else "Welt", display_name])
+
+
+const HELP := [
+	"status                  Welt, Tag, Geld, Spieler, Port",
+	"players                 Spieler mit ID, Ping, Paketverlust, Rechten",
+	"say <Text>              Nachricht an alle im Chat",
+	"time [hh:mm]            Uhrzeit zeigen oder stellen",
+	"weather [Art]           Wetter zeigen oder setzen (clear, cloudy, rain, storm, heatwave)",
+	"speed <0|1|3|10>        Uhr anhalten oder schneller laufen lassen",
+	"save | save-as <Name>   speichern, auch unter neuem Namen",
+	"admin | unadmin <ID|Name>",
+	"build <ID|Name> on|off  Baurecht in Welten ohne Passwort",
+	"kick <ID|Name>",
+	"stop                    speichern und beenden",
+]
 
 
 func _log(msg: String) -> void:

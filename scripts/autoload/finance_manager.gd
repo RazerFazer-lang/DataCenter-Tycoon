@@ -581,6 +581,8 @@ func _rpc_req_pay_all() -> void:
 # ---------------------------------------------------------------- Host-Logik: Aktionen
 
 func _do_hire(pool_idx: int, peer: int) -> void:
+	if GameState._deny_build(peer, "business"):
+		return
 	if pool_idx < 0 or pool_idx >= CANDIDATE_POOL.size() or hired_pool.has(pool_idx):
 		_feedback(peer, false, "Diese Bewerbung gibt es nicht mehr.")
 		return

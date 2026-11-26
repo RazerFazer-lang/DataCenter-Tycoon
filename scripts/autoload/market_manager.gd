@@ -774,6 +774,8 @@ func _rpc_req_set_price(service: String, value: float) -> void:
 		return
 	if not SecurityGuard.is_finite_float(value) or not SecurityGuard.check_rate_limit(_sender(), "price", 20, 4.0):
 		return
+	if GameState._deny_build(_sender(), "business"):
+		return
 	var v := clampf(snappedf(value, PRICE_STEP), PRICE_MIN, PRICE_MAX)
 	if is_equal_approx(v, 1.0):
 		prices.erase(service)
@@ -787,6 +789,8 @@ func _rpc_req_campaign(kind: String) -> void:
 	if not multiplayer.is_server() or not CAMPAIGNS.has(kind):
 		return
 	var peer := _sender()
+	if GameState._deny_build(peer, "business"):
+		return
 	var c: Dictionary = CAMPAIGNS[kind]
 	for run in campaigns:
 		if str((run as Dictionary).get("kind", "")) == kind:
@@ -815,7 +819,7 @@ func _rpc_req_campaign(kind: String) -> void:
 
 @rpc("any_peer", "call_local", "reliable")
 func _rpc_req_lead(lid: String) -> void:
-	if multiplayer.is_server():
+	if multiplayer.is_server() and not GameState._deny_build(_sender(), "business"):
 		do_lead(lid, _sender())
 
 
@@ -856,7 +860,7 @@ func do_lead(lid: String, peer: int) -> void:
 
 @rpc("any_peer", "call_local", "reliable")
 func _rpc_req_counter_poach() -> void:
-	if multiplayer.is_server():
+	if multiplayer.is_server() and not GameState._deny_build(_sender(), "business"):
 		do_counter_poach(_sender())
 
 

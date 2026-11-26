@@ -1931,6 +1931,8 @@ func initialize_new_world(save_id: String = "mein_datacenter", save_name: String
 	current_save_name = save_name.strip_edges()
 	if current_save_name.is_empty():
 		current_save_name = "Mein DataCenter"
+	world_uid = _new_world_uid()
+	build_allowed = {}
 	money = 1800.0
 	# Neuer Spielstand: F1 und F2 mit intakten Sicherungen bestückt, F3/F4 leer, Hauptschalter an.
 	breaker_fuses = _make_fuse_slots("empty")
@@ -2010,6 +2012,8 @@ func export_save_data() -> Dictionary:
 	data["next_ticket_num"] = _next_ticket_num
 	data["delivery_slot_cursor"] = _delivery_slot_cursor
 	data["ddos_cooldown"] = ddos_cooldown
+	data["world_uid"] = world_uid
+	data["build_allowed"] = build_allowed.duplicate()
 	var all_pending: Array = []
 	# Inhalt des Sammelpakets statt des Platzhalters speichern, sonst gehen Bestellungen verloren.
 	for pid_v in _van_parcel_parts:
@@ -2047,6 +2051,15 @@ func load_from_save_data(data: Dictionary, save_id: String, display_name: String
 	_delivery_slot_cursor = int(data.get("delivery_slot_cursor", 0))
 	ddos_cooldown = float(data.get("ddos_cooldown", 55.0))
 	_autosave_accum = 0.0
+	# Ältere Spielstände bekommen hier ihre Kennung, gespeichert wird sie beim nächsten Speichern.
+	world_uid = str(data.get("world_uid", "")).left(32)
+	if world_uid.length() < 8:
+		world_uid = _new_world_uid()
+	build_allowed = {}
+	if data.get("build_allowed", null) is Dictionary:
+		for k in (data["build_allowed"] as Dictionary).keys():
+			if build_allowed.size() < 256:
+				build_allowed[str(k).left(64)] = SecurityGuard.sanitize_label(str(data["build_allowed"][k]), 24, "Spieler")
 
 	_apply_snapshot(data)
 	for bid in bench_states.keys():
@@ -2706,14 +2719,17 @@ func _apply_snapshot(snap: Dictionary) -> void:
 	state_updated.emit()
 
 
-func handle_player_disconnect(peer_id: int) -> void:
+## drop_at: wo der Spieler zuletzt stand (SessionKeeper), dort fällt seine Ware hin.
+func handle_player_disconnect(peer_id: int, drop_at: Vector3 = Vector3(0.0, 0.0, 2.0)) -> void:
 	if not multiplayer.is_server():
 		return
 	var changed_crates := false
+	var n := 0
 	for cid in crates.keys():
 		if int(crates[cid]["held_by"]) == peer_id:
 			crates[cid]["held_by"] = 0
-			crates[cid]["pos"] = Vector3(0.0, 0.0, 2.0)
+			crates[cid]["pos"] = drop_at + Vector3(0.35 * float(n % 3), 0.0, 0.35 * float(n / 3))
+			n += 1
 			changed_crates = true
 	if changed_crates:
 		_broadcast_crates()
@@ -6136,12 +6152,124 @@ func _rpc_sync_host_permissions(enabled: bool) -> void:
 
 
 func is_destructive_action_allowed(peer_id: int) -> bool:
-	return not host_only_destructive or peer_id <= 1
+	return (not host_only_destructive or peer_id <= 1) and can_build(peer_id)
+
+
+# ---------------------------------------------------------------- Baurechte
+# In Welten ohne Passwort bauen neue Mitspieler erst, wenn Host oder Admin sie freigeben.
+# Umsehen, tragen, reparieren und löschen geht immer. Gemerkt wird ein Schlüssel je Spieler und
+# Welt aus der Anmeldung (NetworkManager.peer_key), nicht der Name: den kann jeder nachmachen.
+
+## Was ohne Baurecht abgelehnt wird (Schlüssel = Art der Aktion).
+const BUILD_DENY_TEXT := {
+	"build": "Aufstellen und Umstellen geht erst, wenn dich Host oder Admin freigeben (Pausemenü).",
+	"sell": "Verkaufen geht erst, wenn dich Host oder Admin freigeben (Pausemenü).",
+	"cable": "Kabel ziehen geht erst, wenn dich Host oder Admin freigeben (Pausemenü).",
+	"expand": "Ausbauen und Forschen geht erst, wenn dich Host oder Admin freigeben (Pausemenü).",
+	"buy": "Einkaufen geht erst, wenn dich Host oder Admin freigeben (Pausemenü).",
+	"business": "Verträge, Preise und Personal gehen erst, wenn dich Host oder Admin freigeben (Pausemenü).",
+}
+
+## Schlüssel -> Spielername (wird mit der Welt gespeichert).
+var build_allowed: Dictionary = {}
+## true: Welt mit Passwort, alle dürfen bauen (vom Host verteilt).
+var build_open: bool = true
+## Auf Clients: peer_ids, die gerade bauen dürfen (vom Host verteilt).
+var build_peers: Array = []
+## Zufällige Kennung dieser Welt (für die Schlüssel der Spieler), wird gespeichert.
+var world_uid: String = ""
+signal build_rights_changed
+
+
+func can_build(peer_id: int) -> bool:
+	if peer_id <= 1 or build_open:
+		return true
+	if not multiplayer.is_server():
+		return build_peers.has(peer_id)
+	if AdminManager.is_admin(peer_id):
+		return true
+	var key: String = NetworkManager.peer_key(peer_id)
+	return key != "" and build_allowed.has(key)
+
+
+func local_can_build() -> bool:
+	if not NetworkManager.is_in_session or multiplayer.multiplayer_peer == null:
+		return true
+	return can_build(multiplayer.get_unique_id())
+
+
+## Host: Baurecht geben oder nehmen. false, wenn sich nichts ändert.
+func set_build_right(peer_id: int, on: bool) -> bool:
+	if not multiplayer.is_server() or peer_id <= 1 or not NetworkManager.players.has(peer_id):
+		return false
+	var key: String = NetworkManager.peer_key(peer_id)
+	if key == "" or on == build_allowed.has(key):
+		return false
+	var pname := NetworkManager.get_player_name(peer_id)
+	if on:
+		build_allowed[key] = pname
+	else:
+		build_allowed.erase(key)
+	sync_build_rights()
+	post_event_f("🔨 %s darf jetzt bauen." if on else "🔒 %s darf nicht mehr bauen.", [pname], "info")
+	return true
+
+
+## Host: Stand an alle verteilen (nach Beitritt, Admin-Wechsel, Freigabe).
+func sync_build_rights() -> void:
+	if not NetworkManager.is_in_session or multiplayer.multiplayer_peer == null or not multiplayer.is_server():
+		return
+	build_open = not NetworkManager.host_password.is_empty()
+	var peers: Array = []
+	for pid in NetworkManager.players.keys():
+		if can_build(int(pid)):
+			peers.append(int(pid))
+	_rpc_sync_build_rights.rpc(build_open, peers)
+
+
+@rpc("authority", "call_local", "reliable")
+func _rpc_sync_build_rights(open: bool, peers: Array) -> void:
+	build_open = open
+	build_peers = peers.duplicate()
+	build_rights_changed.emit()
+
+
+## true = abgelehnt (mit Hinweis an den Spieler). Aufruf am Anfang der Bau-Befehle auf dem Host.
+func _deny_build(peer_id: int, kind: String) -> bool:
+	if can_build(peer_id):
+		return false
+	if peer_id != multiplayer.get_unique_id():
+		_rpc_play_sfx.rpc_id(peer_id, "error")
+	tell_peer(peer_id, str(BUILD_DENY_TEXT.get(kind, BUILD_DENY_TEXT["build"])), [], "warn")
+	return true
+
+
+static func _new_world_uid() -> String:
+	return Crypto.new().generate_random_bytes(8).hex_encode()
+
+
+## Meldung nur an einen Spieler (statt an alle wie post_event).
+func tell_peer(peer_id: int, message: String, args: Array = [], severity: String = "info") -> void:
+	if not multiplayer.is_server():
+		return
+	if peer_id == multiplayer.get_unique_id():
+		event_logged.emit(_format_event(message, args), severity)
+	elif NetworkManager.players.has(peer_id):
+		_rpc_event_private.rpc_id(peer_id, message, severity, args)
+
+
+@rpc("authority", "call_remote", "reliable")
+func _rpc_event_private(message: String, severity: String, args: Array = []) -> void:
+	event_logged.emit(_format_event(message, args), severity)
 
 
 func _deny_destructive_action(peer_id: int, action_label: String) -> void:
-	_rpc_play_sfx.rpc_id(peer_id, "error")
-	post_event_f("Nur der Host darf %s (Host-Schutz aktiv).", [action_label], "warn")
+	if not can_build(peer_id):
+		_deny_build(peer_id, "sell" if action_label.to_lower().contains("verkauf") else "expand")
+		return
+	if peer_id != multiplayer.get_unique_id():
+		_rpc_play_sfx.rpc_id(peer_id, "error")
+	tell_peer(peer_id, "Nur der Host darf %s (Host-Schutz aktiv).", [action_label], "warn")
 
 
 @rpc("any_peer", "call_local", "reliable")
@@ -6149,6 +6277,8 @@ func _rpc_req_buy_item(item_type: String) -> void:
 	if not multiplayer.is_server():
 		return
 	var peer_id := _get_sender_id()
+	if _deny_build(peer_id, "buy"):
+		return
 	if not SecurityGuard.check_rate_limit(peer_id, "buy", 10, 5.0):
 		return
 	if not ITEM_CATALOG.has(item_type):
@@ -6229,6 +6359,8 @@ func _rpc_req_rotate(kind: String, entity_id: String, dir: int) -> void:
 	if not multiplayer.is_server():
 		return
 	var peer_id := _get_sender_id()
+	if _deny_build(peer_id, "build"):
+		return
 	if not SecurityGuard.check_rate_limit(peer_id, "rotate", 20, 4.0):
 		return
 	if server_rotate(kind, entity_id, 1 if dir >= 0 else -1):
@@ -6367,6 +6499,8 @@ func _rpc_req_place_held_structure(pos: Vector3, rot_y: float) -> void:
 	if not SecurityGuard.is_finite_vec3(pos) or not SecurityGuard.is_finite_float(rot_y):
 		return
 	var peer_id := _get_sender_id()
+	if _deny_build(peer_id, "build"):
+		return
 	var held := get_player_held_crate(peer_id)
 	if held.is_empty():
 		return
@@ -6554,6 +6688,8 @@ func _rpc_req_relocate_rack(rack_id: String, pos: Vector3, rot_y: float) -> void
 	if not SecurityGuard.is_finite_vec3(pos) or not SecurityGuard.is_finite_float(rot_y):
 		return
 	var peer_id := _get_sender_id()
+	if _deny_build(peer_id, "build"):
+		return
 	if not racks.has(rack_id):
 		return
 	var snapped := Vector3(roundf(pos.x * 2.0) * 0.5, 0.0, roundf(pos.z * 2.0) * 0.5)
@@ -6618,6 +6754,8 @@ func _rpc_req_pack_device(kind: String, entity_id: String) -> void:
 	if not multiplayer.is_server():
 		return
 	var peer_id := _get_sender_id()
+	if _deny_build(peer_id, "build"):
+		return
 	if is_player_holding_anything(peer_id):
 		_rpc_play_sfx.rpc_id(peer_id, "error")
 		return
@@ -6868,6 +7006,8 @@ func _rpc_req_buy_install_component(rack_id: String, slot_idx: int, category: St
 	if not multiplayer.is_server():
 		return
 	var peer_id := _get_sender_id()
+	if _deny_build(peer_id, "buy"):
+		return
 	if not racks.has(rack_id) or not HardwareCatalog.PARTS.has(category):
 		return
 	var slots: Array = racks[rack_id]["slots"]
@@ -6901,6 +7041,8 @@ func _rpc_req_buy_install_module(rack_id: String, slot_idx: int, item_type: Stri
 	if not multiplayer.is_server():
 		return
 	var peer_id := _get_sender_id()
+	if _deny_build(peer_id, "buy"):
+		return
 	if not racks.has(rack_id) or not ITEM_CATALOG.has(item_type):
 		return
 	if str(ITEM_CATALOG[item_type]["category"]) != "module":
@@ -6942,6 +7084,8 @@ func _rpc_req_checkout_cart(entries: Array, express: bool = false) -> void:
 	if not multiplayer.is_server() or entries.is_empty() or entries.size() > 40:
 		return
 	var peer_id := _get_sender_id()
+	if _deny_build(peer_id, "buy"):
+		return
 	if not SecurityGuard.check_rate_limit(peer_id, "checkout", 6, 5.0):
 		return
 	var total_cost := 0.0
@@ -7089,6 +7233,8 @@ func _rpc_req_sell_inventory_part(part_id: String) -> void:
 	if not multiplayer.is_server():
 		return
 	var peer_id := _get_sender_id()
+	if _deny_build(peer_id, "sell"):
+		return
 	var stock := int(parts_inventory.get(part_id, 0))
 	if stock <= 0:
 		_rpc_play_sfx.rpc_id(peer_id, "error")
@@ -7160,6 +7306,8 @@ func _rpc_req_set_rack_rental(rack_id: String, rental_type: String) -> void:
 	if not multiplayer.is_server():
 		return
 	var peer_id := _get_sender_id()
+	if _deny_build(peer_id, "business"):
+		return
 	if not racks.has(rack_id) or not HardwareCatalog.RENTAL_PROFILES.has(rental_type):
 		return
 	var r: Dictionary = racks[rack_id]
@@ -7312,6 +7460,8 @@ func _rpc_req_connect_cable(cable_type: String, from_id: String, to_id: String, 
 	if not multiplayer.is_server():
 		return
 	var peer_id := _get_sender_id()
+	if _deny_build(peer_id, "cable"):
+		return
 	if cable_type != "power" and cable_type != "network" and cable_type != "cluster":
 		return
 	if from_id == to_id:
@@ -7510,6 +7660,8 @@ func _is_valid_cable_endpoint(cable_type: String, endpoint_id: String) -> bool:
 func _rpc_req_disconnect_cable_slot(cable_type: String, endpoint_id: String, slot_idx: int) -> void:
 	if not multiplayer.is_server():
 		return
+	if _deny_build(_get_sender_id(), "cable"):
+		return
 	var target_cid := ""
 	if slot_idx >= 0:
 		var smap := get_cable_slot_map(cable_type, endpoint_id)
@@ -7533,6 +7685,8 @@ func _rpc_req_disconnect_cable_slot(cable_type: String, endpoint_id: String, slo
 @rpc("any_peer", "call_local", "reliable")
 func _rpc_req_disconnect_cables_on(cable_type: String, endpoint_id: String) -> void:
 	if not multiplayer.is_server():
+		return
+	if _deny_build(_get_sender_id(), "cable"):
 		return
 	var to_remove: Array = []
 	for cid in cables.keys():
@@ -7850,6 +8004,8 @@ func _rpc_req_repair_slot(rack_id: String, slot_idx: int, amount: float) -> void
 func _rpc_req_toggle_contract(contract_id: String) -> void:
 	if not multiplayer.is_server():
 		return
+	if _deny_build(_get_sender_id(), "business"):
+		return
 	do_toggle_contract(contract_id, _get_sender_id())
 
 
@@ -7890,6 +8046,8 @@ func _rpc_req_upgrade_power() -> void:
 	if not multiplayer.is_server():
 		return
 	var peer_id := _get_sender_id()
+	if _deny_build(peer_id, "expand"):
+		return
 	if power_fuse_stock > 0:
 		_rpc_play_sfx.rpc_id(peer_id, "error")
 		post_event("Die Drehsicherung liegt schon im Lager. Setze sie am Sicherungskasten in F2 ein.", "warn")
@@ -7927,6 +8085,8 @@ func _rpc_req_research(branch: String) -> void:
 	if not multiplayer.is_server():
 		return
 	var peer_id := _get_sender_id()
+	if _deny_build(peer_id, "expand"):
+		return
 	if not get_research_block_reason(branch).is_empty():
 		_rpc_play_sfx.rpc_id(peer_id, "error")
 		return
@@ -7952,6 +8112,8 @@ func _rpc_req_upgrade_router() -> void:
 	if not multiplayer.is_server():
 		return
 	var peer_id := _get_sender_id()
+	if _deny_build(peer_id, "expand"):
+		return
 	if router_tier + 1 >= ROUTER_TIERS.size():
 		return
 	var next_r: Dictionary = ROUTER_TIERS[router_tier + 1]
@@ -8002,6 +8164,8 @@ func _rpc_req_upgrade_ai_platform() -> void:
 	if not multiplayer.is_server():
 		return
 	var peer_id := _get_sender_id()
+	if _deny_build(peer_id, "expand"):
+		return
 	if ai_platform_level + 1 >= AI_TIERS.size():
 		return
 	var next_ai: Dictionary = AI_TIERS[ai_platform_level + 1]
@@ -10255,6 +10419,8 @@ func _rpc_req_buy_daily_deal(deal_id: String) -> void:
 	if not multiplayer.is_server():
 		return
 	var peer_id := _get_sender_id()
+	if _deny_build(peer_id, "buy"):
+		return
 	if not SecurityGuard.check_rate_limit(peer_id, "buy", 8, 5.0):
 		return
 	if get_delivery_zone_free_slots() < 1:
@@ -10472,6 +10638,8 @@ func _rpc_req_buy_halle_nord() -> void:
 	if not multiplayer.is_server():
 		return
 	var peer_id := _get_sender_id()
+	if _deny_build(peer_id, "expand"):
+		return
 	if halle_nord_owned:
 		return
 	if get_company_level() < HALLE_NORD_REQ_LEVEL or money < float(HALLE_NORD_COST):
@@ -10577,6 +10745,8 @@ func _rpc_req_buy_building_upgrade(uid: String) -> void:
 	if not multiplayer.is_server():
 		return
 	var peer_id := _get_sender_id()
+	if _deny_build(peer_id, "expand"):
+		return
 	if not BUILDING_UPGRADE_CATALOG.has(uid):
 		return
 	if has_building_upgrade(uid) or is_construction_active(uid):
@@ -10716,6 +10886,8 @@ func _rpc_req_relocate_decor(decor_id: String, pos: Vector3, rot_y: float) -> vo
 	if not SecurityGuard.is_finite_vec3(pos) or not SecurityGuard.is_finite_float(rot_y):
 		return
 	var peer_id := _get_sender_id()
+	if _deny_build(peer_id, "build"):
+		return
 	if not decor_items.has(decor_id) or not SecurityGuard.check_rate_limit(peer_id, "relocate", 10, 5.0):
 		return
 	var d: Dictionary = decor_items[decor_id]

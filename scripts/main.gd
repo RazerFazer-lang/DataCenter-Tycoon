@@ -32,6 +32,10 @@ func _ready() -> void:
 	error_watch = ErrorWatch.new()
 	error_watch.context_provider = _error_context
 	OS.add_logger(error_watch)
+	# Fenster schließen erst nach der Übergabe an einen Mitspieler (Host-Wechsel), siehe _notification.
+	if not DedicatedServerScript.is_requested():
+		get_tree().auto_accept_quit = false
+	SessionKeeper.recovering_changed.connect(_on_recovering_changed)
 
 	loading_screen = LoadingScreen.new()
 	$UI.add_child(loading_screen)
@@ -264,9 +268,95 @@ func _process(delta: float) -> void:
 ## Fokusverlust (Windows-Taste, Alt+Tab): Maus freigeben, damit man andere Fenster bedienen kann.
 ## Ist die Maus im Spiel gefangen, geht das Pausemenü auf; offene Menüs zeigen die Maus ohnehin schon.
 func _notification(what: int) -> void:
+	if what == NOTIFICATION_WM_CLOSE_REQUEST and not DedicatedServerScript.is_requested():
+		_quit_with_handover()
+		return
 	if what != NOTIFICATION_APPLICATION_FOCUS_OUT and what != NOTIFICATION_WM_WINDOW_FOCUS_OUT:
 		return
 	_release_mouse_for_os()
+
+
+var _quitting := false
+
+## Host mit Mitspielern schließt das Fenster: erst speichern und die Welt übergeben, dann beenden.
+func _quit_with_handover() -> void:
+	if _quitting:
+		return
+	_quitting = true
+	if NetworkManager.is_in_session and multiplayer.is_server() and not NetworkManager.players.size() <= 1:
+		if SettingsManager.autosave_enabled:
+			GameState.save_current_world("", true)
+		await SessionKeeper.hand_over()
+		NetworkManager.leave_session()
+	get_tree().quit()
+
+
+# --- Wiederverbinden und Host-Wechsel ----------------------------------------
+
+var _recover_overlay: Control = null
+var _recover_lbl: Label = null
+
+
+func _on_recovering_changed(active: bool, text: String) -> void:
+	if active:
+		if _recover_overlay == null:
+			_build_recover_overlay()
+		if not _recover_overlay.visible:
+			# Alte Figuren und Geräte weg, sonst gäbe es nach dem Neuverbinden zwei eigene Figuren.
+			_is_paused = false
+			hud.set_pause_visible(false)
+			terminal_ui.visible = false
+			rack_inspector.visible = false
+			if workbench_ui != null and workbench_ui.visible:
+				workbench_ui.close_workbench()
+			world.reset_world()
+			hud.visible = false
+			menu_camera.current = true
+		_recover_lbl.text = text
+		_recover_overlay.visible = true
+		Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
+	elif _recover_overlay != null:
+		_recover_overlay.visible = false
+
+
+func _build_recover_overlay() -> void:
+	_recover_overlay = Control.new()
+	_recover_overlay.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_recover_overlay.mouse_filter = Control.MOUSE_FILTER_STOP
+	var dim := ColorRect.new()
+	dim.set_anchors_preset(Control.PRESET_FULL_RECT)
+	dim.color = Color(0.02, 0.025, 0.03, 0.82)
+	_recover_overlay.add_child(dim)
+	var center := CenterContainer.new()
+	center.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_recover_overlay.add_child(center)
+	var card := PanelContainer.new()
+	card.add_theme_stylebox_override("panel", UIStyle.make_panel(Color(0.08, 0.085, 0.095, 0.97), UIStyle.COL_BORDER, 6, 1, 26, 22))
+	center.add_child(card)
+	var v := VBoxContainer.new()
+	v.add_theme_constant_override("separation", 14)
+	v.custom_minimum_size = Vector2(460, 0)
+	card.add_child(v)
+	_recover_lbl = Label.new()
+	_recover_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_recover_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	UIStyle.style_label(_recover_lbl, 16, UIStyle.COL_TEXT_MAIN)
+	v.add_child(_recover_lbl)
+	var hint := Label.new()
+	hint.text = tr("Deine Position und was du in der Hand hattest, bleiben erhalten.")
+	hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	UIStyle.style_label(hint, 12, UIStyle.COL_TEXT_SUB)
+	v.add_child(hint)
+	var cancel := Button.new()
+	cancel.text = tr("ABBRECHEN")
+	cancel.custom_minimum_size = Vector2(180, 40)
+	cancel.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+	UIStyle.style_button(cancel, Color(0.14, 0.14, 0.16), UIStyle.COL_TEXT_SUB)
+	cancel.pressed.connect(func() -> void: SessionKeeper.cancel())
+	v.add_child(cancel)
+	_recover_overlay.visible = false
+	$UI.add_child(_recover_overlay)
 
 
 ## Gibt die gefangene Maus an Windows zurück (Fokusverlust oder Windows-Taste).
@@ -370,9 +460,16 @@ func _on_session_left(_reason: String) -> void:
 func _leave_to_menu() -> void:
 	if NetworkManager.is_in_session and multiplayer.is_server() and SettingsManager.autosave_enabled:
 		GameState.save_current_world("", true)
+	# Mit Mitspielern: Wer am längsten dabei ist, übernimmt die Welt (Host-Wechsel).
+	var succ := SessionKeeper.successor() if NetworkManager.is_in_session and multiplayer.is_server() else 0
+	var succ_name := NetworkManager.get_player_name(succ) if succ > 0 else ""
+	var handed: bool = await SessionKeeper.hand_over()
 	NetworkManager.leave_session()
 	_return_to_menu_ui()
-	main_menu.show_status(tr("Sitzung beendet."))
+	if handed:
+		main_menu.show_status(tr("Sitzung verlassen. %s hat die Welt übernommen, dein Spielstand ist gespeichert.") % succ_name)
+	else:
+		main_menu.show_status(tr("Sitzung beendet."))
 
 
 func _return_to_menu_ui() -> void:

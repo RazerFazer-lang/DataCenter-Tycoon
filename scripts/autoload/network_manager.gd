@@ -20,6 +20,8 @@ signal pings_updated
 signal lan_games_updated
 ## Bannliste des Hosts hat sich geändert.
 signal ban_list_changed
+## Status eines abgefragten Servers ist da oder ist weg (siehe query_server).
+signal server_status_updated(key: String)
 
 const DEFAULT_PORT := 7777
 const MAX_PLAYERS := 4
@@ -29,6 +31,10 @@ const AUTH_MAX_BYTES := 1024
 const PASSWORD_MAX_LEN := 32
 ## Abstand, in dem der Host die Ping-Werte an alle schickt.
 const PING_INTERVAL := 1.0
+## Ab hier warnt das HUD: Paketverlust in %, Ping in ms, Sekunden ohne Nachricht vom Host.
+const CONN_LOSS_WARN := 5.0
+const CONN_PING_WARN := 250
+const CONN_SILENT_WARN := 3.0
 ## Wartezeit zwischen Kick-Nachricht und Trennen, damit der Grund ankommt.
 const KICK_GRACE := 0.3
 ## LAN-Suche: UDP-Port, Sendeabstand, Ablaufzeit eines Eintrags, Paketkennung, Maximalgröße.
@@ -37,6 +43,12 @@ const DISCOVERY_INTERVAL := 1.0
 const DISCOVERY_TIMEOUT_MS := 3500
 const DISCOVERY_MAGIC := "DCT_LAN_1"
 const DISCOVERY_MAX_BYTES := 512
+## Lobby: Statusabfrage auf Spielport + 2 (Standard 7779).
+const STATUS_PORT_OFFSET := 2
+const STATUS_QUERY := "DCT_Q1"
+const STATUS_MAGIC := "DCT_STATUS_1"
+const STATUS_TIMEOUT_MS := 2500
+const STATUS_MAX_PER_10S := 20
 ## Ausweich-Ports für den Client, falls Windows keinen zufälligen Port mehr vergibt
 ## (unterhalb des Windows-Bereichs 49152–65535, den z. B. MSI Center komplett belegen kann).
 const CLIENT_PORT_FALLBACK := 38200
@@ -54,6 +66,7 @@ const RPC_SCRIPTS: Array[String] = [
 	"res://scripts/autoload/network_manager.gd",
 	"res://scripts/autoload/outdoor_manager.gd",
 	"res://scripts/autoload/pc_screen_state.gd",
+	"res://scripts/autoload/session_keeper.gd",
 	"res://scripts/autoload/technician_manager.gd",
 	"res://scripts/world/world_controller.gd",
 ]
@@ -88,11 +101,20 @@ var _joining: bool = false
 var _join_password: String = ""
 var _join_error: String = ""
 var _net_build: String = ""
+## Host: peer_id -> Schlüssel des Spielers für diese Welt (Baurechte, Wiederverbinden).
+var _peer_keys: Dictionary = {}
+## Host: gerade gekickte Spieler (bekommen keinen freigehaltenen Platz).
+var _kicking: Dictionary = {}
+## Host: Beitrittsreihenfolge (Host-Wechsel: wer am längsten dabei ist, übernimmt).
+var _join_seq: int = 0
 ## Nur für Tests: tut so, als vergäbe Windows keinen UDP-Port mehr.
 var test_no_udp_ports: bool = false
 
 ## peer_id -> Ping in ms (Host = 0). Wird vom Host verteilt.
 var player_pings: Dictionary = {}
+## peer_id -> Paketverlust in Prozent (vom Host gemessen).
+var player_loss: Dictionary = {}
+var _last_ping_sync_ms: int = 0
 var _ping_timer: Timer = null
 ## Grund, den der Host beim Kicken mitgeschickt hat.
 var _kick_reason: String = ""
@@ -112,6 +134,16 @@ var _lan_listener: PacketPeerUDP = null
 var _lan_broadcasts: Array[PacketPeerUDP] = []
 var _lan_broadcast_port: int = 0
 var _lan_broadcast_timer: Timer = null
+
+var _status_server: PacketPeerUDP = null
+var _status_hits: Dictionary = {}
+var _query_udp: PacketPeerUDP = null
+var _query_nonce: int = 0
+var _query_last_ms: int = 0
+var _query_sent: Dictionary = {}
+var _dns: Dictionary = {}
+## "ip:port" -> {state: wait | ok | offline, world, host, players, max, password, version, build, ping}
+var server_status: Dictionary = {}
 
 
 func _ready() -> void:
@@ -253,12 +285,16 @@ func _start_host_internal(player_name: String, port: int, loaded_state: Dictiona
 	multiplayer.multiplayer_peer = peer
 	is_in_session = true
 	is_dedicated = dedicated
+	# Auch ohne UPnP: Lobby-Status und Host-Wechsel brauchen den Port.
+	hosted_port = port
 	players.clear()
 
+	_join_seq = 0
 	var host_info := {
 		"name": local_player_name,
 		"color": PLAYER_COLORS[0],
 		"skin": SettingsManager.get_skin(),
+		"seq": 0,
 	}
 	if not dedicated:
 		players[1] = host_info
@@ -275,6 +311,8 @@ func _start_host_internal(player_name: String, port: int, loaded_state: Dictiona
 		GameState.load_from_save_data(loaded_state, save_id, safe_display)
 		hosted_world_name = safe_display
 	_start_lan_broadcast(port)
+	_start_status_server(port)
+	GameState.sync_build_rights()
 
 	players_changed.emit()
 	if not dedicated:
@@ -309,6 +347,10 @@ func join_game(ip: String, player_name: String, port: int = DEFAULT_PORT, passwo
 		connection_failed.emit(tr("Verbindung zu %s:%d fehlgeschlagen (Fehler %d).") % [clean_ip, port, err])
 		return err
 
+	# Antwortet der Host nicht, nach höchstens 10 s aufgeben (ENet wartet sonst bis zu 30 s).
+	var host_pkt := peer.get_peer(1)
+	if host_pkt != null:
+		host_pkt.set_timeout(32, SessionKeeper.PEER_TIMEOUT_MIN_MS, SessionKeeper.PEER_TIMEOUT_MAX_MS)
 	_joining = true
 	multiplayer.multiplayer_peer = peer
 	DisplayServer.window_set_title("DataCenter Tycoon Co-op [CLIENT - %s]" % local_player_name)
@@ -334,24 +376,63 @@ func free_udp_port() -> int:
 	return 0
 
 
+## Zeitlimit für die Verbindung zum Host (ENet-Standard bis 30 s). Nur auf Clients.
+func set_host_timeout(min_ms: int, max_ms: int) -> void:
+	var enet := multiplayer.multiplayer_peer as ENetMultiplayerPeer
+	if enet == null or multiplayer.is_server():
+		return
+	var pkt := enet.get_peer(1)
+	if pkt != null:
+		pkt.set_timeout(32, min_ms, max_ms)
+
+
+## Nur für Tests: Verbindung abreißen lassen, ohne den Host zu benachrichtigen (wie ein Kabelzug).
+func simulate_connection_loss() -> void:
+	if multiplayer.multiplayer_peer == null or multiplayer.is_server():
+		return
+	var enet := multiplayer.multiplayer_peer as ENetMultiplayerPeer
+	if enet != null and enet.host != null:
+		var pkt := enet.get_peer(1)
+		if pkt != null:
+			pkt.peer_disconnect_now()
+	multiplayer.multiplayer_peer.close()
+	multiplayer.multiplayer_peer = null
+	_on_server_disconnected()
+
+
+## Wartende Pakete sofort senden (vor dem Schließen, damit „Host geht“ noch ankommt).
+func flush_peer() -> void:
+	var enet := multiplayer.multiplayer_peer as ENetMultiplayerPeer
+	if enet != null and enet.host != null:
+		enet.host.flush()
+
+
 func leave_session() -> void:
 	if multiplayer.multiplayer_peer != null:
+		if multiplayer.multiplayer_peer.get_connection_status() == MultiplayerPeer.CONNECTION_CONNECTED and multiplayer.is_server():
+			SessionKeeper.announce_end()
 		multiplayer.multiplayer_peer.close()
 		multiplayer.multiplayer_peer = null
 	_stop_port_forward()
 	_auth_nonces.clear()
+	_peer_keys.clear()
 	_joining = false
 	players.clear()
 	player_pings.clear()
+	player_loss.clear()
+	_last_ping_sync_ms = 0
 	banned_ips.clear()
 	banned_names.clear()
 	SecurityGuard.clear_all_rate_limits()
 	_stop_lan_broadcast()
+	_stop_status_server()
 	stop_lan_discovery()
 	hosted_world_name = ""
 	is_in_session = false
 	is_dedicated = false
+	_kicking.clear()
 	GameState.clear_local_state()
+	SessionKeeper.on_session_left()
 	DisplayServer.window_set_title("DataCenter Tycoon Co-op")
 
 
@@ -385,6 +466,8 @@ func _upnp_worker(port: int) -> void:
 	if map_err != UPNP.UPNP_RESULT_SUCCESS:
 		_finish_port_forward.call_deferred(null, port, "", "Der Router hat die Portfreigabe abgelehnt (Code %d).", map_err)
 		return
+	# Statusabfrage für die Lobby (Spielport + 2). Klappt sie nicht, geht das Spiel trotzdem.
+	upnp.add_port_mapping(port + STATUS_PORT_OFFSET, port + STATUS_PORT_OFFSET, UPNP_DESCRIPTION + " Status", "UDP", 0)
 	_finish_port_forward.call_deferred(upnp, port, upnp.query_external_address(), "")
 
 
@@ -397,10 +480,11 @@ func _finish_port_forward(upnp: UPNP, port: int, ip: String, error_msg: String, 
 	if not is_in_session or port != hosted_port:
 		if upnp != null:
 			upnp.delete_port_mapping(port, "UDP")
+			upnp.delete_port_mapping(port + STATUS_PORT_OFFSET, "UDP")
 		return
 	if upnp == null:
 		var reason: String = tr(error_msg) % error_code if error_msg.contains("%d") else tr(error_msg)
-		port_forward_finished.emit(false, "", tr("%s Freunde außerhalb deines Netzwerks erreichen dich so nicht. Gib Port %d (UDP) im Router frei oder nutze Tailscale.") % [reason, port])
+		port_forward_finished.emit(false, "", tr("%s Freunde außerhalb deines Netzwerks erreichen dich so nicht. Gib Port %d (UDP) im Router frei. Wie es ohne Portfreigabe geht (Tailscale, Radmin), steht im Pausemenü unter „So erreichen dich Freunde“.") % [reason, port])
 		return
 	_upnp = upnp
 	var clean_ip := ip.strip_edges()
@@ -418,9 +502,45 @@ func _stop_port_forward() -> void:
 		_upnp_thread = null
 	if _upnp != null and hosted_port > 0:
 		_upnp.delete_port_mapping(hosted_port, "UDP")
+		_upnp.delete_port_mapping(hosted_port + STATUS_PORT_OFFSET, "UDP")
 	_upnp = null
 	hosted_port = 0
 	public_ip = ""
+
+
+## Über welche Adressen Freunde diesen PC erreichen: [{kind, ip}], kind = lan | tailscale | radmin | hamachi | public.
+## Ohne Internetdienst bleibt das der Weg ohne Portfreigabe: gleiches LAN oder ein VPN wie Tailscale/Radmin.
+func reach_addresses() -> Array:
+	var out: Array = []
+	var seen := {}
+	for ip in IP.get_local_addresses():
+		var kind := address_kind(ip)
+		if kind != "" and not seen.has(ip):
+			seen[ip] = true
+			out.append({"kind": kind, "ip": ip})
+	if not public_ip.is_empty() and not seen.has(public_ip):
+		out.append({"kind": "public", "ip": public_ip})
+	var order := {"lan": 0, "tailscale": 1, "radmin": 2, "hamachi": 3, "public": 4}
+	out.sort_custom(func(a: Dictionary, b: Dictionary) -> bool: return int(order[a["kind"]]) < int(order[b["kind"]]))
+	return out
+
+
+## Art einer lokalen IPv4-Adresse (leer = uninteressant, z. B. 127.0.0.1, 169.254.x, IPv6).
+static func address_kind(ip: String) -> String:
+	var p := ip.split(".")
+	if p.size() != 4:
+		return ""
+	var a := p[0].to_int()
+	var b := p[1].to_int()
+	if a == 100 and b >= 64 and b <= 127:
+		return "tailscale"
+	if a == 26:
+		return "radmin"
+	if a == 25:
+		return "hamachi"
+	if a == 10 or (a == 172 and b >= 16 and b <= 31) or (a == 192 and b == 168):
+		return "lan"
+	return ""
 
 
 func _is_private_or_cgnat(ip: String) -> bool:
@@ -452,6 +572,7 @@ func _on_peer_authenticating(peer_id: int) -> void:
 		"t": "hello",
 		"v": UIStyle.game_version(),
 		"b": net_build_id(),
+		"w": GameState.world_uid,
 		"pw": not host_password.is_empty(),
 		"nonce": nonce,
 	})
@@ -481,6 +602,7 @@ func _handle_client_login(peer_id: int, msg: Dictionary) -> void:
 		# Nicht bestätigen: Der Client trennt sich selbst, sonst greift AUTH_TIMEOUT.
 		_send_auth_msg(peer_id, {"t": "result", "ok": false, "reason": reason})
 		return
+	_peer_keys[peer_id] = str(msg.get("k", "")).left(64)
 	_send_auth_msg(peer_id, {"t": "result", "ok": true})
 	(multiplayer as SceneMultiplayer).complete_auth(peer_id)
 
@@ -523,6 +645,7 @@ func _handle_host_reply(msg: Dictionary) -> void:
 				"t": "login",
 				"v": UIStyle.game_version(),
 				"b": net_build_id(),
+				"k": world_key(str(msg.get("w", ""))),
 				"proof": _password_proof(str(msg.get("nonce", "")), _join_password),
 			})
 		"result":
@@ -533,11 +656,24 @@ func _handle_host_reply(msg: Dictionary) -> void:
 				_fail_join.call_deferred(_join_error)
 
 
+func is_joining() -> bool:
+	return _joining
+
+
+## Hängenden Beitritt abbrechen (SessionKeeper: Versuch dauert zu lange).
+func abort_join(reason: String) -> void:
+	_fail_join(reason)
+
+
 func _fail_join(reason: String) -> void:
 	if not _joining:
 		return
 	_joining = false
+	# Falsche Version, Prüfsumme, Passwort oder Bann: Weiterversuchen bringt nichts.
+	var permanent := not _join_error.is_empty()
 	leave_session()
+	if SessionKeeper.on_join_failed(reason, permanent):
+		return
 	connection_failed.emit(reason)
 
 
@@ -589,6 +725,16 @@ func net_build_id() -> String:
 		parts.append(path.get_file() + ":" + "|".join(rows))
 	_net_build = "\n".join(parts).sha256_text().left(10)
 	return _net_build
+
+
+## Schlüssel dieses Spielers für eine Welt. Je Welt verschieden: Ein Host kann ihn nirgends sonst benutzen.
+## Mit Name: Zwei Fenster auf einem PC (Launcher-Test) zählen so als zwei Spieler.
+func world_key(world_uid: String) -> String:
+	return ("%s:%s:%s" % [SettingsManager.get_client_id(), world_uid, local_player_name.to_lower()]).sha256_text().left(32)
+
+
+func peer_key(peer_id: int) -> String:
+	return str(_peer_keys.get(peer_id, ""))
 
 
 func _password_proof(nonce: String, password: String) -> String:
@@ -665,6 +811,18 @@ func _rpc_chat_notice(notice_text: String) -> void:
 	chat_message_received.emit("System", Color(0.95, 0.72, 0.25), tr(notice_text), ts)
 
 
+## Serverkonsole: Nachricht als „Server“ an alle. Gibt den gefilterten Text zurück (leer = nichts gesendet).
+func server_say(raw_text: String) -> String:
+	if not is_in_session or multiplayer.multiplayer_peer == null or not multiplayer.is_server():
+		return ""
+	var clean := SecurityGuard.filter_chat_message(raw_text.strip_edges().left(180))
+	if clean.is_empty():
+		return ""
+	var t := Time.get_time_dict_from_system()
+	_rpc_broadcast_chat.rpc("Server", Color(0.95, 0.72, 0.25), clean, "%02d:%02d" % [int(t.get("hour", 0)), int(t.get("minute", 0))])
+	return clean
+
+
 @rpc("authority", "call_local", "reliable")
 func _rpc_broadcast_chat(sender_name: String, sender_color: Color, message: String, timestamp: String) -> void:
 	SfxManager.play("chat", -12.0)
@@ -684,19 +842,61 @@ func _on_ping_tick() -> void:
 	if enet == null:
 		return
 	var pings := {1: 0}
+	var losses := {1: 0.0}
 	for pid in multiplayer.get_peers():
 		var pkt := enet.get_peer(pid)
 		if pkt != null:
 			pings[pid] = int(pkt.get_statistic(ENetPacketPeer.PEER_ROUND_TRIP_TIME))
-	_rpc_sync_pings.rpc(pings)
+			losses[pid] = snappedf(_loss_pct(pkt), 0.1)
+	_rpc_sync_pings.rpc(pings, losses)
+
+
+## Paketverlust einer Verbindung in Prozent (ENet rechnet in 1/65536).
+static func _loss_pct(pkt: ENetPacketPeer) -> float:
+	return clampf(float(pkt.get_statistic(ENetPacketPeer.PEER_PACKET_LOSS)) / float(ENetPacketPeer.PACKET_LOSS_SCALE) * 100.0, 0.0, 100.0)
 
 
 @rpc("authority", "call_local", "unreliable")
-func _rpc_sync_pings(pings: Dictionary) -> void:
+func _rpc_sync_pings(pings: Dictionary, losses: Dictionary = {}) -> void:
 	player_pings.clear()
+	player_loss.clear()
 	for pid in pings.keys():
 		player_pings[int(pid)] = int(pings[pid])
+		player_loss[int(pid)] = float(losses.get(pid, 0.0))
+	_last_ping_sync_ms = Time.get_ticks_msec()
 	pings_updated.emit()
+
+
+func get_player_loss(peer_id: int) -> float:
+	return float(player_loss.get(peer_id, 0.0))
+
+
+## Zustand der eigenen Verbindung zum Host: {rtt, loss, silent}. silent = Sekunden ohne Lebenszeichen vom Host.
+## Auf dem Host selbst immer alles gut.
+func own_connection() -> Dictionary:
+	var out := {"rtt": 0, "loss": 0.0, "silent": 0.0}
+	if not is_in_session or multiplayer.multiplayer_peer == null or multiplayer.is_server():
+		return out
+	var enet := multiplayer.multiplayer_peer as ENetMultiplayerPeer
+	var pkt: ENetPacketPeer = enet.get_peer(1) if enet != null else null
+	if pkt != null:
+		out["rtt"] = int(pkt.get_statistic(ENetPacketPeer.PEER_ROUND_TRIP_TIME))
+		out["loss"] = _loss_pct(pkt)
+	if _last_ping_sync_ms > 0:
+		out["silent"] = float(Time.get_ticks_msec() - _last_ping_sync_ms) / 1000.0
+	return out
+
+
+## Text für die Warnung im HUD, leer = Verbindung in Ordnung.
+func connection_warning() -> String:
+	var c := own_connection()
+	if float(c["silent"]) >= CONN_SILENT_WARN:
+		return tr("Host antwortet nicht (seit %d s)") % int(c["silent"])
+	if float(c["loss"]) >= CONN_LOSS_WARN:
+		return tr("Verbindung instabil: %d %% Paketverlust") % int(roundf(float(c["loss"])))
+	if int(c["rtt"]) >= CONN_PING_WARN:
+		return tr("Hoher Ping zum Host: %d ms") % int(c["rtt"])
+	return ""
 
 
 ## Nur der Host kann kicken. Der Host selbst (peer 1) ist ausgenommen.
@@ -705,6 +905,7 @@ func kick_player(peer_id: int, reason: String = "Du wurdest vom Host aus der Sit
 		return
 	if not multiplayer.get_peers().has(peer_id):
 		return
+	_kicking[peer_id] = true
 	_rpc_kicked.rpc_id(peer_id, reason.left(200))
 	get_tree().create_timer(KICK_GRACE).timeout.connect(_disconnect_kicked.bind(peer_id))
 
@@ -828,16 +1029,8 @@ func _stop_lan_broadcast() -> void:
 func _on_lan_broadcast_tick() -> void:
 	if _lan_broadcasts.is_empty() or not is_in_session or multiplayer.multiplayer_peer == null or not multiplayer.is_server():
 		return
-	var info := {
-		"magic": DISCOVERY_MAGIC,
-		"version": UIStyle.game_version(),
-		"world": hosted_world_name.left(40),
-		"host": local_player_name.left(18),
-		"port": _lan_broadcast_port,
-		"players": players.size(),
-		"max": MAX_PLAYERS,
-		"password": not host_password.is_empty(),
-	}
+	var info := _status_info(DISCOVERY_MAGIC)
+	info["port"] = _lan_broadcast_port
 	var packet := JSON.stringify(info).to_utf8_buffer()
 	for udp in _lan_broadcasts:
 		# Fehler einzelner Adapter (z. B. getrennt) ignorieren, die anderen senden weiter.
@@ -866,15 +1059,19 @@ func stop_lan_discovery() -> void:
 	if _lan_listener != null:
 		_lan_listener.close()
 		_lan_listener = null
-	set_process(false)
 	if not lan_games.is_empty():
 		lan_games.clear()
 		lan_games_updated.emit()
 
 
 func _process(_delta: float) -> void:
+	if _status_server != null:
+		_serve_status()
+	if _query_udp != null:
+		_read_status_replies()
 	if _lan_listener == null:
-		set_process(false)
+		if _status_server == null and _query_udp == null:
+			set_process(false)
 		return
 	var changed := false
 	var now := Time.get_ticks_msec()
@@ -926,9 +1123,172 @@ func _parse_lan_packet(pkt: PackedByteArray, ip: String) -> Dictionary:
 		"max": clampi(_lan_num(d.get("max"), MAX_PLAYERS), 1, 16),
 		"password": d.get("password", false) == true,
 		"version": str(d.get("version", "")).left(16),
+		"build": str(d.get("build", "")).left(16),
 	}
 	game["sig"] = JSON.stringify(game)
 	return game
+
+
+# --- Lobby ohne Internetdienst: Status-Abfrage per UDP ------------------------
+# Der Host antwortet auf Spielport + STATUS_PORT_OFFSET auf "DCT_Q1:<Nonce>" mit Welt, Spielern,
+# Passwort, Version und Prüfsumme. Spiel und Launcher fragen so gespeicherte Server und das LAN ab
+# (Launcher per Broadcast an Port 7779). Die Antwort ist klein und je IP gedrosselt.
+
+func _status_info(magic: String) -> Dictionary:
+	return {
+		"magic": magic,
+		"version": UIStyle.game_version(),
+		"build": net_build_id(),
+		"world": hosted_world_name.left(40),
+		"host": local_player_name.left(18),
+		"port": hosted_port if hosted_port > 0 else _lan_broadcast_port,
+		"players": players.size(),
+		"max": MAX_PLAYERS,
+		"password": not host_password.is_empty(),
+		"dedicated": is_dedicated,
+	}
+
+
+func _start_status_server(port: int) -> void:
+	_stop_status_server()
+	var udp := PacketPeerUDP.new()
+	var err := udp.bind(port + STATUS_PORT_OFFSET)
+	if err != OK:
+		push_warning("Statusabfrage: Port %d belegt (Fehler %d), die Lobby zeigt diesen Server dann ohne Details." % [port + STATUS_PORT_OFFSET, err])
+		return
+	_status_server = udp
+	set_process(true)
+
+
+func _stop_status_server() -> void:
+	if _status_server != null:
+		_status_server.close()
+	_status_server = null
+	_status_hits.clear()
+
+
+func is_status_server_running() -> bool:
+	return _status_server != null
+
+
+func _serve_status() -> void:
+	var budget := 32
+	var now := Time.get_ticks_msec()
+	while budget > 0 and _status_server.get_available_packet_count() > 0:
+		budget -= 1
+		var pkt := _status_server.get_packet()
+		var ip := _status_server.get_packet_ip()
+		var from_port := _status_server.get_packet_port()
+		if pkt.size() > 64 or ip.is_empty():
+			continue
+		var s := pkt.get_string_from_utf8()
+		if not s.begins_with(STATUS_QUERY):
+			continue
+		var hit: Array = _status_hits.get(ip, [now, 0])
+		if now - int(hit[0]) > 10000:
+			hit = [now, 0]
+		hit[1] = int(hit[1]) + 1
+		_status_hits[ip] = hit
+		if int(hit[1]) > STATUS_MAX_PER_10S:
+			continue
+		var reply := _status_info(STATUS_MAGIC)
+		reply["nonce"] = s.get_slice(":", 1).left(16)
+		_status_server.set_dest_address(ip, from_port)
+		_status_server.put_packet(JSON.stringify(reply).to_utf8_buffer())
+	if _status_hits.size() > 512:
+		_status_hits.clear()
+
+
+## Fragt einen Server nach seinem Status. Das Ergebnis kommt über server_status_updated("ip:port").
+func query_server(ip: String, port: int) -> void:
+	var host := ip.strip_edges()
+	if host.is_empty() or port < 1 or port > 65535 - STATUS_PORT_OFFSET:
+		return
+	if _query_udp == null:
+		_query_udp = PacketPeerUDP.new()
+		if _query_udp.bind(0) != OK:
+			_query_udp = null
+			return
+		_query_udp.set_broadcast_enabled(true)
+	var key := "%s:%d" % [host, port]
+	if not server_status.has(key):
+		server_status[key] = {"state": "wait"}
+	var addr := host
+	if not host.is_valid_ip_address():
+		# Namen (z. B. von DynDNS) im Hintergrund auflösen, beim nächsten Abfragen ist er da.
+		if not _dns.has(host):
+			_dns[host] = IP.resolve_hostname_queue_item(host, IP.TYPE_IPV4)
+			return
+		var qid: int = _dns[host]
+		var rs := IP.get_resolve_item_status(qid)
+		if rs == IP.RESOLVER_STATUS_ERROR or rs == IP.RESOLVER_STATUS_NONE:
+			IP.erase_resolve_item(qid)
+			_dns.erase(host)
+			_set_status(key, {"state": "offline"})
+			return
+		if rs != IP.RESOLVER_STATUS_DONE:
+			return
+		addr = IP.get_resolve_item_address(qid)
+	_query_nonce += 1
+	var nonce := str(_query_nonce)
+	_query_sent[nonce] = {"key": key, "t": Time.get_ticks_msec()}
+	_query_last_ms = Time.get_ticks_msec()
+	_query_udp.set_dest_address(addr, port + STATUS_PORT_OFFSET)
+	_query_udp.put_packet(("%s:%s" % [STATUS_QUERY, nonce]).to_utf8_buffer())
+	set_process(true)
+
+
+func get_server_status(ip: String, port: int) -> Dictionary:
+	return server_status.get("%s:%d" % [ip.strip_edges(), port], {})
+
+
+func _set_status(key: String, st: Dictionary) -> void:
+	server_status[key] = st
+	server_status_updated.emit(key)
+
+
+func _read_status_replies() -> void:
+	var now := Time.get_ticks_msec()
+	var budget := 32
+	while budget > 0 and _query_udp.get_available_packet_count() > 0:
+		budget -= 1
+		var pkt := _query_udp.get_packet()
+		var from_ip := _query_udp.get_packet_ip()
+		if pkt.size() > DISCOVERY_MAX_BYTES:
+			continue
+		var parsed: Variant = JSON.parse_string(pkt.get_string_from_utf8())
+		if not (parsed is Dictionary) or str((parsed as Dictionary).get("magic", "")) != STATUS_MAGIC:
+			continue
+		var d: Dictionary = (parsed as Dictionary).duplicate()
+		var nonce := str(d.get("nonce", ""))
+		if not _query_sent.has(nonce):
+			continue
+		var sent: Dictionary = _query_sent[nonce]
+		_query_sent.erase(nonce)
+		d["magic"] = DISCOVERY_MAGIC
+		var game := _parse_lan_packet(JSON.stringify(d).to_utf8_buffer(), from_ip)
+		if game.is_empty():
+			continue
+		game["state"] = "ok"
+		game["ping"] = now - int(sent["t"])
+		game["seen"] = now
+		_set_status(str(sent["key"]), game)
+	for nonce in _query_sent.keys():
+		var q: Dictionary = _query_sent[nonce]
+		if now - int(q["t"]) < STATUS_TIMEOUT_MS:
+			continue
+		_query_sent.erase(nonce)
+		var st: Dictionary = server_status.get(str(q["key"]), {})
+		# Kam inzwischen eine Antwort auf eine neuere Anfrage, bleibt der Server erreichbar.
+		if int(st.get("seen", 0)) < int(q["t"]):
+			_set_status(str(q["key"]), {"state": "offline"})
+	# Nach 30 s ohne Anfrage den Abfrage-Socket wieder schließen.
+	if _query_sent.is_empty() and now - _query_last_ms > 30000:
+		_query_udp.close()
+		_query_udp = null
+		for host in _dns.keys():
+			IP.erase_resolve_item(int(_dns[host]))
+		_dns.clear()
 
 
 func can_reconnect() -> bool:
@@ -941,21 +1301,44 @@ func reconnect() -> Error:
 	return join_game(str(_last_join["ip"]), local_player_name, int(_last_join["port"]), str(_last_join["password"]))
 
 
-func _on_peer_connected(_peer_id: int) -> void:
-	pass
+func _on_peer_connected(peer_id: int) -> void:
+	# Host: Abbrüche nach höchstens 15 s erkennen (ENet-Standard 30 s), dann hält SessionKeeper den Platz frei.
+	if multiplayer.is_server():
+		var enet := multiplayer.multiplayer_peer as ENetMultiplayerPeer
+		var pkt: ENetPacketPeer = enet.get_peer(peer_id) if enet != null else null
+		if pkt != null:
+			pkt.set_timeout(32, 5000, 15000)
+
+
+## Host: Ein Spieler meldet sich neu an, während seine alte Verbindung noch hängt. Die alte sofort
+## abräumen (wie ein Abbruch), damit er nicht doppelt da ist und seinen Platz zurückbekommt.
+func drop_stale_peer(peer_id: int) -> void:
+	if not multiplayer.is_server() or not players.has(peer_id):
+		return
+	_on_peer_disconnected(peer_id)
+	var enet := multiplayer.multiplayer_peer as ENetMultiplayerPeer
+	if enet != null and multiplayer.get_peers().has(peer_id):
+		enet.disconnect_peer(peer_id, true)
 
 
 func _on_peer_disconnected(peer_id: int) -> void:
 	if not multiplayer.is_server():
 		return
 	SecurityGuard.clear_peer(peer_id)
-	GameState.handle_player_disconnect(peer_id)
-	_rpc_remove_player.rpc(peer_id)
+	# Erst die letzte Stelle holen, on_peer_left vergisst sie.
+	var drop := SessionKeeper.drop_pos(peer_id)
+	SessionKeeper.on_peer_left(peer_id, _kicking.has(peer_id))
+	GameState.handle_player_disconnect(peer_id, drop)
+	_peer_keys.erase(peer_id)
+	_kicking.erase(peer_id)
+	if players.has(peer_id):
+		_rpc_remove_player.rpc(peer_id)
 
 
 func _on_connected_to_server() -> void:
 	_joining = false
 	is_in_session = true
+	_last_ping_sync_ms = Time.get_ticks_msec()
 	_rpc_register_player.rpc_id(1, local_player_name, SettingsManager.get_skin())
 	connection_succeeded.emit()
 
@@ -967,6 +1350,9 @@ func _on_connection_failed() -> void:
 func _on_server_disconnected() -> void:
 	if _joining:
 		_fail_join(_join_error if not _join_error.is_empty() else tr("Der Host hat die Verbindung bei der Anmeldung getrennt."))
+		return
+	# Unerwarteter Abbruch: SessionKeeper verbindet neu oder wechselt den Host.
+	if SessionKeeper.on_server_lost(not _kick_reason.is_empty()):
 		return
 	leave_session()
 	var reason := tr(_kick_reason) if not _kick_reason.is_empty() else tr("Der Host hat die Sitzung beendet.")
@@ -1018,16 +1404,19 @@ func _rpc_register_player(player_name: String, skin: Dictionary) -> void:
 	if is_ip_banned(_get_peer_ip(peer_id)) or is_name_banned(player_name):
 		kick_player(peer_id, "Du wurdest vom Host aus dieser Sitzung gebannt.")
 		return
+	SessionKeeper.drop_stale_for(peer_id)
 	var existing_names: Array = []
 	for p_info in players.values():
 		if p_info is Dictionary:
 			existing_names.append(str(p_info.get("name", "")))
 	var color_idx := players.size() % PLAYER_COLORS.size()
 	var clean_name := SecurityGuard.sanitize_player_name(player_name, existing_names, false, "Techniker %d" % peer_id)
+	_join_seq += 1
 	var info := {
 		"name": clean_name,
 		"color": PLAYER_COLORS[color_idx],
 		"skin": SettingsManager.sanitize_skin(skin),
+		"seq": _join_seq,
 	}
 	players[peer_id] = info
 	# Der Spieler steht jetzt schon in players. _rpc_add_player hält ihn deshalb
@@ -1039,6 +1428,8 @@ func _rpc_register_player(player_name: String, skin: Dictionary) -> void:
 	GameState.send_full_snapshot_to_peer(peer_id)
 	_rpc_add_player.rpc(peer_id, info)
 	GameState.post_event_f("%s ist dem Rechenzentrum beigetreten.", [clean_name], "info")
+	GameState.sync_build_rights()
+	SessionKeeper.on_peer_registered(peer_id)
 
 
 @rpc("authority", "call_remote", "reliable")

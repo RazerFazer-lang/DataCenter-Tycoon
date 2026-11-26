@@ -85,6 +85,8 @@ var _own_shadow_check: CheckButton
 var _host_password_input: LineEdit
 var _load_password_input: LineEdit
 var _join_password_input: LineEdit
+var _server_list: VBoxContainer
+var _server_timer: Timer
 
 
 func _ready() -> void:
@@ -95,6 +97,12 @@ func _ready() -> void:
 	NetworkManager.connection_failed.connect(_on_connection_failed)
 	NetworkManager.disconnected_from_session.connect(_on_disconnected)
 	NetworkManager.lan_games_updated.connect(_rebuild_lan_list)
+	NetworkManager.server_status_updated.connect(_on_server_status)
+	_server_timer = Timer.new()
+	_server_timer.wait_time = SERVER_POLL
+	_server_timer.autostart = true
+	_server_timer.timeout.connect(_poll_servers)
+	add_child(_server_timer)
 	SettingsManager.key_bindings_changed.connect(_on_key_bindings_changed)
 	visibility_changed.connect(_update_lan_scan)
 	_update_lan_scan()
@@ -236,6 +244,8 @@ func _switch_page(page_id: String, animate: bool = true) -> void:
 		_rebuild_saves_list()
 	elif page_id == "join_game":
 		_rebuild_recent_ips()
+		_rebuild_server_list()
+		_poll_servers()
 	elif page_id == "settings":
 		_sync_from_settings()
 	if _skin_editor_panel != null:
@@ -524,6 +534,130 @@ func _rebuild_recent_ips() -> void:
 			_join_ip_input.text = cap_ip
 		)
 		_recent_ips_box.add_child(btn)
+
+
+## Lobby: gespeicherte Server mit Live-Status (Welt, Spieler, Passwort, Ping). Ohne Internetdienst:
+## Das Spiel fragt die Server selbst per UDP ab (NetworkManager.query_server), alle SERVER_POLL Sekunden.
+const SERVER_POLL := 3.0
+
+
+func _poll_servers() -> void:
+	if not is_visible_in_tree() or NetworkManager.is_in_session or _active_page != "join_game":
+		return
+	for s_v in SettingsManager.saved_servers:
+		var s: Dictionary = s_v
+		NetworkManager.query_server(str(s["ip"]), int(s["port"]))
+
+
+func _on_server_status(_key: String) -> void:
+	if is_visible_in_tree() and _active_page == "join_game":
+		_rebuild_server_list()
+
+
+func _save_current_server() -> void:
+	var ip := _join_ip_input.text.strip_edges()
+	var port := _parse_port(_join_port_input.text)
+	if ip.is_empty():
+		show_status(tr("Erst eine Adresse eintragen, dann speichern."), UIStyle.COL_AMBER)
+		return
+	var st: Dictionary = NetworkManager.get_server_status(ip, port)
+	var nm := str(st.get("world", "")) if str(st.get("state", "")) == "ok" else ""
+	SettingsManager.add_saved_server(nm if not nm.is_empty() else ip, ip, port)
+	NetworkManager.query_server(ip, port)
+	_rebuild_server_list()
+	show_status(tr("Server gespeichert. Die Liste zeigt jetzt, ob er läuft und wer drin ist."), UIStyle.COL_GREEN)
+
+
+func _rebuild_server_list() -> void:
+	if _server_list == null:
+		return
+	for c in _server_list.get_children():
+		c.queue_free()
+	if SettingsManager.saved_servers.is_empty():
+		var none := Label.new()
+		none.text = tr("Noch keine Server gespeichert. Adresse eintragen und „Speichern“ klicken.")
+		none.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		UIStyle.style_label(none, 12, UIStyle.COL_TEXT_SUB)
+		_server_list.add_child(none)
+		return
+	var my_version := UIStyle.game_version()
+	for s_v in SettingsManager.saved_servers:
+		var s: Dictionary = s_v
+		var ip := str(s["ip"])
+		var port := int(s["port"])
+		var st: Dictionary = NetworkManager.get_server_status(ip, port)
+		var state := str(st.get("state", "wait"))
+		var row := HBoxContainer.new()
+		row.add_theme_constant_override("separation", 8)
+		_server_list.add_child(row)
+		var dot := ColorRect.new()
+		dot.custom_minimum_size = Vector2(9, 9)
+		dot.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+		row.add_child(dot)
+		var info := Label.new()
+		info.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		info.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+		info.tooltip_text = "%s:%d" % [ip, port]
+		UIStyle.style_label(info, 13, UIStyle.COL_TEXT_MAIN)
+		row.add_child(info)
+		var can_join := true
+		var needs_pw := false
+		var text := str(s.get("name", ip))
+		match state:
+			"ok":
+				var players := int(st.get("players", 0))
+				var max_players := int(st.get("max", NetworkManager.MAX_PLAYERS))
+				needs_pw = bool(st.get("password", false))
+				text += "  ·  %s  ·  %d/%d" % [str(st.get("world", "")), players, max_players]
+				if needs_pw:
+					text += "  ·  🔒"
+				text += "  ·  %d ms" % int(st.get("ping", 0))
+				dot.color = UIStyle.COL_GREEN
+				if str(st.get("version", "")) != my_version:
+					text += "  ·  " + tr("Version %s") % str(st.get("version", "?"))
+					dot.color = UIStyle.COL_AMBER
+					can_join = false
+				elif str(st.get("build", "")) != "" and str(st.get("build", "")) != NetworkManager.net_build_id():
+					text += "  ·  " + tr("anderer Programmstand")
+					dot.color = UIStyle.COL_AMBER
+					can_join = false
+				elif players >= max_players:
+					text += "  ·  " + tr("voll")
+					dot.color = UIStyle.COL_AMBER
+					can_join = false
+			"offline":
+				text += "  ·  " + tr("nicht erreichbar")
+				dot.color = UIStyle.COL_RED
+			_:
+				text += "  ·  " + tr("frage an …")
+				dot.color = UIStyle.COL_TEXT_SUB
+		info.text = text
+		var join := Button.new()
+		join.text = tr("BEITRETEN")
+		join.custom_minimum_size = Vector2(104, 30)
+		join.disabled = not can_join
+		UIStyle.style_button(join, Color(0.16, 0.24, 0.32, 0.97), UIStyle.COL_BLUE)
+		join.pressed.connect(func() -> void:
+			SfxManager.play("click", -10.0)
+			_join_ip_input.text = ip
+			_join_port_input.text = str(port)
+			if needs_pw and _join_password_input.text.strip_edges().is_empty():
+				_join_password_input.grab_focus()
+				show_status(tr("Diese Welt hat ein Passwort. Trag es ein und klicke dann „Mit Host verbinden“."), UIStyle.COL_AMBER)
+				return
+			_on_join_pressed()
+		)
+		row.add_child(join)
+		var del := Button.new()
+		del.text = "✕"
+		del.tooltip_text = tr("Aus der Liste entfernen")
+		del.custom_minimum_size = Vector2(32, 30)
+		UIStyle.style_button(del, Color(0.14, 0.14, 0.16), UIStyle.COL_TEXT_SUB)
+		del.pressed.connect(func() -> void:
+			SettingsManager.remove_saved_server(ip, port)
+			_rebuild_server_list()
+		)
+		row.add_child(del)
 
 
 ## LAN-Suche läuft nur, solange das Hauptmenü sichtbar ist und keine Sitzung läuft.
@@ -1078,8 +1212,12 @@ func _build_load_game_page() -> Control:
 
 
 func _build_join_game_page() -> Control:
+	var scroll := ScrollContainer.new()
+	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
 	var v := VBoxContainer.new()
+	v.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	v.add_theme_constant_override("separation", 10)
+	scroll.add_child(v)
 
 	v.add_child(_page_heading("CO-OP SITZUNG BEITRETEN", "Wähle ein Spiel aus deinem LAN oder trage die IP-Adresse deines Hosts ein (Radmin VPN / Tailscale)."))
 
@@ -1108,6 +1246,14 @@ func _build_join_game_page() -> Control:
 	_style_line_edit(_join_port_input)
 	row.add_child(_join_port_input)
 
+	var save_btn := Button.new()
+	save_btn.text = tr("★ SPEICHERN")
+	save_btn.tooltip_text = tr("Adresse in die Server-Liste aufnehmen")
+	save_btn.custom_minimum_size = Vector2(118, 0)
+	UIStyle.style_button(save_btn, Color(0.14, 0.14, 0.16), UIStyle.COL_GOLD_TEXT)
+	save_btn.pressed.connect(_save_current_server)
+	row.add_child(save_btn)
+
 	v.add_child(_field_label("Passwort (nur falls der Host eins gesetzt hat)"))
 	_join_password_input = _make_password_input("leer lassen, wenn die Welt kein Passwort hat")
 	v.add_child(_join_password_input)
@@ -1116,6 +1262,12 @@ func _build_join_game_page() -> Control:
 	_recent_ips_box = HBoxContainer.new()
 	_recent_ips_box.add_theme_constant_override("separation", 6)
 	v.add_child(_recent_ips_box)
+
+	v.add_child(_field_label("Gespeicherte Server (Status wird alle 3 s abgefragt)"))
+	_server_list = VBoxContainer.new()
+	_server_list.add_theme_constant_override("separation", 6)
+	v.add_child(_server_list)
+	_rebuild_server_list()
 
 	v.add_child(_field_label("Spiele im lokalen Netzwerk (Klicken zum Einfügen)"))
 	_lan_list = VBoxContainer.new()
@@ -1135,7 +1287,7 @@ func _build_join_game_page() -> Control:
 	_join_btn.add_theme_font_size_override("font_size", 16)
 	_join_btn.pressed.connect(_on_join_pressed)
 	v.add_child(_join_btn)
-	return v
+	return scroll
 
 
 func _build_settings_page() -> Control:

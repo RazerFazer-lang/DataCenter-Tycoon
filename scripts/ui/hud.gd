@@ -158,6 +158,10 @@ func _ready() -> void:
 	GameState.van_updated.connect(_refresh_van_badge)
 	NetworkManager.players_changed.connect(_refresh_crew)
 	NetworkManager.pings_updated.connect(_refresh_crew)
+	GameState.build_rights_changed.connect(func():
+		_update_net_warn()
+		if _pause_overlay != null and _pause_overlay.visible:
+			_refresh_pause_players())
 	NetworkManager.pings_updated.connect(_update_pause_pings)
 	NetworkManager.players_changed.connect(func() -> void:
 		if _pause_overlay != null and _pause_overlay.visible:
@@ -184,6 +188,9 @@ func set_pause_visible(show_pause: bool) -> void:
 		var coop := NetworkManager.players.size() > 1 or not multiplayer.is_server()
 		_pause_runs_lbl.text = tr("Co-op: Die Welt läuft für alle weiter, auch während dieses Menü offen ist.") if coop \
 			else tr("Die Spielzeit läuft weiter, auch während dieses Menü offen ist.")
+		var succ := SessionKeeper.successor()
+		if is_host and succ > 0:
+			_pause_runs_lbl.text += "\n" + tr("Gehst du, übernimmt %s die Welt.") % NetworkManager.get_player_name(succ)
 		_save_section.visible = is_host
 		_pause_admin_btn.visible = AdminManager.is_local_admin() or AdminManager.login_available
 		_refresh_pause_players()
@@ -237,6 +244,11 @@ func _process(delta: float) -> void:
 	if not visible:
 		return
 	_blink_t += delta
+	_net_warn_accum += delta
+	if _net_warn_accum >= 1.0:
+		_net_warn_accum = 0.0
+		if _crew_panel != null and _crew_panel.visible:
+			_update_net_warn()
 
 	_display_money = lerpf(_display_money, GameState.money, clampf(delta * 9.0, 0.0, 1.0))
 	if absf(_display_money - GameState.money) < 0.6:
@@ -313,6 +325,9 @@ static func _set_font_col(lbl: Control, col: Color) -> void:
 var _checklist_sig: Array = []
 var _crew_sig: Array = []
 var _crew_ping_lbls: Dictionary = {}
+var _net_warn_lbl: Label
+var _net_warn_accum: float = 0.0
+var _build_lbl: Label
 
 
 func _refresh_stats() -> void:
@@ -566,6 +581,7 @@ func _refresh_crew() -> void:
 		_crew_panel.visible = false
 		return
 	_crew_panel.visible = true
+	_update_net_warn()
 	# Gleiche Leute wie beim letzten Mal: nur die Ping-Anzeigen auffrischen.
 	var sig: Array = []
 	for pid0 in NetworkManager.players.keys():
@@ -576,11 +592,7 @@ func _refresh_crew() -> void:
 			var pl: Label = _crew_ping_lbls[pid1]
 			if not is_instance_valid(pl):
 				continue
-			var p1 := NetworkManager.get_player_ping(int(pid1))
-			pl.visible = p1 >= 0
-			if p1 >= 0:
-				pl.text = "%d ms" % p1
-				_set_font_col(pl, Color(1.0, 0.42, 0.38) if p1 > 150 else (Color(0.95, 0.85, 0.35) if p1 > 80 else Color(0.45, 0.85, 0.50)))
+			_show_ping(pl, int(pid1))
 		return
 	_crew_sig = sig
 	_crew_ping_lbls.clear()
@@ -596,7 +608,7 @@ func _refresh_crew() -> void:
 	UIStyle.style_label(title, 11, UIStyle.COL_GOLD_TEXT, _display_font)
 	head.add_child(title)
 	var count := Label.new()
-	count.text = "%d / 4" % NetworkManager.players.size()
+	count.text = "%d / %d" % [NetworkManager.players.size(), NetworkManager.MAX_PLAYERS]
 	UIStyle.style_label(count, 11, UIStyle.COL_TEXT_SUB)
 	head.add_child(count)
 
@@ -621,25 +633,101 @@ func _refresh_crew() -> void:
 		UIStyle.style_label(name_lbl, 13, UIStyle.COL_TEXT_MAIN)
 		row.add_child(name_lbl)
 
-		var ping := NetworkManager.get_player_ping(int(pid))
 		if int(pid) != 1:
 			var ping_lbl := Label.new()
-			ping_lbl.text = "%d ms" % ping
-			var ping_col: Color = Color(0.45, 0.85, 0.50)
-			if ping > 150:
-				ping_col = Color(1.0, 0.42, 0.38)
-			elif ping > 80:
-				ping_col = Color(0.95, 0.85, 0.35)
-			UIStyle.style_label(ping_lbl, 10, ping_col)
-			ping_lbl.visible = ping >= 0
+			ping_lbl.mouse_filter = Control.MOUSE_FILTER_PASS
+			UIStyle.style_label(ping_lbl, 10, Color(0.45, 0.85, 0.50))
 			row.add_child(ping_lbl)
 			_crew_ping_lbls[pid] = ping_lbl
+			_show_ping(ping_lbl, int(pid))
 
 		if int(pid) == 1:
 			var host_lbl := Label.new()
 			host_lbl.text = "HOST"
 			UIStyle.style_label(host_lbl, 10, UIStyle.COL_GOLD_TEXT, _display_font)
 			row.add_child(host_lbl)
+
+
+const REACH_NAMES := {"lan": "LAN", "tailscale": "Tailscale", "radmin": "Radmin VPN", "hamachi": "Hamachi", "public": "Internet"}
+const REACH_HELP := "So kommen Freunde ohne Portfreigabe dazu:\n• Gleiches WLAN oder Netzwerk: Dein Spiel steht bei ihnen unter „Beitreten“ in der LAN-Liste, sonst die LAN-Adresse eintragen.\n• Tailscale (tailscale.com): Beide installieren und im selben Tailnet anmelden (oder dein Gerät teilen). Dann die Tailscale-Adresse (100.x.x.x) eintragen.\n• Radmin VPN: Beide installieren und demselben Netzwerk beitreten. Dann die Radmin-Adresse (26.x.x.x) eintragen.\n• Internet direkt: Nur wenn der Router Port %d (UDP) freigibt. Das versucht das Spiel per UPnP selbst."
+
+
+## Pausemenü des Hosts: Adressen, unter denen Freunde beitreten können, mit Kopierknopf und Anleitung.
+func _add_reach_info(box: VBoxContainer) -> void:
+	box.add_child(_section_label(tr("SO ERREICHEN DICH FREUNDE")))
+	var port := NetworkManager.hosted_port if NetworkManager.hosted_port > 0 else NetworkManager.DEFAULT_PORT
+	var addrs: Array = NetworkManager.reach_addresses()
+	if addrs.is_empty():
+		var none := Label.new()
+		none.text = tr("Keine LAN- oder VPN-Adresse gefunden. Installiere Tailscale oder Radmin VPN, siehe Anleitung.")
+		none.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		UIStyle.style_label(none, 12, UIStyle.COL_TEXT_SUB)
+		box.add_child(none)
+	for a_v in addrs:
+		var a: Dictionary = a_v
+		var row := HBoxContainer.new()
+		row.add_theme_constant_override("separation", 8)
+		box.add_child(row)
+		var kind_lbl := Label.new()
+		kind_lbl.text = tr(str(REACH_NAMES.get(a["kind"], "")))
+		kind_lbl.custom_minimum_size = Vector2(96, 0)
+		UIStyle.style_label(kind_lbl, 12, UIStyle.COL_TEXT_SUB)
+		row.add_child(kind_lbl)
+		var ip_lbl := Label.new()
+		var text := "%s:%d" % [str(a["ip"]), port] if port != NetworkManager.DEFAULT_PORT else str(a["ip"])
+		ip_lbl.text = text
+		ip_lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		UIStyle.style_label(ip_lbl, 13, UIStyle.COL_TEXT_MAIN)
+		row.add_child(ip_lbl)
+		var copy := Button.new()
+		copy.text = tr("KOPIEREN")
+		copy.custom_minimum_size = Vector2(84, 26)
+		UIStyle.style_button(copy, Color(0.14, 0.14, 0.16), UIStyle.COL_BLUE)
+		copy.pressed.connect(func() -> void:
+			DisplayServer.clipboard_set(str(a["ip"]))
+			copy.text = tr("KOPIERT")
+		)
+		row.add_child(copy)
+	var help := Label.new()
+	help.visible = false
+	help.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	help.text = tr(REACH_HELP) % port
+	UIStyle.style_label(help, 12, UIStyle.COL_TEXT_SUB)
+	var help_btn := Button.new()
+	help_btn.text = tr("Wie kommen Freunde ohne Portfreigabe dazu?")
+	help_btn.alignment = HORIZONTAL_ALIGNMENT_LEFT
+	help_btn.flat = true
+	help_btn.add_theme_color_override("font_color", UIStyle.COL_BLUE)
+	help_btn.pressed.connect(func() -> void: help.visible = not help.visible)
+	box.add_child(help_btn)
+	box.add_child(help)
+
+
+## Läuft auch, wenn vom Host gar nichts mehr kommt (dann gibt es keine Ping- oder Sim-Signale).
+func _update_net_warn() -> void:
+	if _net_warn_lbl == null:
+		return
+	if _build_lbl != null:
+		_build_lbl.visible = not GameState.local_can_build()
+	var warn := NetworkManager.connection_warning()
+	_net_warn_lbl.visible = warn != ""
+	if warn != "" and _net_warn_lbl.text != "⚠ " + warn:
+		_net_warn_lbl.text = "⚠ " + warn
+
+
+## Ping eines Mitspielers, rot ab 150 ms, mit ⚠ bei Paketverlust.
+func _show_ping(pl: Label, peer_id: int) -> void:
+	var p := NetworkManager.get_player_ping(peer_id)
+	pl.visible = p >= 0
+	if p < 0:
+		return
+	var loss := NetworkManager.get_player_loss(peer_id)
+	var bad_loss := loss >= NetworkManager.CONN_LOSS_WARN
+	var txt := ("⚠ %d ms" if bad_loss else "%d ms") % p
+	if pl.text != txt:
+		pl.text = txt
+		pl.tooltip_text = tr("%d %% Paketverlust") % int(roundf(loss)) if bad_loss else ""
+	_set_font_col(pl, Color(1.0, 0.42, 0.38) if p > 150 or bad_loss else (Color(0.95, 0.85, 0.35) if p > 80 else Color(0.45, 0.85, 0.50)))
 
 
 func _on_pause_quick_settings_changed(_val: float = 0.0) -> void:
@@ -1043,9 +1131,25 @@ func _build_right_column() -> void:
 	_crew_panel.add_theme_stylebox_override("panel", UIStyle.make_panel(HUD_BG, HUD_BORDER, 4, 1, 12, 10))
 	right_col.add_child(_crew_panel)
 
+	var crew_v := VBoxContainer.new()
+	crew_v.add_theme_constant_override("separation", 6)
+	crew_v.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_crew_panel.add_child(crew_v)
+	# Warnung zur eigenen Verbindung (Paketverlust, hoher Ping, Host schweigt).
+	_net_warn_lbl = Label.new()
+	_net_warn_lbl.visible = false
+	_net_warn_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	UIStyle.style_label(_net_warn_lbl, 12, Color(1.0, 0.55, 0.40))
+	crew_v.add_child(_net_warn_lbl)
+	_build_lbl = Label.new()
+	_build_lbl.visible = false
+	_build_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_build_lbl.text = tr("🔒 Du kannst dich umsehen und helfen. Bauen geht erst, wenn dich Host oder Admin freigeben.")
+	UIStyle.style_label(_build_lbl, 12, UIStyle.COL_AMBER)
+	crew_v.add_child(_build_lbl)
 	_crew_box = VBoxContainer.new()
 	_crew_box.add_theme_constant_override("separation", 5)
-	_crew_panel.add_child(_crew_box)
+	crew_v.add_child(_crew_box)
 
 	_help_panel = PanelContainer.new()
 	_help_panel.visible = false # Standardmäßig aus, Umschalten mit [H]
@@ -1894,6 +1998,7 @@ func _refresh_pause_players() -> void:
 	if not _pause_players_box.visible:
 		return
 
+	_add_reach_info(_pause_players_box)
 	_pause_players_box.add_child(_section_label(tr("HOST-MODERATION & SCHUTZ")))
 
 	var lock_check := CheckButton.new()
@@ -1931,6 +2036,20 @@ func _refresh_pause_players() -> void:
 		UIStyle.style_label(ping_lbl, 12, UIStyle.COL_TEXT_SUB)
 		row.add_child(ping_lbl)
 		_pause_ping_labels[peer_id] = ping_lbl
+
+		# Baurecht nur in Welten ohne Passwort (sonst dürfen alle). Admins dürfen ohnehin.
+		if not GameState.build_open and not AdminManager.is_admin(peer_id):
+			var may := GameState.can_build(peer_id)
+			var build_btn := Button.new()
+			build_btn.text = tr("BAUT") if may else tr("BAUEN?")
+			build_btn.tooltip_text = tr("Darf aufstellen, verkaufen, ausbauen und Kabel ziehen. Klicken nimmt das Recht weg.") if may else tr("Darf sich umsehen und helfen, aber noch nicht bauen. Klicken gibt das Baurecht.")
+			build_btn.custom_minimum_size = Vector2(76, 30)
+			UIStyle.style_button(build_btn, Color(0.08, 0.20, 0.12) if may else Color(0.14, 0.14, 0.16), UIStyle.COL_GREEN if may else UIStyle.COL_TEXT_SUB)
+			build_btn.pressed.connect(func() -> void:
+				GameState.set_build_right(peer_id, not may)
+				_refresh_pause_players()
+			)
+			row.add_child(build_btn)
 
 		var kick_btn := Button.new()
 		kick_btn.text = "KICK"
