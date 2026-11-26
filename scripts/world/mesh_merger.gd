@@ -4,13 +4,20 @@ extends Node
 ## bekommt aber statt hunderter Zeichenaufrufe je Server nur noch einen je Material.
 ##
 ##   merge_primitives()  sofort, für Aufbauten aus Box/Zylinder (Kühlgeräte, Stecker)
-##   queue_server()      verteilt auf mehrere Bilder und einen Hintergrund-Thread, für Server im Rack
+##   queue_server()      im Hintergrund-Thread, für Server im Rack
+## Die Geometrie der Bauteile liest es aus assets/merge_cache (tools/build_merge_cache.gd). Nur was dort
+## fehlt, wird von der Grafikkarte zurückgeholt; das wartet jedes Mal auf das laufende Bild.
 
-const FETCH_BUDGET_USEC := 6000
-const CACHE_MAX := 48
+const FETCH_BUDGET_USEC := 4000
+const CACHE_MAX := 96
+const CACHE_DIR := "res://assets/merge_cache/"
+## So lange darf das Anwenden fertiger Ergebnisse je Bild dauern.
+const APPLY_BUDGET_USEC := 2500
 
 ## Ebene für alles, was weit draußen steht und sich bewegt (Laub, Verkehr, Tiere).
 const OUTSIDE_LAYER := 1 << 10
+## Ebene der eigenen (nur Schatten werfenden) Figur.
+const LOCAL_BODY_LAYER := 1 << 11
 
 static var _inst: MeshMerger
 static var _mat_keys: Dictionary = {}
@@ -35,10 +42,15 @@ void fragment() {
 var _jobs: Array = []
 ## sig -> {mesh_cold, mats_cold, mesh_hot, mats_hot}; mats: [{mat, hwl}]
 var _cache: Dictionary = {}
-## Mesh-ID -> Array von Flächen-Arrays (Quelldaten im Arbeitsspeicher)
+## Schlüssel -> Flächen-Arrays (Quelldaten im Arbeitsspeicher)
 var _arrays: Dictionary = {}
+## Modell -> {Pfad|Fläche -> Arrays} aus assets/merge_cache; leeres Dictionary = keine Datei.
+var _models: Dictionary = {}
 var _task := -1
-var _task_job: Dictionary = {}
+var _load_task := -1
+## Statistik für Tests: wie oft musste die Grafikkarte doch gefragt werden?
+var gpu_fetches := 0
+var cache_hits := 0
 
 
 static func instance() -> MeshMerger:
@@ -165,45 +177,77 @@ func is_idle() -> bool:
 
 
 func _process(_delta: float) -> void:
-	if _jobs.is_empty():
-		return
-	var job: Dictionary = _jobs[0]
+	var t0 := Time.get_ticks_usec()
+	# Mehrere Aufträge je Bild, solange es schnell geht (gleiche Server kommen aus dem Speicher).
+	while not _jobs.is_empty() and Time.get_ticks_usec() - t0 < APPLY_BUDGET_USEC:
+		if not _step(_jobs[0], t0):
+			return
+
+
+## Ein Schritt am vordersten Auftrag. false = in diesem Bild nicht weitermachen.
+func _step(job: Dictionary, t0: int) -> bool:
 	if not is_instance_valid(job["srv"]) or not is_instance_valid(job["fx"]) or (job["srv"] as Node).is_queued_for_deletion():
 		# Läuft dafür noch ein Thread, wird sein Ergebnis beim Abholen verworfen.
-		if int(job["state"]) == 2 and not WorkerThreadPool.is_task_completed(_task):
-			return
-		if int(job["state"]) == 2:
-			WorkerThreadPool.wait_for_task_completion(_task)
+		if int(job["state"]) == 1 and not WorkerThreadPool.is_task_completed(_load_task):
+			return false
+		if int(job["state"]) == 3 and not WorkerThreadPool.is_task_completed(_task):
+			return false
+		_wait_tasks(job)
 		_jobs.pop_front()
-		return
+		return true
 	match int(job["state"]):
 		0:
 			if _cache.has(job["sig"]):
 				_apply(job, _cache[job["sig"]], _gather(job))
 				_jobs.pop_front()
-				return
+				return true
 			job["entries"] = _gather(job)
+			var need: Array = []
+			for e in job["entries"]:
+				var mid := str(e["model"])
+				if mid != "" and not _models.has(mid) and not need.has(mid):
+					need.append(mid)
 			job["state"] = 1
+			if not need.is_empty():
+				var got := {}
+				job["loaded"] = got
+				_load_task = WorkerThreadPool.add_task(_load_models.bind(need, got), false, "MeshMerger Cache")
+			return true
 		1:
-			# Quelldaten häppchenweise aus dem Grafikspeicher holen, damit nichts ruckelt.
-			var t0 := Time.get_ticks_usec()
+			if job.has("loaded"):
+				if not WorkerThreadPool.is_task_completed(_load_task):
+					return false
+				WorkerThreadPool.wait_for_task_completion(_load_task)
+				for k in (job["loaded"] as Dictionary):
+					_models[k] = job["loaded"][k]
+				job.erase("loaded")
+			job["state"] = 2
+			return true
+		2:
+			# Aus dem Teile-Cache, sonst (selten) von der Grafikkarte, mit Zeitbudget.
 			for e in job["entries"]:
 				if _arrays.has(e["key"]):
 					continue
-				_arrays[e["key"]] = (e["mesh"] as Mesh).surface_get_arrays(int(e["surface"]))
-				if Time.get_ticks_usec() - t0 > FETCH_BUDGET_USEC:
-					return
+				var a := _cached_arrays(e)
+				if a.is_empty():
+					if Time.get_ticks_usec() - t0 > FETCH_BUDGET_USEC:
+						return false
+					a = (e["mesh"] as Mesh).surface_get_arrays(int(e["surface"]))
+					gpu_fetches += 1
+				else:
+					cache_hits += 1
+				_arrays[e["key"]] = a
 			# Der Thread bekommt nur reine Daten, keine Knoten.
 			var plain: Array = []
 			for e in job["entries"]:
 				plain.append({"g": e["group"], "xf": e["xf"], "a": _arrays[e["key"]], "flat": e["flat"]})
 			job["out"] = {}
-			job["plain"] = plain
 			_task = WorkerThreadPool.add_task(_build.bind(plain, job["out"]), false, "MeshMerger")
-			job["state"] = 2
-		2:
+			job["state"] = 3
+			return false
+		3:
 			if not WorkerThreadPool.is_task_completed(_task):
-				return
+				return false
 			WorkerThreadPool.wait_for_task_completion(_task)
 			var res := _finish(job)
 			if _cache.size() >= CACHE_MAX:
@@ -211,25 +255,65 @@ func _process(_delta: float) -> void:
 			_cache[job["sig"]] = res
 			_apply(job, res, job["entries"])
 			_jobs.pop_front()
-			if _arrays.size() > 900:
+			if _arrays.size() > 6000:
 				_arrays.clear()
+			return true
+	return false
+
+
+func _wait_tasks(job: Dictionary) -> void:
+	if int(job.get("state", 0)) == 1 and job.has("loaded"):
+		WorkerThreadPool.wait_for_task_completion(_load_task)
+	if int(job.get("state", 0)) == 3:
+		WorkerThreadPool.wait_for_task_completion(_task)
 
 
 func _exit_tree() -> void:
-	if not _jobs.is_empty() and int((_jobs[0] as Dictionary).get("state", 0)) == 2:
-		WorkerThreadPool.wait_for_task_completion(_task)
+	if not _jobs.is_empty():
+		_wait_tasks(_jobs[0])
 	_jobs.clear()
+
+
+## Läuft im Hintergrund: Cache-Dateien der Modelle lesen und entpacken.
+static func _load_models(ids: Array, out: Dictionary) -> void:
+	for id in ids:
+		var path := CACHE_DIR + str(id) + ".bin"
+		var data := {}
+		if FileAccess.file_exists(path):
+			var f := FileAccess.open(path, FileAccess.READ)
+			if f != null:
+				var size := f.get_32()
+				var packed := f.get_buffer(f.get_length() - 4)
+				var raw := packed.decompress(size, FileAccess.COMPRESSION_ZSTD)
+				var v: Variant = bytes_to_var(raw)
+				if v is Dictionary:
+					data = v
+		out[id] = data
+
+
+## Flächendaten aus dem Teile-Cache, wenn sie zur geladenen Fläche passen. Leer = nicht da.
+func _cached_arrays(e: Dictionary) -> Array:
+	if e["mesh"] is PrimitiveMesh:
+		return (e["mesh"] as PrimitiveMesh).get_mesh_arrays()
+	var m: Dictionary = _models.get(str(e["model"]), {})
+	var a: Variant = m.get(str(e["mkey"]))
+	if not (a is Array) or (a as Array).size() < Mesh.ARRAY_MAX or a[Mesh.ARRAY_VERTEX] == null:
+		return []
+	# Passt die Datei nicht mehr zum Modell (neu gebaut, Cache alt), lieber von der Grafikkarte holen.
+	if (a[Mesh.ARRAY_VERTEX] as PackedVector3Array).size() != (e["mesh"] as ArrayMesh).surface_get_array_len(int(e["surface"])):
+		return []
+	return a
 
 
 ## Alle unbewegten Flächen des Servers samt Lage und Material.
 func _gather(job: Dictionary) -> Array:
 	var out: Array = []
 	var fx: PartFx = job["fx"]
-	_walk(job["srv"], Transform3D.IDENTITY, job["keep"], fx, out)
+	_walk(job["srv"], Transform3D.IDENTITY, job["keep"], fx, out, null)
 	return out
 
 
-func _walk(n: Node, xf: Transform3D, keep: Array, fx: PartFx, out: Array) -> void:
+func _walk(n: Node, xf: Transform3D, keep: Array, fx: PartFx, out: Array, model: Node) -> void:
 	for c in n.get_children():
 		if c == fx or keep.has(c) or c.get_script() != null:
 			continue
@@ -238,6 +322,9 @@ func _walk(n: Node, xf: Transform3D, keep: Array, fx: PartFx, out: Array) -> voi
 			if not (c as Node3D).visible:
 				continue
 			cx = xf * (c as Node3D).transform
+		var cm := model
+		if c.scene_file_path.begins_with("res://assets/models/"):
+			cm = c
 		if c is MeshInstance3D and (c as MeshInstance3D).mesh != null and not c.has_meta("flow") and not c.has_meta("spin_axis") and cx.basis.determinant() > 0.0:
 			var mi := c as MeshInstance3D
 			var m := mi.mesh
@@ -247,10 +334,13 @@ func _walk(n: Node, xf: Transform3D, keep: Array, fx: PartFx, out: Array) -> voi
 				for s in m.get_surface_count():
 					var mat := mi.get_active_material(s)
 					var fl := flat_values(mat)
-					out.append({"flat": fl,"node": mi, "mesh": m, "surface": s, "key": "%d:%d" % [m.get_instance_id(), s], "xf": cx, "mat": mat,
+					var mid := cm.scene_file_path.get_file().get_basename() if cm != null else ""
+					out.append({"flat": fl, "node": mi, "mesh": m, "surface": s, "xf": cx, "mat": mat,
+						"key": ("%s|%s|%d" % [mid, cm.get_path_to(mi), s]) if cm != null else ("%d:%d" % [m.get_instance_id(), s]),
+						"model": mid, "mkey": ("%s|%d" % [cm.get_path_to(mi), s]) if cm != null else "",
 						"hwl": mat.resource_name if mat != null and mat.resource_name.begins_with("HWL_") else "",
 						"group": ("H|" if hot else "C|") + (("FLAT%d" % int(fl[3])) if not fl.is_empty() else material_key(mat))})
-		_walk(c, cx, keep, fx, out)
+		_walk(c, cx, keep, fx, out, cm)
 
 
 func _all_opaque(mi: MeshInstance3D) -> bool:

@@ -341,8 +341,11 @@ func _perf() -> void:
 	var slot := {"item_type": "web_server", "components": comps, "build_quality": 100, "state": "ok"}
 	var a: Dictionary = gs.get_slot_stats(slot)
 	chk("Serverwerte gemerkt = gerechnet", a == gs._compute_slot_stats(slot))
-	a["watts"] = -1
-	chk("Änderungen schlagen nicht auf den Speicher durch", int(gs.get_slot_stats(slot)["watts"]) > 0)
+	# Das Ergebnis ist schreibgeschützt (keine Kopie je Abruf); wer ändern will, nimmt duplicate().
+	chk("Serverwerte schreibgeschützt", a.is_read_only())
+	var a2 := a.duplicate()
+	a2["watts"] = -1
+	chk("Änderungen an einer Kopie schlagen nicht auf den Speicher durch", int(gs.get_slot_stats(slot)["watts"]) > 0 and not a2.is_read_only())
 	slot["build_quality"] = 40
 	chk("Bauqualität zählt", float(gs.get_slot_stats(slot)["heat"]) > float(a["heat"]) and gs.get_slot_stats(slot) == gs._compute_slot_stats(slot))
 	var w0: int = gs.get_slot_stats(slot)["watts"]

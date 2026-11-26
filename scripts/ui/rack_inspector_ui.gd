@@ -3278,6 +3278,7 @@ func _attach_preview_damage_vfx(target: Node3D, cat: String) -> void:
 		offset = Vector3(0.01, 0.06, 0.03)
 
 	var smoke := CPUParticles3D.new()
+	smoke.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	smoke.amount = 14
 	smoke.lifetime = 1.4
 	smoke.preprocess = 0.6
@@ -3306,6 +3307,7 @@ func _attach_preview_damage_vfx(target: Node3D, cat: String) -> void:
 	target.add_child(smoke)
 
 	var sparks := CPUParticles3D.new()
+	sparks.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	sparks.amount = 8
 	sparks.lifetime = 0.45
 	sparks.preprocess = 0.3

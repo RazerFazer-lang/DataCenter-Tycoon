@@ -468,6 +468,7 @@ func _build_garden() -> void:
 	_solid(GRILL_POS + Vector3(0, 0.5, 0), Vector3(0.5, 1.0, 0.5))
 	_area("grill", GRILL_POS + Vector3(0, 0.65, 0), Vector3(0.75, 1.2, 0.75))
 	_grill_smoke = CPUParticles3D.new()
+	_grill_smoke.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	_grill_smoke.position = GRILL_POS + Vector3(0, 0.95, 0)
 	_grill_smoke.amount = 22
 	_grill_smoke.lifetime = 2.6
@@ -665,6 +666,7 @@ func _refresh_units() -> void:
 
 func _build_season_fx() -> void:
 	_fall = CPUParticles3D.new()
+	_fall.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	_fall.amount = 70
 	_fall.lifetime = 9.0
 	_fall.emission_shape = CPUParticles3D.EMISSION_SHAPE_BOX

@@ -38,6 +38,8 @@ var _player_nodes: Dictionary = {} # peer_id -> PlayerController
 
 
 func _ready() -> void:
+	# Kleine 3D-Schilder bekommen eine Sichtweite, auch die, die später dazukommen.
+	get_tree().node_added.connect(_on_node_added_label)
 	_garage = GarageBuilder.new()
 	_garage.name = "Garage"
 	add_child(_garage)
@@ -152,10 +154,20 @@ func _update_light_gate(delta: float) -> void:
 	if _gate_tick > 0.0:
 		return
 	_gate_tick = 0.06
+	var own := SettingsManager.own_lamp_shadow
 	for n in _gate_lights:
 		if not is_instance_valid(n):
 			continue
 		var l := n as Light3D
+		# Eigene Figur: Schatten nur von der Sonne, außer der Spieler will ihn auch unter den Lampen.
+		# Godot zeichnet Schatten schon neu, wenn sich etwas Beleuchtetes bewegt: deshalb auch aus der Beleuchtung
+		# nehmen. Die eigene Figur wirft nur Schatten, beleuchtet wird sie nie gezeigt.
+		if l.shadow_enabled:
+			var m := l.shadow_caster_mask | MeshMerger.LOCAL_BODY_LAYER if own else l.shadow_caster_mask & ~MeshMerger.LOCAL_BODY_LAYER
+			var c := l.light_cull_mask | MeshMerger.LOCAL_BODY_LAYER if own else l.light_cull_mask & ~MeshMerger.LOCAL_BODY_LAYER
+			if m != l.shadow_caster_mask or c != l.light_cull_mask:
+				l.shadow_caster_mask = m
+				l.light_cull_mask = c
 		if l.light_energy <= 0.0005:
 			if l.visible:
 				l.visible = false
@@ -249,6 +261,10 @@ func _apply_graphics_quality() -> void:
 		return
 	var env := _world_env.environment
 	var q := SettingsManager.graphics_quality
+	# Niedrig und Mittel: flache Wolkenschicht statt Volumenwolken.
+	var sky_m := MatLib.get_sky_shader_material()
+	if sky_m != null:
+		sky_m.set_shader_parameter("cheap_clouds", q <= 1)
 	env.tonemap_mode = Environment.TONE_MAPPER_ACES
 	env.tonemap_exposure = 1.05
 	# Dezentes Bloom: nur echte Lichtquellen (Lampenleisten, LEDs, Bildschirme) strahlen über.
@@ -647,6 +663,27 @@ func get_port_world_pos(cable_type: String, endpoint_id: String) -> Variant:
 		var dp: DecorProp = _decor_nodes[endpoint_id]
 		return dp.get_port_world_pos()
 	return null
+
+
+func _on_node_added_label(n: Node) -> void:
+	if n is Label3D:
+		_limit_small_label.call_deferred(n)
+
+
+## Kleine Schrift (unter 10 cm hoch) blendet weich aus, sobald sie nur noch etwa 4 Pixel hoch wäre.
+## Große Schilder (Firmennamen, Straßen, Namen über Spielern) bleiben weit sichtbar.
+static func _limit_small_label(n: Object) -> void:
+	if not is_instance_valid(n) or not (n is Label3D):
+		return
+	var l := n as Label3D
+	if l.visibility_range_end > 0.0:
+		return
+	var h := float(l.font_size) * l.pixel_size
+	if h <= 0.0 or h >= 0.1:
+		return
+	l.visibility_range_end = clampf(h * 300.0, 6.0, 30.0)
+	l.visibility_range_end_margin = 1.5
+	l.visibility_range_fade_mode = GeometryInstance3D.VISIBILITY_RANGE_FADE_SELF
 
 
 func _on_full_rebuild() -> void:

@@ -13,6 +13,11 @@ var rack_type: String = "rack"
 var slot_count: int = 4
 var is_showcase_only: bool = false
 var _rack_data: Dictionary = {}
+## Was die Anzeige zuletzt gezeigt hat (siehe _visual_sig). Leer = beim nächsten Abgleich neu aufbauen.
+var _vis_sig: Array = []
+## Zwischenstand für das Front-Display: [belegte Schächte, Watt, Störung, Brand].
+var _lcd_state: Array = []
+var _placed: Array = []
 
 var _power_port_marker: Node3D
 var _net_port_marker: Node3D
@@ -59,6 +64,7 @@ func setup(id: String, p_rack_type: String = "rack", p_showcase: bool = false) -
 	rack_id = id
 	rack_type = p_rack_type
 	slot_count = 6 if rack_type == "rack_pro" else 4
+	_vis_sig = []
 	is_showcase_only = p_showcase
 	_ensure_shared_fx_assets()
 	_build_rack_geometry()
@@ -133,9 +139,45 @@ func get_cluster_port_global_pos() -> Vector3:
 
 func apply_data(data: Dictionary) -> void:
 	_rack_data = data
-	position = data["pos"]
-	rotation.y = float(data["rot_y"])
+	# Position nur bei Änderung setzen: Jedes Setzen schiebt alle Teile des Racks neu durch die Szene.
+	var place := [data["pos"], float(data["rot_y"])]
+	if place != _placed:
+		_placed = place
+		position = data["pos"]
+		rotation.y = float(data["rot_y"])
+	# Der Abgleich kommt mehrmals je Sekunde, meist sieht das Rack danach genauso aus.
+	var sig := _visual_sig()
+	if sig == _vis_sig:
+		return
+	# Nur die Temperatur hat sich geändert: dann reicht das Front-Display.
+	if sig.size() == _vis_sig.size() and not _lcd_state.is_empty():
+		var a := sig.duplicate()
+		var b := _vis_sig.duplicate()
+		a[3] = 0
+		b[3] = 0
+		if a == b:
+			_vis_sig = sig
+			_refresh_lcd()
+			return
+	_vis_sig = sig
 	_refresh_visuals()
+
+
+## Alles, was _refresh_visuals zeigt: Strom, Netz, Verbund, Temperatur (ganze Grad wie am Display),
+## Name, Buchsen und je Einschub Bestückung und Zustand. Laufende Werte wie Staub zählen nicht.
+func _visual_sig() -> Array:
+	var sig: Array = [bool(_rack_data.get("powered", false)), bool(_rack_data.get("networked", false)),
+		bool(_rack_data.get("clustered", false)), roundi(float(_rack_data.get("temp", 22.0))), TranslationServer.get_locale()]
+	if not is_showcase_only and GameState.racks.has(rack_id):
+		sig.append(GameState.get_rack_display_name(rack_id))
+		sig.append(GameState.get_max_ports("network", rack_id))
+		sig.append(GameState.research_levels.hash())
+	for s in _rack_data.get("slots", []):
+		var sd: Dictionary = s
+		sig.append_array([str(sd.get("item_type", "")), str(sd.get("state", "")), bool(sd.get("offline", false)),
+			float(sd.get("boot_wait", 0.0)) > 0.0, float(sd.get("boot_total", 0.0)) > 0.0,
+			roundi(float(sd.get("fire_level", 0.0)) * 100.0), sd.get("build_quality", 100), hash(sd.get("components", {}))])
+	return sig
 
 
 func _apply_graphics_setting() -> void:
@@ -381,25 +423,33 @@ func _process(delta: float) -> void:
 		# Teleskopschienen: Schacht sanft nach vorne aus-/einfahren!
 		var sroot: Node3D = vis.get("slot_root", null)
 		if sroot != null and not is_showcase_only:
-			var want_z := 0.48 if GameState.is_slot_extended(rack_id, i) else 0.0
-			var cur_z := lerpf(float(vis.get("slide_z", 0.0)), want_z, clampf(delta * 8.5, 0.0, 1.0))
-			if absf(cur_z - want_z) < 0.002:
-				cur_z = want_z
-			vis["slide_z"] = cur_z
-			sroot.position.z = cur_z
-			# Ausgefahrener Einschub bekommt Voll-Chassis-Hitbox, damit Zielen aufs Mainboard nie durch den Schlitten rutscht!
-			var s_area: Area3D = vis.get("area", null)
-			var s_shape: BoxShape3D = vis.get("area_shape", null)
-			if s_area != null and s_shape != null:
-				var slot_step_h: float = float(vis.get("slot_step", 0.40))
-				if cur_z > 0.14:
-					s_shape.size = Vector3(0.78, slot_step_h - 0.02, 0.80)
-					s_area.position = Vector3(0.0, -0.01, 0.08)
-				else:
-					s_shape.size = Vector3(0.76, slot_step_h - 0.04, 0.24)
-					s_area.position = Vector3(0.0, 0.0, 0.41)
+			if not vis.has("pkey"):
+				vis["pkey"] = GameState.panel_key(rack_id, "slot_%d" % i)
+			var want_z := 0.48 if GameState.is_panel_key_open(vis["pkey"]) else 0.0
+			var cur_z := float(vis.get("slide_z", 0.0))
+			# Nur während der Schacht fährt: Position und Trefferbox anfassen (jedes Setzen schiebt
+			# den ganzen Einschub samt Teilen neu durch die Szene).
+			if cur_z != want_z:
+				cur_z = lerpf(cur_z, want_z, clampf(delta * 8.5, 0.0, 1.0))
+				if absf(cur_z - want_z) < 0.002:
+					cur_z = want_z
+				vis["slide_z"] = cur_z
+				sroot.position.z = cur_z
+				# Ausgefahrener Einschub bekommt Voll-Chassis-Hitbox, damit Zielen aufs Mainboard nie durch den Schlitten rutscht!
+				var s_area: Area3D = vis.get("area", null)
+				var s_shape: BoxShape3D = vis.get("area_shape", null)
+				var ext := cur_z > 0.14
+				if s_area != null and s_shape != null and ext != bool(vis.get("area_ext", false)):
+					vis["area_ext"] = ext
+					var slot_step_h: float = float(vis.get("slot_step", 0.40))
+					if ext:
+						s_shape.size = Vector3(0.78, slot_step_h - 0.02, 0.80)
+						s_area.position = Vector3(0.0, -0.01, 0.08)
+					else:
+						s_shape.size = Vector3(0.76, slot_step_h - 0.04, 0.24)
+						s_area.position = Vector3(0.0, 0.0, 0.41)
 			var rc: Node3D = vis.get("rear_cables", null)
-			if rc != null and cur_z > 0.05:
+			if rc != null and cur_z > 0.05 and rc.visible:
 				rc.visible = false
 			if _hover_slot_root != null and _hover_slot_root.visible and _hover_slot_idx == i:
 				_hover_slot_root.position = sroot.position
@@ -437,30 +487,21 @@ func _process(delta: float) -> void:
 			var boot_speed := lerpf(4.0, 34.0, clampf(boot_p * 5.0, 0.0, 1.0)) if boot_p < 0.45 else lerpf(34.0, 12.0, clampf((boot_p - 0.45) * 3.0, 0.0, 1.0))
 			active_servers += 1
 			gpu_weight += 1.2 * clampf(boot_speed / 34.0, 0.2, 1.0)
-			for bf in vis["hw_fans"]:
-				if is_instance_valid(bf):
-					var bnode := bf as Node3D
-					if str(bnode.get_meta("spin_axis", "z")) == "x":
-						bnode.rotation.x += delta * boot_speed
-					else:
-						bnode.rotation.z += delta * boot_speed
+			_spin_fans(vis, delta * boot_speed)
 		var running := powered and st == "ok" and not offline
 		if running:
 			active_servers += 1
-			var comps: Dictionary = slot.get("components", {})
-			var gpu_lvl := HardwareMeshFactory.get_visual_tier(comps, "gpu")
-			var chassis := GameState.get_chassis_visual(item_type)
-			gpu_weight += (1.5 if chassis == "gpu_server" else (0.45 if item_type == "net_switch" else 0.85)) + float(gpu_lvl) * 0.35
+			# Gewicht für das Lüftergeräusch: hängt nur an der Bestückung, also einmal je Bestückung.
+			if str(vis.get("w_sig", "-")) != str(vis["hw_sig"]):
+				var comps: Dictionary = slot.get("components", {})
+				var gpu_lvl := HardwareMeshFactory.get_visual_tier(comps, "gpu")
+				var chassis := GameState.get_chassis_visual(item_type)
+				vis["w"] = (1.5 if chassis == "gpu_server" else (0.45 if item_type == "net_switch" else 0.85)) + float(gpu_lvl) * 0.35
+				vis["w_sig"] = vis["hw_sig"]
+			gpu_weight += float(vis["w"])
 
 			var speed := 11.0 + clampf((temp - 25.0) * 0.35, 0.0, 22.0)
-			var hw_fans: Array = vis["hw_fans"]
-			for fan_node in hw_fans:
-				if is_instance_valid(fan_node):
-					var fnode := fan_node as Node3D
-					if str(fnode.get_meta("spin_axis", "z")) == "x":
-						fnode.rotation.x += delta * speed
-					else:
-						fnode.rotation.z += delta * speed
+			_spin_fans(vis, delta * speed)
 
 		_set_leds_lit(vis, powered and (not offline or booting or waiting))
 		var hfx: Variant = vis.get("hw_fx")
@@ -476,16 +517,12 @@ func _process(delta: float) -> void:
 			smoke_fx.emitting = true
 			flame_fx.emitting = true
 			spark_fx.emitting = true
-			led_mat.emission = Color(0.98, 0.16, 0.06)
-			led_mat.emission_energy_multiplier = 1.4 + 0.6 * sin(_anim_time * 18.0)
+			_led(led_mat, Color(0.98, 0.16, 0.06), 1.4 + 0.6 * sin(_anim_time * 18.0))
 			for hm in hdd_mats:
-				(hm as StandardMaterial3D).emission_energy_multiplier = 0.02
-			nic_mat.emission_energy_multiplier = 0.02
-			bmc_mat.emission = Color(1.0, 0.15, 0.08)
-			bmc_mat.emission_energy_multiplier = 1.4
-			post_lbl.text = "FF"
-			post_lbl.modulate = Color(1.0, 0.22, 0.10)
-			post_lbl.visible = true
+				_led_e(hm, 0.02)
+			_led_e(nic_mat, 0.02)
+			_led(bmc_mat, Color(1.0, 0.15, 0.08), 1.4)
+			_post(post_lbl, "FF", Color(1.0, 0.22, 0.10), true)
 		elif st == "crashed":
 			smoke_fx.emitting = false
 			flame_fx.emitting = false
@@ -503,16 +540,12 @@ func _process(delta: float) -> void:
 			if burst > 0.0:
 				spark_flash = maxf(spark_flash, burst / 0.14)
 			var blink := sin(_anim_time * 10.5 + float(i)) > 0.0
-			led_mat.emission = Color(0.95, 0.16, 0.12)
-			led_mat.emission_energy_multiplier = 1.15 if blink else 0.06
+			_led(led_mat, Color(0.95, 0.16, 0.12), 1.15 if blink else 0.06)
 			for hm in hdd_mats:
-				(hm as StandardMaterial3D).emission_energy_multiplier = 0.02
-			nic_mat.emission_energy_multiplier = 0.02
-			bmc_mat.emission = Color(0.95, 0.18, 0.12)
-			bmc_mat.emission_energy_multiplier = 1.2 if blink else 0.1
-			post_lbl.text = "E4" if (i % 2 == 0) else "C5"
-			post_lbl.modulate = Color(1.0, 0.26, 0.16) if blink else Color(0.35, 0.08, 0.05)
-			post_lbl.visible = powered
+				_led_e(hm, 0.02)
+			_led_e(nic_mat, 0.02)
+			_led(bmc_mat, Color(0.95, 0.18, 0.12), 1.2 if blink else 0.1)
+			_post(post_lbl, "E4" if (i % 2 == 0) else "C5", Color(1.0, 0.26, 0.16) if blink else Color(0.35, 0.08, 0.05), powered)
 		else:
 			smoke_fx.emitting = false
 			flame_fx.emitting = false
@@ -521,66 +554,51 @@ func _process(delta: float) -> void:
 				_show_boot_leds(vis, slot, i)
 			elif waiting:
 				# Warten auf den Start: nur die Wartungs-LED blinkt langsam
-				led_mat.emission_energy_multiplier = 0.02
+				_led_e(led_mat, 0.02)
 				for hm_w in hdd_mats:
-					(hm_w as StandardMaterial3D).emission_energy_multiplier = 0.02
-				nic_mat.emission_energy_multiplier = 0.02
-				bmc_mat.emission = Color(0.96, 0.62, 0.12)
-				bmc_mat.emission_energy_multiplier = 0.9 if fmod(_anim_time, 1.0) < 0.18 else 0.04
-				post_lbl.visible = false
+					_led_e(hm_w, 0.02)
+				_led_e(nic_mat, 0.02)
+				_led(bmc_mat, Color(0.96, 0.62, 0.12), 0.9 if fmod(_anim_time, 1.0) < 0.18 else 0.04)
+				if post_lbl.visible:
+					post_lbl.visible = false
 			elif not powered or offline:
-				led_mat.emission = Color(0.14, 0.14, 0.16)
-				led_mat.emission_energy_multiplier = 0.02
+				_led(led_mat, Color(0.14, 0.14, 0.16), 0.02)
 				for hm in hdd_mats:
-					(hm as StandardMaterial3D).emission_energy_multiplier = 0.02
-				nic_mat.emission_energy_multiplier = 0.02
-				bmc_mat.emission_energy_multiplier = 0.02
-				post_lbl.visible = false
+					_led_e(hm, 0.02)
+				_led_e(nic_mat, 0.02)
+				_led_e(bmc_mat, 0.02)
+				if post_lbl.visible:
+					post_lbl.visible = false
 			elif temp >= 68.0:
 				# Sichtbare Rauch-Vorwarnung bei kritischer Hitze BEVOR der Server brennt!
 				smoke_fx.emitting = (SettingsManager.graphics_quality >= 1)
 				var warn_p := 0.75 + 0.45 * sin(_anim_time * 8.0 + float(i))
-				led_mat.emission = Color(0.96, 0.62, 0.10)
-				led_mat.emission_energy_multiplier = warn_p
+				_led(led_mat, Color(0.96, 0.62, 0.10), warn_p)
 				for h_i in range(hdd_mats.size()):
-					var hm := hdd_mats[h_i] as StandardMaterial3D
-					hm.emission = Color(0.95, 0.56, 0.12)
-					hm.emission_energy_multiplier = 0.80 if sin(_anim_time * (14.0 + float(h_i) * 4.7) + float(i)) > 0.0 else 0.06
-				nic_mat.emission = Color(0.24, 0.64, 0.96)
-				nic_mat.emission_energy_multiplier = 0.75 if networked else 0.04
-				bmc_mat.emission = Color(0.96, 0.64, 0.14)
-				bmc_mat.emission_energy_multiplier = 0.9
-				post_lbl.text = "7F"
-				post_lbl.modulate = Color(1.0, 0.64, 0.16)
-				post_lbl.visible = true
+					_led(hdd_mats[h_i], Color(0.95, 0.56, 0.12), 0.80 if sin(_anim_time * (14.0 + float(h_i) * 4.7) + float(i)) > 0.0 else 0.06)
+				_led(nic_mat, Color(0.24, 0.64, 0.96), 0.75 if networked else 0.04)
+				_led(bmc_mat, Color(0.96, 0.64, 0.14), 0.9)
+				_post(post_lbl, "7F", Color(1.0, 0.64, 0.16), true)
 			else:
 				# Realistische Enterprise-Server-Aktivitaet (feine punktfoermige LEDs, kein Neon!)
 				if not networked and item_type != "net_switch":
-					led_mat.emission = Color(0.90, 0.58, 0.16)
-					led_mat.emission_energy_multiplier = 0.72
+					_led(led_mat, Color(0.90, 0.58, 0.16), 0.72)
 				else:
-					led_mat.emission = Color(0.20, 0.82, 0.38)
-					led_mat.emission_energy_multiplier = 0.82
+					_led(led_mat, Color(0.20, 0.82, 0.38), 0.82)
 				var rate := 8.0 + cpu_load * 16.0
 				for h_i in range(hdd_mats.size()):
-					var hm := hdd_mats[h_i] as StandardMaterial3D
 					var ph := _anim_time * (rate + float(h_i) * 3.9 + float(i) * 2.1)
 					var trig := sin(ph) * cos(ph * 0.63 + float(h_i) * 1.7)
-					hm.emission = Color(0.22, 0.80, 0.38) if h_i == 0 else Color(0.94, 0.68, 0.16)
-					hm.emission_energy_multiplier = 0.88 if trig > (0.48 - cpu_load * 0.38) else 0.05
+					_led(hdd_mats[h_i], Color(0.22, 0.80, 0.38) if h_i == 0 else Color(0.94, 0.68, 0.16), 0.88 if trig > (0.48 - cpu_load * 0.38) else 0.05)
 				if networked or item_type == "net_switch":
 					var pkt := sin(_anim_time * (19.0 + float(i) * 4.3)) > 0.15
-					nic_mat.emission = Color(0.22, 0.66, 0.98)
-					nic_mat.emission_energy_multiplier = 0.88 if pkt else 0.14
+					_led(nic_mat, Color(0.22, 0.66, 0.98), 0.88 if pkt else 0.14)
 				else:
-					nic_mat.emission_energy_multiplier = 0.03
+					_led_e(nic_mat, 0.03)
 				# Sanfter BMC-Heartbeat auf dem Mainboard (~1.2 Hz)
 				var hb := 0.25 + 0.75 * absf(sin(_anim_time * 3.8 + float(i) * 0.9))
-				bmc_mat.emission = Color(0.18, 0.88, 0.44)
-				bmc_mat.emission_energy_multiplier = hb
-				post_lbl.text = "A0" if (i % 2 == 0) else "AA"
-				post_lbl.modulate = Color(0.96, 0.38, 0.14)
-				post_lbl.visible = true
+				_led(bmc_mat, Color(0.18, 0.88, 0.44), hb)
+				_post(post_lbl, "A0" if (i % 2 == 0) else "AA", Color(0.96, 0.38, 0.14), true)
 
 	# LED-Test nach Einbau oder Start: alle LEDs kurz voll an
 	for vt in _slot_visuals:
@@ -610,6 +628,54 @@ func _process(delta: float) -> void:
 	_update_fan_audio(delta, active_servers, gpu_weight, temp)
 
 
+## LED-Leuchten setzen, aber nur was sich ändert: Jedes Setzen geht als Auftrag an den Grafikserver.
+static func _led(m: StandardMaterial3D, c: Color, e: float) -> void:
+	if m.emission != c:
+		m.emission = c
+	if m.emission_energy_multiplier != e:
+		m.emission_energy_multiplier = e
+
+
+static func _led_e(m: StandardMaterial3D, e: float) -> void:
+	if m.emission_energy_multiplier != e:
+		m.emission_energy_multiplier = e
+
+
+## POST-Anzeige: Text und Farbe nur bei Änderung (sonst baut das Schild sein Netz neu).
+static func _post(l: Label3D, text: String, col: Color, vis: bool) -> void:
+	if l.visible != vis:
+		l.visible = vis
+	if not vis:
+		return
+	if l.text != text:
+		l.text = text
+	if l.modulate != col:
+		l.modulate = col
+
+
+## Lüfter eines Einschubs drehen. Die Drehachse steht als Meta am Lüfter, sie wird einmal je
+## Bestückung gelesen statt in jedem Bild.
+func _spin_fans(vis: Dictionary, amount: float) -> void:
+	var fans: Array = vis["hw_fans"]
+	if str(vis.get("fan_sig", "-")) != str(vis["hw_sig"]) or (vis.get("fan_ax", PackedByteArray()) as PackedByteArray).size() != fans.size():
+		var ax := PackedByteArray()
+		ax.resize(fans.size())
+		for k in fans.size():
+			var f: Variant = fans[k]
+			ax[k] = 1 if is_instance_valid(f) and str((f as Node3D).get_meta("spin_axis", "z")) == "x" else 0
+		vis["fan_ax"] = ax
+		vis["fan_sig"] = vis["hw_sig"]
+	var axes: PackedByteArray = vis["fan_ax"]
+	for k in fans.size():
+		var f: Variant = fans[k]
+		if not is_instance_valid(f):
+			continue
+		if axes[k] == 1:
+			(f as Node3D).rotation.x += amount
+		else:
+			(f as Node3D).rotation.z += amount
+
+
 ## Ohne Strom sind die LED-Linsen dunkel, sonst leuchtet ihre Grundfarbe weiter.
 func _set_leds_lit(vis: Dictionary, lit: bool) -> void:
 	if bool(vis.get("leds_lit", true)) == lit:
@@ -637,20 +703,13 @@ func _show_boot_leds(vis: Dictionary, slot: Dictionary, idx: int) -> void:
 	var bmc_mat: StandardMaterial3D = vis["bmc_mat"]
 	var post_lbl: Label3D = vis["post_lbl"]
 	var hdds: Array = vis["hdd_mats"]
-	led_mat.emission = Color(0.95, 0.66, 0.16)
-	led_mat.emission_energy_multiplier = 0.9 if sin(_anim_time * (5.0 + p * 10.0)) > 0.0 else 0.08
-	bmc_mat.emission = Color(0.20, 0.60, 0.98)
-	bmc_mat.emission_energy_multiplier = 0.9 if sin(_anim_time * 9.0 + float(idx)) > -0.3 else 0.1
+	_led(led_mat, Color(0.95, 0.66, 0.16), 0.9 if sin(_anim_time * (5.0 + p * 10.0)) > 0.0 else 0.08)
+	_led(bmc_mat, Color(0.20, 0.60, 0.98), 0.9 if sin(_anim_time * 9.0 + float(idx)) > -0.3 else 0.1)
 	for h_i in range(hdds.size()):
-		var hm := hdds[h_i] as StandardMaterial3D
 		var on_at := 0.20 + 0.45 * float(h_i) / float(maxi(1, hdds.size()))
-		hm.emission = Color(0.22, 0.80, 0.38)
-		hm.emission_energy_multiplier = 0.04 if p < on_at else (0.9 if sin(_anim_time * 21.0 + float(h_i) * 2.0) > 0.2 else 0.15)
-	nic_mat.emission = Color(0.24, 0.64, 0.96)
-	nic_mat.emission_energy_multiplier = 0.03 if p < 0.75 else (0.8 if sin(_anim_time * 24.0) > 0.0 else 0.1)
-	post_lbl.text = BOOT_CODES[clampi(int(p * float(BOOT_CODES.size())), 0, BOOT_CODES.size() - 1)]
-	post_lbl.modulate = Color(0.96, 0.58, 0.16)
-	post_lbl.visible = true
+		_led(hdds[h_i], Color(0.22, 0.80, 0.38), 0.04 if p < on_at else (0.9 if sin(_anim_time * 21.0 + float(h_i) * 2.0) > 0.2 else 0.15))
+	_led(nic_mat, Color(0.24, 0.64, 0.96), 0.03 if p < 0.75 else (0.8 if sin(_anim_time * 24.0) > 0.0 else 0.1))
+	_post(post_lbl, BOOT_CODES[clampi(int(p * float(BOOT_CODES.size())), 0, BOOT_CODES.size() - 1)], Color(0.96, 0.58, 0.16), true)
 
 
 func _update_fan_audio(delta: float, active_servers: int, gpu_weight: float, temp: float) -> void:
@@ -795,7 +854,21 @@ func _refresh_visuals() -> void:
 				slot_lbl.text = "%s%s" % [tr(str(cat["name"])), up_tag]
 				slot_lbl.modulate = Color(0.92, 0.93, 0.94)
 
-	# Integriertes Front-OLED/LCD-Statusdisplay aktualisieren
+	_lcd_state = [used_slots, total_watts, any_fault, any_fire]
+	_refresh_lcd()
+
+
+## Integriertes Front-OLED/LCD-Statusdisplay aktualisieren (Werte der Schächte aus _lcd_state).
+func _refresh_lcd() -> void:
+	var powered := bool(_rack_data.get("powered", false))
+	var networked := bool(_rack_data.get("networked", false))
+	var clustered := bool(_rack_data.get("clustered", false))
+	var temp := float(_rack_data.get("temp", 22.0))
+	var slots: Array = _rack_data.get("slots", [])
+	var used_slots: int = _lcd_state[0]
+	var total_watts: int = _lcd_state[1]
+	var any_fault: bool = _lcd_state[2]
+	var any_fire: bool = _lcd_state[3]
 	var rname := GameState.get_rack_display_name(rack_id)
 	var pro_tag := " PRO" if rack_type == "rack_pro" else ""
 	var max_pdu := int((GameState.ITEM_CATALOG.get(rack_type, {}) as Dictionary).get("max_pdu_watts", 3200))
@@ -1280,6 +1353,7 @@ func _make_particle_quad(tex: Texture2D, additive: bool, quad_size: float = 0.22
 
 func _make_smoke_emitter() -> CPUParticles3D:
 	var p := CPUParticles3D.new()
+	p.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	p.emitting = false
 	p.amount = 42
 	p.lifetime = 2.2
@@ -1308,6 +1382,7 @@ func _make_smoke_emitter() -> CPUParticles3D:
 
 func _make_flame_emitter() -> CPUParticles3D:
 	var p := CPUParticles3D.new()
+	p.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	p.emitting = false
 	p.amount = 26
 	p.lifetime = 0.58
@@ -1331,6 +1406,7 @@ func _make_flame_emitter() -> CPUParticles3D:
 
 func _make_spark_emitter() -> CPUParticles3D:
 	var p := CPUParticles3D.new()
+	p.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	p.emitting = false
 	p.one_shot = true
 	p.explosiveness = 0.90
@@ -1356,6 +1432,7 @@ func _make_spark_emitter() -> CPUParticles3D:
 
 func _make_heat_shimmer_emitter() -> CPUParticles3D:
 	var p := CPUParticles3D.new()
+	p.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	p.emitting = false
 	p.amount = 14
 	p.lifetime = 1.45

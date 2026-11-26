@@ -129,6 +129,9 @@ var upscaler: int = UPSCALER_FSR1
 var sharpness: float = 0.8
 var anisotropic: int = 4
 var vsync: bool = true
+## Eigene Figur wirft auch unter den Hallenlampen Schatten. Kostet Leistung: Jede Bewegung zwingt
+## die Lampen, ihre ganzen Schatten neu zu zeichnen. Den Sonnenschatten gibt es immer.
+var own_lamp_shadow: bool = false
 var max_fps: int = 0
 
 var player_name: String = "Admin"
@@ -273,6 +276,7 @@ func load_settings() -> void:
 	sharpness = clampf(float(cfg.get_value("video", "sharpness", 0.8)), 0.0, 1.0)
 	anisotropic = clampi(int(cfg.get_value("video", "anisotropic", 4)), 0, ANISO_LEVELS.size() - 1)
 	vsync = bool(cfg.get_value("video", "vsync", true))
+	own_lamp_shadow = bool(cfg.get_value("video", "own_lamp_shadow", false))
 	var saved_fps := int(cfg.get_value("video", "max_fps", 0))
 	max_fps = saved_fps if FPS_LIMITS.has(saved_fps) else 0
 	autosave_enabled = bool(cfg.get_value("gameplay", "autosave", true))
@@ -331,6 +335,7 @@ func save_settings() -> void:
 	cfg.set_value("video", "sharpness", sharpness)
 	cfg.set_value("video", "anisotropic", anisotropic)
 	cfg.set_value("video", "vsync", vsync)
+	cfg.set_value("video", "own_lamp_shadow", own_lamp_shadow)
 	cfg.set_value("video", "max_fps", max_fps)
 	cfg.set_value("gameplay", "autosave", autosave_enabled)
 	if LANGUAGE_CODES.has(language):
@@ -516,6 +521,9 @@ func apply_graphics_settings() -> void:
 	vp.fsr_sharpness = (1.0 - sharpness) * 2.0
 
 	vp.anisotropic_filtering_level = ANISO_LEVELS[anisotropic]
+	# Automatische Detailstufen der Modelle: Ultra wechselt erst, wenn der Unterschied unter einem Pixel
+	# liegt (unsichtbar). Darunter darf er etwas früher wechseln, das entlastet den Hauptdurchgang.
+	vp.mesh_lod_threshold = [3.0, 2.0, 1.25, 1.0][clampi(graphics_quality, 0, 3)]
 
 	DisplayServer.window_set_vsync_mode(DisplayServer.VSYNC_ENABLED if vsync else DisplayServer.VSYNC_DISABLED)
 	Engine.max_fps = max_fps

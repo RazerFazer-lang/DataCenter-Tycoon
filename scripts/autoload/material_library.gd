@@ -362,6 +362,8 @@ uniform float power_glow : hint_range(0.0, 1.0) = 1.0;
 uniform float cloud_coverage : hint_range(0.0, 1.0) = 0.48;
 uniform float cloud_darkness : hint_range(0.0, 1.0) = 0.0;
 uniform bool half_clouds = true;
+// Niedrige Grafikstufen: eine flache Wolkenschicht statt der Volumenwolken (ein paar Rauschwerte je Pixel).
+uniform bool cheap_clouds = false;
 
 float hash21(vec2 p) {
 	p = fract(p * vec2(123.34, 456.21));
@@ -528,6 +530,42 @@ vec4 march_clouds(vec3 dir, vec3 sdir, vec3 mdir, float sun_raw, vec3 hor_col) {
 	return cloud_out;
 }
 
+// Flache Wolkenschicht: dieselbe Form und Bewegung wie die Volumenwolken, aber nur eine Ebene in
+// mittlerer Höhe, ohne Strahlverfolgung und Eigenschatten.
+vec4 flat_clouds(vec3 dir, float sun_raw, vec3 hor_col) {
+	if (dir.y <= 0.015) {
+		return vec4(0.0);
+	}
+	float elev = max(dir.y, 0.045);
+	vec3 p = dir * (2250.0 / elev);
+	vec3 wind = vec3(TIME * 0.018, 0.0, TIME * 0.007);
+	vec3 q = p * 0.00055 + wind;
+	float base_shape = 0.52 * noise3d(q);
+	vec3 q1 = q * 2.04 + vec3(13.7, 7.1, 19.3);
+	base_shape += 0.2496 * noise3d(q1);
+	q1 = q1 * 2.04 + vec3(13.7, 7.1, 19.3);
+	base_shape += 0.119808 * noise3d(q1);
+	float threshold = mix(0.66, 0.34, cloud_coverage);
+	float d = smoothstep(threshold * 0.62, threshold * 0.62 + 0.26, base_shape * 0.78 + 0.15);
+
+	vec3 sun_col = mix(vec3(1.06, 1.02, 0.96), vec3(1.15, 0.62, 0.34), sunset_factor) * mix(1.0, 0.42, cloud_darkness);
+	vec3 amb = mix(vec3(0.08, 0.11, 0.18), mix(vec3(0.56, 0.68, 0.86), vec3(0.76, 0.50, 0.44), sunset_factor * 0.7), day_factor);
+	amb *= mix(1.0, 0.55, cloud_darkness);
+	vec3 direct = mix(vec3(0.18, 0.22, 0.32), sun_col, smoothstep(0.05, 0.35, day_factor));
+	float silver = pow(max(sun_raw, 0.0), 6.0) * 0.55;
+	vec3 c = amb * 0.78 + direct * (0.56 - 0.30 * d + silver);
+	c = mix(hor_col, c, smoothstep(0.015, 0.22, dir.y));
+	float a = (1.0 - exp(-d * 3.2)) * smoothstep(0.015, 0.16, dir.y);
+	return vec4(c, clamp(a, 0.0, 0.94));
+}
+
+vec4 clouds(vec3 dir, vec3 sdir, vec3 mdir, float sun_raw, vec3 hor_col) {
+	if (cheap_clouds) {
+		return flat_clouds(dir, sun_raw, hor_col);
+	}
+	return march_clouds(dir, sdir, mdir, sun_raw, hor_col);
+}
+
 void sky() {
 	vec3 dir = normalize(EYEDIR);
 	float h = clamp(dir.y, 0.0, 1.0);
@@ -600,7 +638,7 @@ void sky() {
 	if (AT_QUARTER_RES_PASS) {
 		vec4 c = vec4(0.0);
 		if (half_clouds) {
-			c = march_clouds(dir, sdir, mdir, sun_raw, hor_col);
+			c = clouds(dir, sdir, mdir, sun_raw, hor_col);
 		}
 		COLOR = c.rgb * c.a;
 		ALPHA = c.a;
@@ -608,7 +646,7 @@ void sky() {
 	if (half_clouds) {
 		col = col * (1.0 - QUARTER_RES_COLOR.a) + QUARTER_RES_COLOR.rgb;
 	} else {
-		vec4 c = march_clouds(dir, sdir, mdir, sun_raw, hor_col);
+		vec4 c = clouds(dir, sdir, mdir, sun_raw, hor_col);
 		col = mix(col, c.rgb, c.a);
 	}
 

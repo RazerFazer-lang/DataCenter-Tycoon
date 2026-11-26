@@ -988,6 +988,7 @@ func _build_lighting() -> void:
 
 	# Funken-Partikel am Sicherungskasten (feuert bei Sicherungsflug/Überlast!)
 	_breaker_sparks = CPUParticles3D.new()
+	_breaker_sparks.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	_breaker_sparks.position = Vector3(-4.55, 1.52, -4.22)
 	_breaker_sparks.emitting = false
 	_breaker_sparks.one_shot = true
@@ -2712,6 +2713,23 @@ func _build_halle_nord_site() -> void:
 	_add_collider_box(hn, Vector3(-6.1, 2.38, 6.1), Vector3(7.9, 4.76, 0.25))
 	_add_collider_box(hn, Vector3( 6.1, 2.38, 6.1), Vector3(7.9, 4.76, 0.25))
 	_add_collider_box(hn, Vector3( 0.0, 3.98, 6.1), Vector3(4.5, 1.48, 0.25))
+	# Verdecker für die geschlossenen Wandteile und das Dach: Drinnen fällt die Außenwelt weg, draußen
+	# das Halleninnere. Die Oberlichter (Y 3.58..4.34 in Nord-, West- und Ostwand) und das Rolltor bleiben frei.
+	for o in [
+		[Vector3(0.0, 1.77, -6.02), Vector3(20.0, 3.54, 0.1)],
+		[Vector3(-10.02, 1.77, 0.0), Vector3(0.1, 3.54, 12.0)],
+		[Vector3(10.02, 1.77, 0.0), Vector3(0.1, 3.54, 12.0)],
+		[Vector3(-6.15, 2.40, 6.02), Vector3(7.7, 4.78, 0.1)],
+		[Vector3(6.15, 2.40, 6.02), Vector3(7.7, 4.78, 0.1)],
+		[Vector3(0.0, 4.05, 6.02), Vector3(4.5, 1.5, 0.1)],
+		[Vector3(0.0, 4.76, 0.0), Vector3(20.0, 0.08, 12.0)],
+	]:
+		var hocc := OccluderInstance3D.new()
+		var hbox := BoxOccluder3D.new()
+		hbox.size = o[1]
+		hocc.occluder = hbox
+		hocc.position = o[0]
+		hn.add_child(hocc)
 
 	# ---------------------------------------------------------------- 2. LICHT, WEICHE SCHATTEN & BOX-REFLEXIONEN (echte Raumtiefe!)
 	_hn_ceiling_lights.clear()

@@ -256,28 +256,56 @@ static func _no(msg: String) -> Dictionary:
 
 ## Alle Verbindungen einer Art: [a, a_slot, b, b_slot] aus Kabeln und gesteckten Leisten.
 static func edges(ctype: String) -> Array:
+	var gs := _gs()
 	var out: Array = []
-	var maps := {}
-	for cid in _gs().cables.keys():
-		var c: Dictionary = _gs().cables[cid]
+	# Buchsen aller Anschlüsse in einem Durchgang (früher je Anschluss einmal alle Kabel).
+	var maps: Dictionary = gs.get_cable_slot_maps(ctype)
+	for cid in gs.cables.keys():
+		var c: Dictionary = gs.cables[cid]
 		if str(c.get("cable_type", "")) != ctype:
 			continue
 		var a := str(c["from_id"])
 		var b := str(c["to_id"])
-		for e in [a, b]:
-			if not maps.has(e):
-				maps[e] = _gs().get_cable_slot_map(ctype, e)
-		out.append([a, int((maps[a] as Dictionary).get(str(cid), -1)), b, int((maps[b] as Dictionary).get(str(cid), -1))])
+		out.append([a, int((maps.get(a, {}) as Dictionary).get(str(cid), -1)), b, int((maps.get(b, {}) as Dictionary).get(str(cid), -1))])
 	if ctype == "power" or ctype == "network":
 		for l in links(ctype):
 			out.append([l[0], out_slot(ctype), l[1], in_slot(ctype)])
 	return out
 
 
+## Nachbarliste aus edges(): Anschluss -> [[anderer, eigene Buchse, andere Buchse], ...] in der
+## Reihenfolge der Kanten. Spart in der Breitensuche das Durchgehen aller Kanten je Knoten.
+static func adjacency(edge_list: Array) -> Dictionary:
+	var adj := {}
+	for e in edge_list:
+		var a := str(e[0])
+		var b := str(e[2])
+		if not adj.has(a):
+			adj[a] = []
+		(adj[a] as Array).append([b, int(e[1]), int(e[3])])
+		if b != a:
+			if not adj.has(b):
+				adj[b] = []
+			(adj[b] as Array).append([a, int(e[3]), int(e[1])])
+	return adj
+
+
 ## Darf Strom/Netz über diese Verbindung von cur zu other fließen?
-static func flows(ctype: String, cur: String, cur_slot: int, other: String, other_slot: int) -> bool:
-	var rc := role(ctype, cur)
-	var ro := role(ctype, other)
+## roles: optional ein Merkzettel Anschluss -> Rolle für viele Abfragen hintereinander (Breitensuche).
+static func flows(ctype: String, cur: String, cur_slot: int, other: String, other_slot: int, roles: Variant = null) -> bool:
+	var rc := ""
+	var ro := ""
+	if roles is Dictionary:
+		var memo: Dictionary = roles
+		if not memo.has(cur):
+			memo[cur] = role(ctype, cur)
+		if not memo.has(other):
+			memo[other] = role(ctype, other)
+		rc = memo[cur]
+		ro = memo[other]
+	else:
+		rc = role(ctype, cur)
+		ro = role(ctype, other)
 	if rc == "strip":
 		if cur_slot == in_slot(ctype):
 			return false
@@ -291,5 +319,10 @@ static func flows(ctype: String, cur: String, cur_slot: int, other: String, othe
 
 
 ## Spielzustand ohne festen Bezug: GameState lädt dieses Skript selbst, ein direkter Verweis wäre ein Kreis.
+static var _gs_node: Node
+
+
 static func _gs() -> Node:
-	return (Engine.get_main_loop() as SceneTree).root.get_node("GameState")
+	if _gs_node == null or not is_instance_valid(_gs_node):
+		_gs_node = (Engine.get_main_loop() as SceneTree).root.get_node("GameState")
+	return _gs_node

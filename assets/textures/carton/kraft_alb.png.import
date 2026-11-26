@@ -3,20 +3,21 @@
 importer="texture"
 type="CompressedTexture2D"
 uid="uid://cad5yupekvcob"
-path="res://.godot/imported/kraft_alb.png-897e4103fe73f8ae625c144846ad7b9f.ctex"
+path.bptc="res://.godot/imported/kraft_alb.png-897e4103fe73f8ae625c144846ad7b9f.bptc.ctex"
 metadata={
-"vram_texture": false
+"imported_formats": ["s3tc_bptc"],
+"vram_texture": true
 }
 
 [deps]
 
 source_file="res://assets/textures/carton/kraft_alb.png"
-dest_files=["res://.godot/imported/kraft_alb.png-897e4103fe73f8ae625c144846ad7b9f.ctex"]
+dest_files=["res://.godot/imported/kraft_alb.png-897e4103fe73f8ae625c144846ad7b9f.bptc.ctex"]
 
 [params]
 
-compress/mode=0
-compress/high_quality=false
+compress/mode=2
+compress/high_quality=true
 compress/lossy_quality=0.7
 compress/uastc_level=0
 compress/rdo_quality_loss=0.0

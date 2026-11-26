@@ -36,9 +36,37 @@ func instantiate_custom_model(model_id: String) -> Node3D:
 	return null
 
 
-func _configure_imported_visuals(node: Node) -> void:
+## Kleine Einzelteile (unter 20 cm) blenden ab etwa der 200-fachen Größe weich aus: Dann wären sie nur
+## noch wenige Pixel groß. Das spart Zeichenaufrufe, auch in den Schatten. Leuchtende Teile (von weitem
+## als Lichtpunkt sichtbar) und Figuren mit Skelett oder Gesichtsformen bleiben unverändert.
+const SMALL_PART_SIZE := 0.20
+
+
+static func _limit_small_part(mi: MeshInstance3D, xf: Transform3D) -> void:
+	if mi.mesh == null or mi.skin != null or mi.visibility_range_end > 0.0:
+		return
+	if mi.mesh is ArrayMesh and (mi.mesh as ArrayMesh).get_blend_shape_count() > 0:
+		return
+	var longest := (xf * mi.mesh.get_aabb()).get_longest_axis_size()
+	if longest <= 0.0 or longest >= SMALL_PART_SIZE:
+		return
+	for s in mi.mesh.get_surface_count():
+		var m := mi.get_active_material(s)
+		if m is BaseMaterial3D and (m as BaseMaterial3D).emission_enabled:
+			return
+		if m is ShaderMaterial:
+			return
+	mi.visibility_range_end = clampf(longest * 200.0, 10.0, 40.0)
+	mi.visibility_range_end_margin = 2.0
+	mi.visibility_range_fade_mode = GeometryInstance3D.VISIBILITY_RANGE_FADE_SELF
+
+
+func _configure_imported_visuals(node: Node, xf: Transform3D = Transform3D.IDENTITY) -> void:
+	if node is Node3D:
+		xf = xf * (node as Node3D).transform
 	if node is MeshInstance3D:
 		var mi := node as MeshInstance3D
+		_limit_small_part(mi, xf)
 		if mi.name.contains("Glass"):
 			mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 			if mi.mesh != null:
@@ -49,7 +77,7 @@ func _configure_imported_visuals(node: Node) -> void:
 						bm.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
 						bm.cull_mode = BaseMaterial3D.CULL_DISABLED
 	for child in node.get_children():
-		_configure_imported_visuals(child)
+		_configure_imported_visuals(child, xf)
 
 
 func _find_model_path(model_id: String) -> String:

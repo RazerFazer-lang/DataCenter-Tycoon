@@ -37,6 +37,12 @@
       "items": [
         {
           "tag": "neu",
+          "version": "v3.2",
+          "title": "Performance-Paket",
+          "desc": "Mehr FPS ohne Grafikverlust, kein Ruckler beim ersten Rundgang, schnellerer Simulationstakt, weniger Netzverkehr und ein kleinerer Download."
+        },
+        {
+          "tag": "neu",
           "version": "v3.1",
           "title": "Steckleisten mit Ein- und Ausgang",
           "desc": "Strom- und LAN-Leisten mit Seitenbuchsen für Ketten, direktes Zusammenstecken, Last je Leiste und Kette sowie A+B-Einspeisung für Racks."

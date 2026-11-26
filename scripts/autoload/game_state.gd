@@ -1293,6 +1293,16 @@ var current_save_name: String = "Mein DataCenter"
 var _next_entity_num: int = 1
 var _next_ticket_num: int = 101
 var _sim_accum: float = 0.0
+## Sim-Takt als Änderungspaket: Racks und große Listen gehen nur mit, wenn sie sich seit dem letzten
+## Paket geändert haben. Alle SIM_FULL_EVERY Takte geht alles mit (Sicherheitsnetz).
+const SIM_FULL_EVERY := 10
+var _sim_full_in := 0
+var _sim_sent_racks: Dictionary = {}
+var _sim_sent_misc: Dictionary = {}
+## Für Tests und Messungen: Größe des letzten Sim-Pakets in Bytes (nur wenn eingeschaltet).
+var measure_sim_packet := false
+var last_sim_packet_bytes := 0
+var last_sim_packet_racks := 0
 var _autosave_accum: float = 0.0
 var _phone_ring_accum: float = 0.0
 var _call_cooldown: float = 18.0
@@ -2540,6 +2550,8 @@ func build_snapshot() -> Dictionary:
 func send_full_snapshot_to_peer(peer_id: int) -> void:
 	if not multiplayer.is_server():
 		return
+	# Danach wieder ein volles Sim-Paket, nicht nur Änderungen.
+	_sim_full_in = 0
 	_rpc_receive_full_snapshot.rpc_id(peer_id, build_snapshot())
 
 
@@ -2886,8 +2898,10 @@ func get_slot_stats(slot: Dictionary) -> Dictionary:
 		if _stats_cache.size() > 512:
 			_stats_cache.clear()
 		hit = _compute_slot_stats(slot)
+		# Schreibgeschützt statt bei jedem Abruf kopiert: Wer etwas ändern will, nimmt duplicate().
+		(hit as Dictionary).make_read_only()
 		_stats_cache[key.duplicate(true)] = hit
-	return (hit as Dictionary).duplicate()
+	return hit
 
 
 func _compute_slot_stats(slot: Dictionary) -> Dictionary:
@@ -3380,6 +3394,47 @@ func get_cable_slot_map(cable_type: String, endpoint_id: String) -> Dictionary:
 		result[cid] = next
 		used[next] = true
 	return result
+
+
+## Wie get_cable_slot_map, aber für alle Anschlüsse einer Kabelart in einem Durchgang:
+## Anschluss -> {Kabel-ID -> Buchse}. Gleiche Regeln, gleiche Reihenfolge.
+func get_cable_slot_maps(cable_type: String) -> Dictionary:
+	var per := {}
+	for cid in cables.keys():
+		var c: Dictionary = cables[cid]
+		if str(c.get("cable_type", "")) != cable_type:
+			continue
+		var f := str(c.get("from_id", ""))
+		var t := str(c.get("to_id", ""))
+		_slot_map_take(per, f, str(cid), int(c.get("from_slot", -1)))
+		if t != f:
+			_slot_map_take(per, t, str(cid), int(c.get("to_slot", -1)))
+	var out := {}
+	for e in per:
+		var p: Array = per[e]
+		var result: Dictionary = p[0]
+		var used: Dictionary = p[1]
+		var legacy: Array = p[2]
+		legacy.sort()
+		var next := 0
+		for cid in legacy:
+			while used.has(next):
+				next += 1
+			result[cid] = next
+			used[next] = true
+		out[e] = result
+	return out
+
+
+func _slot_map_take(per: Dictionary, endpoint_id: String, cid: String, s: int) -> void:
+	if not per.has(endpoint_id):
+		per[endpoint_id] = [{}, {}, []]
+	var p: Array = per[endpoint_id]
+	if s >= 0 and not (p[1] as Dictionary).has(s):
+		(p[0] as Dictionary)[cid] = s
+		(p[1] as Dictionary)[s] = true
+	else:
+		(p[2] as Array).append(cid)
 
 
 ## Gewünschte Buchse, wenn sie existiert und frei ist, sonst die erste freie. -1 = keine frei.
@@ -4584,6 +4639,8 @@ func _run_simulation_step(dt: float) -> void:
 		var rack: Dictionary = racks[rid]
 		var rtemp := float(rack["temp"])
 		var slots: Array = rack["slots"]
+		# Staub hängt am Standort des Racks, nicht am Einschub: einmal je Rack fragen.
+		var dust_f := -1.0
 		for i in range(slots.size()):
 			var slot: Dictionary = slots[i]
 			var item_type := str(slot["item_type"])
@@ -4594,7 +4651,9 @@ func _run_simulation_step(dt: float) -> void:
 				money = maxf(0.0, money - 3.0 * dt)
 			elif is_slot_on(slot) and bool(rack["powered"]):
 				# Staub sammelt sich sehr langsam an; vorbeugende Wartung drückt Ausfallrisiko auf nahezu 0 %!
-				var dust := clampf(float(slot.get("dust_level", 0.0)) + dt * 0.048 * DecorManager.dust_factor(rack["pos"]), 0.0, 100.0)
+				if dust_f < 0.0:
+					dust_f = DecorManager.dust_factor(rack["pos"])
+				var dust := clampf(float(slot.get("dust_level", 0.0)) + dt * 0.048 * dust_f, 0.0, 100.0)
 				var th_hp := clampf(float(slot.get("thermal_health", 100.0)) - dt * 0.022 * (1.0 + 1.5 * get_slot_sloppiness(slot)), 0.0, 100.0)
 				slot["dust_level"] = dust
 				slot["thermal_health"] = th_hp
@@ -5270,10 +5329,17 @@ func _recalculate_networks_and_metrics() -> void:
 	if FinanceManager.is_power_blocked():
 		max_watts = maxi(FinanceManager.BLOCK_POWER_MIN, int(float(max_watts) * FinanceManager.BLOCK_POWER_FACTOR))
 
+	# Verbundkabel einmal zählen statt je Rack alle Kabel durchzugehen.
+	var clustered_ids := {}
+	for cid in cables.keys():
+		var cc: Dictionary = cables[cid]
+		if str(cc["cable_type"]) == "cluster":
+			clustered_ids[str(cc["from_id"])] = true
+			clustered_ids[str(cc["to_id"])] = true
 	for rid in racks.keys():
 		racks[rid]["powered"] = false
 		racks[rid]["networked"] = false
-		racks[rid]["clustered"] = count_cables_on("cluster", str(rid)) > 0
+		racks[rid]["clustered"] = clustered_ids.has(str(rid))
 	for cid in coolers.keys():
 		coolers[cid]["powered"] = false
 	for uid in ups_units.keys():
@@ -5292,22 +5358,16 @@ func _recalculate_networks_and_metrics() -> void:
 		bus_visited[src] = true
 		bus_queue.append(src)
 
-	var p_edges := StripRules.edges("power")
+	var p_adj := StripRules.adjacency(StripRules.edges("power"))
+	# Rollen ändern sich während der Berechnung nicht: einmal je Anschluss ermitteln.
+	var p_roles := {}
 	while not bus_queue.is_empty():
 		var curr := str(bus_queue.pop_front())
-		for e in p_edges:
-			var other := ""
-			var cs := -1
-			var os := -1
-			if str(e[0]) == curr:
-				other = str(e[2])
-				cs = int(e[1])
-				os = int(e[3])
-			elif str(e[2]) == curr:
-				other = str(e[0])
-				cs = int(e[3])
-				os = int(e[1])
-			if other == "" or bus_visited.has(other) or not StripRules.flows("power", curr, cs, other, os):
+		for x in p_adj.get(curr, []):
+			var other: String = x[0]
+			var cs: int = x[1]
+			var os: int = x[2]
+			if other == "" or bus_visited.has(other) or not StripRules.flows("power", curr, cs, other, os, p_roles):
 				continue
 			bus_visited[other] = true
 			if ups_units.has(other):
@@ -5336,19 +5396,11 @@ func _recalculate_networks_and_metrics() -> void:
 			p_queue.append(src)
 		while not p_queue.is_empty():
 			var curr := str(p_queue.pop_front())
-			for e in p_edges:
-				var other := ""
-				var cs := -1
-				var os := -1
-				if str(e[0]) == curr:
-					other = str(e[2])
-					cs = int(e[1])
-					os = int(e[3])
-				elif str(e[2]) == curr:
-					other = str(e[0])
-					cs = int(e[3])
-					os = int(e[1])
-				if other == "" or not StripRules.flows("power", curr, cs, other, os):
+			for x in p_adj.get(curr, []):
+				var other: String = x[0]
+				var cs: int = x[1]
+				var os: int = x[2]
+				if other == "" or not StripRules.flows("power", curr, cs, other, os, p_roles):
 					continue
 				# A+B-Einspeisung: ein Rack an zwei Leisten teilt seine Last auf beide auf.
 				if racks.has(other) and p_visited.has(other):
@@ -5388,7 +5440,8 @@ func _recalculate_networks_and_metrics() -> void:
 			n_visited[HALL_NORD_ROUTER_ID] = true
 			n_queue.append(HALL_NORD_ROUTER_ID)
 
-		var n_edges := StripRules.edges("network")
+		var n_adj := StripRules.adjacency(StripRules.edges("network"))
+		var n_roles := {}
 		while not n_queue.is_empty():
 			var curr := str(n_queue.pop_front())
 			var can_forward := (
@@ -5400,19 +5453,11 @@ func _recalculate_networks_and_metrics() -> void:
 			)
 			if not can_forward:
 				continue
-			for e in n_edges:
-				var other := ""
-				var cs := -1
-				var os := -1
-				if str(e[0]) == curr:
-					other = str(e[2])
-					cs = int(e[1])
-					os = int(e[3])
-				elif str(e[2]) == curr:
-					other = str(e[0])
-					cs = int(e[3])
-					os = int(e[1])
-				if other == "" or n_visited.has(other) or not StripRules.flows("network", curr, cs, other, os):
+			for x in n_adj.get(curr, []):
+				var other: String = x[0]
+				var cs: int = x[1]
+				var os: int = x[2]
+				if other == "" or n_visited.has(other) or not StripRules.flows("network", curr, cs, other, os, n_roles):
 					continue
 				n_visited[other] = true
 				_lan_parent[other] = curr
@@ -5700,6 +5745,15 @@ func is_shared_panel_open(entity_id: String, panel_id: String) -> bool:
 	return shared_open_panels.has(_panel_key(entity_id, panel_id))
 
 
+## Für Abfragen jedes Bild: Schlüssel einmal bauen (panel_key) und dann nur noch nachsehen.
+func panel_key(entity_id: String, panel_id: String) -> String:
+	return _panel_key(entity_id, panel_id)
+
+
+func is_panel_key_open(key: String) -> bool:
+	return shared_open_panels.has(key)
+
+
 ## Tür/Seitenwand/Antenne umschalten: Der Server entscheidet und schickt den neuen Zustand an alle.
 func request_toggle_panel(entity_id: String, panel_id: String) -> void:
 	if entity_id.is_empty() or panel_id.is_empty():
@@ -5825,13 +5879,15 @@ func _apply_rack_power_changes() -> void:
 
 ## Hält den Stromzustand aller Einschübe passend zur Schiene (nur Host).
 func _refresh_slot_power() -> void:
+	# Meist ist kein Schacht ausgefahren: dann gar nicht erst Schlüssel bauen.
+	var any_open := not shared_open_panels.is_empty()
 	for rid in racks.keys():
 		var slots: Array = racks[rid]["slots"]
 		for i in range(slots.size()):
 			var slot: Dictionary = slots[i]
 			if str(slot.get("item_type", "")) == "":
 				continue
-			if is_slot_extended(str(rid), i):
+			if any_open and is_slot_extended(str(rid), i):
 				slot["offline"] = true
 				slot.erase("boot_left")
 				slot.erase("boot_total")
@@ -8450,11 +8506,18 @@ func _rpc_sync_call(data: Dictionary) -> void:
 
 
 func _broadcast_sim_tick() -> void:
+	# Das Paket wird beim Senden sofort verpackt, Kopien der Listen braucht es dafür nicht.
+	var full := _sim_full_in <= 0
+	_sim_full_in = SIM_FULL_EVERY if full else _sim_full_in - 1
+	if full:
+		_sim_sent_racks.clear()
+		_sim_sent_misc.clear()
 	var rack_temps := {}
 	for rid in racks.keys():
 		var rk: Dictionary = racks[rid]
-		rack_temps[rid] = {
-			"temp": float(rk["temp"]),
+		var entry := {
+			# Zehntelgrad reicht für jede Anzeige und spart Pakete, solange die Temperatur nur zittert.
+			"temp": snappedf(float(rk["temp"]), 0.1),
 			"powered": bool(rk["powered"]),
 			"networked": bool(rk["networked"]),
 			"rental_type": str(rk.get("rental_type", "none")),
@@ -8462,9 +8525,14 @@ func _broadcast_sim_tick() -> void:
 			"active_users": int(rk.get("active_users", 0)),
 			"satisfaction": float(rk.get("satisfaction", 100.0)),
 			"rental_income": float(rk.get("rental_income", 0.0)),
-			"metrics": (rk.get("metrics", {}) as Dictionary).duplicate(true),
-			"services": (rk.get("services", []) as Array).duplicate(true),
+			"metrics": rk.get("metrics", {}),
+			"services": rk.get("services", []),
 		}
+		var h := entry.hash()
+		if _sim_sent_racks.get(rid, -1) == h:
+			continue
+		_sim_sent_racks[rid] = h
+		rack_temps[rid] = entry
 	var cooler_pwr := {}
 	for cid in coolers.keys():
 		cooler_pwr[cid] = bool(coolers[cid]["powered"])
@@ -8484,15 +8552,14 @@ func _broadcast_sim_tick() -> void:
 		"grid_outage_left": grid_outage_left,
 		"ups_backup_active": ups_backup_active,
 		"avg_ups_charge": avg_ups_charge,
-		"strip_loads": strip_loads.duplicate(),
-		"chain_loads": chain_loads.duplicate(),
-		"lan_chain_mbps": lan_chain_mbps.duplicate(),
-		"strip_parent": _strip_parent.duplicate(),
-		"lan_parent": _lan_parent.duplicate(),
+		"strip_loads": strip_loads,
+		"chain_loads": chain_loads,
+		"lan_chain_mbps": lan_chain_mbps,
+		"strip_parent": _strip_parent,
+		"lan_parent": _lan_parent,
 		"overload_timer": overload_timer,
 		"power_tier": power_tier,
 		"router_tier": router_tier,
-		"research_levels": research_levels.duplicate(),
 		"company_milestones_reached": company_milestones_reached,
 		"company_level": company_level,
 		"ai_platform_level": ai_platform_level,
@@ -8522,7 +8589,6 @@ func _broadcast_sim_tick() -> void:
 		"used_bandwidth_mbps": used_bandwidth_mbps,
 		"max_bandwidth_mbps": max_bandwidth_mbps,
 		"next_payout_in": next_payout_in,
-		"contracts": contracts,
 		"rack_temps": rack_temps,
 		"cooler_pwr": cooler_pwr,
 		"ups_sync": ups_sync,
@@ -8530,15 +8596,20 @@ func _broadcast_sim_tick() -> void:
 		"weather_next": weather_next,
 		"airflow_bonus": airflow_bonus,
 		"cable_mgmt_bonus": cable_mgmt_bonus,
-		"career_completed": career_completed,
-		"active_team_order": active_team_order,
 		"halle_nord_owned": halle_nord_owned,
 		"delivery_target_site": delivery_target_site,
-		"building_upgrades": building_upgrades.duplicate(true),
-		"active_constructions": active_constructions.duplicate(true),
-		"decor_items": decor_items.duplicate(true),
 		"maint_kits": maint_kits,
 	}
+	# Größere Teile nur bei Änderung. (Die Deko-Liste stand früher hier mit drin, gelesen hat sie keiner.)
+	for k in ["contracts", "research_levels", "career_completed", "active_team_order", "building_upgrades", "active_constructions"]:
+		var v: Variant = get(k)
+		var h := hash(v)
+		if _sim_sent_misc.get(k, -1) != h:
+			_sim_sent_misc[k] = h
+			packet[k] = v
+	if measure_sim_packet:
+		last_sim_packet_bytes = var_to_bytes(packet).size()
+		last_sim_packet_racks = rack_temps.size()
 	_rpc_sync_sim_tick.rpc(packet)
 
 
@@ -8564,7 +8635,8 @@ func _rpc_sync_sim_tick(packet: Dictionary) -> void:
 		overload_timer = float(packet["overload_timer"])
 		power_tier = int(packet["power_tier"])
 		router_tier = clampi(int(packet.get("router_tier", 0)), 0, ROUTER_TIERS.size() - 1)
-		research_levels = _sanitize_research(packet.get("research_levels", {}))
+		if packet.has("research_levels"):
+			research_levels = _sanitize_research(packet["research_levels"])
 		ai_platform_level = int(packet["ai_platform_level"])
 		company_milestones_reached = int(packet.get("company_milestones_reached", company_milestones_reached))
 		company_level = int(packet.get("company_level", company_level))
@@ -8600,7 +8672,8 @@ func _rpc_sync_sim_tick(packet: Dictionary) -> void:
 		used_bandwidth_mbps = float(packet.get("used_bandwidth_mbps", 0.0))
 		max_bandwidth_mbps = float(packet.get("max_bandwidth_mbps", 50.0))
 		next_payout_in = float(packet["next_payout_in"])
-		contracts = packet["contracts"].duplicate(true)
+		if packet.get("contracts", null) is Dictionary:
+			contracts = (packet["contracts"] as Dictionary).duplicate(true)
 		weather_state = str(packet.get("weather_state", weather_state))
 		weather_next = str(packet.get("weather_next", ""))
 		airflow_bonus = float(packet.get("airflow_bonus", airflow_bonus))

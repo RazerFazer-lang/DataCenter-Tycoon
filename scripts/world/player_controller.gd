@@ -2649,6 +2649,8 @@ func _build_human() -> void:
 	if is_local:
 		for mi in _human.find_children("*", "MeshInstance3D", true, false):
 			(mi as MeshInstance3D).cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_SHADOWS_ONLY
+			# Eigene Ebene: Hallenlampen können die eigene Figur aus ihren Schatten nehmen (WorldController).
+			(mi as MeshInstance3D).layers = MeshMerger.LOCAL_BODY_LAYER
 		for l in _human.find_children("*", "Label3D", true, false):
 			(l as Label3D).visible = false
 

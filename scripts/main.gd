@@ -91,6 +91,81 @@ func _ready() -> void:
 
 	# Ablauf: Verion-Digital Studio- & Titel-Intro -> nahtloser Ladebildschirm -> 3D-Hauptmenü.
 	intro_splash.start_intro()
+	_warm_up_views()
+
+
+## Blickpunkte, die beim ersten Hinsehen sonst kurz ruckeln (Shader, Pipelines, Texturen).
+const WARM_SPOTS := [
+	[Vector3(0.5, 1.65, 2.0), Vector3(0.0, 1.0, -3.0)],
+	[Vector3(1.0, 1.7, 0.5), Vector3(20.0, 1.2, 0.0)],
+	[Vector3(0.0, 1.65, 2.0), Vector3(0.0, 1.3, 14.0)],
+	[Vector3(-3.0, 1.7, 14.0), Vector3(3.0, 1.5, 0.0)],
+	[Vector3(-9.0, 1.7, 9.0), Vector3(25.0, 1.5, -5.0)],
+	[Vector3(-9.5, 1.7, -8.5), Vector3(20.0, 2.5, -6.0)],
+	[Vector3(2.0, 6.0, -2.0), Vector3(20.0, 14.0, 12.0)],
+	[Vector3(2.0, 6.0, -2.0), Vector3(20.0, 2.0, 20.0)],
+	[Vector3(-6.0, 1.7, -322.0), Vector3(6.0, 1.0, -318.0)],
+]
+
+
+## Einmal je Programmstart auch beim ersten Betreten der Welt (siehe _warm_up_session).
+var _session_warmed := false
+
+
+## Hinter dem deckenden Intro bzw. Ladebildschirm einmal durch die wichtigen Blickpunkte fahren: Was
+## dort zu sehen ist, wird schon jetzt einmal gezeichnet, nicht erst beim ersten Hinsehen im Spiel.
+## Sobald nichts Deckendes mehr davor liegt (Intro übersprungen und ausgeblendet), hört es auf.
+func _warm_up_views() -> void:
+	await _sweep_views(menu_camera, func() -> bool:
+		if _startup_done or NetworkManager.is_in_session:
+			return false
+		return (intro_splash.visible and intro_splash.modulate.a >= 0.999) or (loading_screen.visible and loading_screen.modulate.a >= 0.999))
+	if not NetworkManager.is_in_session:
+		menu_camera.current = true
+
+
+## Im Spiel sehen Lampen, Tageszeit und Figuren anders aus als im Menü, dafür braucht die Grafikkarte
+## eigene Varianten. Deshalb beim ersten Betreten noch einmal kurz hinter dem Ladebildschirm.
+func _warm_up_session() -> void:
+	if _session_warmed or DisplayServer.get_name() == "headless":
+		return
+	_session_warmed = true
+	loading_screen.start_loading("BETRETE RECHENZENTRUM…", 1.6)
+	# Auf die eigene Figur warten: Deren Kamera ist die Vorlage (Sichtfeld, Ebenen, Weite).
+	var t0 := Time.get_ticks_msec()
+	while (world.local_player == null or get_viewport().get_camera_3d() == null or get_viewport().get_camera_3d() == menu_camera) \
+			and Time.get_ticks_msec() - t0 < 1000:
+		await get_tree().process_frame
+	var player_cam := get_viewport().get_camera_3d()
+	if player_cam == null or player_cam == menu_camera:
+		return
+	await _sweep_views(player_cam, func() -> bool:
+		return NetworkManager.is_in_session and loading_screen.visible and loading_screen.modulate.a >= 0.999)
+	if is_instance_valid(player_cam) and NetworkManager.is_in_session:
+		player_cam.current = true
+
+
+## Eine eigene Kamera (Einstellungen wie template) durch WARM_SPOTS fahren, solange covered() gilt.
+func _sweep_views(template: Camera3D, covered: Callable) -> void:
+	var cam := Camera3D.new()
+	cam.name = "WarmUpCamera"
+	cam.cull_mask = template.cull_mask
+	cam.near = template.near
+	cam.far = maxf(template.far, 500.0)
+	cam.fov = template.fov
+	cam.attributes = template.attributes
+	cam.environment = template.environment
+	menu_camera.get_parent().add_child(cam)
+	await get_tree().process_frame
+	for sp in WARM_SPOTS:
+		if not bool(covered.call()):
+			break
+		cam.current = true
+		cam.global_position = sp[0]
+		cam.look_at(sp[1], Vector3.UP)
+		for i in 6:
+			await get_tree().process_frame
+	cam.queue_free()
 
 
 func _on_intro_fading_out() -> void:
@@ -230,6 +305,7 @@ func _on_session_entered() -> void:
 	hud.set_pause_visible(false)
 	world.activate_session()
 	Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
+	_warm_up_session()
 
 
 func _on_loading_finished() -> void:

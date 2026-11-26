@@ -86,7 +86,8 @@ func _load() -> void:
 func _process(delta: float) -> void:
 	if rig == null or manual or not is_visible_in_tree():
 		return
-	# Weit weg oder hinter der Kamera reichen weniger Schritte je Sekunde.
+	# Weit weg oder außerhalb des Bildes reichen weniger Schritte je Sekunde. Außerhalb des Bildes
+	# sieht man höchstens den Schatten, dafür genügt etwa ein Sechstel.
 	_acc += delta
 	_skip -= 1
 	if _skip > 0:
@@ -95,9 +96,13 @@ func _process(delta: float) -> void:
 	if cam != null:
 		var to := global_position - cam.global_position
 		var dist := to.length()
-		var behind := dist > 4.0 and to.dot(-cam.global_basis.z) < -1.0
-		_skip = 1 if dist < 14.0 and not behind else (2 if dist < 30.0 and not behind else 5)
-	rig.update(minf(_acc, 0.15))
+		var seen := dist <= 4.0 or cam.is_position_in_frustum(global_position + Vector3(0.0, 1.0, 0.0)) \
+			or cam.is_position_in_frustum(global_position)
+		if not seen:
+			_skip = 6
+		else:
+			_skip = 1 if dist < 14.0 else (2 if dist < 30.0 else (3 if dist < 60.0 else 5))
+	rig.update(minf(_acc, 0.25))
 	_acc = 0.0
 
 

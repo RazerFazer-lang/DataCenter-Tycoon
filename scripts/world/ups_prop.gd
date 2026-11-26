@@ -326,6 +326,7 @@ func _add_area(pos: Vector3, size: Vector3, interact_type: String) -> void:
 ## Warme Abluft über dem Gerät.
 func _make_heat(size: Vector3) -> CPUParticles3D:
 	var p := CPUParticles3D.new()
+	p.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	p.position = Vector3(0.0, size.y + 0.05, -0.05)
 	p.amount = 10
 	p.lifetime = 2.0
@@ -360,6 +361,7 @@ func _make_heat(size: Vector3) -> CPUParticles3D:
 
 func _make_sparks(size: Vector3) -> CPUParticles3D:
 	var p := CPUParticles3D.new()
+	p.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	p.position = Vector3(0.0, size.y * 0.62, size.z * 0.5)
 	p.amount = 26
 	p.lifetime = 0.7

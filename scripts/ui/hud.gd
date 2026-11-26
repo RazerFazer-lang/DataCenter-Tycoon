@@ -102,6 +102,7 @@ var _pause_sharp_slider: HSlider
 var _pause_aniso_option: OptionButton
 var _pause_fps_option: OptionButton
 var _pause_vsync_check: CheckButton
+var _pause_shadow_check: CheckButton
 var _pause_sfx_slider: HSlider
 var _pause_fov_slider: HSlider
 var _pause_window_mode_option: OptionButton
@@ -298,6 +299,18 @@ func _refresh_all() -> void:
 	_refresh_crew()
 
 
+## Schriftfarbe nur bei Änderung setzen: Jede Überschreibung löst ein neues Layout aus.
+static func _set_font_col(lbl: Control, col: Color) -> void:
+	if not lbl.has_theme_color_override("font_color") or lbl.get_theme_color("font_color") != col:
+		lbl.add_theme_color_override("font_color", col)
+
+
+## Was die Startliste und die Crew-Liste zuletzt gezeigt haben (neu aufbauen nur bei Änderung).
+var _checklist_sig: Array = []
+var _crew_sig: Array = []
+var _crew_ping_lbls: Dictionary = {}
+
+
 func _refresh_stats() -> void:
 	if _power_lbl == null:
 		return
@@ -310,7 +323,7 @@ func _refresh_stats() -> void:
 		p_col = UIStyle.COL_AMBER if GameState.ups_backup_active else UIStyle.COL_RED
 	elif pwr_ratio > 0.80:
 		p_col = UIStyle.COL_AMBER
-	_power_lbl.add_theme_color_override("font_color", UIStyle.COL_TEXT_MAIN if p_col == UIStyle.COL_GREEN else p_col)
+	_set_font_col(_power_lbl, UIStyle.COL_TEXT_MAIN if p_col == UIStyle.COL_GREEN else p_col)
 	_set_bar_color(_power_bar, p_col)
 	_set_icon(_power_icon, "power", UIStyle.COL_GOLD_TEXT if p_col == UIStyle.COL_GREEN else p_col)
 
@@ -318,7 +331,7 @@ func _refresh_stats() -> void:
 	_temp_bar.value = clampf((GameState.room_temp - 15.0) / 75.0 * 100.0, 0.0, 100.0)
 	var hot := GameState.room_temp >= 56.0
 	var t_col := UIStyle.COL_TEXT_MAIN if not hot else (UIStyle.COL_AMBER if GameState.room_temp < 72.0 else UIStyle.COL_RED)
-	_temp_lbl.add_theme_color_override("font_color", t_col)
+	_set_font_col(_temp_lbl, t_col)
 	_set_bar_color(_temp_bar, UIStyle.COL_BLUE if not hot else t_col)
 	_set_icon(_temp_icon, "temp", UIStyle.COL_BLUE if not hot else t_col)
 
@@ -347,6 +360,14 @@ func _refresh_checklist() -> void:
 	_checklist_seen_open = true
 	_checklist_panel.visible = true
 	_checklist_count_lbl.text = "%d / %d" % [done_n, steps.size()]
+	# Kommt mit jedem Sim-Takt: nur neu aufbauen, wenn sich ein Schritt oder eine Taste geändert hat.
+	var sig: Array = [TranslationServer.get_locale()]
+	for s in steps:
+		var sd0: Dictionary = s
+		sig.append_array([bool(sd0["done"]), SettingsManager.remap_prompt_keys(tr(str(sd0["text"]))), _format_checklist_hint(tr(str(sd0.get("hint", ""))))])
+	if sig == _checklist_sig and _checklist_box.get_child_count() > 0:
+		return
+	_checklist_sig = sig
 	for c in _checklist_box.get_children():
 		c.queue_free()
 
@@ -426,7 +447,7 @@ func _draw_check_box(ci: Control, state: int) -> void:
 
 func _set_bar_color(bar: ProgressBar, col: Color) -> void:
 	var fill := bar.get_theme_stylebox("fill") as StyleBoxFlat
-	if fill != null:
+	if fill != null and fill.bg_color != col:
 		fill.bg_color = col
 
 
@@ -541,6 +562,24 @@ func _refresh_crew() -> void:
 		_crew_panel.visible = false
 		return
 	_crew_panel.visible = true
+	# Gleiche Leute wie beim letzten Mal: nur die Ping-Anzeigen auffrischen.
+	var sig: Array = []
+	for pid0 in NetworkManager.players.keys():
+		var inf0: Dictionary = NetworkManager.players[pid0]
+		sig.append_array([pid0, str(inf0.get("name", "")), inf0.get("color", Color.WHITE)])
+	if sig == _crew_sig and _crew_box.get_child_count() > 0:
+		for pid1 in _crew_ping_lbls:
+			var pl: Label = _crew_ping_lbls[pid1]
+			if not is_instance_valid(pl):
+				continue
+			var p1 := NetworkManager.get_player_ping(int(pid1))
+			pl.visible = p1 >= 0
+			if p1 >= 0:
+				pl.text = "%d ms" % p1
+				_set_font_col(pl, Color(1.0, 0.42, 0.38) if p1 > 150 else (Color(0.95, 0.85, 0.35) if p1 > 80 else Color(0.45, 0.85, 0.50)))
+		return
+	_crew_sig = sig
+	_crew_ping_lbls.clear()
 	for child in _crew_box.get_children():
 		child.queue_free()
 
@@ -579,7 +618,7 @@ func _refresh_crew() -> void:
 		row.add_child(name_lbl)
 
 		var ping := NetworkManager.get_player_ping(int(pid))
-		if int(pid) != 1 and ping >= 0:
+		if int(pid) != 1:
 			var ping_lbl := Label.new()
 			ping_lbl.text = "%d ms" % ping
 			var ping_col: Color = Color(0.45, 0.85, 0.50)
@@ -588,7 +627,9 @@ func _refresh_crew() -> void:
 			elif ping > 80:
 				ping_col = Color(0.95, 0.85, 0.35)
 			UIStyle.style_label(ping_lbl, 10, ping_col)
+			ping_lbl.visible = ping >= 0
 			row.add_child(ping_lbl)
+			_crew_ping_lbls[pid] = ping_lbl
 
 		if int(pid) == 1:
 			var host_lbl := Label.new()
@@ -612,6 +653,7 @@ func _on_pause_quick_settings_changed(_val: float = 0.0) -> void:
 		var fps_idx := clampi(_pause_fps_option.selected, 0, SettingsManager.FPS_LIMITS.size() - 1)
 		SettingsManager.max_fps = SettingsManager.FPS_LIMITS[fps_idx]
 		SettingsManager.vsync = _pause_vsync_check.button_pressed
+		SettingsManager.own_lamp_shadow = _pause_shadow_check.button_pressed
 		_update_pause_sharpness_state()
 	SettingsManager.save_settings()
 
@@ -626,6 +668,7 @@ func _sync_pause_graphics() -> void:
 	_pause_aniso_option.selected = SettingsManager.anisotropic
 	_pause_fps_option.selected = maxi(SettingsManager.FPS_LIMITS.find(SettingsManager.max_fps), 0)
 	_pause_vsync_check.set_pressed_no_signal(SettingsManager.vsync)
+	_pause_shadow_check.set_pressed_no_signal(SettingsManager.own_lamp_shadow)
 	_update_slider_label(_pause_scale_slider)
 	_update_slider_label(_pause_sharp_slider)
 	_update_pause_sharpness_state()
@@ -756,6 +799,8 @@ func _make_icon(kind: String, col: Color, px: int) -> Control:
 
 func _set_icon(ic: Control, kind: String, col: Color) -> void:
 	if ic == null:
+		return
+	if ic.get_meta("kind", "") == kind and ic.get_meta("col", Color.TRANSPARENT) == col:
 		return
 	ic.set_meta("kind", kind)
 	ic.set_meta("col", col)
@@ -1496,6 +1541,12 @@ func _build_pause_overlay() -> void:
 	_pause_vsync_check.add_theme_color_override("font_color", Color(0.80, 0.81, 0.81))
 	_pause_vsync_check.toggled.connect(func(_on: bool): _on_pause_quick_settings_changed())
 	_pause_gfx_details.add_child(_pause_vsync_check)
+	_pause_shadow_check = CheckButton.new()
+	_pause_shadow_check.text = tr("Eigener Schatten unter Hallenlampen (kostet FPS)")
+	_pause_shadow_check.add_theme_font_size_override("font_size", 13)
+	_pause_shadow_check.add_theme_color_override("font_color", Color(0.80, 0.81, 0.81))
+	_pause_shadow_check.toggled.connect(func(_on: bool): _on_pause_quick_settings_changed())
+	_pause_gfx_details.add_child(_pause_shadow_check)
 
 	_build_pause_general_section(pvbox)
 

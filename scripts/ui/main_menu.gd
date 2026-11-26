@@ -81,6 +81,7 @@ var _sharp_val: Label
 var _aniso_option: OptionButton
 var _fps_option: OptionButton
 var _vsync_check: CheckButton
+var _own_shadow_check: CheckButton
 var _host_password_input: LineEdit
 var _load_password_input: LineEdit
 var _join_password_input: LineEdit
@@ -212,6 +213,8 @@ func _sync_from_settings() -> void:
 		_fps_option.selected = maxi(SettingsManager.FPS_LIMITS.find(SettingsManager.max_fps), 0)
 	if _vsync_check != null:
 		_vsync_check.set_pressed_no_signal(SettingsManager.vsync)
+	if _own_shadow_check != null:
+		_own_shadow_check.set_pressed_no_signal(SettingsManager.own_lamp_shadow)
 	_update_graphics_labels()
 	if _join_ip_input != null and not SettingsManager.recent_ips.is_empty():
 		_join_ip_input.text = SettingsManager.recent_ips[0]
@@ -367,6 +370,8 @@ func _apply_settings_change() -> void:
 		SettingsManager.max_fps = SettingsManager.FPS_LIMITS[fps_idx]
 	if _vsync_check != null:
 		SettingsManager.vsync = _vsync_check.button_pressed
+	if _own_shadow_check != null:
+		SettingsManager.own_lamp_shadow = _own_shadow_check.button_pressed
 
 	_master_val.text = "%d%%" % int(roundf(_master_slider.value))
 	_sfx_val.text = "%d%%" % int(roundf(_sfx_slider.value))
@@ -1175,6 +1180,7 @@ func _build_settings_page() -> Control:
 	_ui_scale_option.tooltip_text = tr("Automatisch: 100 % bis 1080p, 125 % bei 1440p, 200 % bei 4K.")
 	_fps_option = _add_option_row(display, "FPS-Limit", SettingsManager.get_fps_labels())
 	_vsync_check = _add_check_row(display, "V-Sync (kein Bildreißen)")
+	_own_shadow_check = _add_check_row(display, "Eigener Schatten unter Hallenlampen (kostet FPS)")
 	_sync_window_options()
 
 	# --- Grafik ---

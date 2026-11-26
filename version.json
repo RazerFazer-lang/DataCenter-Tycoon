@@ -1,9 +1,25 @@
 {
-  "version": "3.1.0",
-  "launcher_version": "3.1.0",
-  "codename": "v3.1.0 Steckleisten mit Ein- und Ausgang",
+  "version": "3.2.0",
+  "launcher_version": "3.2.0",
+  "codename": "v3.2.0 Performance-Paket",
   "release_date": "2026-11-26",
   "changelog": [
+    {
+      "version": "v3.2.0",
+      "date": "2026-11-26",
+      "title": "Update 3.2: Mehr FPS, weniger Ruckler, kleinerer Download",
+      "items": [
+        "[PERFORMANCE] Mehr FPS bei gleichem Bild: in der Testwelt mit 12 Racks in Garage und vor den Racks rund 29 %, draußen bis zu 35 % mehr.",
+        "[PERFORMANCE] Rauch und Funken lassen die Hallenlampen nicht mehr jedes Bild ihre Schatten neu zeichnen (Garage: rund 70 % weniger Schatten-Zeichenaufrufe).",
+        "[PERFORMANCE] Kein Ruckler beim ersten Rundgang: Intro und ein kurzer Ladebildschirm beim Betreten bereiten die Grafik vor.",
+        "[PERFORMANCE] Der Simulationstakt ist bei 20 Racks etwa dreimal so schnell, Racks und Anzeigen bauen sich nur noch bei Änderungen neu auf.",
+        "[PERFORMANCE] Halle Nord blendet Verdecktes aus, kleine Teile und kleine Schrift blenden in der Ferne weich aus.",
+        "[GRAFIK] Niedrig und Mittel zeichnen eine flache Wolkenschicht statt der Volumenwolken. Hoch und Ultra bleiben gleich.",
+        "[GRAFIK] Neue Einstellung: Eigener Schatten unter Hallenlampen (standardmäßig aus, den Sonnenschatten gibt es immer).",
+        "[DOWNLOAD] Texturen gemeinsam und komprimiert: Spielpaket rund 130 MB kleiner, Grafikspeicher für Texturen etwa halbiert.",
+        "[CO-OP] Der Sim-Takt schickt nur noch Änderungen, deutlich weniger Datenverkehr. Alle Mitspieler brauchen v3.2.0."
+      ]
+    },
     {
       "version": "v3.1.0",
       "date": "2026-11-26",
