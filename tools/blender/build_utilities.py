@@ -3,6 +3,8 @@
 Aufruf in Blender:
     p = r"<pfad>/build_utilities.py"
     exec(compile(open(p, encoding="utf-8").read(), p, "exec"), {"__name__": "__main__", "__file__": p})
+Die .glb-Dateien schreibt danach export_models.py (build_all.py ruft beide in einem Blender-Lauf auf).
+Die Vorschaubilder preview_*.png landen in dct_paths.WORK_DIR (sonst tools/blender).
 
 Alle Masse stammen aus scripts/world/garage_builder.gd und sind hier in GODOT-Koordinaten notiert
 (X rechts, Y oben, Z zur Raummitte). g() rechnet sie nach Blender um (X, -Z, Y); der glTF-Export dreht
@@ -36,8 +38,12 @@ if SCRIPT_DIR and SCRIPT_DIR not in sys.path:
     sys.path.insert(0, SCRIPT_DIR)
 
 import build_racks as br  # noqa: E402
+import dct_paths  # noqa: E402
 
 importlib.reload(br)
+
+# Kachelgroesse der Lochblech-Textur. build_racks.py hat die Konstante seit dem Umbau in v2.1.1 nicht mehr.
+PERF_TILE = getattr(br, "PERF_TILE", 0.012)
 
 COLLECTION = "DCT_Utilities"
 DOOR_OPEN_DEG = -110.0
@@ -763,7 +769,7 @@ def build_router_vdsl(coll, M):
     p.gbox((0.0, 0.0, -0.115), (0.40, 0.16, 0.01), M["galv"])
     p.gbox((0.0, 0.0, 0.0), (0.58, 0.30, 0.20), M["router_body"])
     p.gbox((0.0, 0.158, -0.005), (0.56, 0.016, 0.19), M["router_body"])
-    p.gbox((0.0, 0.1675, -0.01), (0.40, 0.003, 0.12), M["perf"], uv=br.PERF_TILE)
+    p.gbox((0.0, 0.1675, -0.01), (0.40, 0.003, 0.12), M["perf"], uv=PERF_TILE)
     for sx in (-0.2905, 0.2905):
         for k in range(6):
             p.gbox((sx, -0.08 + 0.03 * k, 0.0), (0.002, 0.012, 0.14), M["slot"])
@@ -805,7 +811,7 @@ def build_router_gateway(coll, M):
     root = router_root(coll, n, 2, ROUTER_X[2])
     p = GPart(f"{n}_Body")
     p.gbox((0.0, 0.0, 0.0), (0.74, 0.36, 0.24), M["gw_body"])
-    p.gbox((0.0, 0.181, -0.02), (0.60, 0.003, 0.16), M["perf"], uv=br.PERF_TILE)
+    p.gbox((0.0, 0.181, -0.02), (0.60, 0.003, 0.16), M["perf"], uv=PERF_TILE)
     p.gbox((0.0, 0.0, 0.1225), (0.66, 0.30, 0.005), M["gw_face"])
     for sx in (-0.385, 0.385):
         p.gbox((sx, 0.0, 0.11), (0.03, 0.36, 0.03), M["galv"])
@@ -825,7 +831,7 @@ def build_router_gateway(coll, M):
     for i in range(5):
         rj45(p, -0.27 + 0.09 * i, -0.06, 0.14, M)
     rj45(p, 0.23, -0.06, 0.14, M, frame="console_blue")
-    p.gbox((0.0, -0.135, 0.126), (0.66, 0.025, 0.003), M["perf"], uv=br.PERF_TILE)
+    p.gbox((0.0, -0.135, 0.126), (0.66, 0.025, 0.003), M["perf"], uv=PERF_TILE)
     p.build(coll, root)
     add_text(coll, root, f"{n}_Txt_Lcd", "1G FIBER\nUPLINK OK", (-0.23, 0.08, 0.1295), 0.020, M["lcd_text"])
     add_text(coll, root, f"{n}_Txt_Model", "GLASFASER-GATEWAY 1G", (0.21, 0.055, 0.1255), 0.020, M["text_light"])
@@ -851,7 +857,7 @@ def build_router_cabinet(coll, M, is_100g):
         for z in (-0.12, 0.20):
             p.gbox((sx, cy, z), (0.02, cab_h - 0.04, 0.02), M["gw_body"])
     p.gbox((0.0, cy, -0.128), (0.80, cab_h - 0.04, 0.004), M["inner"])
-    p.gbox((0.0, top + 0.002, 0.04), (0.50, 0.004, 0.18), M["perf"], uv=br.PERF_TILE)
+    p.gbox((0.0, top + 0.002, 0.04), (0.50, 0.004, 0.18), M["perf"], uv=PERF_TILE)
     p.gcyl((0.0, top + 0.006, -0.02), 0.035, 0.035, 0.012, M["rubber"], segs=20)
     for sx in (-0.30, 0.30):
         p.gbox((sx, top - 0.06, -0.152), (0.06, 0.03, 0.004), M["galv"])
@@ -865,7 +871,7 @@ def build_router_cabinet(coll, M, is_100g):
     # Typenschild oben, bei Stufe 4 mit zusaetzlicher Lueftungsblende
     p.gbox((0.0, 0.285, 0.148), (0.72, 0.06, 0.006), M["cab_face"])
     if is_100g:
-        p.gbox((0.0, 0.36, 0.150), (0.72, 0.06, 0.004), M["perf"], uv=br.PERF_TILE)
+        p.gbox((0.0, 0.36, 0.150), (0.72, 0.06, 0.004), M["perf"], uv=PERF_TILE)
 
     # Patchpanel mit 12 Keystone-Buchsen, Beschriftungsstreifen und 2 Glasfaser-Jumpern
     p.gbox((0.0, 0.20, 0.155), (0.72, 0.08, 0.01), M["galv"])
@@ -905,9 +911,9 @@ def build_router_cabinet(coll, M, is_100g):
                 p.gbox((qx, -0.215, 0.177), (0.024, 0.02, 0.016), M["lc_blue"])
                 p.ghose([(qx, -0.215, 0.185), (qx + 0.01, -0.25, 0.20), (qx + 0.03, -0.32, 0.19)],
                         0.0045, M["fiber"])
-        p.gbox((0.0, -0.272, 0.150), (0.72, 0.03, 0.004), M["perf"], uv=br.PERF_TILE)
+        p.gbox((0.0, -0.272, 0.150), (0.72, 0.03, 0.004), M["perf"], uv=PERF_TILE)
     else:
-        p.gbox((0.0, -0.175, 0.150), (0.72, 0.07, 0.004), M["perf"], uv=br.PERF_TILE)
+        p.gbox((0.0, -0.175, 0.150), (0.72, 0.07, 0.004), M["perf"], uv=PERF_TILE)
     p.build(coll, root)
 
     # Abnehmbare Seitenwaende mit Lueftungsschlitzen
@@ -1121,7 +1127,8 @@ def render_previews():
             cam.location = loc
             cam_data.angle = math.radians(fov)
             cam.rotation_euler = (Vector(target) - Vector(loc)).to_track_quat("-Z", "Y").to_euler()
-            r.filepath = os.path.join(SCRIPT_DIR or bpy.path.abspath("//"), name + ".png")
+            os.makedirs(dct_paths.WORK_DIR, exist_ok=True)
+            r.filepath = os.path.join(dct_paths.WORK_DIR, name + ".png")
             bpy.ops.render.render(write_still=True)
             out.append(r.filepath)
     finally:

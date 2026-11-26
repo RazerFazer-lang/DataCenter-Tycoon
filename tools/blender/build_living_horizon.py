@@ -23,6 +23,7 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 if SCRIPT_DIR not in sys.path:
     sys.path.insert(0, SCRIPT_DIR)
 
+import dct_paths
 from build_delivery_van import PartBuilder, g, make_solid_mat, make_tex_mat
 from build_exterior_vehicles import _build_wheel, _gen_truck_curtain_tex, _shared_vehicle_mats
 from build_exterior_world import (
@@ -32,7 +33,7 @@ from build_exterior_world import (
     make_pbr_tex_mat,
 )
 
-OUT_MODELS_DIR = os.path.normpath(os.path.join(SCRIPT_DIR, "..", "..", "assets", "models"))
+OUT_MODELS_DIR = dct_paths.MODELS_DIR
 
 
 # ---------------------------------------------------------------------------

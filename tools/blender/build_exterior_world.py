@@ -5,9 +5,7 @@
     - assets/models/ext_substation_20kv.glb     (20-kV-Umspannwerk mit Aussen-Oeltrafo, Kuehlrippen & Isolatoren)
     - assets/models/ext_shipping_container.glb  (20ft Wellblech-Ueberseecontainer mit Eckbeschlaegen & Riegelstangen)
     - assets/models/ext_house_suburban.glb      (Deutsches Satteldach-Haus / kleine Werkstatt fuer Horizont)
-  Natur & Begruenung:
-    - assets/models/ext_tree_oak.glb            (Verzweigter Laubbaum mit echter Rinde & organischen Blatt-Clustern)
-    - assets/models/ext_tree_pine.glb           (Deutsche Fichte / Nadelbaum mit gestuften Nadelkraenzen)
+  Begruenung (Baeume kommen aus build_nature_d.py):
     - assets/models/ext_hedge_bush.glb          (Organisch geformtes Hecken-Segment 2.4 m + Einzelbusch)
     - assets/models/ext_grass_tuft.glb          (Gras- & Unkrautbueschel fuer Bordstein & Zaunrand)
   Strasse & Details:
@@ -37,6 +35,7 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 if SCRIPT_DIR not in sys.path:
     sys.path.insert(0, SCRIPT_DIR)
 
+import dct_paths
 import pbr_textures
 from build_delivery_van import (
     PartBuilder,
@@ -47,8 +46,8 @@ from build_delivery_van import (
     make_solid_mat,
 )
 
-OUT_MODELS_DIR = os.path.normpath(os.path.join(SCRIPT_DIR, "..", "..", "assets", "models"))
-CACHE_DIR = os.path.join(SCRIPT_DIR, "_pbr_cache")
+OUT_MODELS_DIR = dct_paths.MODELS_DIR
+CACHE_DIR = dct_paths.PBR_CACHE
 
 
 def _reset_scene():
@@ -100,7 +99,7 @@ def make_pbr_tex_mat(name: str, alb_path: str, norm_path: str = None, rough: flo
 
 
 # ---------------------------------------------------------------------------
-# Prozedurale 1K PBR-Texturen (Klinker, Trapezblech, Beton, Dachziegel, Rinde)
+# Prozedurale 1K PBR-Texturen (Klinker, Trapezblech, Beton, Dachziegel)
 # ---------------------------------------------------------------------------
 
 def ensure_exterior_textures() -> dict:
@@ -195,22 +194,6 @@ def ensure_exterior_textures() -> dict:
         _save_rgb(p_alb, alb)
         _save_rgb(p_nrm, _height_to_normal(hgt, 4.5))
     paths["rooftile"] = (p_alb, p_nrm)
-
-    # 5. Realistische Baumrinde (Eiche / Fichte)
-    p_alb = os.path.join(CACHE_DIR, "ext_bark_alb.png")
-    p_nrm = os.path.join(CACHE_DIR, "ext_bark_nrm.png")
-    if not (os.path.exists(p_alb) and os.path.exists(p_nrm)):
-        s = 512
-        furrows = pbr_textures.fbm_tile(s, s, 6, 48, 5, seed=55)
-        detail = pbr_textures.fbm_tile(s, s, 24, 64, 3, seed=56)
-        hgt = furrows * 0.72 + detail * 0.28
-        r = 0.20 + 0.18 * hgt
-        g_ch = 0.15 + 0.13 * hgt
-        b = 0.10 + 0.09 * hgt
-        alb = np.stack([r, g_ch, b], axis=-1)
-        _save_rgb(p_alb, alb)
-        _save_rgb(p_nrm, _height_to_normal(hgt, 5.0))
-    paths["bark"] = (p_alb, p_nrm)
 
     return paths
 
@@ -502,7 +485,7 @@ def build_suburban_house(tex: dict):
 
 
 # ---------------------------------------------------------------------------
-# 6. Organischer Laubbaum (Eiche/Ahorn) — gekruemmter Stamm, echte Aeste & Blattcluster!
+# 6. Geometrie-Helfer: gebogene Rohre (Laternenmast) und Laub-Cluster (Hecke)
 # ---------------------------------------------------------------------------
 
 def _add_branch_tube(pb: PartBuilder, pts_g: list, r_start: float, r_end: float, mat, seg: int = 8):
@@ -579,150 +562,8 @@ def _add_foliage_cluster(pb: PartBuilder, center_g: Vector, scale_g: Vector, mat
     pb._uv_box(faces, 1.0)
 
 
-def build_tree_oak(tex: dict):
-    _reset_scene()
-    root = bpy.data.objects.new("OakTreeRoot", None)
-    bpy.context.scene.collection.objects.link(root)
-    rng = random.Random(2026)
-
-    bark_mat = make_pbr_tex_mat("Tree_BarkMat", *tex["bark"], rough=0.92, metal=0.0, normal_strength=1.25)
-    leaf_dark = make_solid_mat("Tree_LeafDark", (0.14, 0.30, 0.12), rough=0.78, metal=0.0)
-    leaf_mid = make_solid_mat("Tree_LeafMid", (0.20, 0.40, 0.16), rough=0.74, metal=0.0)
-    leaf_sun = make_solid_mat("Tree_LeafSun", (0.28, 0.48, 0.19), rough=0.72, metal=0.0)
-
-    pb_trunk = PartBuilder("TrunkAndBranches", origin_g=Vector((0, 0, 0)))
-    # Gekruemmter Hauptstamm mit Wurzelanlauf (Y = -0.15..3.4 m)
-    trunk_pts = [
-        Vector((0.0, -0.15, 0.0)),
-        Vector((0.03, 0.65, -0.02)),
-        Vector((0.08, 1.55, 0.04)),
-        Vector((0.02, 2.45, 0.02)),
-        Vector((-0.04, 3.25, -0.02)),
-    ]
-    _add_branch_tube(pb_trunk, trunk_pts, 0.36, 0.17, bark_mat, seg=10)
-    # Wurzelstreben am Stammfuss
-    for ri in range(5):
-        ang = (ri / 5.0) * math.tau + 0.3
-        r_pts = [
-            Vector((math.cos(ang) * 0.14, 0.48, math.sin(ang) * 0.14)),
-            Vector((math.cos(ang) * 0.42, 0.12, math.sin(ang) * 0.42)),
-            Vector((math.cos(ang) * 0.56, -0.08, math.sin(ang) * 0.56)),
-        ]
-        _add_branch_tube(pb_trunk, r_pts, 0.12, 0.05, bark_mat, seg=6)
-
-    # 6 Hauptaeste + 12 Nebenaeste (echtes sichtbares Geaest!)
-    branch_tips = []
-    for bi in range(6):
-        ang = (bi / 6.0) * math.tau + rng.uniform(-0.22, 0.22)
-        h0 = 2.35 + (bi % 3) * 0.36
-        reach = rng.uniform(1.65, 2.25)
-        h_tip = h0 + rng.uniform(1.65, 2.45)
-        dx, dz = math.cos(ang), math.sin(ang)
-        p0 = Vector((dx * 0.08, h0, dz * 0.08))
-        p1 = Vector((dx * reach * 0.52, (h0 + h_tip) * 0.52, dz * reach * 0.52))
-        p2 = Vector((dx * reach, h_tip, dz * reach))
-        _add_branch_tube(pb_trunk, [p0, p1, p2], 0.13, 0.045, bark_mat, seg=7)
-        branch_tips.append(p2)
-        # 2 Nebenaeste pro Hauptast
-        for sub_s in (-1.0, 1.0):
-            sang = ang + sub_s * rng.uniform(0.45, 0.80)
-            s_tip = p1 + Vector((math.cos(sang) * 1.15, rng.uniform(0.65, 1.25), math.sin(sang) * 1.15))
-            _add_branch_tube(pb_trunk, [p1, (p1 + s_tip) * 0.5 + Vector((0, 0.15, 0)), s_tip], 0.07, 0.025, bark_mat, seg=5)
-            branch_tips.append(s_tip)
-
-    # Zentraler Kronengipfel-Ast
-    apex_tip = Vector((0.0, 5.45, 0.0))
-    _add_branch_tube(pb_trunk, [trunk_pts[-1], Vector((0.05, 4.40, 0.06)), apex_tip], 0.15, 0.04, bark_mat, seg=7)
-    branch_tips.append(apex_tip)
-    pb_trunk.build(root)
-
-    # Separates Canopy-Mesh: 64 feine, dicht ueberlappende Blatt-Bueschel um die Astspitzen!
-    pb_canopy = PartBuilder("Canopy", origin_g=Vector((0, 0, 0)))
-    for tip in branch_tips:
-        for _k in range(4):
-            off = Vector((rng.uniform(-0.72, 0.72), rng.uniform(-0.32, 0.58), rng.uniform(-0.72, 0.72)))
-            c_pos = tip + off
-            if c_pos.y > 5.0:
-                lm = leaf_sun
-            elif c_pos.y > 3.9:
-                lm = leaf_mid
-            else:
-                lm = leaf_dark
-            sc = Vector((rng.uniform(0.50, 0.86), rng.uniform(0.42, 0.70), rng.uniform(0.50, 0.86)))
-            _add_foliage_cluster(pb_canopy, c_pos, sc, lm, rng, subdiv=2)
-    pb_canopy.build(root)
-
-    _export_glb(os.path.join(OUT_MODELS_DIR, "ext_tree_oak.glb"))
-
-
 # ---------------------------------------------------------------------------
-# 7. Deutsche Fichte / Nadelbaum (gestufte ausgezackte Nadelkraenze)
-# ---------------------------------------------------------------------------
-
-def build_tree_pine(tex: dict):
-    _reset_scene()
-    root = bpy.data.objects.new("PineTreeRoot", None)
-    bpy.context.scene.collection.objects.link(root)
-    rng = random.Random(3031)
-
-    bark_mat = make_pbr_tex_mat("Pine_BarkMat", *tex["bark"], rough=0.93, metal=0.0, normal_strength=1.2)
-    pine_dark = make_solid_mat("Pine_NeedleDark", (0.09, 0.21, 0.11), rough=0.82, metal=0.0)
-    pine_mid = make_solid_mat("Pine_NeedleMid", (0.12, 0.27, 0.14), rough=0.80, metal=0.0)
-
-    pb_trunk = PartBuilder("Trunk", origin_g=Vector((0, 0, 0)))
-    _add_branch_tube(
-        pb_trunk,
-        [Vector((0, -0.15, 0)), Vector((0.02, 2.2, 0.01)), Vector((-0.02, 4.8, 0.02)), Vector((0, 7.6, 0))],
-        0.24, 0.03, bark_mat, seg=9,
-    )
-    pb_trunk.build(root)
-
-    pb_canopy = PartBuilder("Canopy", origin_g=Vector((0, 0, 0)))
-    # 7 gestufte, unregelmaessig gezackte Nadel-Etagen (Y = 1.4 .. 8.1 m)
-    tiers = [
-        (1.55, 2.05, 1.55, pine_dark),
-        (2.55, 1.82, 1.45, pine_dark),
-        (3.52, 1.58, 1.38, pine_mid),
-        (4.45, 1.32, 1.30, pine_mid),
-        (5.32, 1.04, 1.22, pine_mid),
-        (6.12, 0.76, 1.15, pine_mid),
-        (6.95, 0.46, 1.25, pine_mid),
-    ]
-    for y_base, radius, height, mat in tiers:
-        mid = pb_canopy._mid(mat)
-        seg = 14
-        ret = bmesh.ops.create_cone(
-            pb_canopy.bm, cap_ends=True, cap_tris=True, segments=seg,
-            radius1=radius, radius2=0.06, depth=height,
-        )
-        verts = ret["verts"]
-        rot_y = rng.uniform(0.0, math.tau)
-        cb = pb_canopy._local_b(Vector((0.0, y_base + height * 0.45, 0.0)))
-        for v in verts:
-            p = v.co.copy()
-            # Untere Kante zackig & leicht haengend wie echte Fichtenzweige!
-            if p.z < 0.0:
-                ang = math.atan2(p.y, p.x) + rot_y
-                r_xy = math.hypot(p.x, p.y)
-                if r_xy > 0.15:
-                    jagged = 0.78 + 0.34 * (0.5 + 0.5 * math.sin(ang * 7.0)) + rng.uniform(-0.08, 0.08)
-                    p.x *= jagged
-                    p.y *= jagged
-                    p.z -= 0.16 * (0.5 + 0.5 * math.sin(ang * 7.0))
-            v.co = p + cb
-        faces = list({f for v in verts for f in v.link_faces})
-        for f in faces:
-            f.material_index = mid
-            f.smooth = False
-        pb_canopy.bm.normal_update()
-        pb_canopy._uv_box(faces, 1.0)
-    pb_canopy.build(root)
-
-    _export_glb(os.path.join(OUT_MODELS_DIR, "ext_tree_pine.glb"))
-
-
-# ---------------------------------------------------------------------------
-# 8. Organisches Hecken-Segment (2.4 m) & Grasbueschel (fuer Wind-Shader!)
+# 7. Organisches Hecken-Segment (2.4 m) & Grasbueschel (fuer Wind-Shader!)
 # ---------------------------------------------------------------------------
 
 def build_hedge_and_grass():
@@ -766,7 +607,7 @@ def build_hedge_and_grass():
 
 
 # ---------------------------------------------------------------------------
-# 9. Deutsche Peitschen-Strassenlaterne + Doppelstabmattenzaun + Strassen-Props
+# 8. Deutsche Peitschen-Strassenlaterne + Doppelstabmattenzaun + Strassen-Props
 # ---------------------------------------------------------------------------
 
 def build_street_lamp():
@@ -919,13 +760,11 @@ def main():
     build_substation_20kv(tex)
     build_shipping_container(tex)
     build_suburban_house(tex)
-    build_tree_oak(tex)
-    build_tree_pine(tex)
     build_hedge_and_grass()
     build_street_lamp()
     build_fence_panel(tex)
     build_street_props(tex)
-    print("[EXT_WORLD] Alle 16 deutschen Aussenwelt-Blender-Modelle erfolgreich gebaut!")
+    print("[EXT_WORLD] Alle 14 deutschen Aussenwelt-Blender-Modelle erfolgreich gebaut!")
 
 
 if __name__ == "__main__":

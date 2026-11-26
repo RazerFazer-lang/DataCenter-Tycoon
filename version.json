@@ -1,9 +1,23 @@
 {
-  "version": "3.3.0",
-  "launcher_version": "3.3.0",
-  "codename": "v3.3.0 Co-op & Netzwerk",
+  "version": "3.4.0",
+  "launcher_version": "3.4.0",
+  "codename": "v3.4.0 Code & Technik",
   "release_date": "2026-11-26",
   "changelog": [
+    {
+      "version": "v3.4.0",
+      "date": "2026-11-26",
+      "title": "Update 3.4.0: Code & Technik",
+      "items": [
+        "[SPIELSTAND] Spielstände tragen jetzt eine Versionsnummer. Alte Spielstände werden beim Laden einmal auf den neuen Stand gebracht, neue müssen nichts mehr umstellen.",
+        "[SPIELSTAND] Ein Spielstand aus einer neueren Spielversion lädt mit einer Warnung, statt still Inhalte zu verlieren.",
+        "[TECHNIK] Die Spiellogik ist aufgeräumt: Strom, Kabel, Einkauf und Lieferung, Racks und Verträge stehen in eigenen Dateien. Neue Funktionen lassen sich dadurch sicherer bauen.",
+        "[TECHNIK] Feste Datenklassen für Racks, Einschübe, Leisten und Kabel prüfen ihre Daten. Alle Racks, Kabel und Leisten aus alten Spielständen werden darauf getestet.",
+        "[TECHNIK] Sieben alte, nicht mehr genutzte Modelle und ihre Texturen sind entfernt: rund 12 MB weniger.",
+        "[TECHNIK] Alle Blender-Modelle lassen sich mit einem Befehl neu bauen, mit Vorschaubildern und Vergleich.",
+        "[CO-OP] Alle Mitspieler brauchen v3.4.0."
+      ]
+    },
     {
       "version": "v3.3.0",
       "date": "2026-11-26",

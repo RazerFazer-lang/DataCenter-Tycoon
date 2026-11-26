@@ -23,8 +23,9 @@ if HERE not in sys.path:
 
 import build_desk as bd
 from build_desk import Scene, frame_of, g, make_mat
+import dct_paths
 
-OUT = os.path.normpath(os.path.join(HERE, "..", "..", "assets", "models"))
+OUT = dct_paths.MODELS_DIR
 
 
 def lin(c):

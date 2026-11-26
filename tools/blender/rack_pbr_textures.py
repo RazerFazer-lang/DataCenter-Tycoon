@@ -222,6 +222,7 @@ def generate_rack_textures(cache_dir: str) -> dict:
 
 
 if __name__ == "__main__":
-    out = os.path.join(SCRIPT_DIR, "_pbr_cache")
+    import dct_paths
+    out = dct_paths.PBR_CACHE
     res = generate_rack_textures(out)
     print(f"RACK PBR TEXTURES READY: {len(res)} sets in {out}")

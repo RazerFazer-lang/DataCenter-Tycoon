@@ -27,6 +27,7 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 if SCRIPT_DIR not in sys.path:
     sys.path.insert(0, SCRIPT_DIR)
 
+import dct_paths
 import pbr_textures as pt
 from build_delivery_van import PartBuilder, _load_img, _new_mat, _save_rgb, g, make_solid_mat
 from hall_pbr_kit import (
@@ -39,9 +40,8 @@ from hall_pbr_kit import (
     reset_scene,
 )
 
-ROOT = os.path.normpath(os.path.join(SCRIPT_DIR, "..", ".."))
-TEX_DIR = os.path.join(ROOT, "assets", "textures", "carton")
-TMP = os.path.join(SCRIPT_DIR, "_pbr_cache")
+TEX_DIR = os.path.join(dct_paths.TEXTURES_DIR, "carton")
+TMP = dct_paths.PBR_CACHE
 
 
 # ---------------------------------------------------------------------------

@@ -1,7 +1,7 @@
 """Detailliertere Router-Modelle der Stufen 1 bis 4 (PLAN.md Punkt 4).
 
 Wird von build_utilities.build_all() aufgerufen. Die Helfer (GPart, rj45, pivot, add_text, router_root,
-off, g, mat, br, ROUTER_X, DOOR_OPEN_DEG, SIDE_SLIDE) kommen per setup(globals()) aus build_utilities,
+off, g, mat, br, PERF_TILE, ROUTER_X, DOOR_OPEN_DEG, SIDE_SLIDE) kommen per setup(globals()) aus build_utilities,
 damit kein Zirkelimport entsteht.
 
 Feste Vorgaben aus scripts/world/garage_builder.gd, die hier nicht verschoben werden duerfen:
@@ -112,7 +112,7 @@ def build_router_vdsl(coll, M):
     p.gbox((0.0, 0.0, -0.115), (0.40, 0.16, 0.01), M["galv"])
     p.gbox((0.0, 0.0, 0.0), (0.58, 0.30, 0.20), M["router_body"])
     p.gbox((0.0, 0.158, -0.005), (0.56, 0.016, 0.19), M["router_body"])
-    p.gbox((0.0, 0.1675, -0.01), (0.40, 0.003, 0.12), M["perf"], uv=H.br.PERF_TILE)
+    p.gbox((0.0, 0.1675, -0.01), (0.40, 0.003, 0.12), M["perf"], uv=H.PERF_TILE)
     for sx in (-0.2905, 0.2905):
         for col in range(2):
             for k in range(6):
@@ -182,7 +182,7 @@ def build_router_gateway(coll, M):
 
     # Gehaeuse, Deckelgitter, Frontblende, Montagewinkel mit Langloechern, Seitenluefter
     p.gbox((0.0, 0.0, 0.0), (0.74, 0.36, 0.24), M["gw_body"])
-    p.gbox((0.0, 0.181, -0.02), (0.60, 0.003, 0.16), M["perf"], uv=H.br.PERF_TILE)
+    p.gbox((0.0, 0.181, -0.02), (0.60, 0.003, 0.16), M["perf"], uv=H.PERF_TILE)
     p.gbox((0.0, 0.0, 0.1225), (0.66, 0.30, 0.005), M["gw_face"])
     for sx in (-0.385, 0.385):
         p.gbox((sx, 0.0, 0.11), (0.03, 0.36, 0.03), M["galv"])
@@ -216,7 +216,7 @@ def build_router_gateway(coll, M):
     p.gbox((0.15, -0.06, 0.1265), (0.020, 0.010, 0.003), M["silver"])
     p.gbox((0.15, -0.06, 0.1281), (0.014, 0.004, 0.0006), M["jack"])
     p.gcyl((0.185, -0.06, 0.1253), 0.003, 0.003, 0.0006, M["hole"], axis="Z", segs=12)
-    p.gbox((0.0, -0.135, 0.126), (0.66, 0.025, 0.003), M["perf"], uv=H.br.PERF_TILE)
+    p.gbox((0.0, -0.135, 0.126), (0.66, 0.025, 0.003), M["perf"], uv=H.PERF_TILE)
 
     # Netzkabel durch Verschraubung im Deckel zum Leerrohr
     p.gcyl((0.28, 0.184, -0.06), 0.012, 0.012, 0.008, M["gland"], segs=16)
@@ -243,7 +243,6 @@ def build_router_gateway(coll, M):
 # ---------------------------------------------------------------------------
 
 def _cabinet_shell(p, M, cab_h, cy, top, bottom, zc, depth, is_100g):
-    br = H.br
     # Korpus: Rueckwand, Deckel, Boden, Eckprofile, Innenraum, Deckelgitter, Kabeleinfuehrung, Wandlaschen
     p.gbox((0.0, cy, -0.14), (0.84, cab_h, 0.02), M["gw_body"])
     p.gbox((0.0, top - 0.01, zc), (0.84, 0.02, depth), M["gw_body"])
@@ -252,7 +251,7 @@ def _cabinet_shell(p, M, cab_h, cy, top, bottom, zc, depth, is_100g):
         for z in (-0.12, 0.20):
             p.gbox((sx, cy, z), (0.02, cab_h - 0.04, 0.02), M["gw_body"])
     p.gbox((0.0, cy, -0.128), (0.80, cab_h - 0.04, 0.004), M["inner"])
-    p.gbox((0.0, top + 0.002, 0.04), (0.50, 0.004, 0.18), M["perf"], uv=br.PERF_TILE)
+    p.gbox((0.0, top + 0.002, 0.04), (0.50, 0.004, 0.18), M["perf"], uv=H.PERF_TILE)
     p.gcyl((0.0, top + 0.006, -0.02), 0.035, 0.035, 0.012, M["rubber"], segs=20)
     for sx in (-0.30, 0.30):
         p.gbox((sx, top - 0.06, -0.152), (0.06, 0.03, 0.004), M["galv"])
@@ -273,7 +272,7 @@ def _cabinet_shell(p, M, cab_h, cy, top, bottom, zc, depth, is_100g):
         p.gbox((0.25 + 0.03 * i, 0.285, 0.1515), (0.010, 0.006, 0.001),
                M["router_led" if i < 2 else "amber_led"])
     if is_100g:
-        p.gbox((0.0, 0.36, 0.150), (0.72, 0.06, 0.004), M["perf"], uv=br.PERF_TILE)
+        p.gbox((0.0, 0.36, 0.150), (0.72, 0.06, 0.004), M["perf"], uv=H.PERF_TILE)
 
 
 def _patch_panel(p, M):
@@ -330,7 +329,7 @@ def _core_switch(p, M):
     H.rj45(p, 0.24, -0.058, 0.166, M, frame="console_blue")
     for i, y in enumerate((-0.06, -0.08, -0.10)):
         p.gbox((-0.32, y, 0.1585), (0.008, 0.005, 0.001), M["router_led" if i < 2 else "amber_led"])
-    p.gbox((0.32, -0.105, 0.1585), (0.05, 0.03, 0.001), M["perf"], uv=H.br.PERF_TILE)
+    p.gbox((0.32, -0.105, 0.1585), (0.05, 0.03, 0.001), M["perf"], uv=H.PERF_TILE)
     return jack_x
 
 

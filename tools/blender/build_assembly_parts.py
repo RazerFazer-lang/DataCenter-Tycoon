@@ -22,8 +22,9 @@ if SCRIPT_DIR not in sys.path:
     sys.path.insert(0, SCRIPT_DIR)
 
 import build_hardware_parts as H
+import dct_paths
 
-OUT_DIR = os.path.normpath(os.path.join(SCRIPT_DIR, "..", "..", "assets", "models"))
+OUT_DIR = dct_paths.MODELS_DIR
 C_INV = H.C.inverted()
 
 

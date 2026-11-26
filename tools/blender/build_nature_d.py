@@ -5,7 +5,7 @@
     bird_sparrow / bird_crow / bird_pigeon / bird_swallow     (Body, Head, WingL, WingL2, WingR, WingR2, Tail, Legs)
     animal_cat / animal_squirrel / animal_hedgehog            (Body, Head, Tail, LegFL, LegFR, LegBL, LegBR)
     butterfly                                                 (Body, WingL, WingR)
-    assets/textures/nature/leaf_*.png                         Blattwerk mit Alpha (selbst gerechnet)
+    assets/textures/nature/leaf_*.png                         Blattwerk mit Alpha (selbst gerechnet, Ordner: dct_paths.TEXTURES_DIR)
 
 Aufruf: blender --background --factory-startup --python tools/blender/build_nature_d.py [-- trees|birds|animals|tex ...]
 """
@@ -24,9 +24,10 @@ sys.path.insert(0, HERE)
 import build_human as H
 from build_human import g, back, Blob, set_mats, join, box, tube, move, vcol, smoothstep, bis, cut
 
-ROOT = os.path.dirname(os.path.dirname(HERE))
-OUT = os.path.join(ROOT, "assets", "models")
-TEX = os.path.join(ROOT, "assets", "textures", "nature")
+import dct_paths
+
+OUT = dct_paths.MODELS_DIR
+TEX = os.path.join(dct_paths.TEXTURES_DIR, "nature")
 
 
 def reset():

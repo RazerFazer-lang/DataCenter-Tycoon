@@ -37,6 +37,12 @@
       "items": [
         {
           "tag": "neu",
+          "version": "v3.4.0",
+          "title": "Code & Technik",
+          "desc": "Spielstände mit Versionsnummer und je einer Umstellung pro Version, aufgeteilte Spiellogik, feste Datenklassen, 12 MB weniger alte Modelle, Blender-Modelle mit einem Befehl."
+        },
+        {
+          "tag": "neu",
           "version": "v3.3.0",
           "title": "Co-op & Netzwerk",
           "desc": "Server-Liste mit Live-Status ohne Internetdienst, automatisches Wiederverbinden, Host-Wechsel, Baurechte nach Freigabe, flüssigere Mitspieler und neue Serverbefehle."

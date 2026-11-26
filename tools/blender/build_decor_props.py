@@ -1,12 +1,15 @@
-"""Blender 5.2 AAA-Generator fuer alle 6 kaufbaren Einrichtungs-Items (DecorProp) & Lagerregale:
-  1. assets/models/decor_storage_shelf.glb     (prop_storage_shelf — 4 echte Ablageebenen Y=0.22/0.78/1.34/1.90)
-  2. assets/models/decor_esd_workbench.glb     (prop_esd_workbench — Eichenplatte, ESD-Matte, 2-Ch-Oszilloskop, Lochwand)
-  3. assets/models/decor_parts_cabinet.glb     (prop_parts_cabinet — Stahlschrank mit Echtglastueren & gefuellten Sichtboxen)
-  4. assets/models/decor_cold_aisle_gate.glb   (prop_cold_aisle_gate — Alu-Kaltgang-Schiebetuerportal mit Echtglasfluegeln)
-  5. assets/models/decor_vending_lounge.glb    (prop_vending_lounge — Getraenkeautomat mit 3D-Dosen hinter Glas + Ficus-Pflanze)
-  6. assets/models/decor_cctv_monitor.glb      (prop_cctv_monitor — Telemetrie-Stele + High-Poly 6kg-Feuerloescher)
-  7. assets/models/decor_cctv_cam_head.glb     (Schwenkbarer PTZ-Sicherheitskamerakopf mit Sonnenblende & Optik)
-  8. assets/models/halle_nord_stocked_shelf.glb (Voll bestuecktes Schwerlast-Werkstattregal fuer Halle Nord & Garage)
+"""Blender 5.2 AAA-Generator fuer kaufbare Einrichtungs-Items (DecorProp) & das bestueckte Regal:
+  1. assets/models/decor_esd_workbench.glb     (prop_esd_workbench — Eichenplatte, ESD-Matte, 2-Ch-Oszilloskop, Lochwand)
+  2. assets/models/decor_parts_cabinet.glb     (prop_parts_cabinet — Stahlschrank mit Echtglastueren & gefuellten Sichtboxen)
+  3. assets/models/decor_cold_aisle_gate.glb   (prop_cold_aisle_gate — Alu-Kaltgang-Schiebetuerportal mit Echtglasfluegeln)
+  4. assets/models/decor_vending_lounge.glb    (prop_vending_lounge — Getraenkeautomat mit 3D-Dosen hinter Glas + Ficus-Pflanze)
+  5. assets/models/decor_cctv_monitor.glb      (prop_cctv_monitor — Telemetrie-Stele + High-Poly 6kg-Feuerloescher)
+  6. assets/models/decor_cctv_cam_head.glb     (Schwenkbarer PTZ-Sicherheitskamerakopf mit Sonnenblende & Optik)
+  7. assets/models/halle_nord_stocked_shelf.glb (Voll bestuecktes Schwerlast-Werkstattregal fuer Halle Nord & Garage)
+
+Achtung: Die Spielfassung von 1-6 stammt heute aus build_paket_c.py (Materialien PC_*/LIVE_*).
+build_all.py laesst dieses Skript deshalb vor build_paket_c.py laufen, das die sechs Dateien ueberschreibt.
+Aktuell gebraucht wird von hier nur halle_nord_stocked_shelf.glb.
 """
 
 import math
@@ -42,48 +45,7 @@ from hall_pbr_kit import (
 
 
 # ---------------------------------------------------------------------------
-# 1. Kaufbares Schwerlast-Lagerregal (prop_storage_shelf, 4 Ablageplaetze!)
-# ---------------------------------------------------------------------------
-
-def build_decor_storage_shelf(lib: dict):
-    reset_scene()
-    root = bpy.data.objects.new("DecorStorageShelfRoot", None)
-    bpy.context.scene.collection.objects.link(root)
-
-    steel_anth = make_orm_mat("DSS_Steel", lib["steel_anthracite"], normal_strength=0.75)
-    galv = make_orm_mat("DSS_Galv", lib["galv"], normal_strength=0.80)
-    wood_oak = make_orm_mat("DSS_Oak", lib["wood_oak"], normal_strength=1.0)
-    blue = make_orm_mat("DSS_Blue", lib["euro_blue"], normal_strength=0.65)
-    rubber = make_orm_mat("DSS_Rubber", lib["rubber_black"], normal_strength=0.85)
-
-    pb = PartBuilder("DecorStorageShelf", origin_g=Vector((0, 0, 0)))
-
-    # 4 profilierte Eckpfosten mit Gummifuessen & seitlichen Fachwerkstreben (1.56 x 2.16 x 0.56 m)
-    for sx in (-0.75, 0.75):
-        for sz in (-0.25, 0.25):
-            pb.box((sx, 0.015, sz), (0.065, 0.030, 0.065), rubber, bevel=0.004)
-            pb.box((sx, 1.08, sz), (0.044, 2.12, 0.044), steel_anth, bevel=0.005)
-        for ty in (0.22, 0.78, 1.34, 1.90):
-            pb.box((sx, ty, 0.0), (0.028, 0.036, 0.48), galv, bevel=0.003)
-        pb.box((sx, 0.50, 0.0), (0.016, 0.022, 0.54), galv, rot_g_deg=(44.0, 0.0, 0.0))
-        pb.box((sx, 1.62, 0.0), (0.016, 0.022, 0.54), galv, rot_g_deg=(-44.0, 0.0, 0.0))
-
-    # Diagonal-Kreuzverband hinten (Z = -0.26)
-    pb.box((0.0, 1.08, -0.26), (0.022, 2.18, 0.010), galv, rot_g_deg=(0.0, 0.0, 34.0))
-    pb.box((0.0, 1.08, -0.26), (0.022, 2.18, 0.010), galv, rot_g_deg=(0.0, 0.0, -34.0))
-
-    # 4 Ebenen exakt auf Y = 0.22, 0.78, 1.34, 1.90 (Oberkante y + 0.018 passt exakt zu _shelf_crate_nodes!)
-    for sy in (0.22, 0.78, 1.34, 1.90):
-        pb.box((0.0, sy, 0.0), (1.48, 0.028, 0.50), wood_oak, bevel=0.004, uv_scale=1.2)
-        pb.box((0.0, sy - 0.006,  0.262), (1.54, 0.046, 0.018), blue, bevel=0.004)
-        pb.box((0.0, sy - 0.006, -0.262), (1.54, 0.046, 0.018), steel_anth, bevel=0.004)
-
-    pb.build(root)
-    export_glb(os.path.join(OUT_MODELS_DIR, "decor_storage_shelf.glb"))
-
-
-# ---------------------------------------------------------------------------
-# 2. Kaufbare ESD-Diagnose-Werkbank (prop_esd_workbench)
+# 1. Kaufbare ESD-Diagnose-Werkbank (prop_esd_workbench)
 # ---------------------------------------------------------------------------
 
 def build_decor_esd_workbench(lib: dict):
@@ -163,7 +125,7 @@ def build_decor_esd_workbench(lib: dict):
 
 
 # ---------------------------------------------------------------------------
-# 3. Kaufbarer Ersatzteil-Schrank (prop_parts_cabinet) MIT ECHTGLASTUEREN!
+# 2. Kaufbarer Ersatzteil-Schrank (prop_parts_cabinet) MIT ECHTGLASTUEREN!
 # ---------------------------------------------------------------------------
 
 def build_decor_parts_cabinet(lib: dict):
@@ -232,7 +194,7 @@ def build_decor_parts_cabinet(lib: dict):
 
 
 # ---------------------------------------------------------------------------
-# 4. Kaufbares Kaltgang-Schiebetuer-Portal (prop_cold_aisle_gate)
+# 3. Kaufbares Kaltgang-Schiebetuer-Portal (prop_cold_aisle_gate)
 # ---------------------------------------------------------------------------
 
 def build_decor_cold_aisle_gate(lib: dict):
@@ -286,7 +248,7 @@ def build_decor_cold_aisle_gate(lib: dict):
 
 
 # ---------------------------------------------------------------------------
-# 5. Kaufbarer Getraenkeautomat & Lounge-Pflanze (prop_vending_lounge)
+# 4. Kaufbarer Getraenkeautomat & Lounge-Pflanze (prop_vending_lounge)
 # ---------------------------------------------------------------------------
 
 def build_decor_vending_lounge(lib: dict):
@@ -368,7 +330,7 @@ def build_decor_vending_lounge(lib: dict):
 
 
 # ---------------------------------------------------------------------------
-# 6. Kaufbare CCTV- & Temperatur-Stele + separater PTZ-Kamerakopf
+# 5. Kaufbare CCTV- & Temperatur-Stele + separater PTZ-Kamerakopf
 # ---------------------------------------------------------------------------
 
 def build_decor_cctv(lib: dict):
@@ -436,7 +398,7 @@ def build_decor_cctv(lib: dict):
 
 
 # ---------------------------------------------------------------------------
-# 7. Voll bestuecktes Schwerlast-Werkstattregal (fuer Halle Nord & BuildingPropFactory!)
+# 6. Voll bestuecktes Schwerlast-Werkstattregal (fuer Halle Nord & BuildingPropFactory!)
 # ---------------------------------------------------------------------------
 
 def build_halle_nord_stocked_shelf(lib: dict):
@@ -514,14 +476,13 @@ def build_halle_nord_stocked_shelf(lib: dict):
 
 def main():
     lib = ensure_hall_pbr_library()
-    build_decor_storage_shelf(lib)
     build_decor_esd_workbench(lib)
     build_decor_parts_cabinet(lib)
     build_decor_cold_aisle_gate(lib)
     build_decor_vending_lounge(lib)
     build_decor_cctv(lib)
     build_halle_nord_stocked_shelf(lib)
-    print("[DECOR_PROPS] Alle 8 High-Poly 2K-ORM-PBR Shop-Dekos & Regale erfolgreich gebaut!")
+    print("[DECOR_PROPS] Alle 7 High-Poly 2K-ORM-PBR Shop-Dekos & Regale erfolgreich gebaut!")
 
 
 if __name__ == "__main__":

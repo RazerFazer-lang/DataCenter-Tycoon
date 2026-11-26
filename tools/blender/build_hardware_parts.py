@@ -2,7 +2,9 @@
 
 Aufruf (Hintergrundmodus):
     blender --background --factory-startup --python-exit-code 1 \
-        --python tools/blender/build_hardware_parts.py -- assets/models
+        --python tools/blender/build_hardware_parts.py [-- <ausgabeordner>]
+
+Ohne Ordner: dct_paths.MODELS_DIR (assets/models oder DCT_MODELS_OUT).
 
 Erzeugt alle 34 Bauteile (Mainboards, CPU/RAM/GPU/Storage/Cooling/PSU t0..3, Chassis 4/8-Bay/Switch,
 LFF/SFF-Caddies & Blanks, ESD-Reparaturwerkbank) mit echten 2K-PBR-Texturen (Albedo, Normal, ORM),
@@ -24,6 +26,7 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 if SCRIPT_DIR not in sys.path:
     sys.path.insert(0, SCRIPT_DIR)
 
+import dct_paths
 import pbr_textures
 
 # Godot (x, y, z) -> Blender (x, -z, y). Der glTF-Export mit +Y oben rechnet das exakt zurueck.
@@ -1987,10 +1990,10 @@ def build_psu_broken(P: Part):
 def main():
     global TEX_PATHS
     argv = sys.argv[sys.argv.index("--") + 1:] if "--" in sys.argv else []
-    out_dir = os.path.abspath(argv[0]) if argv else os.path.abspath(os.path.join(SCRIPT_DIR, "..", "..", "assets", "models"))
+    out_dir = os.path.abspath(argv[0]) if argv else dct_paths.MODELS_DIR
     os.makedirs(out_dir, exist_ok=True)
 
-    cache_dir = os.path.join(SCRIPT_DIR, "_pbr_cache")
+    cache_dir = dct_paths.PBR_CACHE
     print("Generating/updating 2K PBR textures...")
     TEX_PATHS = pbr_textures.generate_all(cache_dir)
 

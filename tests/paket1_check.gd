@@ -316,6 +316,7 @@ func _breaker() -> void:
 	chk("Router nutzt echte Ports", gs.get_max_ports("network", gs.WALL_ROUTER_ID) == gs.ROUTER_TIER_JACK_COUNTS[gs.router_tier])
 	chk("altes Zubehör nicht mehr kaufbar", gs._accessory_price("power_strip") == 0 and gs._accessory_price("net_hub") == 0)
 	var data: Dictionary = gs.export_save_data()
+	data.erase("schema") # Spielstände von vor v3.4 haben noch kein Schema
 	data["power_strips"] = 7
 	data["net_hubs"] = 2
 	data["cables"]["cable_alt1"] = {"id": "cable_alt1", "cable_type": "power", "from_id": gs.WALL_BREAKER_ID, "to_id": rid, "from_slot": 3, "to_slot": -1}

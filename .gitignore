@@ -16,3 +16,5 @@ tools/blender/*.png
 tools/blender/*.log
 tools/blender/*.blend1
 tools/blender/__pycache__/
+# build_all.py: Bericht, Kontaktbögen und Logs bei Ziel assets/models
+tools/blender/_build/

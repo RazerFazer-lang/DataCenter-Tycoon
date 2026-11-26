@@ -20,7 +20,9 @@ sys.path.insert(0, HERE)
 import build_human as H
 from build_human import g, back, Blob, set_mats, join, box, tube, move, vcol, smoothstep
 
-OUT = os.path.join(os.path.dirname(os.path.dirname(HERE)), "assets", "models")
+import dct_paths  # noqa: E402
+
+OUT = dct_paths.MODELS_DIR
 P = {
     "OD_Wood": ((0.52, 0.36, 0.22), 0.8, 0.0), "OD_WoodDark": ((0.30, 0.20, 0.13), 0.8, 0.0), "OD_Steel": ((0.24, 0.26, 0.29), 0.5, 0.6), "OD_Galv": ((0.68, 0.70, 0.72), 0.4, 0.85),
     "OD_Black": ((0.05, 0.05, 0.06), 0.6, 0.1), "OD_White": ((0.92, 0.92, 0.90), 0.5, 0.0), "OD_Grey": ((0.55, 0.58, 0.61), 0.5, 0.1), "OD_Blue": ((0.10, 0.22, 0.42), 0.45, 0.1),

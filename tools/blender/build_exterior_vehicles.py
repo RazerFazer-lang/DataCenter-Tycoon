@@ -32,6 +32,7 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 if SCRIPT_DIR not in sys.path:
     sys.path.insert(0, SCRIPT_DIR)
 
+import dct_paths
 import pbr_textures
 from build_delivery_van import (
     PartBuilder,
@@ -41,8 +42,8 @@ from build_delivery_van import (
     make_tex_mat,
 )
 
-OUT_MODELS_DIR = os.path.normpath(os.path.join(SCRIPT_DIR, "..", "..", "assets", "models"))
-CACHE_DIR = os.path.join(SCRIPT_DIR, "_pbr_cache")
+OUT_MODELS_DIR = dct_paths.MODELS_DIR
+CACHE_DIR = dct_paths.PBR_CACHE
 
 
 def _reset_scene():

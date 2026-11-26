@@ -1,0 +1,30 @@
+# Zeilenenden: im Repo und im Arbeitsordner immer LF.
+# Godot schreibt .import, .tscn, .tres und project.godot selbst mit LF. Mit core.autocrlf=true
+# erwartete Git dort CRLF, deshalb galten Hunderte .import-Dateien ständig als geändert.
+* text=auto eol=lf
+
+# Binärdateien nie umwandeln.
+*.glb binary
+*.gltf binary
+*.blend binary
+*.blend1 binary
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.webp binary
+*.svg -diff
+*.ico binary
+*.ogg binary
+*.wav binary
+*.mp3 binary
+*.mp4 binary
+*.ttf binary
+*.otf binary
+*.bin binary
+*.res binary
+*.scn binary
+*.translation binary
+*.pck binary
+*.exe binary
+*.dll binary
+*.zip binary

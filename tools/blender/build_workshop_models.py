@@ -1,7 +1,7 @@
 """Blender 5.2 Generator fuer die neuen IT-Werkstatt-Modelle (2K PBR):
 - workshop_workbench.glb      (Industrielle IT-Werkbank mit Lochwand, LED-Leiste, Labornetzteil, Loetstation, ESD-Matte)
-- workshop_storage_shelf.glb  (Funktionales Schwerlast-Lagerregal mit 4 Ebenen x 3 freien Stellplaetzen & Etikettenleisten)
 - repair_kit_case.glb         (Robuster Reparatur-Kit-Koffer mit Griff, Schnallen & Etikettenfeld)
+- bulk_pack_crate.glb         (Mengen-Kiste fuer bis zu 6 Teile)
 - delivery_build_box.glb      (Industrieller Versandkarton mit Klebeband, Umreifung & Versandetikett)
 
 Aufruf:
@@ -24,14 +24,15 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 if SCRIPT_DIR not in sys.path:
     sys.path.insert(0, SCRIPT_DIR)
 
+import dct_paths
 import pbr_textures
 
-OUT_MODELS_DIR = os.path.normpath(os.path.join(SCRIPT_DIR, "..", "..", "assets", "models"))
-CACHE_DIR = os.path.join(SCRIPT_DIR, "_pbr_cache")
+OUT_MODELS_DIR = dct_paths.MODELS_DIR
+CACHE_DIR = dct_paths.PBR_CACHE
 
 
 # ---------------------------------------------------------------------------
-# 2K PBR Texturen fuer Werkstatt, Lagerregal, Oszilloskop & Versandkarton
+# 2K PBR Texturen fuer Werkstatt, Oszilloskop & Versandkarton
 # ---------------------------------------------------------------------------
 
 def _save_rgb(path: str, arr_01: np.ndarray) -> None:
@@ -141,21 +142,6 @@ def _gen_scope_screen(cache_dir: str) -> str:
         img[max(0, y2 - 2):min(h, y2 + 2), x] = np.array([0.96, 0.78, 0.18], dtype=np.float32)
     pbr_textures.draw_text(img, 18, 16, "CH1 12.04V  3.8A", (0.28, 0.98, 0.82), scale=2)
     pbr_textures.draw_text(img, 18, 42, "CH2 3.31V  PWM OK", (0.98, 0.82, 0.25), scale=2)
-    _save_rgb(p, img)
-    return p
-
-
-def _gen_shelf_plaque(cache_dir: str) -> str:
-    p = os.path.join(cache_dir, "ws_shelf_plaque.png")
-    if os.path.exists(p):
-        return p
-    w, h = 512, 128
-    img = np.zeros((h, w, 3), dtype=np.float32)
-    img[:, :] = np.array([0.92, 0.72, 0.10], dtype=np.float32)
-    pbr_textures.stroke_rect(img, 4, 4, w - 5, h - 5, (0.06, 0.06, 0.07), thickness=5)
-    pbr_textures.fill_rect(img, 12, 12, w - 13, 52, (0.08, 0.08, 0.09))
-    pbr_textures.draw_text(img, 26, 22, "DCT TEILE-LAGER  HD-250", (0.95, 0.78, 0.18), scale=2)
-    pbr_textures.draw_text(img, 24, 72, "MAX 250 KG / EBENE  ESD-SAFE", (0.06, 0.06, 0.07), scale=2)
     _save_rgb(p, img)
     return p
 
@@ -369,7 +355,6 @@ def build_materials():
     m_pegboard = make_pbr_mat("WS_Pegboard", _gen_pegboard_pbr(CACHE_DIR), 1.2)
     m_cardboard = make_pbr_mat("WS_Cardboard", _gen_cardboard_pbr(CACHE_DIR), 1.0)
     m_scope_scr = make_emissive_tex_mat("WS_ScopeScreen", _gen_scope_screen(CACHE_DIR), em_strength=1.35, rough=0.15)
-    m_plaque = make_emissive_tex_mat("WS_ShelfPlaque", _gen_shelf_plaque(CACHE_DIR), em_strength=0.0, rough=0.35)
 
     return {
         "anthracite": m_anthracite,
@@ -380,7 +365,6 @@ def build_materials():
         "pegboard": m_pegboard,
         "cardboard": m_cardboard,
         "scope_scr": m_scope_scr,
-        "plaque": m_plaque,
         "chrome": make_solid_mat("WS_Chrome", (0.82, 0.85, 0.88, 1.0), 0.16, 0.96),
         "rubber": make_solid_mat("WS_Rubber", (0.045, 0.048, 0.052, 1.0), 0.86, 0.02),
         "plastic_dark": make_solid_mat("WS_PlasticDark", (0.10, 0.11, 0.125, 1.0), 0.45, 0.04),
@@ -497,59 +481,7 @@ def build_workbench():
 
 
 # ---------------------------------------------------------------------------
-# 2. Funktionales Schwerlast-Lagerregal (workshop_storage_shelf.glb)
-# ---------------------------------------------------------------------------
-
-def build_storage_shelf():
-    clear_scene()
-    M = build_materials()
-    B = MeshBuilder("WorkshopStorageShelf")
-
-    W, D, H = 1.62, 0.58, 2.08
-    POST = 0.042
-    # 4 Schwerlast-Steckpfosten + gelbe Anfahrschutz-Ecken unten
-    for sx in (-W * 0.5 + 0.025, W * 0.5 - 0.025):
-        for sy in (-D * 0.5 + 0.025, D * 0.5 - 0.025):
-            B.box((sx, sy, H * 0.5), (POST, POST, H), M["anthracite"], bevel=0.002)
-            B.box((sx, sy, 0.014), (0.056, 0.056, 0.028), M["rubber"], bevel=0.002)
-            if sy < 0:
-                B.box((sx, sy - 0.008, 0.10), (0.048, 0.014, 0.14), M["safety_yellow"], bevel=0.002)
-
-    # 4 Ebenen (exakte Oberkanten Z = 0.18, 0.68, 1.18, 1.68) + oberer Abschlussrahmen Z = 2.04
-    shelf_tops = [0.18, 0.68, 1.18, 1.68]
-    for zt in shelf_tops:
-        # Verzinkter Einlegeboden
-        B.box((0.0, 0.0, zt - 0.014), (W - 0.05, D - 0.04, 0.028), M["galv"], bevel=0.002)
-        # Vordere & hintere Schwerlast-Traverse in Anthrazit
-        B.box((0.0, -D * 0.5 + 0.022, zt - 0.026), (W - 0.02, 0.024, 0.044), M["anthracite"], bevel=0.002)
-        B.box((0.0, D * 0.5 - 0.022, zt - 0.026), (W - 0.02, 0.024, 0.044), M["anthracite"], bevel=0.002)
-        # Etiketten-Leiste vorne (3 dezente Stellplatz-Markierungen je Ebene)
-        for slot_x in (-0.50, 0.0, 0.50):
-            B.box((slot_x, -D * 0.5 + 0.008, zt - 0.026), (0.24, 0.006, 0.024), M["plastic_dark"], bevel=0.001)
-            B.box((slot_x, -D * 0.5 + 0.005, zt - 0.026), (0.21, 0.003, 0.016), M["paper"], bevel=0.0)
-        # Seiten-Traversen
-        for sx in (-W * 0.5 + 0.025, W * 0.5 - 0.025):
-            B.box((sx, 0.0, zt - 0.026), (0.024, D - 0.06, 0.036), M["anthracite"], bevel=0.001)
-
-    # Oberer Dachrahmen + Traglast-Plakette vorne
-    B.box((0.0, -D * 0.5 + 0.022, H - 0.03), (W - 0.02, 0.030, 0.056), M["anthracite"], bevel=0.002)
-    B.box((0.0, D * 0.5 - 0.022, H - 0.03), (W - 0.02, 0.030, 0.056), M["anthracite"], bevel=0.002)
-    B.box((0.0, 0.0, H - 0.018), (W - 0.06, D - 0.05, 0.016), M["galv"], bevel=0.001)
-    B.box((0.0, -D * 0.5 + 0.005, H - 0.03), (0.34, 0.006, 0.064), M["plaque"], bevel=0.0, uv_mode="planar_front")
-
-    # Seitliche & hintere Diagonalstreben (Industrie-Look)
-    for sx in (-W * 0.5 + 0.025, W * 0.5 - 0.025):
-        B.box((sx, 0.0, 1.08), (0.010, 0.018, 1.88), M["galv"], rot_deg=(16.0, 0.0, 0.0), bevel=0.0)
-        B.box((sx, 0.0, 1.08), (0.010, 0.018, 1.88), M["galv"], rot_deg=(-16.0, 0.0, 0.0), bevel=0.0)
-    B.box((0.0, D * 0.5 - 0.018, 1.08), (0.018, 0.010, 2.18), M["galv"], rot_deg=(0.0, 34.0, 0.0), bevel=0.0)
-    B.box((0.0, D * 0.5 - 0.018, 1.08), (0.018, 0.010, 2.18), M["galv"], rot_deg=(0.0, -34.0, 0.0), bevel=0.0)
-
-    B.build_object()
-    export_glb(os.path.join(OUT_MODELS_DIR, "workshop_storage_shelf.glb"))
-
-
-# ---------------------------------------------------------------------------
-# 3. AAA Pro-Reparatur-Kit-Koffer (repair_kit_case.glb — Hartschalen-Stil)
+# 2. AAA Pro-Reparatur-Kit-Koffer (repair_kit_case.glb — Hartschalen-Stil)
 # ---------------------------------------------------------------------------
 
 def build_repair_kit_case():
@@ -644,7 +576,7 @@ def build_repair_kit_case():
 
 
 # ---------------------------------------------------------------------------
-# 3b. Mengen-Kiste / Multi-Pack Logistics Crate (bulk_pack_crate.glb, bis 6x)
+# 3. Mengen-Kiste / Multi-Pack Logistics Crate (bulk_pack_crate.glb, bis 6x)
 # ---------------------------------------------------------------------------
 
 def build_bulk_pack_crate():
@@ -722,7 +654,6 @@ def build_delivery_box():
 
 def main():
     build_workbench()
-    build_storage_shelf()
     build_repair_kit_case()
     build_bulk_pack_crate()
     build_delivery_box()

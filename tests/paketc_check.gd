@@ -444,6 +444,7 @@ func _save() -> void:
 	# Alter Spielstand: festes Regal und 4er-Regal
 	var old: Dictionary = data.duplicate(true)
 	old.erase("start_shelf_done")
+	old.erase("schema") # Spielstände von vor v3.4 haben noch kein Schema
 	var di: Dictionary = {}
 	di["decor_9"] = {"id": "decor_9", "item_type": "prop_storage_shelf", "pos": Vector3(8, 0, 0), "rot_y": 0.0, "stored_items": [{"item_type": "web_server"}, null, {"item_type": "kit_ram"}, null]}
 	old["decor_items"] = di

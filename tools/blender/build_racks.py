@@ -28,10 +28,11 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 if SCRIPT_DIR not in sys.path:
     sys.path.insert(0, SCRIPT_DIR)
 
+import dct_paths
 import rack_pbr_textures
 
 COLLECTION = "DCT_Racks"
-OUT_MODELS_DIR = os.path.normpath(os.path.join(SCRIPT_DIR, "..", "..", "assets", "models"))
+OUT_MODELS_DIR = dct_paths.MODELS_DIR
 
 U = 0.04445
 HW = 0.464               # halbe Dachbreite
@@ -840,7 +841,7 @@ def export_rack_glb(root, out_dir):
 
 def main():
     clear_all()
-    cache_dir = os.path.join(SCRIPT_DIR, "_pbr_cache")
+    cache_dir = dct_paths.PBR_CACHE
     print("Generating rack PBR textures...")
     tp = rack_pbr_textures.generate_rack_textures(cache_dir)
 
@@ -860,7 +861,8 @@ def main():
         print(f"{variant}: {len(meshes)} Meshes, {tris} Dreiecke, {n_u} HE, {outlets} PDU-Dosen -> {os.path.getsize(glb_path)/1024.0:.1f} KB")
         print(f"  beweglich: {', '.join(movable)}")
 
-    blend_path = os.path.join(SCRIPT_DIR, "dct_racks.blend")
+    os.makedirs(dct_paths.WORK_DIR, exist_ok=True)
+    blend_path = os.path.join(dct_paths.WORK_DIR, "dct_racks.blend")
     bpy.ops.wm.save_as_mainfile(filepath=blend_path)
     print(f"RACKS DONE: {blend_path}")
 

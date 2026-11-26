@@ -64,6 +64,14 @@ var daily_deals: Array = []
 var career_completed: Array = []
 var active_team_order: Dictionary = {}
 
+## Bereichsmodule (TEC-01): Die Logik liegt in scripts/autoload/game_state/, der Zustand hier.
+const _Contracts := preload("res://scripts/autoload/game_state/contracts.gd")
+const _Racks := preload("res://scripts/autoload/game_state/racks.gd")
+const _Delivery := preload("res://scripts/autoload/game_state/delivery.gd")
+const _Cables := preload("res://scripts/autoload/game_state/cables.gd")
+const _Power := preload("res://scripts/autoload/game_state/power.gd")
+const _Migrations := preload("res://scripts/autoload/game_state/save_migrations.gd")
+
 const CAREER_MILESTONES := [
 	{
 		"id": "career_handwerk",
@@ -1367,367 +1375,9 @@ func is_world_paused_for_empty_server() -> bool:
 	return NetworkManager.is_dedicated and NetworkManager.players.is_empty()
 
 
-func get_delivery_fee(tier: int, express: bool = false) -> int:
-	var base := int(DELIVERY_FEES.get(clampi(tier, 1, 3), 15))
-	return base + (DELIVERY_EXPRESS_SURCHARGE if express else 0)
-
-
-func get_next_delivery_slot() -> Dictionary:
-	var cur_h := time_of_day * 24.0
-	for h in DELIVERY_SLOTS_HOURS:
-		if float(h) > cur_h + 0.12:
-			return {"day": day_number, "hour": h, "tomorrow": false}
-	return {"day": day_number + 1, "hour": DELIVERY_SLOTS_HOURS[0], "tomorrow": true}
-
-
-func get_next_delivery_slot_label() -> String:
-	var s := get_next_delivery_slot()
-	if bool(s["tomorrow"]):
-		return "Morgen %02d:00 Uhr" % int(s["hour"])
-	return "%02d:00 Uhr" % int(s["hour"])
-
-
-func get_scheduled_delivery_label() -> String:
-	if pending_delivery_express:
-		return "Sofort-Express"
-	if scheduled_delivery_hour < 0:
-		return get_next_delivery_slot_label()
-	if scheduled_delivery_day > day_number:
-		return "Morgen %02d:00 Uhr" % scheduled_delivery_hour
-	return "%02d:00 Uhr" % scheduled_delivery_hour
-
-
-func _is_delivery_window_due() -> bool:
-	if pending_delivery_express:
-		return true
-	if scheduled_delivery_hour < 0:
-		return true
-	if day_number > scheduled_delivery_day:
-		return true
-	return day_number == scheduled_delivery_day and (time_of_day * 24.0) >= float(scheduled_delivery_hour)
-
-
-func _update_delivery_van(delta: float) -> void:
-	match van_phase:
-		"idle":
-			if not pending_delivery_items.is_empty() and _is_delivery_window_due():
-				van_cargo = _pack_van_cargo(pending_delivery_items)
-				pending_delivery_items.clear()
-				pending_delivery_express = false
-				scheduled_delivery_hour = -1
-				scheduled_delivery_day = 0
-				_start_delivery_van()
-		"arriving":
-			van_phase_time += delta
-			if van_phase_time >= VAN_ARRIVE_DURATION:
-				_begin_unloading()
-		"unloading":
-			van_phase_time += delta
-			van_trip_time += delta
-			_update_van_trip()
-		"departing":
-			van_phase_time += delta
-			if van_phase_time >= VAN_DEPART_DURATION:
-				van_phase = "idle"
-				van_phase_time = 0.0
-				_reset_van_trip()
-				_broadcast_van_state()
-
-
-## Das Fahrzeug fährt los (van_cargo ist schon gepackt).
-func _start_delivery_van() -> void:
-	_reset_van_trip()
-	van_site = "halle_nord" if halle_nord_owned and delivery_target_site == "halle_nord" else "garage"
-	van_delivery_tier = compute_delivery_tier(van_cargo)
-	van_phase = "arriving"
-	van_phase_time = 0.0
-	_van_unload_accum = 0.0
-	if van_site == "garage":
-		set_garage_door_open_server(true)
-	_clear_van_bay()
-	_broadcast_van_state()
-
-
-## Kisten, die genau da stehen, wo gleich das Fahrzeug parkt, rücken zur Seite.
-func _clear_van_bay() -> void:
-	var o := DeliveryPlan.offset(van_site)
-	var moved := false
-	for cid in crates.keys():
-		var c: Dictionary = crates[cid]
-		if int(c.get("held_by", 0)) != 0:
-			continue
-		var p: Vector3 = (c["pos"] as Vector3) - o
-		if absf(p.x) > 1.75 or p.z < DeliveryPlan.clear_z(van_delivery_tier) or p.z > 16.0:
-			continue
-		c["held_by"] = -1
-		var sp := DeliveryPlan.assign(DeliveryPlan.survey(van_site), c, DeliveryPlan.spot_limit(van_delivery_tier))
-		c["held_by"] = 0
-		_apply_spot(c, sp, van_site)
-		moved = true
-	for cid in carts.keys():
-		var ct: Dictionary = carts[cid]
-		var cp: Vector3 = (ct["pos"] as Vector3) - o
-		if int(ct.get("pushed_by", 0)) == 0 and absf(cp.x) < 1.9 and cp.z > DeliveryPlan.clear_z(van_delivery_tier) and cp.z < 16.0:
-			var ds := DeliveryPlan.assign(DeliveryPlan.survey(van_site), {"item_type": "cart"})
-			ct["pos"] = (ds["pos"] as Vector3) + o
-			_broadcast_carts()
-	if moved:
-		_broadcast_crates()
-
-
-func _apply_spot(c: Dictionary, sp: Dictionary, site: String) -> void:
-	c["pos"] = (sp["pos"] as Vector3) + DeliveryPlan.offset(site)
-	c.erase("stk")
-	c.erase("pal")
-	if str(sp.get("stk", "")) != "":
-		c["stk"] = str(sp["stk"])
-	if bool(sp.get("pal", false)):
-		c["pal"] = true
-
-
-func _begin_unloading() -> void:
-	_clear_van_bay()
-	van_phase = "unloading"
-	van_phase_time = 0.0
-	van_trip_phase = "work"
-	van_trip_time = 0.0
-	van_trip_total = van_cargo.size()
-	van_trip_done = 0
-	_van_drop_i = 0
-	van_plan = DeliveryPlan.build(van_site, van_delivery_tier, van_cargo)
-	for e in van_plan["items"]:
-		var it := str((e as Dictionary)["it"])
-		if it.begins_with("build:"):
-			var bd: Dictionary = pending_build_orders.get(it.substr(6), {})
-			e["label"] = "%s · Slot %d" % [str(bd.get("rack_label", "Rack")), int(bd.get("slot_idx", 0)) + 1]
-	_rpc_sync_van_plan.rpc(van_plan)
-	_rpc_play_sfx.rpc("van_horn")
-	var tmeta: Dictionary = DELIVERY_TIER_META.get(van_delivery_tier, DELIVERY_TIER_META[1])
-	post_event_f("%s %s ist angekommen (%d Pakete · %s)!", [
-		str(tmeta["icon"]), str(tmeta["name"]), van_trip_total, str(tmeta["method"])
-	], "good")
-	_broadcast_van_state()
-
-
-@rpc("authority", "call_remote", "reliable")
-func _rpc_sync_van_plan(plan: Dictionary) -> void:
-	van_plan = plan.duplicate(true)
-
-
-## Abladen läuft nach Plan. Danach wartet der Fahrer auf die Unterschrift und steigt wieder ein.
-func _update_van_trip() -> void:
-	match van_trip_phase:
-		"work":
-			var drops: Array = van_plan.get("drops", [])
-			var dropped := false
-			while _van_drop_i < drops.size() and van_phase_time >= float(drops[_van_drop_i][0]):
-				_drop_planned(int(drops[_van_drop_i][1]))
-				_van_drop_i += 1
-				dropped = true
-			if dropped:
-				_broadcast_van_state()
-			if _van_drop_i >= drops.size() and van_phase_time >= float(van_plan.get("end", 0.0)):
-				_set_van_trip("sign")
-		"sign":
-			if van_trip_time >= VAN_SIGN_TIME:
-				post_event("📝 Niemand da zum Unterschreiben: Der Fahrer hat die Lieferung abgestellt.", "info")
-				_set_van_trip("enter")
-		"enter":
-			if van_trip_time >= VAN_ENTER_TIME:
-				van_phase = "departing"
-				van_phase_time = 0.0
-				van_trip_phase = ""
-				MailManager.on_delivery_done(van_trip_total)
-				_broadcast_van_state()
-		_:
-			_begin_unloading()
-
-
-func _set_van_trip(step: String) -> void:
-	van_trip_phase = step
-	van_trip_time = 0.0
-	_broadcast_van_state()
-
-
-func _drop_planned(idx: int) -> void:
-	var items: Array = van_plan.get("items", [])
-	if idx < 0 or idx >= items.size():
-		return
-	var e: Dictionary = items[idx]
-	var item := str(e["it"])
-	van_cargo.erase(item)
-	van_trip_done += 1
-	if item == VAN_PARCEL_ITEM:
-		_deliver_parts_parcel()
-		return
-	_van_spot = e if _spot_still_free(e) else {}
-	_deliver_item_to_zone(item)
-	_van_spot = {}
-
-
-## Hat inzwischen jemand etwas auf den geplanten Platz gestellt?
-func _spot_still_free(e: Dictionary) -> bool:
-	if str(e.get("cls", "")) == "cart" or str(e.get("stk", "")) != "":
-		return true
-	var p: Vector3 = (e["pos"] as Vector3) + DeliveryPlan.offset(van_site)
-	for c in crates.values():
-		var cp: Vector3 = (c as Dictionary)["pos"]
-		if int((c as Dictionary).get("held_by", 0)) == 0 and Vector2(cp.x - p.x, cp.z - p.z).length() < 0.42:
-			return false
-	return true
-
-
 ## Unterschrift auf dem Tablet des Fahrers.
 func request_sign_delivery() -> void:
 	_rpc_sign_delivery.rpc_id(1)
-
-
-@rpc("any_peer", "call_local", "reliable")
-func _rpc_sign_delivery() -> void:
-	if not multiplayer.is_server() or van_phase != "unloading" or van_trip_phase != "sign":
-		return
-	var peer_id := _get_sender_id()
-	reputation = minf(100.0, reputation + VAN_SIGN_REPUTATION)
-	FinanceManager.credit_public(VAN_SIGN_TIP, "Lieferbonus")
-	_rpc_play_sfx.rpc("sign_pen")
-	post_event_f("📝 %s hat die Lieferung unterschrieben. Alles da! (+$%d, etwas mehr Ruf)", [NetworkManager.get_player_name(peer_id), int(VAN_SIGN_TIP)], "good")
-	_set_van_trip("enter")
-	_broadcast_sim_tick()
-
-
-func _reset_van_trip() -> void:
-	van_trip_phase = ""
-	van_trip_time = 0.0
-	van_trip_done = 0
-	van_trip_total = 0
-	_van_drop_i = 0
-	van_plan = {}
-
-
-## Welche Artikel bei Mehrfachbestellung automatisch in Mengen-Kisten (bis 6 Stück/Kiste) gebündelt werden.
-func is_bulk_packable(item_type: String) -> bool:
-	if is_repair_kit(item_type):
-		return true
-	return item_type == "web_server" or item_type == "storage_server" or item_type == "gpu_server" or item_type == "net_switch" or item_type == INDOOR_UNIT_TYPE or is_strip_type(item_type)
-
-
-func is_heavy_delivery_item(item_type: String) -> bool:
-	var base := item_type
-	if base.begins_with("bulk:"):
-		var parts := base.split(":")
-		if parts.size() >= 2:
-			base = parts[1]
-	return base == "rack" or base == "rack_pro" or is_ups_type(base) or base == "cart" or is_heat_pump_type(base) or is_floor_cooler_type(base)
-
-
-## Berechnet die Liefer-Kategorie (1 = Lieferwagen, 2 = Kastenwagen 7,5t, 3 = Schwerlast-LKW 18t).
-func compute_delivery_tier(packed_cargo: Array) -> int:
-	var total := 0
-	var heavy := 0
-	for entry in packed_cargo:
-		var s := str(entry)
-		if s == VAN_PARCEL_ITEM:
-			total += 1
-			continue
-		total += 1
-		if is_heavy_delivery_item(s):
-			heavy += 1
-	if total >= 10 or heavy >= 4:
-		return 3
-	if total >= 5 or heavy >= 2:
-		return 2
-	return 1
-
-
-## Fasst Bauteile/Zubehör ins Sammelpaket UND bündelt gleiche Mengen-Artikel (Kits, Module) in bis zu 6er-Kisten.
-func _pack_items_preview(items: Array, out_parcels: Array = []) -> Array:
-	var physical: Array = []
-	var bulk_counts: Dictionary = {}
-	var bulk_order: Array[String] = []
-	var has_parcel := false
-	for entry in items:
-		var s := str(entry)
-		if s.begins_with("part:"):
-			has_parcel = true
-			out_parcels.append(s.substr(5))
-		elif s.begins_with("acc:"):
-			has_parcel = true
-			out_parcels.append(s)
-		elif s == VAN_PARCEL_ITEM:
-			continue
-		elif s.begins_with("bulk:"):
-			physical.append(s)
-		elif is_bulk_packable(s):
-			if not bulk_counts.has(s):
-				bulk_counts[s] = 0
-				bulk_order.append(s)
-			bulk_counts[s] = int(bulk_counts[s]) + 1
-		else:
-			physical.append(s)
-	for btype in bulk_order:
-		var rem := int(bulk_counts[btype])
-		while rem > 0:
-			var chunk := mini(rem, BULK_PACK_MAX)
-			if chunk > 1:
-				physical.append("bulk:%s:%d" % [btype, chunk])
-			else:
-				physical.append(btype)
-			rem -= chunk
-	if has_parcel:
-		physical.push_front(VAN_PARCEL_ITEM)
-	return physical
-
-
-func _pack_van_cargo(items: Array) -> Array:
-	_van_parcel_parts.clear()
-	return _pack_items_preview(items, _van_parcel_parts)
-
-
-## Lieferzone des gewählten Standorts (Garage oder Halle Nord).
-func is_pos_in_delivery_zone(pos: Vector3) -> bool:
-	var p := pos - DeliveryPlan.offset("halle_nord" if halle_nord_owned and delivery_target_site == "halle_nord" else "garage")
-	return p.z >= 4.4 and p.z <= 9.2 and absf(p.x) <= 3.4
-
-
-func get_delivery_zone_ground_crates() -> int:
-	var n := 0
-	for c in crates.values():
-		var cd: Dictionary = c as Dictionary
-		if int(cd.get("held_by", 0)) == 0 and is_pos_in_delivery_zone(cd.get("pos", Vector3.ZERO) as Vector3):
-			n += 1
-	for ct in carts.values():
-		var ctd: Dictionary = ct as Dictionary
-		if int(ctd.get("pushed_by", 0)) == 0 and is_pos_in_delivery_zone(ctd.get("pos", Vector3.ZERO) as Vector3):
-			n += 1
-	return n
-
-
-func get_incoming_delivery_crates() -> int:
-	if multiplayer.is_server():
-		var n := 0
-		for e in van_cargo:
-			if str(e) != VAN_PARCEL_ITEM:
-				n += 1
-		var pend_packed := _pack_items_preview(pending_delivery_items)
-		for e in pend_packed:
-			if str(e) != VAN_PARCEL_ITEM:
-				n += 1
-		return maxi(0, n)
-	return maxi(0, van_cargo_count + pending_delivery_count)
-
-
-func get_delivery_zone_used_slots() -> int:
-	return get_delivery_zone_ground_crates() + get_incoming_delivery_crates()
-
-
-func get_delivery_zone_free_slots() -> int:
-	return maxi(0, get_max_delivery_slots() - get_delivery_zone_used_slots())
-
-
-func get_max_delivery_slots() -> int:
-	var lvl_b: Dictionary = COMPANY_LEVEL_BENEFITS.get(get_company_level(), {})
-	var extra := int(lvl_b.get("delivery_bonus", 0))
-	return DELIVERY_ZONE_MAX_CRATES + extra + (career_completed.size() * 2)
 
 
 func get_level_revenue_mult() -> float:
@@ -1745,183 +1395,6 @@ func get_level_failure_mult() -> float:
 	var lvl_b: Dictionary = COMPANY_LEVEL_BENEFITS.get(get_company_level(), {})
 	var fm := float(lvl_b.get("fail_mult", 1.0)) - float(career_completed.size()) * 0.03
 	return clampf(fm, 0.45, 1.0)
-
-
-func get_max_contracts_limit() -> int:
-	var lvl_b: Dictionary = COMPANY_LEVEL_BENEFITS.get(get_company_level(), {})
-	return int(lvl_b.get("max_contracts", 4)) + career_completed.size()
-
-
-## Berechnet für den Warenkorb: {"crates": physische Kisten, "tier": 1..3, "packed": Array}.
-func preview_cart_delivery(entries: Array) -> Dictionary:
-	var raw_items: Array = []
-	for raw in entries:
-		var e: Dictionary = raw
-		var kind := str(e.get("kind", "item"))
-		var qty := clampi(int(e.get("qty", 1)), 1, 24)
-		if kind == "item":
-			var itype := str(e.get("id", ""))
-			if itype == "kit_bundle_all":
-				for _q in range(qty):
-					for kid in REPAIR_KIT_ORDER:
-						raw_items.append(kid)
-			elif ITEM_CATALOG.has(itype):
-				for _q in range(qty):
-					raw_items.append(itype)
-		elif kind == "slot_build":
-			raw_items.append("slot_build_box")
-		elif kind == "part":
-			raw_items.append("part:" + str(e.get("id", "")))
-		elif kind == "acc":
-			raw_items.append("acc:" + str(e.get("id", "")))
-	var packed := _pack_items_preview(raw_items)
-	var physical_crates := 0
-	for p in packed:
-		if str(p) != VAN_PARCEL_ITEM:
-			physical_crates += 1
-	return {
-		"crates": physical_crates,
-		"total_packages": packed.size(),
-		"tier": compute_delivery_tier(packed),
-		"packed": packed,
-	}
-
-
-func _deliver_parts_parcel() -> void:
-	if _van_parcel_parts.is_empty():
-		return
-	var n_parts := 0
-	var n_fuses := 0
-	var n_crates := 0
-	var n_power := 0
-	var n_bench := 0
-	for pid_v in _van_parcel_parts:
-		var pid := str(pid_v)
-		match pid:
-			"acc:fuse":
-				fuse_stock += 1
-				n_fuses += 1
-			"acc:power_strip", "acc:net_hub":
-				# Vor v2.6 bestelltes Zubehör kommt als echte Leiste.
-				_spawn_crate_internal("prop_power_strip" if pid == "acc:power_strip" else "prop_lan_strip")
-				n_crates += 1
-			"acc:tool_akku", "acc:tool_torque", "acc:tool_paste_gun", "acc:tool_meter_pro", "acc:tool_rcd":
-				var tid := pid.substr(9)
-				if has_bench_tool(tid):
-					money += float(BENCH_TOOLS[tid]["price"])
-				else:
-					bench_tools[tid] = true
-					_rpc_sync_bench_tools.rpc(bench_tools)
-					post_event_f("📦 Neues Werkzeug an der Werkbank: %s.", [str(BENCH_TOOLS[tid]["name"])], "good")
-			"acc:screw_box":
-				bench_screws = mini(BENCH_SCREWS_MAX, bench_screws + SCREW_BOX_COUNT)
-				n_bench += 1
-			"acc:paste_tube":
-				bench_paste = minf(BENCH_PASTE_MAX, bench_paste + PASTE_TUBE_USES)
-				n_bench += 1
-			"acc:power_fuse":
-				if power_fuse_stock == 0:
-					power_fuse_stock = 1
-					n_power += 1
-			_:
-				if pid.begins_with("acc:"):
-					continue
-				parts_inventory[pid] = int(parts_inventory.get(pid, 0)) + 1
-				n_parts += 1
-	_van_parcel_parts.clear()
-	_rpc_play_sfx.rpc("pickup")
-	if n_parts > 0:
-		_broadcast_inventory()
-		post_event_f("📦 %d Hardware-Bauteil(e) ins Teile-Lager geliefert! Jetzt am Rack einbauen [E].", [n_parts], "good")
-	if n_bench > 0:
-		_rpc_sync_bench_supplies.rpc(bench_screws, bench_paste)
-		post_event_f("📦 %d× Werkbank-Material geliefert (Schrauben: %d, Wärmeleitpaste: %.0f Anwendungen).", [n_bench, bench_screws, bench_paste], "good")
-	if n_fuses > 0 or n_power > 0:
-		_broadcast_fuses()
-	if n_fuses > 0:
-		post_event_f("📦 %d Sicherung(en) geliefert. Am Sicherungskasten mit [E] einsetzen.", [n_fuses], "good")
-	if n_power > 0:
-		post_event("📦 Drehsicherung geliefert. Am Sicherungskasten mit [E] in Steckplatz F2 einsetzen.", "good")
-	if n_crates > 0:
-		_broadcast_crates()
-	_broadcast_sim_tick()
-
-
-func _deliver_item_to_zone(item_type: String) -> void:
-	if item_type == "cart":
-		var cid := _alloc_id("cart")
-		var csite := van_site if van_phase == "unloading" else delivery_target_site
-		var csp: Dictionary = _van_spot if not _van_spot.is_empty() else DeliveryPlan.assign(DeliveryPlan.survey(csite), {"item_type": "cart"})
-		var cart_pos: Vector3 = (csp["pos"] as Vector3) + DeliveryPlan.offset(csite)
-		carts[cid] = {
-			"id": cid,
-			"pos": cart_pos,
-			"rot_y": 0.0,
-			"pushed_by": 0,
-			"items": [],
-		}
-		_broadcast_carts()
-		_rpc_play_sfx.rpc("place")
-	elif item_type.begins_with("build:"):
-		var oid := item_type.substr(6)
-		var bdata: Dictionary = pending_build_orders.get(oid, {}).duplicate(true)
-		pending_build_orders.erase(oid)
-		var cid := _spawn_crate_internal("slot_build_box")
-		var rlabel := str(bdata.get("rack_label", "Rack"))
-		var sidx := int(bdata.get("slot_idx", 0))
-		crates[cid]["label"] = "%s · Slot %d" % [rlabel, sidx + 1]
-		crates[cid]["build_data"] = bdata
-		_broadcast_crates()
-		_rpc_play_sfx.rpc("drop")
-		post_event_f("📦 Bausatz-Karton geliefert: %s — an der Werkbank [E] zusammenbauen!", [crates[cid]["label"]], "good")
-	elif item_type.begins_with("bulk:"):
-		var parts := item_type.split(":")
-		var base_type := parts[1] if parts.size() >= 2 else item_type
-		var pcount := clampi(int(parts[2]) if parts.size() >= 3 else 1, 1, BULK_PACK_MAX)
-		_spawn_crate_internal(base_type, pcount)
-		_broadcast_crates()
-		_rpc_play_sfx.rpc("drop")
-	else:
-		_spawn_crate_internal(item_type, 1)
-		_broadcast_crates()
-		_rpc_play_sfx.rpc("drop")
-
-
-func _broadcast_van_state() -> void:
-	van_cargo_count = van_cargo.size()
-	var pend_packed := _pack_items_preview(pending_delivery_items)
-	pending_delivery_count = pend_packed.size()
-	var trip := {
-		"phase": van_trip_phase,
-		"t": van_trip_time,
-		"site": van_site,
-		"done": van_trip_done,
-		"total": van_trip_total,
-		"tier": van_delivery_tier,
-		"sched_day": scheduled_delivery_day,
-		"sched_hour": scheduled_delivery_hour,
-		"express": pending_delivery_express,
-	}
-	_rpc_sync_van_state.rpc(van_phase, van_phase_time, van_cargo_count, pending_delivery_count, trip)
-
-
-@rpc("authority", "call_local", "reliable")
-func _rpc_sync_van_state(phase: String, phase_t: float, cargo_n: int, pending_n: int, trip: Dictionary) -> void:
-	if not multiplayer.is_server():
-		van_phase = phase
-		van_phase_time = phase_t
-		van_cargo_count = cargo_n
-		pending_delivery_count = pending_n
-		van_trip_phase = str(trip.get("phase", ""))
-		van_trip_time = float(trip.get("t", 0.0))
-		van_site = "halle_nord" if str(trip.get("site", "garage")) == "halle_nord" else "garage"
-		van_trip_done = maxi(int(trip.get("done", 0)), 0)
-		van_trip_total = maxi(int(trip.get("total", 0)), 0)
-		van_delivery_tier = clampi(int(trip.get("tier", 1)), 1, 3)
-		scheduled_delivery_day = int(trip.get("sched_day", 0))
-		scheduled_delivery_hour = int(trip.get("sched_hour", -1))
-		pending_delivery_express = bool(trip.get("express", false))
-	van_updated.emit()
 
 
 func initialize_new_world(save_id: String = "mein_datacenter", save_name: String = "Mein DataCenter") -> void:
@@ -2014,6 +1487,7 @@ func export_save_data() -> Dictionary:
 	data["ddos_cooldown"] = ddos_cooldown
 	data["world_uid"] = world_uid
 	data["build_allowed"] = build_allowed.duplicate()
+	data[SaveSchema.KEY] = SaveSchema.CURRENT
 	var all_pending: Array = []
 	# Inhalt des Sammelpakets statt des Platzhalters speichern, sonst gehen Bestellungen verloren.
 	for pid_v in _van_parcel_parts:
@@ -2061,6 +1535,9 @@ func load_from_save_data(data: Dictionary, save_id: String, display_name: String
 			if build_allowed.size() < 256:
 				build_allowed[str(k).left(64)] = SecurityGuard.sanitize_label(str(data["build_allowed"][k]), 24, "Spieler")
 
+	# TEC-02: Migrationen laufen nur für Spielstände, die älter sind als SaveSchema.CURRENT.
+	var schema_from := SaveSchema.version_of(data)
+	var ran: Array[int] = _Migrations.run(data, schema_from, "data")
 	_apply_snapshot(data)
 	for bid in bench_states.keys():
 		var wbs: Dictionary = bench_states[bid]
@@ -2078,14 +1555,11 @@ func load_from_save_data(data: Dictionary, save_id: String, display_name: String
 	if saved_pending is Array:
 		for item in saved_pending:
 			pending_delivery_items.append(str(item))
-	_migrate_mounted_strips(data)
-	_migrate_strip_ports()
-	_migrate_shelves()
-	# Upgrade older v0.2/v0.3 saves cleanly with a starter cart
-	if not data.has("carts"):
-		var cid := _alloc_id("cart")
-		carts[cid] = {"id": cid, "pos": Vector3(-3.2, 0.0, 2.8), "rot_y": 0.25, "pushed_by": 0, "items": []}
-		carts_changed.emit()
+	ran.append_array(_Migrations.run(data, schema_from, "world"))
+	if not ran.is_empty():
+		print("[Spielstand] Schema %d -> %d, Migrationen %s" % [schema_from, SaveSchema.CURRENT, str(ran)])
+	if SaveSchema.is_newer(data):
+		post_event_f("⚠ Dieser Spielstand stammt aus einer neueren Spielversion (Schema %d, dieses Spiel kennt %d). Speichern kann Neues darin verlieren.", [schema_from, SaveSchema.CURRENT], "warn")
 	for tmpl in CONTRACTS_TEMPLATE:
 		var tmpl_dict: Dictionary = tmpl
 		var cid := str(tmpl_dict["id"])
@@ -2108,128 +1582,6 @@ func load_from_save_data(data: Dictionary, save_id: String, display_name: String
 	post_event_f("Spielstand '%s' geladen! (Tag %d • $%.0f • %d Racks • %d CU)", [
 		current_save_name, day_number, money, racks.size(), total_compute
 	], "good")
-
-
-## Seit den Seitenbuchsen: alte Kabel an Leisten auf die richtige Buchse stecken.
-## Leiste an Leiste: von der näher am Kasten liegenden aus dem Ausgang in den Eingang der anderen.
-## Kasten/Router kommt in den Eingang, Geräte oben. Was nicht mehr passt, wird abgezogen.
-## Gibt [umgesteckt, abgezogen] zurück.
-func _migrate_strip_ports() -> Array:
-	var moved := 0
-	var dropped: Array = []
-	for ctype in ["power", "network"]:
-		var depth := _cable_depths(ctype)
-		var ids: Array = []
-		for cid in cables.keys():
-			var c: Dictionary = cables[cid]
-			if str(c.get("cable_type", "")) == ctype:
-				ids.append(str(cid))
-		# Kabel nah am Kasten zuerst, damit die Kette von vorn aufgebaut wird.
-		ids.sort_custom(func(x, y):
-			var dx := mini(int(depth.get(str(cables[x]["from_id"]), 999)), int(depth.get(str(cables[x]["to_id"]), 999)))
-			var dy := mini(int(depth.get(str(cables[y]["from_id"]), 999)), int(depth.get(str(cables[y]["to_id"]), 999)))
-			return dx < dy if dx != dy else x < y)
-		var taken := {}
-		# Kabel ohne Leiste behalten ihre Buchsen.
-		for cid in ids:
-			var c: Dictionary = cables[cid]
-			for end in [["from_id", "from_slot"], ["to_id", "to_slot"]]:
-				var eid := str(c[end[0]])
-				if StripRules.role(ctype, eid) != "strip":
-					continue
-		for cid in ids:
-			var c: Dictionary = cables[cid]
-			var a := str(c["from_id"])
-			var b := str(c["to_id"])
-			var ra := StripRules.role(ctype, a)
-			var rb := StripRules.role(ctype, b)
-			if ctype == "power" and ra == "device" and rb == "device":
-				dropped.append(cid)
-				continue
-			if ra != "strip" and rb != "strip":
-				continue
-			var sa := -1
-			var sb := -1
-			if ra == "strip" and rb == "strip":
-				var a_up := int(depth.get(a, 999)) <= int(depth.get(b, 999))
-				sa = StripRules.out_slot(ctype) if a_up else StripRules.in_slot(ctype)
-				sb = StripRules.in_slot(ctype) if a_up else StripRules.out_slot(ctype)
-			else:
-				var s_is_a := ra == "strip"
-				var strip := a if s_is_a else b
-				var other := b if s_is_a else a
-				var orole := rb if s_is_a else ra
-				var feeds := orole == "source" or ((orole == "ups" or orole == "hub") and int(depth.get(other, 999)) < int(depth.get(strip, 999)))
-				var slot := StripRules.in_slot(ctype)
-				if not feeds:
-					slot = -1
-					for i in StripRules.top_count(ctype):
-						if not (taken.get(strip, {}) as Dictionary).has(i):
-							slot = i
-							break
-				if s_is_a:
-					sa = slot
-				else:
-					sb = slot
-			var ok := true
-			for pair in [[a, sa], [b, sb]]:
-				if int(pair[1]) < 0 and StripRules.role(ctype, str(pair[0])) == "strip":
-					ok = false
-				elif int(pair[1]) >= 0 and (taken.get(pair[0], {}) as Dictionary).has(int(pair[1])):
-					ok = false
-			if not ok:
-				dropped.append(cid)
-				continue
-			for pair in [[a, sa, "from_slot"], [b, sb, "to_slot"]]:
-				if int(pair[1]) < 0:
-					continue
-				if not taken.has(pair[0]):
-					taken[pair[0]] = {}
-				taken[pair[0]][int(pair[1])] = true
-				if int(c.get(pair[2], -1)) != int(pair[1]):
-					c[pair[2]] = int(pair[1])
-					moved += 1
-	for cid in dropped:
-		cables.erase(cid)
-	if moved > 0 or not dropped.is_empty():
-		post_event_f("🔌 Steckleisten haben jetzt Eingang (weiß) und Ausgang (rot) an der Seite: %d Kabel umgesteckt, %d Kabel abgezogen. Racks geben keinen Strom mehr weiter, sie hängen an Leisten oder am Kasten.", [moved, dropped.size()], "info")
-	return [moved, dropped.size()]
-
-
-## Abstand jedes Anschlusses zum Kasten bzw. Router über beliebige Kabel (alte Regeln).
-func _cable_depths(ctype: String) -> Dictionary:
-	var depth := {}
-	var queue: Array = []
-	for src in ([WALL_BREAKER_ID, HALL_C_BREAKER_ID, HALL_NORD_BREAKER_ID] if ctype == "power" else [WALL_ROUTER_ID, HALL_C_ROUTER_ID, HALL_NORD_ROUTER_ID]):
-		depth[src] = 0
-		queue.append(src)
-	while not queue.is_empty():
-		var cur := str(queue.pop_front())
-		for cid in cables.keys():
-			var c: Dictionary = cables[cid]
-			if str(c.get("cable_type", "")) != ctype:
-				continue
-			var other := str(c["to_id"]) if str(c["from_id"]) == cur else (str(c["from_id"]) if str(c["to_id"]) == cur else "")
-			if other == "" or depth.has(other):
-				continue
-			depth[other] = int(depth[cur]) + 1
-			queue.append(other)
-	return depth
-
-
-## Spielstände vor v2.6: am Kasten bzw. Router montierte Leisten werden zu echten Leisten in Kisten.
-func _migrate_mounted_strips(data: Dictionary) -> void:
-	var got := 0
-	for pair in [["power_strips", "prop_power_strip"], ["net_hubs", "prop_lan_strip"]]:
-		var left := clampi(int(data.get(pair[0], 0)), 0, 8)
-		got += left
-		while left > 0:
-			var n := mini(left, BULK_PACK_MAX)
-			_spawn_crate_internal(str(pair[1]), n)
-			left -= n
-	if got > 0:
-		crates_changed.emit()
-		post_event_f("📦 %d montierte Leisten sind jetzt echte Leisten und stehen als Kiste in der Lieferzone. Alte Kabel bleiben stecken, bis du sie ziehst.", [got], "info")
 
 
 func save_current_world(custom_display_name: String = "", is_autosave: bool = false) -> Dictionary:
@@ -2339,107 +1691,8 @@ func _alloc_id(prefix: String) -> String:
 	return id
 
 
-## Vergibt für Racks immer die niedrigste freie Nummer ab 1 (rack_1, rack_2, ...),
-## unabhängig davon, wie viele Kisten/Kabel vorher erzeugt wurden.
-func _alloc_rack_id() -> String:
-	var n := 1
-	while racks.has("rack_%d" % n):
-		n += 1
-	return "rack_%d" % n
-
-
 ## Ohne diese Bauteile läuft ein Server nicht. Eine Grafikkarte ist optional.
 const REQUIRED_PART_CATS: Array[String] = ["cpu", "ram", "storage", "cooling", "psu"]
-
-
-func _default_components(server_type: String = "web_server") -> Dictionary:
-	# Mainboards kommen nackt: CPU, RAM, GPU, Speicher, Kühlung und Netzteil kauft der Spieler danach selbst.
-	if is_mainboard(server_type):
-		return HardwareCatalog.make_empty_components()
-	return HardwareCatalog.make_default_components(server_type)
-
-
-func _make_empty_slot() -> Dictionary:
-	return {
-		"item_type": "",
-		"state": "ok",
-		"repair_progress": 0.0,
-		"fire_level": 0.0,
-		"components": _default_components(),
-	}
-
-
-func _make_rack_data(rack_id: String, rack_type: String, pos: Vector3, rot_y: float) -> Dictionary:
-	var slot_count := int(ITEM_CATALOG.get(rack_type, {}).get("slots", 4))
-	var slots: Array = []
-	for _i in range(slot_count):
-		slots.append(_make_empty_slot())
-	return {
-		"id": rack_id,
-		"custom_name": "",
-		"rack_type": rack_type,
-		"pos": pos,
-		"rot_y": rot_y,
-		"powered": false,
-		"networked": false,
-		"temp": 22.0,
-		"rental_type": "none",
-		"rental_customer": "",
-		"active_users": 0,
-		"satisfaction": 100.0,
-		"grace_timer": 0.0,
-		"rental_income": 0.0,
-		"metrics": {},
-		"services": [],
-		"slots": slots,
-	}
-
-
-func _ensure_loaded_compat() -> void:
-	for rid in racks.keys():
-		var r: Dictionary = racks[rid]
-		if not r.has("rack_type"):
-			r["rack_type"] = "rack"
-		if not (r.get("custom_name") is String):
-			r["custom_name"] = ""
-		if not r.has("rental_type"):
-			r["rental_type"] = "none"
-		if not r.has("rental_customer"):
-			r["rental_customer"] = ""
-		if not r.has("active_users"):
-			r["active_users"] = 0
-		if not r.has("satisfaction"):
-			r["satisfaction"] = 100.0
-		if not r.has("grace_timer"):
-			r["grace_timer"] = 0.0
-		if not r.has("rental_income"):
-			r["rental_income"] = 0.0
-		if not r.has("metrics") or not (r["metrics"] is Dictionary):
-			r["metrics"] = {}
-		# Alte Spielstände hatten genau einen Dienst pro Rack: in die Dienstliste übernehmen.
-		if not (r.get("services") is Array):
-			var migrated: Array = []
-			var old_type := str(r.get("rental_type", "none"))
-			if old_type != "none" and HardwareCatalog.RENTAL_PROFILES.has(old_type):
-				migrated.append({
-					"type": old_type,
-					"customer": str(r.get("rental_customer", "")),
-					"users": float(r.get("active_users", 0)),
-					"trend": 0.0,
-				})
-			r["services"] = migrated
-		var slots: Array = r.get("slots", [])
-		for s in slots:
-			var sd: Dictionary = s
-			var stype := str(sd.get("item_type", ""))
-			if not sd.has("components") or not (sd["components"] is Dictionary):
-				sd["components"] = _default_components(stype if stype != "" else "web_server")
-			else:
-				sd["components"] = HardwareCatalog.normalize_components(sd["components"] as Dictionary, stype if stype != "" else "web_server")
-	for cid in coolers.keys():
-		var c: Dictionary = coolers[cid]
-		if not c.has("cooler_type"):
-			c["cooler_type"] = "cooler"
 
 
 func _spawn_crate_internal(item_type: String, pack_count: int = 1) -> String:
@@ -2593,11 +1846,8 @@ func _apply_snapshot(snap: Dictionary) -> void:
 	power_tier = int(snap.get("power_tier", 0))
 	router_tier = clampi(int(snap.get("router_tier", 0)), 0, ROUTER_TIERS.size() - 1)
 	research_levels = _sanitize_research(snap.get("research_levels", {}))
-	# Backwards-compatible migration from old v0.2 room_expanded bool
-	if snap.has("room_level"):
-		room_level = clampi(int(snap.get("room_level", 0)), 0, 2)
-	else:
-		room_level = 1 if bool(snap.get("room_expanded", false)) else 0
+	# Alte Spielstände mit room_expanded stellt SaveSchema-Migration 1 vorher um.
+	room_level = clampi(int(snap.get("room_level", 0)), 0, 2)
 	halle_nord_owned = bool(snap.get("halle_nord_owned", false))
 	delivery_target_site = str(snap.get("delivery_target_site", "garage"))
 	if not halle_nord_owned:
@@ -2770,17 +2020,6 @@ func _real_time_of_day() -> float:
 	return float(secs) / 86400.0
 
 
-func get_estimated_daily_bill() -> int:
-	return int(roundf(daily_kwh * electricity_rate))
-
-
-## Neuer Tagespreis: zufällige Änderung, die zum Grundpreis zurückzieht. Nur auf dem Host.
-func _roll_electricity_rate(current: float) -> float:
-	var pull := (ELECTRICITY_RATE_PER_KWH - current) * ELECTRICITY_RATE_REVERSION
-	var swing := randf_range(-ELECTRICITY_RATE_DAILY_SWING, ELECTRICITY_RATE_DAILY_SWING)
-	return snappedf(clampf(current + pull + swing, ELECTRICITY_RATE_MIN, ELECTRICITY_RATE_MAX), 0.01)
-
-
 ## Kategorien der Mainboard-Auswahl im Rack-Menü (Reihenfolge = Anzeige-Reihenfolge).
 const MAINBOARD_CATEGORIES := [
 	{"id": "entry", "label": "Einsteiger", "form": "1U", "color": Color(0.36, 0.62, 0.86),
@@ -2792,39 +2031,6 @@ const MAINBOARD_CATEGORIES := [
 	{"id": "gpu", "label": "GPU & KI", "form": "4U", "color": Color(0.84, 0.58, 0.18),
 		"desc": "Mehrere PCIe-x16-Plätze für Grafikkarten, Streaming und KI-Hosting."},
 ]
-
-
-func is_slot_upgradeable(item_type: String) -> bool:
-	# Die alten Chassis bleiben nur für bestehende Spielstände gültig.
-	if item_type == "web_server" or item_type == "storage_server" or item_type == "gpu_server":
-		return true
-	return is_mainboard(item_type)
-
-
-func is_mainboard(item_type: String) -> bool:
-	var entry: Dictionary = ITEM_CATALOG.get(item_type, {})
-	return bool(entry.get("mainboard", false))
-
-
-## Welches 3D-Gehäuse (1U/2U/4U) für einen Einschub gezeigt wird.
-func get_chassis_visual(item_type: String) -> String:
-	if is_mainboard(item_type):
-		return str(ITEM_CATALOG[item_type].get("chassis", "web_server"))
-	return item_type
-
-
-## Mainboard-IDs einer Kategorie ("" = alle), aufsteigend nach Preis sortiert.
-func get_mainboards(mb_cat: String = "") -> Array:
-	var out: Array = []
-	for key in ITEM_CATALOG:
-		var id := str(key)
-		if not is_mainboard(id):
-			continue
-		if mb_cat != "" and str(ITEM_CATALOG[id].get("mb_cat", "")) != mb_cat:
-			continue
-		out.append(id)
-	out.sort_custom(func(a, b) -> bool: return int(ITEM_CATALOG[a]["price"]) < int(ITEM_CATALOG[b]["price"]))
-	return out
 
 
 ## Aktuelle Stufe eines Forschungszweigs (0 = nicht erforscht).
@@ -2889,186 +2095,10 @@ func _sanitize_research(raw: Variant) -> Dictionary:
 	return out
 
 
-## Bauqualität eines Einschubs oder Schlittens (0–100). Server aus alten Spielständen haben 100.
-func get_build_quality(data: Dictionary) -> int:
-	return clampi(int(roundf(float(data.get("build_quality", 100)))), 0, 100)
-
-
-func get_slot_sloppiness(slot: Dictionary) -> float:
-	return float(100 - get_build_quality(slot)) / 100.0
-
-
 ## Serverwerte hängen nur an Gehäuse, Bauteilen, Bauqualität und Forschung. Sie werden im Takt
 ## hunderte Male gebraucht und deshalb gemerkt.
 var _stats_cache: Dictionary = {}
 var _stats_research: Dictionary = {}
-
-
-func get_slot_stats(slot: Dictionary) -> Dictionary:
-	if _stats_research != research_levels:
-		_stats_research = research_levels.duplicate()
-		_stats_cache.clear()
-	var key := [slot.get("item_type", ""), slot.get("build_quality", 100), slot.get("components", {})]
-	var hit: Variant = _stats_cache.get(key)
-	if hit == null:
-		if _stats_cache.size() > 512:
-			_stats_cache.clear()
-		hit = _compute_slot_stats(slot)
-		# Schreibgeschützt statt bei jedem Abruf kopiert: Wer etwas ändern will, nimmt duplicate().
-		(hit as Dictionary).make_read_only()
-		_stats_cache[key.duplicate(true)] = hit
-	return hit
-
-
-func _compute_slot_stats(slot: Dictionary) -> Dictionary:
-	var item_type := str(slot.get("item_type", ""))
-	if item_type == "" or not ITEM_CATALOG.has(item_type):
-		return {
-			"compute": 0, "watts": 0, "heat": 0.0, "fault_mult": 1.0,
-			"revenue_bonus": 0.0, "total_value": 0,
-			"cpu_score": 0, "ram_gb": 0, "gpu_score": 0, "vram_gb": 0,
-			"storage_tb": 0.0, "psu_max_watts": 0, "psu_overloaded": false, "ram_tag": "",
-			"missing_parts": [], "complete": false,
-		}
-
-	var base: Dictionary = ITEM_CATALOG[item_type]
-	var compute := int(base["compute"])
-	var watts := float(base["watts"])
-	var heat := float(base["heat"])
-	var fault_mult := 1.0
-	var watt_mult := 1.0
-	var total_val := int(base["price"])
-	var rev_bonus := float(base.get("revenue_bonus", 0.0))
-	var cpu_score := 0
-	var ram_gb := 0
-	var gpu_score := 0
-	var vram_gb := 0
-	var storage_tb := 0.0
-	var psu_max_watts := 550
-	var ram_tag := "DDR3"
-	var missing: Array = []
-
-	if is_slot_upgradeable(item_type):
-		var raw_comps: Dictionary = slot.get("components", {})
-		var comps := HardwareCatalog.normalize_components(raw_comps, item_type)
-		# Mainboard-/Chassis-Basis plus alle eingebauten Bauteile
-		watts = 65.0
-		heat = 2.0
-		compute = int(ITEM_CATALOG[item_type].get("base_compute", 4 if item_type == "web_server" else (6 if item_type == "storage_server" else 10)))
-		for cat in HardwareCatalog.CATEGORY_ORDER:
-			var part_id := str(comps.get(cat, ""))
-			if part_id.is_empty():
-				if REQUIRED_PART_CATS.has(cat):
-					missing.append(cat)
-				continue
-			var pd := HardwareCatalog.get_part(cat, part_id)
-			if pd.is_empty():
-				continue
-			total_val += int(pd.get("cost", 0))
-			compute += int(pd.get("compute", 0))
-			watts += float(pd.get("watts", 0))
-			heat += float(pd.get("heat", 0.0))
-			fault_mult *= float(pd.get("fault_mult", 1.0))
-			rev_bonus += float(pd.get("revenue_bonus", 0.0))
-			if cat == "cpu":
-				cpu_score += int(pd.get("cpu_score", 12))
-			elif cat == "ram":
-				ram_gb += int(pd.get("ram_gb", 2))
-				ram_tag = str(pd.get("tag", "DDR3"))
-			elif cat == "gpu":
-				gpu_score += int(pd.get("gpu_score", 4))
-				vram_gb += int(pd.get("vram_gb", 0))
-			elif cat == "storage":
-				storage_tb += float(pd.get("storage_tb", 0.5))
-			elif cat == "psu":
-				psu_max_watts = int(pd.get("psu_max_watts", 350))
-				watt_mult *= float(pd.get("watt_mult", 1.0))
-
-	# Ohne Pflichtteile startet das Board nicht: keine Rechenleistung, nur Standby-Verbrauch.
-	if not missing.is_empty():
-		compute = 0
-		watts = 10.0
-		heat = 0.5
-	var psu_overloaded := is_slot_upgradeable(item_type) and not missing.has("psu") and (watts > float(psu_max_watts))
-	if psu_overloaded:
-		fault_mult *= 2.4
-		heat += 4.5
-
-	# Forschung wirkt auf alle Server.
-	heat *= get_research_mult("cooling")
-	watt_mult *= get_research_mult("efficiency")
-	fault_mult *= get_research_mult("reliability")
-
-	# Schlampig gebaute Server laufen wärmer, fallen öfter aus und drosseln.
-	var sloppy := get_slot_sloppiness(slot)
-	heat *= 1.0 + 0.60 * sloppy
-	fault_mult = clampf(fault_mult, 0.15, 3.0) * (1.0 + 2.0 * sloppy)
-	var throttle := 1.0 - 0.30 * maxf(0.0, sloppy - 0.15)
-	compute = int(roundf(float(compute) * throttle))
-	cpu_score = int(roundf(float(cpu_score) * throttle))
-	gpu_score = int(roundf(float(gpu_score) * throttle))
-
-	var final_watts := maxi(40, int(roundf(watts * watt_mult)))
-	var final_heat := maxf(1.5, heat)
-	return {
-		"compute": compute,
-		"watts": final_watts,
-		"heat": final_heat,
-		"fault_mult": clampf(fault_mult, 0.15, 6.0),
-		"build_quality": get_build_quality(slot),
-		"revenue_bonus": rev_bonus,
-		"total_value": total_val,
-		"cpu_score": cpu_score,
-		"ram_gb": ram_gb,
-		"gpu_score": gpu_score,
-		"vram_gb": vram_gb,
-		"storage_tb": storage_tb,
-		"psu_max_watts": psu_max_watts,
-		"psu_overloaded": psu_overloaded,
-		"ram_tag": ram_tag,
-		"missing_parts": missing,
-		"complete": missing.is_empty(),
-	}
-
-
-func get_rack_hardware_summary(rack_id: String) -> Dictionary:
-	var out := {
-		"cpu_score": 0, "ram_gb": 0, "gpu_score": 0, "vram_gb": 0,
-		"storage_tb": 0.0, "watts": 0, "compute": 0,
-		"active_servers": 0, "total_servers": 0, "psu_overloaded": false,
-	}
-	if not racks.has(rack_id):
-		return out
-	var r: Dictionary = racks[rack_id]
-	var powered := bool(r.get("powered", false))
-	var networked := bool(r.get("networked", false))
-	for sl in r["slots"]:
-		var sd: Dictionary = sl
-		var itype := str(sd.get("item_type", ""))
-		if itype == "":
-			continue
-		if is_slot_upgradeable(itype):
-			out["total_servers"] = int(out["total_servers"]) + 1
-		var st := get_slot_stats(sd)
-		if not bool(sd.get("offline", false)):
-			out["watts"] = int(out["watts"]) + int(st["watts"])
-		if bool(st["psu_overloaded"]):
-			out["psu_overloaded"] = true
-		if not bool(st.get("complete", true)) and is_slot_upgradeable(itype):
-			out["incomplete_servers"] = int(out.get("incomplete_servers", 0)) + 1
-		if powered and networked and is_slot_on(sd) and is_slot_upgradeable(itype) and bool(st.get("complete", true)):
-			out["active_servers"] = int(out["active_servers"]) + 1
-			out["cpu_score"] = int(out["cpu_score"]) + int(st["cpu_score"])
-			out["ram_gb"] = int(out["ram_gb"]) + int(st["ram_gb"])
-			out["gpu_score"] = int(out["gpu_score"]) + int(st["gpu_score"])
-			out["vram_gb"] = int(out["vram_gb"]) + int(st["vram_gb"])
-			out["storage_tb"] = float(out["storage_tb"]) + float(st["storage_tb"])
-			out["compute"] = int(out["compute"]) + int(st["compute"])
-	return out
-
-
-func get_open_ticket_count() -> int:
-	return support_tickets.size()
 
 
 func get_part_stock(part_id: String) -> int:
@@ -3173,68 +2203,6 @@ func _trigger_water_leak() -> void:
 	_rpc_play_sfx.rpc("alarm")
 	_recalculate_networks_and_metrics()
 	_broadcast_racks()
-
-
-func is_ticket_issue_fixed(ticket: Dictionary) -> bool:
-	var rid := str(ticket.get("rack_id", ""))
-	if not racks.has(rid):
-		return true
-	var r: Dictionary = racks[rid]
-	if str(r.get("rental_type", "none")) == "none":
-		return true
-	var issue := str(ticket.get("issue_key", "ok"))
-	var m: Dictionary = r.get("metrics", {})
-	if not bool(r.get("powered", false)) or not bool(r.get("networked", false)):
-		return false
-	match issue:
-		"ram":
-			return float(m.get("ram_pct", 0.0)) < 88.0
-		"cpu":
-			return float(m.get("cpu_pct", 0.0)) < 88.0
-		"gpu":
-			return float(m.get("gpu_pct", 0.0)) < 88.0
-		"storage":
-			return float(m.get("storage_pct", 0.0)) < 88.0
-		"network":
-			return float(m.get("net_pct", 0.0)) < 90.0 and used_bandwidth_mbps <= max_bandwidth_mbps
-		"overheat":
-			return float(r.get("temp", 22.0)) < 68.0
-		"psu":
-			return not bool(get_rack_hardware_summary(rid)["psu_overloaded"])
-		"offline":
-			return bool(r.get("powered", false)) and bool(r.get("networked", false)) and int(get_rack_hardware_summary(rid)["active_servers"]) > 0
-		_:
-			return str(m.get("bottleneck", "ok")) == "ok"
-
-
-func get_rack_sell_value(rack_id: String) -> int:
-	if not racks.has(rack_id):
-		return 0
-	var r: Dictionary = racks[rack_id]
-	var rtype := str(r.get("rack_type", "rack"))
-	var total := int(ITEM_CATALOG.get(rtype, {}).get("price", 400))
-	for slot in r["slots"]:
-		var st := get_slot_stats(slot as Dictionary)
-		total += int(st["total_value"])
-	return int(roundf(float(total) * SELL_REFUND_RATIO))
-
-
-func get_device_sell_value(kind: String, eid: String) -> int:
-	if kind == "cooler" and coolers.has(eid):
-		var ctype := str(coolers[eid].get("cooler_type", "cooler"))
-		return int(roundf(float(ITEM_CATALOG[ctype]["price"]) * SELL_REFUND_RATIO))
-	if kind == "decor" and decor_items.has(eid):
-		var dtype := str((decor_items[eid] as Dictionary).get("item_type", ""))
-		return int(roundf(float((ITEM_CATALOG.get(dtype, {}) as Dictionary).get("price", 0)) * SELL_REFUND_RATIO))
-	if kind == "ups" and ups_units.has(eid):
-		return int(roundf(float(ITEM_CATALOG[get_ups_type(ups_units[eid])]["price"]) * SELL_REFUND_RATIO * (0.5 + 0.5 * get_ups_health(ups_units[eid]) / 100.0)))
-	if kind == "cart" and carts.has(eid):
-		var total := int(ITEM_CATALOG["cart"]["price"])
-		var c_items: Array = carts[eid].get("items", [])
-		for it in c_items:
-			total += int(ITEM_CATALOG.get(str(it), {}).get("price", 0))
-		return int(roundf(float(total) * SELL_REFUND_RATIO))
-	return 0
 
 
 func get_active_slot(peer_id: int) -> int:
@@ -3370,170 +2338,12 @@ func has_any_crash() -> bool:
 	return false
 
 
-func count_cables_on(cable_type: String, endpoint_id: String) -> int:
-	var n := 0
-	for cid in cables.keys():
-		var c: Dictionary = cables[cid]
-		if str(c["cable_type"]) == cable_type:
-			if str(c["from_id"]) == endpoint_id or str(c["to_id"]) == endpoint_id:
-				n += 1
-	return n
-
-
-## Buchse jedes Kabels an einem Anschluss: {cable_id: slot}. Kabel ohne gespeicherte Buchse
-## (alte Spielstände) bekommen der Reihe nach die freien Buchsen, sortiert nach Kabel-ID.
-func get_cable_slot_map(cable_type: String, endpoint_id: String) -> Dictionary:
-	var result := {}
-	var used := {}
-	var legacy: Array[String] = []
-	for cid in cables.keys():
-		var c: Dictionary = cables[cid]
-		if str(c.get("cable_type", "")) != cable_type:
-			continue
-		var s := -1
-		if str(c.get("from_id", "")) == endpoint_id:
-			s = int(c.get("from_slot", -1))
-		elif str(c.get("to_id", "")) == endpoint_id:
-			s = int(c.get("to_slot", -1))
-		else:
-			continue
-		if s >= 0 and not used.has(s):
-			result[str(cid)] = s
-			used[s] = true
-		else:
-			legacy.append(str(cid))
-	legacy.sort()
-	var next := 0
-	for cid in legacy:
-		while used.has(next):
-			next += 1
-		result[cid] = next
-		used[next] = true
-	return result
-
-
-## Wie get_cable_slot_map, aber für alle Anschlüsse einer Kabelart in einem Durchgang:
-## Anschluss -> {Kabel-ID -> Buchse}. Gleiche Regeln, gleiche Reihenfolge.
-func get_cable_slot_maps(cable_type: String) -> Dictionary:
-	var per := {}
-	for cid in cables.keys():
-		var c: Dictionary = cables[cid]
-		if str(c.get("cable_type", "")) != cable_type:
-			continue
-		var f := str(c.get("from_id", ""))
-		var t := str(c.get("to_id", ""))
-		_slot_map_take(per, f, str(cid), int(c.get("from_slot", -1)))
-		if t != f:
-			_slot_map_take(per, t, str(cid), int(c.get("to_slot", -1)))
-	var out := {}
-	for e in per:
-		var p: Array = per[e]
-		var result: Dictionary = p[0]
-		var used: Dictionary = p[1]
-		var legacy: Array = p[2]
-		legacy.sort()
-		var next := 0
-		for cid in legacy:
-			while used.has(next):
-				next += 1
-			result[cid] = next
-			used[next] = true
-		out[e] = result
-	return out
-
-
-func _slot_map_take(per: Dictionary, endpoint_id: String, cid: String, s: int) -> void:
-	if not per.has(endpoint_id):
-		per[endpoint_id] = [{}, {}, []]
-	var p: Array = per[endpoint_id]
-	if s >= 0 and not (p[1] as Dictionary).has(s):
-		(p[0] as Dictionary)[cid] = s
-		(p[1] as Dictionary)[s] = true
-	else:
-		(p[2] as Array).append(cid)
-
-
-## Gewünschte Buchse, wenn sie existiert und frei ist, sonst die erste freie. -1 = keine frei.
-func pick_free_slot(cable_type: String, endpoint_id: String, wanted: int) -> int:
-	var used: Array = get_cable_slot_map(cable_type, endpoint_id).values()
-	var max_n := get_max_ports(cable_type, endpoint_id)
-	if wanted >= 0 and wanted < max_n and not used.has(wanted):
-		return wanted
-	for i in range(max_n):
-		if not used.has(i):
-			return i
-	return -1
-
-
 ## Cluster-Ports pro Rack: Ein Rack kann sich mit bis zu zwei Nachbar-Racks zusammenschließen.
 const CLUSTER_PORTS_PER_RACK := 2
 
 
 ## Physische RJ45-Port-Anzahl je Router-Stufe (0=DSL, 1=VDSL, 2=Gateway, 3=Core10G, 4=Core100G).
 const ROUTER_TIER_JACK_COUNTS: Array[int] = [2, 3, 5, 6, 6]
-
-
-func is_power_strip_decor(eid: String) -> bool:
-	return decor_items.has(eid) and str((decor_items[eid] as Dictionary).get("item_type", "")) == "prop_power_strip"
-
-
-func is_lan_strip_decor(eid: String) -> bool:
-	return decor_items.has(eid) and str((decor_items[eid] as Dictionary).get("item_type", "")) == "prop_lan_strip"
-
-
-## Liefert das Kabel an genau dieser Buchse (slot_idx), oder {} wenn der Port frei ist.
-func get_cable_on_slot(cable_type: String, endpoint_id: String, slot_idx: int) -> Dictionary:
-	if slot_idx < 0:
-		return {}
-	var smap := get_cable_slot_map(cable_type, endpoint_id)
-	for cid in smap.keys():
-		if int(smap[cid]) == slot_idx and cables.has(cid):
-			return cables[cid] as Dictionary
-	return {}
-
-
-func get_max_ports(cable_type: String, endpoint_id: String) -> int:
-	if cable_type == "cluster":
-		return CLUSTER_PORTS_PER_RACK if racks.has(endpoint_id) else 0
-	if cable_type == "power":
-		if endpoint_id == WALL_BREAKER_ID:
-			return BREAKER_BASE_SOCKETS
-		if endpoint_id == HALL_C_BREAKER_ID:
-			return 6 + power_tier * 2
-		if endpoint_id == HALL_NORD_BREAKER_ID:
-			return 16
-		if is_power_strip_decor(endpoint_id):
-			return StripRules.POWER_TOP + 2
-		if racks.has(endpoint_id):
-			return 2
-		if coolers.has(endpoint_id):
-			# Das Innengerät hat keine Strombuchse, es läuft über das Außengerät.
-			return 0 if is_indoor_unit(endpoint_id) else 1
-		if ups_units.has(endpoint_id):
-			return 2 # Connect to breaker AND optionally daisy-chain out
-		return 0
-	else:
-		if endpoint_id == WALL_ROUTER_ID:
-			return ROUTER_TIER_JACK_COUNTS[clampi(router_tier, 0, ROUTER_TIER_JACK_COUNTS.size() - 1)]
-		if endpoint_id == HALL_C_ROUTER_ID:
-			return 4
-		if endpoint_id == HALL_NORD_ROUTER_ID:
-			return 16
-		if is_lan_strip_decor(endpoint_id):
-			return StripRules.LAN_TOP + 2
-		if racks.has(endpoint_id):
-			return 1 + _count_rack_switches(endpoint_id) * 3
-		return 0
-
-
-func _count_rack_switches(rack_id: String) -> int:
-	if not racks.has(rack_id):
-		return 0
-	var count := 0
-	for slot in racks[rack_id]["slots"]:
-		if str(slot["item_type"]) == "net_switch" and str(slot["state"]) == "ok":
-			count += 1
-	return count
 
 
 const INDOOR_UNIT_TYPE := "indoor_unit"
@@ -3569,82 +2379,8 @@ const UPS_MIN_HEALTH := 25.0
 var _ups_over: float = 0.0
 
 
-func is_ups_type(item_type: String) -> bool:
-	return UPS_TYPES.has(item_type)
-
-
-func get_ups_type(u: Dictionary) -> String:
-	var t := str(u.get("ups_type", "ups"))
-	return t if UPS_TYPES.has(t) else "ups"
-
-
-func get_ups_spec(u: Dictionary) -> Dictionary:
-	return UPS_TYPES[get_ups_type(u)]
-
-
-func get_ups_health(u: Dictionary) -> float:
-	return clampf(float(u.get("health", 100.0)), UPS_MIN_HEALTH, 100.0)
-
-
-## Nutzbare Kapazität in Wh, Alterung eingerechnet.
-func get_ups_capacity(u: Dictionary) -> float:
-	return float(get_ups_spec(u)["cap"]) * get_ups_health(u) / 100.0
-
-
-func get_ups_stored_wh(u: Dictionary) -> float:
-	return get_ups_capacity(u) * clampf(float(u.get("charge", 0.0)), 0.0, 100.0) / 100.0
-
-
-func is_ups_ready(u: Dictionary) -> bool:
-	return bool(u.get("connected", false)) and float(u.get("charge", 0.0)) > 0.2 and not bool(u.get("tripped", false))
-
-
-## Gesamte Abgabeleistung aller bereiten Notstrom-Geräte.
-func get_ups_total_out() -> float:
-	var sum := 0.0
-	for uid in ups_units.keys():
-		if is_ups_ready(ups_units[uid]):
-			sum += float(get_ups_spec(ups_units[uid])["out"])
-	return sum
-
-
-## Restzeit in Spielminuten bei aktueller Last (alle bereiten Geräte zusammen).
-func get_ups_runtime_minutes() -> int:
-	var wh := 0.0
-	for uid in ups_units.keys():
-		if is_ups_ready(ups_units[uid]):
-			wh += get_ups_stored_wh(ups_units[uid])
-	return int(wh / maxf(50.0, float(total_watts) * 1.06) * 60.0)
-
-
 func request_swap_ups_cells(uid: String) -> void:
 	_rpc_req_swap_ups_cells.rpc_id(1, uid)
-
-
-func get_ups_swap_cost(u: Dictionary) -> int:
-	return int(get_ups_spec(u)["swap"])
-
-
-@rpc("any_peer", "call_local", "reliable")
-func _rpc_req_swap_ups_cells(uid: String) -> void:
-	if not multiplayer.is_server():
-		return
-	var peer_id := _get_sender_id()
-	if not ups_units.has(uid) or not SecurityGuard.check_rate_limit(peer_id, "ups_swap", 4, 5.0):
-		return
-	var u: Dictionary = ups_units[uid]
-	var cost := get_ups_swap_cost(u)
-	if money < float(cost) or get_ups_health(u) > 95.0 or bool(u.get("discharging", false)):
-		_rpc_play_sfx.rpc_id(peer_id, "error")
-		return
-	money -= float(cost)
-	u["health"] = 100.0
-	u["charge"] = minf(float(u.get("charge", 0.0)), 40.0)
-	_recalculate_networks_and_metrics()
-	_broadcast_ups()
-	_broadcast_sim_tick()
-	_rpc_play_sfx.rpc("upgrade")
-	post_event_f("%s hat die Akkus von %s getauscht (-$%d).", [NetworkManager.get_player_name(peer_id), uid.to_upper(), cost], "good")
 
 
 ## Außengeräte (Rasen). Brauchen ein Goldis Innengerät.
@@ -3716,11 +2452,6 @@ func _is_wide_spot_free(pos: Vector3) -> bool:
 	return true
 
 
-## Strom- und LAN-Leisten sind flach: feineres Raster und weniger Abstand zu Geräten.
-func is_strip_type(item_type: String) -> bool:
-	return item_type == "prop_power_strip" or item_type == "prop_lan_strip"
-
-
 ## Leisten an der Wand: Höhe über dem Boden ab hier, darunter liegt die Leiste.
 const STRIP_WALL_MIN_Y := 0.28
 const STRIP_WALL_MAX_Y := 1.75
@@ -3741,227 +2472,8 @@ var chain_loads: Dictionary = {}
 var _chain_over: Dictionary = {}
 
 
-func is_strip_on(did: String) -> bool:
-	return bool((decor_items.get(did, {}) as Dictionary).get("on", true))
-
-
-func is_wall_strip(d: Dictionary) -> bool:
-	return bool(d.get("wall", false))
-
-
-func get_strip_limit(did: String) -> int:
-	return StripRules.STRIP_LIMIT_W if is_power_strip_decor(did) else 0
-
-
-## Erste Leiste der Kette, in der diese Leiste hängt ("" = hängt nicht am Strom).
-func get_chain_root(did: String) -> String:
-	var cur := did
-	var root := ""
-	for i in 128:
-		if is_power_strip_decor(cur):
-			root = cur
-		if not _strip_parent.has(cur):
-			break
-		cur = str(_strip_parent[cur])
-	return root if StripRules.role("power", cur) == "source" else ""
-
-
-## Kommt an dieser Leiste Strom bzw. Netz an?
-func is_strip_fed(ctype: String, did: String) -> bool:
-	if ctype == "power":
-		return _strip_parent.has(did) and get_chain_root(did) != ""
-	return _lan_parent.has(did)
-
-
-## Versorgt diese Leiste über ihren Ausgang eine weitere?
-func feeds_next_strip(ctype: String, did: String) -> bool:
-	var parents := _strip_parent if ctype == "power" else _lan_parent
-	for k in parents.keys():
-		if str(parents[k]) == did and StripRules.is_strip(ctype, str(k)):
-			return true
-	return false
-
-
-func get_chain_load(did: String) -> int:
-	return int(chain_loads.get(get_chain_root(did), 0))
-
-
-func get_chain_length(did: String) -> int:
-	var root := get_chain_root(did)
-	var n := 0
-	for k in _strip_parent.keys():
-		if is_power_strip_decor(str(k)) and get_chain_root(str(k)) == root and root != "":
-			n += 1
-	return n
-
-
-func get_strip_load(did: String) -> int:
-	return int(strip_loads.get(did, 0))
-
-
 func request_toggle_strip(did: String) -> void:
 	_rpc_req_toggle_strip.rpc_id(1, did)
-
-
-@rpc("any_peer", "call_local", "reliable")
-func _rpc_req_toggle_strip(did: String) -> void:
-	if not multiplayer.is_server():
-		return
-	var peer_id := _get_sender_id()
-	if not (is_power_strip_decor(did) or is_lan_strip_decor(did)) or not SecurityGuard.check_rate_limit(peer_id, "strip", 8, 4.0):
-		return
-	var d: Dictionary = decor_items[did]
-	var on := not is_strip_on(did)
-	d["on"] = on
-	if on:
-		d["tripped"] = false
-		_strip_over.erase(did)
-	_after_strip_change()
-	_rpc_play_sfx.rpc("strip_switch")
-
-
-func _after_strip_change() -> void:
-	_recalculate_networks_and_metrics()
-	_broadcast_decor_items()
-	_broadcast_racks()
-	_broadcast_coolers()
-	_broadcast_ups()
-	_broadcast_sim_tick()
-
-
-## Überlastete Leisten lösen nach ein paar Sekunden aus (nur Host). Ist die ganze Kette zu viel
-## für den Abgang, fällt die erste Leiste am Kasten und alles dahinter ist aus.
-func _tick_strips(dt: float) -> void:
-	for root_v in chain_loads.keys():
-		var root := str(root_v)
-		if not is_power_strip_decor(root) or not is_strip_on(root) or int(chain_loads[root]) <= StripRules.CHAIN_LIMIT_W:
-			_chain_over.erase(root)
-			continue
-		_chain_over[root] = float(_chain_over.get(root, 0.0)) + dt
-		if float(_chain_over[root]) >= STRIP_TRIP_SECONDS:
-			_chain_over.erase(root)
-			decor_items[root]["on"] = false
-			decor_items[root]["tripped"] = true
-			post_event_f("LEISTENKETTE AUSGELÖST: %d W am Abgang, höchstens %d W. Die ganze Kette ist aus. Last auf einen zweiten Abgang verteilen und an der ersten Leiste wieder einschalten.", [int(chain_loads[root]), StripRules.CHAIN_LIMIT_W], "alert")
-			_after_strip_change()
-			_rpc_play_sfx.rpc("breaker_trip")
-			return
-	for did_v in strip_loads.keys():
-		var did := str(did_v)
-		if not is_power_strip_decor(did) or not is_strip_on(did):
-			_strip_over.erase(did)
-			continue
-		if get_strip_load(did) <= get_strip_limit(did):
-			_strip_over.erase(did)
-			continue
-		# Eine Leiste weiter oben in der Kette ist schon aus? Dann hat diese keine Last mehr.
-		_strip_over[did] = float(_strip_over.get(did, 0.0)) + dt
-		if float(_strip_over[did]) >= STRIP_TRIP_SECONDS:
-			_strip_over.erase(did)
-			decor_items[did]["on"] = false
-			decor_items[did]["tripped"] = true
-			post_event_f("STROMLEISTE AUSGELÖST: %d W bei höchstens %d W. Last verteilen und am Schalter wieder einschalten.", [get_strip_load(did), get_strip_limit(did)], "alert")
-			_after_strip_change()
-			_rpc_play_sfx.rpc("breaker_trip")
-			return
-
-
-## Last je Leiste (nur die Geräte oben in ihren Buchsen) und je Kette (alles am Abgang).
-func _compute_strip_loads(device_watts: Dictionary) -> void:
-	var loads := {}
-	var chains := {}
-	for did in decor_items.keys():
-		if is_power_strip_decor(str(did)):
-			loads[did] = 0
-	for dev in device_watts.keys():
-		var feeds: Array = _strip_feeds.get(str(dev), [])
-		if feeds.is_empty():
-			continue
-		var share := float(device_watts[dev]) / float(feeds.size())
-		for f in feeds:
-			if loads.has(f):
-				loads[f] = int(loads[f]) + roundi(share)
-			var root := get_chain_root(str(f)) if is_power_strip_decor(str(f)) else ""
-			if root != "":
-				chains[root] = int(chains.get(root, 0)) + roundi(share)
-	strip_loads = loads
-	chain_loads = chains
-	strip_loads_changed.emit()
-
-
-## Bandbreite, die über jede LAN-Kette läuft (alle Racks hinter der ersten Leiste am Router).
-func _compute_lan_chains() -> void:
-	var out := {}
-	for rid in racks.keys():
-		var rack: Dictionary = racks[rid]
-		if not bool(rack.get("networked", false)):
-			continue
-		var r_rent := str(rack.get("rental_type", "none"))
-		if r_rent == "none" or not HardwareCatalog.RENTAL_PROFILES.has(r_rent):
-			continue
-		var mbps := float(rack.get("active_users", 0)) * float((HardwareCatalog.RENTAL_PROFILES[r_rent] as Dictionary).get("mbps_per_user", 0.5))
-		var cur := str(rid)
-		var root := ""
-		for i in 128:
-			if not _lan_parent.has(cur):
-				break
-			cur = str(_lan_parent[cur])
-			if is_lan_strip_decor(cur):
-				root = cur
-		if root != "":
-			out[root] = float(out.get(root, 0.0)) + mbps
-	lan_chain_mbps = out
-
-
-func get_lan_chain_root(did: String) -> String:
-	var cur := did
-	var root := ""
-	for i in 128:
-		if is_lan_strip_decor(cur):
-			root = cur
-		if not _lan_parent.has(cur):
-			break
-		cur = str(_lan_parent[cur])
-	return root
-
-
-## Montageplatz einer Leiste an einer Wand. Leer = hier geht es nicht.
-func get_strip_wall_spot(hit: Vector3, normal: Vector3) -> Dictionary:
-	if absf(normal.y) > 0.3:
-		return {}
-	var n := Vector3(signf(normal.x), 0.0, 0.0) if absf(normal.x) > absf(normal.z) else Vector3(0.0, 0.0, signf(normal.z))
-	var y := clampf(roundf(hit.y * 10.0) / 10.0, STRIP_WALL_MIN_Y + 0.02, STRIP_WALL_MAX_Y)
-	for w in _strip_walls():
-		var wn: Vector3 = w["n"]
-		if not wn.is_equal_approx(n):
-			continue
-		var on_x := absf(wn.z) > 0.5
-		var plane: float = w["at"]
-		if absf((hit.z if on_x else hit.x) - plane) > WALL_HIT_TOLERANCE:
-			continue
-		var along := clampf(roundf((hit.x if on_x else hit.z) * 4.0) / 4.0, float(w["lo"]), float(w["hi"]))
-		if absf(along - (hit.x if on_x else hit.z)) > 0.6:
-			continue
-		var pos := Vector3(along, y, plane) if on_x else Vector3(plane, y, along)
-		return {"pos": pos, "rot_y": atan2(wn.x, wn.z)}
-	return {}
-
-
-func _strip_walls() -> Array:
-	var out: Array = []
-	var max_x := _interior_max_x() - 0.5
-	out.append({"n": Vector3(0, 0, 1), "at": WALL_FACE_NORTH_Z, "lo": -5.0, "hi": max_x})
-	out.append({"n": Vector3(0, 0, -1), "at": WALL_FACE_SOUTH_Z, "lo": -5.0, "hi": max_x})
-	out.append({"n": Vector3(1, 0, 0), "at": WALL_FACE_WEST_X, "lo": -4.0, "hi": 4.0})
-	if room_level >= 2:
-		out.append({"n": Vector3(-1, 0, 0), "at": WALL_FACE_EAST_X, "lo": -4.0, "hi": 4.0})
-	if halle_nord_owned:
-		var o := HALLE_NORD_ORIGIN
-		out.append({"n": Vector3(0, 0, 1), "at": o.z - 5.86, "lo": -9.3, "hi": 9.3})
-		out.append({"n": Vector3(0, 0, -1), "at": o.z + 5.86, "lo": -9.3, "hi": 9.3})
-		out.append({"n": Vector3(1, 0, 0), "at": -9.86, "lo": o.z - 5.3, "hi": o.z + 5.3})
-		out.append({"n": Vector3(-1, 0, 0), "at": 9.86, "lo": o.z - 5.3, "hi": o.z + 5.3})
-	return out
 
 
 ## Was schon an der Wand hängt: [x, y, halbe Breite, halbe Höhe] je Wandebene z.
@@ -3969,41 +2481,6 @@ const STRIP_WALL_KEEPOUT := [
 	[-4.475, -4.2, 1.15, 0.55, 0.85], [-4.475, -2.8, 1.25, 0.45, 0.60], [-4.475, -1.0, 1.6, 0.60, 0.45],
 	[-4.475, 14.6, 1.55, 0.75, 0.70], [-4.475, 16.6, 1.6, 0.75, 0.50],
 ]
-
-
-func can_place_strip_on_wall(pos: Vector3, rot_y: float, ignore_id: String = "") -> bool:
-	if pos.y < STRIP_WALL_MIN_Y or pos.y > STRIP_WALL_MAX_Y + 0.01:
-		return false
-	var n := Vector3(sin(rot_y), 0.0, cos(rot_y)).round()
-	var spot := get_strip_wall_spot(pos, n)
-	if spot.is_empty():
-		return false
-	# Entlang der Wand darf die Leiste frei sitzen (zusammengesteckte Leisten liegen nicht im Raster).
-	var off := (spot["pos"] as Vector3) - pos
-	var along_dir := Vector3(absf(n.z), 0.0, absf(n.x))
-	off -= along_dir * off.dot(along_dir)
-	if off.length() > 0.05:
-		return false
-	if absf(n.z) > 0.5:
-		var local_z := pos.z - HALLE_NORD_ORIGIN.z if pos.z < -100.0 else pos.z
-		# Tore frei lassen
-		if n.z < 0.0 and local_z > 4.0 and absf(pos.x) < 2.75:
-			return false
-		if pos.z > -100.0:
-			for k in STRIP_WALL_KEEPOUT:
-				if absf(pos.z - float(k[0])) < 0.2 and absf(pos.x - float(k[1])) < float(k[3]) + 0.34 and absf(pos.y - float(k[2])) < float(k[4]) + 0.07:
-					return false
-	for did in decor_items.keys():
-		if str(did) == ignore_id:
-			continue
-		var d: Dictionary = decor_items[did]
-		if is_wall_strip(d) and (d["pos"] as Vector3).distance_to(pos) < 0.72 and absf((d["pos"] as Vector3).y - pos.y) < 0.14:
-			return false
-	for cid in coolers.keys():
-		var c: Dictionary = coolers[cid]
-		if str(c.get("cooler_type", "")) == INDOOR_UNIT_TYPE and (c["pos"] as Vector3).distance_to(pos) < 0.75:
-			return false
-	return true
 
 
 func snap_place_pos(item_type: String, pos: Vector3) -> Vector3:
@@ -4019,48 +2496,6 @@ func snap_place_pos(item_type: String, pos: Vector3) -> Vector3:
 		return pos if DecorSpec.is_wall_sign(item_type) else Vector3(pos.x, 0.0, pos.z)
 	var f := 4.0 if is_strip_type(item_type) else 2.0
 	return Vector3(roundf(pos.x * f) / f, 0.0, roundf(pos.z * f) / f)
-
-
-func can_place_strip_at(pos: Vector3, ignore_id: String = "") -> bool:
-	if halle_nord_owned and pos.z < -100.0:
-		var lz := pos.z - HALLE_NORD_ORIGIN.z
-		if pos.x < -9.3 or pos.x > 9.3 or lz < -5.0 or lz > 5.2:
-			return false
-		if lz < -2.3 and pos.x > 4.3:
-			return false
-		if lz > 4.0 and absf(pos.x) < 2.3:
-			return false
-	else:
-		var max_x := 4.8 if room_level == 0 else (11.7 if room_level == 1 else 20.6)
-		if pos.x < -4.8 or pos.x > max_x or pos.z < -4.0 or pos.z > 3.9:
-			return false
-		if pos.z > 2.6 and absf(pos.x) < 2.2:
-			return false
-	for group in [racks, coolers, ups_units]:
-		for gid in (group as Dictionary).keys():
-			var entry: Dictionary = (group as Dictionary)[gid]
-			if str(entry.get("cooler_type", "")) == INDOOR_UNIT_TYPE:
-				continue
-			var gpos: Vector3 = entry["pos"]
-			if Vector2(gpos.x - pos.x, gpos.z - pos.z).length() < 0.62:
-				return false
-	for did in decor_items.keys():
-		if str(did) == ignore_id or is_wall_strip(decor_items[did]):
-			continue
-		var d: Dictionary = decor_items[did]
-		var dpos: Vector3 = d.get("pos", Vector3.ZERO)
-		var gap := 0.24 if is_strip_type(str(d.get("item_type", ""))) else 0.62
-		if Vector2(dpos.x - pos.x, dpos.z - pos.z).length() < gap:
-			return false
-		# Leisten direkt hintereinander: Enden berühren sich, aber nicht seitlich daneben.
-		if is_strip_type(str(d.get("item_type", ""))):
-			var rel := Vector2(pos.x - dpos.x, pos.z - dpos.z)
-			var ax := StripRules.axis(d)
-			var along := rel.dot(Vector2(ax.x, ax.z))
-			var across := absf(rel.cross(Vector2(ax.x, ax.z)))
-			if across < 0.13 and absf(along) < StripRules.LINK_PITCH - 0.02:
-				return false
-	return true
 
 
 func can_place_heat_pump_at(pos: Vector3) -> bool:
@@ -4201,103 +2636,6 @@ func can_place_at(pos: Vector3, ignore_rack_id: String = "") -> bool:
 		if Vector2(upos.x - pos.x, upos.z - pos.z).length() < 0.95:
 			return false
 	return true
-
-
-func get_active_contract_count() -> int:
-	var n := 0
-	for cid in contracts.keys():
-		if bool(contracts[cid]["active"]):
-			n += 1
-	return n
-
-
-## Reihenfolge für die Anzeige: feste Vorlagen zuerst, danach befristete Angebote.
-func get_contract_display_order() -> Array[String]:
-	var order: Array[String] = []
-	for tmpl in CONTRACTS_TEMPLATE:
-		var tmpl_dict: Dictionary = tmpl
-		var cid := str(tmpl_dict["id"])
-		if contracts.has(cid):
-			order.append(cid)
-	var extra: Array[String] = []
-	for key in contracts.keys():
-		var cid := str(key)
-		if not order.has(cid):
-			extra.append(cid)
-	extra.sort()
-	order.append_array(extra)
-	return order
-
-
-## Erzeugt ein befristetes Angebot, abgeleitet von einer Vorlage, die zum aktuellen Ausbau passt.
-func _make_random_contract() -> Dictionary:
-	var ram_cap := maxi(int(total_ram_gb), 4) * RANDOM_CONTRACT_RAM_REACH
-	var bases: Array[Dictionary] = []
-	for tmpl in CONTRACTS_TEMPLATE:
-		var tmpl_dict: Dictionary = tmpl
-		if int(tmpl_dict["req_ram_gb"]) <= ram_cap:
-			bases.append(tmpl_dict)
-	if bases.is_empty():
-		var first: Dictionary = CONTRACTS_TEMPLATE[0]
-		bases.append(first)
-	var base: Dictionary = bases[randi() % bases.size()]
-	var scale := randf_range(RANDOM_CONTRACT_SCALE_MIN, RANDOM_CONTRACT_SCALE_MAX)
-	var premium := randf_range(RANDOM_CONTRACT_PREMIUM_MIN, RANDOM_CONTRACT_PREMIUM_MAX)
-	var cid := ""
-	while cid == "" or contracts.has(cid):
-		cid = "r_%d_%d" % [day_number, randi() % 100000]
-	return {
-		"id": cid,
-		"title": str(RANDOM_CONTRACT_TITLES[randi() % RANDOM_CONTRACT_TITLES.size()]),
-		"client": str(RANDOM_CONTRACT_CLIENTS[randi() % RANDOM_CONTRACT_CLIENTS.size()]),
-		"required_compute": maxi(1, int(roundf(float(base["required_compute"]) * scale))),
-		"req_ram_gb": maxi(2, int(roundf(float(base["req_ram_gb"]) * scale))),
-		"req_mbps": snappedf(maxf(5.0, float(base["req_mbps"]) * scale), 0.5),
-		"payout_per_cycle": maxi(1, int(roundf(float(base["payout_per_cycle"]) * scale * premium))),
-		"penalty_per_cycle": maxi(1, int(roundf(float(base["penalty_per_cycle"]) * scale * RANDOM_CONTRACT_PENALTY_MULT))),
-		"random": true,
-		"duration_days": randi_range(RANDOM_CONTRACT_DURATION_MIN, RANDOM_CONTRACT_DURATION_MAX),
-		"days_left": 0,
-		"offer_days_left": RANDOM_CONTRACT_OFFER_DAYS,
-		"active": false,
-		"status": "idle",
-	}
-
-
-## Füllt die offenen befristeten Angebote auf. Gibt die Zahl neuer Angebote zurück.
-func _fill_random_contract_offers() -> int:
-	var offers := 0
-	for key in contracts.keys():
-		var c: Dictionary = contracts[key]
-		if bool(c.get("random", false)) and not bool(c.get("active", false)):
-			offers += 1
-	var added := 0
-	while offers < RANDOM_CONTRACT_MAX_OFFERS:
-		var entry := _make_random_contract()
-		contracts[str(entry["id"])] = entry
-		MailManager.on_new_contract(entry)
-		offers += 1
-		added += 1
-	return added
-
-
-## Tageswechsel: Laufzeiten und Annahmefristen herunterzählen, abgelaufene entfernen, neue Angebote erzeugen.
-func _advance_random_contracts() -> void:
-	for key in contracts.keys():
-		var c: Dictionary = contracts[key]
-		if not bool(c.get("random", false)):
-			continue
-		if bool(c.get("active", false)):
-			c["days_left"] = int(c.get("days_left", 0)) - 1
-			if int(c["days_left"]) <= 0:
-				contracts.erase(key)
-				post_event_f("✅ Befristeter Vertrag '%s' (%s) ist erfüllt und ausgelaufen.", [str(c["title"]), str(c["client"])], "good")
-		else:
-			c["offer_days_left"] = int(c.get("offer_days_left", 1)) - 1
-			if int(c["offer_days_left"]) <= 0:
-				contracts.erase(key)
-	if _fill_random_contract_offers() > 0:
-		post_event("📄 Neue befristete Vertragsangebote im Support-Hub.", "info")
 
 
 func _catalog_price(item_id: String) -> float:
@@ -4778,802 +3116,12 @@ func _rack_has_fire(rack: Dictionary) -> bool:
 	return false
 
 
-func _process_contract_payouts() -> void:
-	var avail_ram := 0 if ddos_active else total_ram_gb
-	var avail_mbps := 0.0 if ddos_active else max_bandwidth_mbps
-	var net_delta := 0.0
-	var had_sla_breach := false
-
-	for cid in contracts.keys():
-		var c: Dictionary = contracts[cid]
-		if not bool(c["active"]):
-			c["status"] = "idle"
-			continue
-		var req_ram := int(c.get("req_ram_gb", 4))
-		var req_mbps := float(c.get("req_mbps", 15.0))
-		if avail_ram >= req_ram and avail_mbps >= req_mbps:
-			avail_ram -= req_ram
-			avail_mbps -= req_mbps
-			c["status"] = "ok"
-			net_delta += float(c["payout_per_cycle"]) * revenue_bonus_mult
-		else:
-			c["status"] = "underpowered"
-			net_delta -= float(c["penalty_per_cycle"])
-			had_sla_breach = true
-
-	# Add Rented Rack customer payouts (scaled by live active users & satisfaction!)
-	var rental_payout := 0.0
-	if not ddos_active:
-		for rid in racks.keys():
-			var rk: Dictionary = racks[rid]
-			if str(rk.get("rental_type", "none")) != "none" and bool(rk.get("powered", false)) and bool(rk.get("networked", false)):
-				rental_payout += float(rk.get("rental_income", 0.0))
-	net_delta += rental_payout
-
-	money = maxf(0.0, money + net_delta)
-	if had_sla_breach:
-		post_event("SLA-Strafe! Zu wenig aktiver RAM (GB) oder Internet-Bandbreite (Mbit/s) für laufende Verträge.", "warn")
-
-
-func _update_rack_rentals_and_support(dt: float) -> void:
-	var tickets_dirty := false
-	var call_dirty := false
-	var total_rent := 0.0
-	var time_wave := 0.85 + 0.30 * sin((time_of_day - 0.25) * TAU)
-
-	# Manage incoming phone call ringing & timeout
-	_call_cooldown = maxf(0.0, _call_cooldown - dt)
-	if not active_call.is_empty():
-		active_call["timer"] = float(active_call.get("timer", 0.0)) + dt
-		if str(active_call.get("state", "ringing")) == "ringing":
-			_phone_ring_accum += dt
-			if _phone_ring_accum >= 4.2:
-				_phone_ring_accum = 0.0
-				_rpc_play_sfx.rpc("phone_ring")
-			if float(active_call["timer"]) >= 42.0:
-				var crid := str(active_call.get("rack_id", ""))
-				if racks.has(crid):
-					racks[crid]["satisfaction"] = maxf(5.0, float(racks[crid].get("satisfaction", 60.0)) - 12.0)
-				post_event_f("📞 Verpasster Kundenanruf von %s! Zufriedenheit gesunken.", [str(active_call.get("customer", "Kunde"))], "warn")
-				active_call.clear()
-				_call_cooldown = 30.0
-				call_dirty = true
-		call_dirty = true
-
-	var worst_call_rack := ""
-	var worst_call_issue := ""
-	var worst_call_sat := 999.0
-	var rep_delta := 0.0
-	# Freie Hardware der Cluster-Racks, einmal pro Tick ermittelt und beim Verleihen verbraucht.
-	var cluster_spare := _compute_cluster_spare()
-
-	for rid in racks.keys():
-		var r: Dictionary = racks[rid]
-		var services := _get_rack_services(r)
-		if services.is_empty():
-			r["rental_type"] = "none"
-			r["rental_customer"] = ""
-			r["active_users"] = 0
-			r["rental_income"] = 0.0
-			r["metrics"] = {}
-			continue
-
-		var rtype := str((services[0] as Dictionary)["type"])
-		var prof: Dictionary = HardwareCatalog.RENTAL_PROFILES[rtype]
-		var hw := get_rack_hardware_summary(rid)
-		var powered := bool(r.get("powered", false))
-		var networked := bool(r.get("networked", false))
-		var active_servers := int(hw["active_servers"])
-		var rtemp := float(r.get("temp", 22.0))
-		var sat := float(r.get("satisfaction", 100.0))
-		var grace := maxf(0.0, float(r.get("grace_timer", 0.0)) - dt)
-		r["grace_timer"] = grace
-
-		# Kunden kommen nach und nach: Jeder Dienst startet mit wenigen Nutzern und wächst je nach Ruf.
-		var online := powered and networked and active_servers > 0
-		# Auslastung aus dem letzten Tick bremst das Wachstum, bevor die Hardware an ihre Grenze kommt.
-		var prev_m: Dictionary = r["metrics"] if r.get("metrics") is Dictionary else {}
-		var prev_load := maxf(
-			maxf(float(prev_m.get("ram_pct", 0.0)), float(prev_m.get("cpu_pct", 0.0))),
-			maxf(maxf(float(prev_m.get("gpu_pct", 0.0)), float(prev_m.get("storage_pct", 0.0))), float(prev_m.get("net_pct", 0.0)))
-		)
-		var users_int := 0
-		for svc in services:
-			users_int += _update_service_users(svc as Dictionary, sat, online, dt, time_wave, prev_load)
-		users_int = maxi(1, users_int)
-		_sync_rack_rental_fields(r)
-		r["active_users"] = users_int
-		# Ressourcenbedarf und Preis pro Nutzer: Mittel aller Dienste, gewichtet nach Nutzerzahl.
-		prof = _blend_service_profiles(services)
-
-		# Cluster-Kabel: Reicht die eigene Hardware nicht, leiht sich das Rack freie Kapazität der verbundenen Racks.
-		var cluster_borrowed: Dictionary = {}
-		if active_servers > 0:
-			hw = hw.duplicate()
-			cluster_borrowed = _borrow_cluster_capacity(str(rid), hw, users_int, prof, cluster_spare)
-
-		# Calculate live per-resource utilization % so player can self-assess RAM/CPU/GPU/Storage/Router!
-		var ram_total := maxf(0.5, float(hw["ram_gb"]))
-		var ram_used := float(users_int) * float(prof["ram_gb_per_user"])
-		var ram_pct := (ram_used / ram_total) * 100.0 if active_servers > 0 else 100.0
-
-		var cpu_total := maxf(1.0, float(hw["cpu_score"]))
-		var cpu_used := float(users_int) * float(prof["cpu_per_user"])
-		var cpu_pct := (cpu_used / cpu_total) * 100.0 if active_servers > 0 else 100.0
-
-		var gpu_pct := 0.0
-		if float(prof["gpu_per_user"]) > 0.001:
-			var gpu_total := maxf(1.0, float(hw["gpu_score"]))
-			gpu_pct = ((float(users_int) * float(prof["gpu_per_user"])) / gpu_total) * 100.0 if active_servers > 0 else 100.0
-
-		var sto_total := maxf(0.1, float(hw["storage_tb"]))
-		var sto_used := float(users_int) * float(prof["storage_tb_per_user"])
-		var sto_pct := (sto_used / sto_total) * 100.0 if active_servers > 0 else 100.0
-
-		var net_need_mbps := float(users_int) * float(prof.get("mbps_per_user", 0.5))
-		var net_pct := (net_need_mbps / maxf(1.0, max_bandwidth_mbps)) * 100.0
-		if used_bandwidth_mbps > max_bandwidth_mbps:
-			net_pct = maxf(net_pct, (used_bandwidth_mbps / maxf(1.0, max_bandwidth_mbps)) * 100.0)
-
-		var bottleneck := "ok"
-		var peak_load := maxf(maxf(ram_pct, cpu_pct), maxf(maxf(gpu_pct, sto_pct), net_pct))
-		if not powered or not networked or active_servers == 0:
-			bottleneck = "offline"
-		elif _rack_has_fire(r):
-			bottleneck = "overheat"
-		elif bool(hw["psu_overloaded"]):
-			bottleneck = "psu"
-		elif rtemp >= 74.0:
-			bottleneck = "overheat"
-		elif peak_load >= 92.0:
-			if ram_pct >= cpu_pct and ram_pct >= gpu_pct and ram_pct >= sto_pct and ram_pct >= net_pct:
-				bottleneck = "ram"
-			elif cpu_pct >= gpu_pct and cpu_pct >= sto_pct and cpu_pct >= net_pct:
-				bottleneck = "cpu"
-			elif gpu_pct >= sto_pct and gpu_pct >= net_pct:
-				bottleneck = "gpu"
-			elif sto_pct >= net_pct:
-				bottleneck = "storage"
-			else:
-				bottleneck = "network"
-
-		r["metrics"] = {
-			"ram_used_gb": ram_used,
-			"ram_total_gb": float(hw["ram_gb"]),
-			"ram_pct": ram_pct,
-			"cpu_pct": cpu_pct,
-			"gpu_pct": gpu_pct,
-			"storage_used_tb": sto_used,
-			"storage_total_tb": float(hw["storage_tb"]),
-			"storage_pct": sto_pct,
-			"net_used_mbps": net_need_mbps,
-			"net_pct": net_pct,
-			"bottleneck": bottleneck,
-			"cluster_borrowed": cluster_borrowed,
-		}
-
-		# Satisfaction dynamics
-		if bottleneck == "ok" and not ddos_active:
-			sat = minf(100.0, sat + 1.4 * dt)
-		elif grace <= 0.0:
-			var penalty_rate := 2.4 if bottleneck == "offline" else (1.9 if peak_load >= 115.0 else 1.15)
-			sat = maxf(0.0, sat - penalty_rate * dt)
-		r["satisfaction"] = sat
-
-		var income := 0.0
-		if powered and networked and active_servers > 0 and not ddos_active:
-			var sat_mult := clampf(sat / 100.0, 0.25, 1.15)
-			income = float(users_int) * float(prof["pay_per_user"]) * sat_mult * revenue_bonus_mult
-		r["rental_income"] = income
-		total_rent += income
-		# Zufriedene Kunden empfehlen dich weiter, unzufriedene schaden dem Ruf.
-		rep_delta += (sat - 60.0) / 100.0 * 0.05 * dt * sqrt(float(services.size()))
-
-		# Auto-generate specific Customer Support Ticket on persistent bottleneck!
-		if bottleneck != "ok" and not _has_open_ticket_for_rack(rid):
-			if bottleneck == "offline" or sat < 86.0 or peak_load >= 96.0:
-				_create_support_ticket(rid, r, bottleneck)
-				tickets_dirty = true
-
-		# Track most critical rack for an incoming VoIP Phone Call at the PC!
-		if bottleneck != "ok" and grace <= 0.0 and (sat < 68.0 or bottleneck == "offline" or peak_load >= 112.0):
-			if sat < worst_call_sat:
-				worst_call_sat = sat
-				worst_call_rack = rid
-				worst_call_issue = bottleneck
-
-		# If customer satisfaction collapses completely, customer cancels rental!
-		if sat <= 5.0:
-			var cname := str(r.get("rental_customer", "Kunde"))
-			r["rental_type"] = "none"
-			r["rental_customer"] = ""
-			r["active_users"] = 0
-			r["satisfaction"] = 100.0
-			r["rental_income"] = 0.0
-			services.clear()
-			reputation = maxf(0.0, reputation - 8.0)
-			_clear_tickets_for_rack(rid)
-			tickets_dirty = true
-			post_event_f("❌ %s hat %s gekündigt (dauerhafte Überlastung)! Hardware aufrüsten & neu vermieten.", [cname, get_rack_display_name(rid)], "alert")
-			MailManager.on_cancelled(cname, get_rack_display_name(rid))
-			_rpc_play_sfx.rpc("alarm")
-
-	reputation = clampf(reputation + rep_delta, 0.0, 100.0)
-	var rep_tier := get_reputation_tier()
-	if rep_tier != _last_rep_tier:
-		if _last_rep_tier >= 0:
-			if rep_tier > _last_rep_tier:
-				post_event_f("⭐ Dein Ruf steigt: %s! Neue Kunden kommen schneller und zahlreicher.", [get_reputation_label()], "good")
-			else:
-				post_event_f("📉 Dein Ruf sinkt: %s. Es kommen weniger neue Kunden.", [get_reputation_label()], "warn")
-		_last_rep_tier = rep_tier
-
-	total_rental_income_per_cycle = total_rent
-
-	# Trigger Live Customer Phone Call at PC if a rack is critically impacted!
-	if active_call.is_empty() and _call_cooldown <= 0.0 and worst_call_rack != "":
-		var cr: Dictionary = racks[worst_call_rack]
-		var cname := str(cr.get("rental_customer", "Kunde"))
-		var rtype := str(cr.get("rental_type", "web"))
-		var call_msg := _describe_issue_call(worst_call_rack, cr, worst_call_issue)
-		active_call = {
-			"id": "call_%d" % _next_ticket_num,
-			"rack_id": worst_call_rack,
-			"customer": cname,
-			"rental_type": rtype,
-			"issue_key": worst_call_issue,
-			"message": str(call_msg["text"]),
-			"message_args": call_msg["args"],
-			"state": "ringing",
-			"timer": 0.0,
-		}
-		_next_ticket_num += 1
-		_phone_ring_accum = 0.0
-		_rpc_play_sfx.rpc("phone_ring")
-		post_event_f("📞 EINGEHENDER ANRUF AM PC: %s beschwert sich über %s! Zum PC [E] gehen!", [cname, worst_call_rack.to_upper()], "alert")
-		call_dirty = true
-
-	# Tickets altern lassen. Unbeantwortete Tickets eskalieren nach Ablauf der SLA-Frist.
-	for tid in support_tickets.keys():
-		var t: Dictionary = support_tickets[tid]
-		t["age"] = float(t.get("age", 0.0)) + dt
-		if bool(t.get("reassured", false)) or bool(t.get("escalated", false)):
-			continue
-		if float(t["age"]) < get_ticket_sla(t):
-			continue
-		t["escalated"] = true
-		var erid := str(t.get("rack_id", ""))
-		if racks.has(erid):
-			racks[erid]["satisfaction"] = maxf(0.0, float(racks[erid].get("satisfaction", 60.0)) - TICKET_ESCALATION_SAT_PENALTY)
-		reputation = maxf(0.0, reputation - TICKET_ESCALATION_REP_PENALTY)
-		tickets_dirty = true
-		_rpc_play_sfx.rpc("alarm")
-		post_event_f("⏰ Ticket %s eskaliert: %s wartet zu lange auf eine Antwort (-%d%% Zufriedenheit).", [str(tid), str(t.get("customer", "Kunde")), int(TICKET_ESCALATION_SAT_PENALTY)], "alert")
-
-	if tickets_dirty:
-		_broadcast_tickets()
-	if call_dirty:
-		_broadcast_call()
-
-
-## Aktive Dienste eines Racks. Ungültige Einträge (unbekannte Dienste, "none") werden entfernt.
-func _get_rack_services(r: Dictionary) -> Array:
-	if not (r.get("services") is Array):
-		r["services"] = []
-	var arr: Array = r["services"]
-	for i in range(arr.size() - 1, -1, -1):
-		var e: Variant = arr[i]
-		if not (e is Dictionary):
-			arr.remove_at(i)
-			continue
-		var t := str((e as Dictionary).get("type", ""))
-		if t == "none" or not HardwareCatalog.RENTAL_PROFILES.has(t):
-			arr.remove_at(i)
-	return arr
-
-
-func _find_service(services: Array, service_type: String) -> int:
-	for i in range(services.size()):
-		if str((services[i] as Dictionary).get("type", "")) == service_type:
-			return i
-	return -1
-
-
-## Hält die alten Einzelfelder (rental_type, rental_customer) passend zur Dienstliste.
-## Tickets, Anrufe, Terminal und Rack-Schild lesen weiter diese Felder.
-func _sync_rack_rental_fields(r: Dictionary) -> void:
-	var services: Array = r.get("services", [])
-	if services.is_empty():
-		r["rental_type"] = "none"
-		r["rental_customer"] = ""
-		r["active_users"] = 0
-		r["rental_income"] = 0.0
-		r["satisfaction"] = 100.0
-		r["grace_timer"] = 0.0
-		return
-	var first: Dictionary = services[0]
-	r["rental_type"] = str(first.get("type", "none"))
-	var cname := str(first.get("customer", ""))
-	if services.size() > 1:
-		cname += " +%d" % (services.size() - 1)
-	r["rental_customer"] = cname
-	var total := 0
-	for s in services:
-		total += int(roundf(float((s as Dictionary).get("users", 0.0))))
-	r["active_users"] = total
-
-
-func get_reputation_factor() -> float:
-	return clampf(reputation / 100.0, 0.0, 1.0)
-
-
-func get_reputation_tier() -> int:
-	var tier := 0
-	for th in REPUTATION_THRESHOLDS:
-		if reputation >= th:
-			tier += 1
-	return tier
-
-
-func get_reputation_label() -> String:
-	return REPUTATION_LABELS[get_reputation_tier()]
-
-
 ## Neue Kunden kommen nur, solange die Hardware des Racks noch Luft hat (höchste Auslastung in %).
 const USER_GROWTH_LOAD_LIMIT := 85.0
 ## Bereich unter dem Limit, in dem das Wachstum weich ausläuft.
 const USER_GROWTH_SOFT_RANGE := 25.0
 ## Ab dieser Auslastung wandern Kunden langsam ab, auch bei hoher Zufriedenheit.
 const USER_SHED_LOAD_LIMIT := 100.0
-
-
-## Startnutzer eines neuen Dienstes: bei schlechtem Ruf nur eine Handvoll.
-func _start_users_for(service_type: String) -> float:
-	var p: Dictionary = HardwareCatalog.RENTAL_PROFILES[service_type]
-	return maxf(1.0, roundf(float(p.get("base_users", 1)) * (0.15 + 0.35 * get_reputation_factor())))
-
-
-## Nutzerzahl eines Dienstes fortschreiben. Gibt die gerundete Nutzerzahl zurück.
-func _update_service_users(svc: Dictionary, sat: float, online: bool, dt: float, time_wave: float, load_pct: float = 0.0) -> int:
-	var st := str(svc.get("type", ""))
-	if not HardwareCatalog.RENTAL_PROFILES.has(st):
-		return 0
-	var p: Dictionary = HardwareCatalog.RENTAL_PROFILES[st]
-	var base := float(p.get("base_users", 1))
-	var prev := float(svc.get("users", base))
-	var cur := prev
-	if not online:
-		cur = maxf(base * 0.2, cur - 4.5 * dt)
-	elif sat >= 72.0:
-		if load_pct < USER_GROWTH_LOAD_LIMIT:
-			var headroom := clampf((USER_GROWTH_LOAD_LIMIT - load_pct) / USER_GROWTH_SOFT_RANGE, 0.0, 1.0)
-			var growth := float(p.get("growth_rate", 1.0)) * time_wave * (0.35 + 0.65 * get_reputation_factor()) * MarketManager.growth_factor_cached(st)
-			cur += growth * headroom * dt * 0.36
-		elif load_pct >= USER_SHED_LOAD_LIMIT:
-			# Hardware voll ausgelastet: ein Teil der Kunden wandert langsam ab.
-			cur = maxf(base, cur - 1.0 * dt)
-	elif sat < 45.0:
-		cur = maxf(base * 0.25, cur - 2.2 * dt)
-	# Zu hohe Preise vertreiben mit der Zeit Kunden.
-	var shed := MarketManager.price_shed(st) * dt
-	if shed > 0.0:
-		cur = maxf(minf(cur, base * 0.5), cur - shed)
-	svc["users"] = cur
-	if dt > 0.0:
-		var per_min := (cur - prev) / dt * 60.0
-		svc["trend"] = lerpf(float(svc.get("trend", 0.0)), per_min, clampf(dt * 0.5, 0.0, 1.0))
-	return maxi(0, int(roundf(cur)))
-
-
-## Ein gemeinsames Profil für alle Dienste eines Racks, gewichtet nach Nutzerzahl.
-func _blend_service_profiles(services: Array) -> Dictionary:
-	var first_type := str((services[0] as Dictionary).get("type", ""))
-	var out: Dictionary = (HardwareCatalog.RENTAL_PROFILES[first_type] as Dictionary).duplicate(true)
-	if services.size() == 1:
-		out["pay_per_user"] = float(out.get("pay_per_user", 0.0)) * MarketManager.get_price(first_type)
-		return out
-	var sums := {}
-	for k in _BLEND_KEYS:
-		sums[k] = 0.0
-	var total_w := 0.0
-	var base_sum := 0.0
-	var max_sum := 0.0
-	var growth_sum := 0.0
-	for s in services:
-		var sd: Dictionary = s
-		var p: Dictionary = HardwareCatalog.RENTAL_PROFILES[str(sd["type"])]
-		var w := maxf(1.0, float(sd.get("users", 1.0)))
-		total_w += w
-		for k in _BLEND_KEYS:
-			var fallback := 0.5 if k == "mbps_per_user" else 0.0
-			var price_f := MarketManager.get_price(str(sd["type"])) if k == "pay_per_user" else 1.0
-			sums[k] = float(sums[k]) + w * float(p.get(k, fallback)) * price_f
-		base_sum += float(p.get("base_users", 0))
-		max_sum += float(p.get("max_users", 0))
-		growth_sum += float(p.get("growth_rate", 0.0))
-	for k in _BLEND_KEYS:
-		out[k] = float(sums[k]) / total_w
-	out["base_users"] = int(base_sum)
-	out["max_users"] = int(max_sum)
-	out["growth_rate"] = growth_sum
-	return out
-
-
-func _has_open_ticket_for_rack(rack_id: String) -> bool:
-	for tid in support_tickets.keys():
-		if str(support_tickets[tid].get("rack_id", "")) == rack_id:
-			return true
-	return false
-
-
-func _clear_tickets_for_rack(rack_id: String) -> void:
-	var del_ids: Array[String] = []
-	for tid in support_tickets.keys():
-		if str(support_tickets[tid].get("rack_id", "")) == rack_id:
-			del_ids.append(str(tid))
-	for tid in del_ids:
-		support_tickets.erase(tid)
-
-
-func _create_support_ticket(rack_id: String, rack: Dictionary, issue_key: String) -> void:
-	var tid := "T-%d" % _next_ticket_num
-	_next_ticket_num += 1
-	var cname := str(rack.get("rental_customer", "Kunde"))
-	var rtype := str(rack.get("rental_type", "web"))
-	var users := int(rack.get("active_users", 0))
-	var m: Dictionary = rack.get("metrics", {})
-	var rid_up := get_rack_display_name(rack_id)
-	# Titel und Text bleiben Vorlagen mit Werten. Übersetzt wird erst beim
-	# Empfänger, damit jeder Spieler sie in seiner eigenen Sprache sieht.
-	var title := ""
-	var title_args: Array = []
-	var msg := ""
-	var msg_args: Array = []
-	var prio := "HOCH"
-	match issue_key:
-		"ram":
-			title = "Arbeitsspeicher (RAM) voll!"
-			msg = "Hallo Support, bei unseren %d aktiven Nutzern läuft der RAM auf %s über (%.1f / %.0f GB)! Dienste stürzen ab — bitte mehr/schnelleren RAM (DDR3/DDR4/DDR5) einbauen!"
-			msg_args = [users, rid_up, float(m.get("ram_used_gb", 0.0)), float(m.get("ram_total_gb", 0.0))]
-		"cpu":
-			title = "CPU-Auslastung bei %.0f%%!"
-			title_args = [float(m.get("cpu_pct", 100.0))]
-			msg = "Unsere %d aktiven User klagen über extreme Lags auf %s! Der Prozessor ist komplett am Limit — wir brauchen dringend stärkere CPUs oder einen weiteren Server!"
-			msg_args = [users, rid_up]
-		"gpu":
-			title = "GPU-Leistung reicht nicht aus!"
-			msg = "Bei %d aktiven Nutzern hängen unsere GPU-Jobs auf %s (%.0f%% Last). Bitte bessere Grafikkarten verbauen!"
-			msg_args = [users, rid_up, float(m.get("gpu_pct", 100.0))]
-		"storage":
-			title = "Festplatten-Speicher fast voll!"
-			msg = "Warnung: Unsere %d Nutzer belegen bereits %.1f / %.1f TB auf %s! Uploads schlagen fehl — bitte größere HDD/SSD/NVMe einbauen!"
-			msg_args = [users, float(m.get("storage_used_tb", 0.0)), float(m.get("storage_total_tb", 0.0)), rid_up]
-		"network":
-			title = "Internet-Leitung zu langsam!"
-			msg = "Hoher Ping & Paketverlust bei %d aktiven Usern! Dein Router drosselt %s — bitte Internet-Router upgraden!"
-			msg_args = [users, rid_up]
-		"overheat":
-			prio = "KRITISCH"
-			title = "Kritische Rack-Temperatur (%.0f°C)!"
-			title_args = [float(rack.get("temp", 75.0))]
-			msg = "Thermal Throttling auf %s! Bitte sofort Server-Kühlung verbessern oder Klimaanlage anschließen!"
-			msg_args = [rid_up]
-		"psu":
-			prio = "KRITISCH"
-			title = "Netzteil-Überlastung erkannt!"
-			msg = "Spannungsabfälle auf %s — ein verbautes Netzteil ist zu schwach für die Komponenten! Bitte stärkeres Netzteil (PSU) einbauen."
-			msg_args = [rid_up]
-		_:
-			prio = "KRITISCH"
-			title = "Komplettausfall — Server offline!"
-			msg = "NOTFALL: Unser gemietetes %s ist komplett unerreichbar! Bitte sofort Stromkabel, Netzwerkkabel & Server-Zustand prüfen!"
-			msg_args = [rid_up]
-
-	support_tickets[tid] = {
-		"id": tid,
-		"rack_id": rack_id,
-		"customer": cname,
-		"rental_type": rtype,
-		"issue_key": issue_key,
-		"title": title,
-		"title_args": title_args,
-		"message": msg,
-		"message_args": msg_args,
-		"priority": prio,
-		"created_day": day_number,
-		"age": 0.0,
-		"reassured": false,
-		"compensated": false,
-		"escalated": false,
-	}
-	_rpc_play_sfx.rpc("ticket_notify")
-	post_event_f("🎧 Neues Support-Ticket %s von %s: %s", [tid, cname, {"text": title, "args": title_args}], "warn")
-	MailManager.on_ticket(support_tickets[tid])
-
-
-## Antwortfrist eines Tickets in Sekunden (nach Priorität).
-func get_ticket_sla(ticket: Dictionary) -> float:
-	return float(TICKET_SLA_SECONDS.get(str(ticket.get("priority", "HOCH")), TICKET_DEFAULT_SLA))
-
-
-## Restzeit bis zur Eskalation. 0 bei beantworteten oder bereits eskalierten Tickets.
-func get_ticket_sla_remaining(ticket: Dictionary) -> float:
-	if bool(ticket.get("reassured", false)) or bool(ticket.get("escalated", false)):
-		return 0.0
-	return maxf(0.0, get_ticket_sla(ticket) - float(ticket.get("age", 0.0)))
-
-
-## Liefert den Anruftext als Vorlage plus Werte ({text, args}).
-func _describe_issue_call(rack_id: String, rack: Dictionary, issue_key: String) -> Dictionary:
-	var users := int(rack.get("active_users", 0))
-	var m: Dictionary = rack.get("metrics", {})
-	var who := str(rack.get("rental_customer", ""))
-	var rid_up := get_rack_display_name(rack_id)
-	match issue_key:
-		"ram":
-			return {"text": "„Hallo?! Hier ist %s! Bei %d aktiven Usern ist der RAM auf %s zu %.0f%% voll — unsere Kunden fliegen ständig raus! Wann baut ihr mehr RAM ein?“",
-				"args": [who, users, rid_up, float(m.get("ram_pct", 100.0))]}
-		"cpu":
-			return {"text": "„Dringend! Hier %s — die CPU auf %s hängt bei %.0f%% Last mit %d Usern, alles laggt unerträglich! Macht bitte sofort ein CPU-Upgrade!“",
-				"args": [who, rid_up, float(m.get("cpu_pct", 100.0)), users]}
-		"gpu":
-			return {"text": "„Hier %s! Unsere KI/Video-Aufträge auf %s stehen still, die GPU ist restlos überlastet (%.0f%%)! Wir brauchen dringend dickere Grafikkarten!“",
-				"args": [who, rid_up, float(m.get("gpu_pct", 100.0))]}
-		"storage":
-			return {"text": "„Hallo Support, %s hier! Der Speicher auf %s ist komplett voll (%.1f / %.1f TB) — unsere Kunden können nichts mehr hochladen!“",
-				"args": [who, rid_up, float(m.get("storage_used_tb", 0.0)), float(m.get("storage_total_tb", 0.0))]}
-		"network":
-			return {"text": "„%s am Apparat! Euer alter Router bremst unser ganzes %s aus — Ping über 400 ms bei %d Usern! Wann gibt's schnelleres Internet?“",
-				"args": [who, rid_up, users]}
-		"overheat":
-			return {"text": "„ALARM! Hier %s — euer Monitoring meldet %.0f°C auf %s! Wenn die Server gleich abbrennen, kündigen wir sofort!“",
-				"args": [who, float(rack.get("temp", 80.0)), rid_up]}
-		"psu":
-			return {"text": "„%s hier! Auf %s brechen ständig die Netzteile ein — bitte baut stärkere PSUs ein, bevor uns Daten verloren gehen!“",
-				"args": [who, rid_up]}
-		_:
-			return {"text": "„NOTFALL! Hier ist %s — unser gemietetes %s ist KOMPLETT OFFLINE! Prüft sofort Strom, LAN-Kabel und Server!“",
-				"args": [who, rid_up]}
-
-
-func _recalculate_networks_and_metrics() -> void:
-	if multiplayer.is_server():
-		_refresh_slot_power()
-	max_watts = int(POWER_TIERS[power_tier]["watts"])
-	if halle_nord_owned:
-		max_watts += HALLE_NORD_EXTRA_WATTS
-	if FinanceManager.is_power_blocked():
-		max_watts = maxi(FinanceManager.BLOCK_POWER_MIN, int(float(max_watts) * FinanceManager.BLOCK_POWER_FACTOR))
-
-	# Verbundkabel einmal zählen statt je Rack alle Kabel durchzugehen.
-	var clustered_ids := {}
-	for cid in cables.keys():
-		var cc: Dictionary = cables[cid]
-		if str(cc["cable_type"]) == "cluster":
-			clustered_ids[str(cc["from_id"])] = true
-			clustered_ids[str(cc["to_id"])] = true
-	for rid in racks.keys():
-		racks[rid]["powered"] = false
-		racks[rid]["networked"] = false
-		racks[rid]["clustered"] = clustered_ids.has(str(rid))
-	for cid in coolers.keys():
-		coolers[cid]["powered"] = false
-	for uid in ups_units.keys():
-		ups_units[uid]["connected"] = false
-
-	# First discover which UPS units are wired into the main breaker power graph
-	var bus_sources: Array[String] = [WALL_BREAKER_ID]
-	if room_level >= 2:
-		bus_sources.append(HALL_C_BREAKER_ID)
-	if halle_nord_owned:
-		bus_sources.append(HALL_NORD_BREAKER_ID)
-
-	var bus_visited: Dictionary = {}
-	var bus_queue: Array = []
-	for src in bus_sources:
-		bus_visited[src] = true
-		bus_queue.append(src)
-
-	var p_adj := StripRules.adjacency(StripRules.edges("power"))
-	# Rollen ändern sich während der Berechnung nicht: einmal je Anschluss ermitteln.
-	var p_roles := {}
-	while not bus_queue.is_empty():
-		var curr := str(bus_queue.pop_front())
-		for x in p_adj.get(curr, []):
-			var other: String = x[0]
-			var cs: int = x[1]
-			var os: int = x[2]
-			if other == "" or bus_visited.has(other) or not StripRules.flows("power", curr, cs, other, os, p_roles):
-				continue
-			bus_visited[other] = true
-			if ups_units.has(other):
-				ups_units[other]["connected"] = true
-				bus_queue.append(other)
-			elif is_power_strip_decor(other) and is_strip_on(other):
-				bus_queue.append(other)
-
-	# Determine if UPS backup is keeping the power bus alive during a breaker outage
-	var has_charged_ups := false
-	for uid in ups_units.keys():
-		if is_ups_ready(ups_units[uid]):
-			has_charged_ups = true
-			break
-
-	ups_backup_active = (not breaker_on) and has_charged_ups
-	var power_alive := breaker_on or ups_backup_active
-
-	_strip_parent = {}
-	_strip_feeds = {}
-	if power_alive:
-		var p_visited: Dictionary = {}
-		var p_queue: Array = []
-		for src in bus_sources:
-			p_visited[src] = true
-			p_queue.append(src)
-		while not p_queue.is_empty():
-			var curr := str(p_queue.pop_front())
-			for x in p_adj.get(curr, []):
-				var other: String = x[0]
-				var cs: int = x[1]
-				var os: int = x[2]
-				if other == "" or not StripRules.flows("power", curr, cs, other, os, p_roles):
-					continue
-				# A+B-Einspeisung: ein Rack an zwei Leisten teilt seine Last auf beide auf.
-				if racks.has(other) and p_visited.has(other):
-					(_strip_feeds[other] as Array).append(curr)
-					continue
-				if p_visited.has(other):
-					continue
-				p_visited[other] = true
-				_strip_parent[other] = curr
-				_strip_feeds[other] = [curr]
-				if racks.has(other):
-					racks[other]["powered"] = true
-				elif coolers.has(other):
-					coolers[other]["powered"] = true
-				elif ups_units.has(other) or (is_power_strip_decor(other) and is_strip_on(other)):
-					p_queue.append(other)
-
-		# Goldis Innengeräte laufen, sobald mindestens ein Außengerät Strom hat.
-		var any_heat_pump_on := false
-		for cid in coolers.keys():
-			if is_heat_pump_type(str(coolers[cid].get("cooler_type", "cooler"))) and bool(coolers[cid]["powered"]):
-				any_heat_pump_on = true
-				break
-		if any_heat_pump_on:
-			for cid in coolers.keys():
-				if is_indoor_unit(str(cid)):
-					coolers[cid]["powered"] = true
-
-		# BFS Network from Wall Router (+ Hall C Router if unlocked)
-		_lan_parent = {}
-		var n_visited: Dictionary = {WALL_ROUTER_ID: true}
-		var n_queue: Array = [WALL_ROUTER_ID]
-		if room_level >= 2:
-			n_visited[HALL_C_ROUTER_ID] = true
-			n_queue.append(HALL_C_ROUTER_ID)
-		if halle_nord_owned:
-			n_visited[HALL_NORD_ROUTER_ID] = true
-			n_queue.append(HALL_NORD_ROUTER_ID)
-
-		var n_adj := StripRules.adjacency(StripRules.edges("network"))
-		var n_roles := {}
-		while not n_queue.is_empty():
-			var curr := str(n_queue.pop_front())
-			var can_forward := (
-				curr == WALL_ROUTER_ID
-				or curr == HALL_C_ROUTER_ID
-				or curr == HALL_NORD_ROUTER_ID
-				or (is_lan_strip_decor(curr) and is_strip_on(curr))
-				or (racks.has(curr) and bool(racks[curr]["powered"]) and _count_rack_switches(curr) > 0)
-			)
-			if not can_forward:
-				continue
-			for x in n_adj.get(curr, []):
-				var other: String = x[0]
-				var cs: int = x[1]
-				var os: int = x[2]
-				if other == "" or n_visited.has(other) or not StripRules.flows("network", curr, cs, other, os, n_roles):
-					continue
-				n_visited[other] = true
-				_lan_parent[other] = curr
-				if racks.has(other):
-					racks[other]["networked"] = true
-					n_queue.append(other)
-				elif is_lan_strip_decor(other):
-					n_queue.append(other)
-
-	# Aggregate real hardware & network bandwidth metrics (GB RAM, TB Storage, CPU, GPU, Mbit/s, Watts)
-	var watts := 0
-	var compute := 0
-	var bonus_sum := 0.0
-	var sum_ram := 0
-	var sum_cpu := 0
-	var sum_gpu := 0
-	var sum_sto := 0.0
-	var sum_mbps := 0.0
-	var device_watts := {}
-	if multiplayer.is_server():
-		_apply_rack_power_changes()
-
-	for rid in racks.keys():
-		var rack: Dictionary = racks[rid]
-		if not bool(rack["powered"]):
-			continue
-		var rack_w0 := watts
-		var r_rent := str(rack.get("rental_type", "none"))
-		if bool(rack["networked"]) and r_rent != "none" and HardwareCatalog.RENTAL_PROFILES.has(r_rent):
-			var rprof: Dictionary = HardwareCatalog.RENTAL_PROFILES[r_rent]
-			sum_mbps += float(rack.get("active_users", 0)) * float(rprof.get("mbps_per_user", 0.5))
-		for slot in rack["slots"]:
-			var sd: Dictionary = slot
-			var item_type := str(sd["item_type"])
-			if item_type == "":
-				continue
-			var st := str(sd["state"])
-			var stats := get_slot_stats(sd)
-			if is_slot_on(sd):
-				watts += int(stats["watts"])
-				if bool(rack["networked"]):
-					compute += int(stats["compute"])
-					bonus_sum += float(stats["revenue_bonus"])
-					sum_ram += int(stats["ram_gb"])
-					sum_cpu += int(stats["cpu_score"])
-					sum_gpu += int(stats["gpu_score"])
-					sum_sto += float(stats["storage_tb"])
-			elif st == "burning":
-				watts += int(stats["watts"])
-		device_watts[rid] = watts - rack_w0
-
-	# Kaltgang-/Warmgang-Airflow & Kabelmanagement-Bonus live berechnen
-	_recompute_layout_bonuses()
-
-	var heatwave_cooler_mult := 1.22 if weather_state == "heatwave" else 1.0
-	var airflow_watt_save := 1.0 - airflow_bonus * 0.45
-	for cid in coolers.keys():
-		if bool(coolers[cid]["powered"]):
-			var ctype := str(coolers[cid].get("cooler_type", "cooler"))
-			var cw := int(roundf(float(ITEM_CATALOG[ctype]["watts"]) * heatwave_cooler_mult * airflow_watt_save))
-			watts += cw
-			device_watts[cid] = cw
-
-	# Ladende Notstrom-Batterien ziehen ihre Ladeleistung
-	if breaker_on:
-		for uid in ups_units.keys():
-			var u: Dictionary = ups_units[uid]
-			if bool(u["connected"]) and float(u["charge"]) < 99.5:
-				var chw := int(get_ups_spec(u)["charge_w"])
-				watts += chw
-				device_watts[uid] = chw
-	_compute_strip_loads(device_watts)
-	_compute_lan_chains()
-
-	var req_compute := 0
-	for cid in contracts.keys():
-		if bool(contracts[cid]["active"]):
-			req_compute += int(contracts[cid]["required_compute"])
-			sum_mbps += float(contracts[cid].get("req_mbps", 15.0))
-
-	var rt_d: Dictionary = ROUTER_TIERS[clampi(router_tier, 0, ROUTER_TIERS.size() - 1)]
-	max_bandwidth_cu = int(rt_d["max_cu"])
-	max_bandwidth_mbps = float(rt_d.get("max_mbps", 50.0))
-	if halle_nord_owned:
-		max_bandwidth_mbps += HALLE_NORD_EXTRA_MBPS
-		max_bandwidth_cu += 600
-	if FinanceManager.is_blocked("internet"):
-		max_bandwidth_mbps = maxf(10.0, max_bandwidth_mbps * FinanceManager.BLOCK_NET_FACTOR)
-	total_watts = watts
-	total_ram_gb = sum_ram
-	total_cpu_score = sum_cpu
-	total_gpu_score = sum_gpu
-	total_storage_tb = sum_sto
-	used_bandwidth_mbps = sum_mbps
-	raw_compute = compute
-	total_compute = mini(compute, max_bandwidth_cu)
-	used_compute = req_compute
-	revenue_bonus_mult = (1.0 + minf(bonus_sum + cable_mgmt_bonus, 0.92)) * get_level_revenue_mult()
-	if FinanceManager.is_blocked("license"):
-		revenue_bonus_mult *= FinanceManager.BLOCK_LICENSE_FACTOR
 
 
 # ==============================================================================
@@ -5757,19 +3305,6 @@ func request_spray_extinguisher(rack_id: String, slot_idx: int) -> void:
 	_rpc_req_spray_extinguisher.rpc_id(1, rack_id, slot_idx)
 
 
-func is_shared_panel_open(entity_id: String, panel_id: String) -> bool:
-	return shared_open_panels.has(_panel_key(entity_id, panel_id))
-
-
-## Für Abfragen jedes Bild: Schlüssel einmal bauen (panel_key) und dann nur noch nachsehen.
-func panel_key(entity_id: String, panel_id: String) -> String:
-	return _panel_key(entity_id, panel_id)
-
-
-func is_panel_key_open(key: String) -> bool:
-	return shared_open_panels.has(key)
-
-
 ## Tür/Seitenwand/Antenne umschalten: Der Server entscheidet und schickt den neuen Zustand an alle.
 func request_toggle_panel(entity_id: String, panel_id: String) -> void:
 	if entity_id.is_empty() or panel_id.is_empty():
@@ -5777,85 +3312,7 @@ func request_toggle_panel(entity_id: String, panel_id: String) -> void:
 	_rpc_req_toggle_panel.rpc_id(1, entity_id, panel_id)
 
 
-func _panel_key(entity_id: String, panel_id: String) -> String:
-	return entity_id + "|" + panel_id
-
-
-func _sanitize_open_panels(data: Variant) -> Dictionary:
-	var out: Dictionary = {}
-	if not (data is Dictionary):
-		return out
-	var src := data as Dictionary
-	for k in src.keys():
-		if out.size() >= MAX_SHARED_PANELS:
-			break
-		var ks := str(k)
-		var v: Variant = src[k]
-		if ks.length() <= 160 and ks.contains("|") and typeof(v) == TYPE_BOOL and bool(v):
-			out[ks] = true
-	return out
-
-
-@rpc("any_peer", "call_local", "reliable")
-func _rpc_req_toggle_panel(entity_id: String, panel_id: String) -> void:
-	if not multiplayer.is_server():
-		return
-	if entity_id.length() > 64 or panel_id.length() > 95:
-		return
-	var key := _panel_key(entity_id, panel_id)
-	var opened := not shared_open_panels.has(key)
-	if opened:
-		if shared_open_panels.size() >= MAX_SHARED_PANELS:
-			return
-		shared_open_panels[key] = true
-	else:
-		shared_open_panels.erase(key)
-	_rpc_sync_panel.rpc(key, opened)
-	if panel_id.begins_with("slot_") and racks.has(entity_id):
-		_on_slot_panel_toggled(entity_id, int(panel_id.trim_prefix("slot_")), opened)
-
-
 ## --- Strom im Einschub: ausgefahren = stromlos, eingeschoben = der Server fährt hoch ---
-
-## Hochfahrzeit je nach Servergröße (Sekunden).
-func get_boot_seconds(item_type: String) -> float:
-	if not is_slot_upgradeable(item_type):
-		return 6.0
-	match str((ITEM_CATALOG.get(item_type, {}) as Dictionary).get("mb_cat", "entry")):
-		"server":
-			return 9.0
-		"storage":
-			return 11.0
-		"gpu":
-			return 15.0
-	return 6.0
-
-
-## true, wenn der Server Strom bekommt und fertig hochgefahren ist (Rack-Strom wird extra geprüft).
-func is_slot_on(slot: Dictionary) -> bool:
-	return str(slot.get("state", "ok")) == "ok" and not bool(slot.get("offline", false))
-
-
-func _on_slot_panel_toggled(rack_id: String, slot_idx: int, opened: bool) -> void:
-	var slots: Array = racks[rack_id]["slots"]
-	if slot_idx < 0 or slot_idx >= slots.size():
-		return
-	var slot: Dictionary = slots[slot_idx]
-	if str(slot.get("item_type", "")) == "":
-		return
-	var was_on := is_slot_on(slot) and bool(racks[rack_id].get("powered", false))
-	_recalculate_networks_and_metrics()
-	_broadcast_racks()
-	_broadcast_sim_tick()
-	if opened and was_on:
-		_rpc_play_sfx.rpc("server_off")
-
-
-func _close_slot_panel(rack_id: String, slot_idx: int) -> void:
-	var key := _panel_key(rack_id, "slot_%d" % slot_idx)
-	if shared_open_panels.has(key):
-		shared_open_panels.erase(key)
-		_rpc_sync_panel.rpc(key, false)
 
 
 ## Abstand zwischen zwei Servern beim Start eines ganzen Racks.
@@ -5863,99 +3320,6 @@ const RACK_BOOT_STAGGER := 1.5
 const RACK_BOOT_FIRST := 1.2
 ## Letzter bekannter Stromzustand je Rack. Fehlt ein Rack, gilt der erste Wert nicht als Wechsel.
 var _rack_power_prev: Dictionary = {}
-
-
-## Strom weg = alle Server aus. Strom da = Server fahren der Reihe nach hoch (nur Host).
-func _apply_rack_power_changes() -> void:
-	for rid_v in racks.keys():
-		var rid := str(rid_v)
-		var now := bool(racks[rid]["powered"])
-		if _rack_power_prev.has(rid) and bool(_rack_power_prev[rid]) != now:
-			var k := 0
-			for i in range((racks[rid]["slots"] as Array).size()):
-				var slot: Dictionary = racks[rid]["slots"][i]
-				if str(slot.get("item_type", "")) == "" or str(slot.get("state", "ok")) != "ok":
-					continue
-				slot["offline"] = true
-				slot.erase("boot_wait")
-				if now and not is_slot_extended(rid, i):
-					var t := get_boot_seconds(str(slot["item_type"]))
-					slot["boot_left"] = t
-					slot["boot_total"] = t
-					slot["boot_wait"] = RACK_BOOT_FIRST + float(k) * RACK_BOOT_STAGGER
-					k += 1
-				else:
-					slot.erase("boot_left")
-					slot.erase("boot_total")
-		_rack_power_prev[rid] = now
-	for old in _rack_power_prev.keys():
-		if not racks.has(old):
-			_rack_power_prev.erase(old)
-
-
-## Hält den Stromzustand aller Einschübe passend zur Schiene (nur Host).
-func _refresh_slot_power() -> void:
-	# Meist ist kein Schacht ausgefahren: dann gar nicht erst Schlüssel bauen.
-	var any_open := not shared_open_panels.is_empty()
-	for rid in racks.keys():
-		var slots: Array = racks[rid]["slots"]
-		for i in range(slots.size()):
-			var slot: Dictionary = slots[i]
-			if str(slot.get("item_type", "")) == "":
-				continue
-			if any_open and is_slot_extended(str(rid), i):
-				slot["offline"] = true
-				slot.erase("boot_left")
-				slot.erase("boot_total")
-				slot.erase("boot_wait")
-			elif bool(slot.get("offline", false)):
-				if str(slot.get("state", "ok")) != "ok":
-					slot.erase("boot_left")
-					slot.erase("boot_total")
-				elif not slot.has("boot_left"):
-					var t := get_boot_seconds(str(slot["item_type"]))
-					slot["boot_left"] = t
-					slot["boot_total"] = t
-
-
-func _update_slot_boot(dt: float) -> void:
-	var done := false
-	var woke := false
-	for rid in racks.keys():
-		if not bool(racks[rid].get("powered", false)):
-			continue
-		for slot_v in racks[rid]["slots"]:
-			var slot: Dictionary = slot_v
-			if not slot.has("boot_left"):
-				continue
-			if float(slot.get("boot_wait", 0.0)) > 0.0:
-				slot["boot_wait"] = float(slot["boot_wait"]) - dt
-				if float(slot["boot_wait"]) <= 0.0:
-					slot.erase("boot_wait")
-					woke = true
-				continue
-			slot["boot_left"] = float(slot["boot_left"]) - dt
-			if float(slot["boot_left"]) <= 0.0:
-				slot.erase("boot_left")
-				slot.erase("boot_total")
-				slot.erase("offline")
-				done = true
-	if done:
-		_recalculate_networks_and_metrics()
-		_broadcast_racks()
-		_broadcast_sim_tick()
-	elif woke:
-		_broadcast_racks()
-
-
-@rpc("authority", "call_local", "reliable")
-func _rpc_sync_panel(key: String, opened: bool) -> void:
-	if not multiplayer.is_server():
-		if opened:
-			shared_open_panels[key] = true
-		else:
-			shared_open_panels.erase(key)
-	panel_states_changed.emit()
 
 
 func request_toggle_garage_door() -> void:
@@ -6002,64 +3366,6 @@ func request_repair_slot(rack_id: String, slot_idx: int, amount: float) -> void:
 
 func request_diagnose_slot(rack_id: String, slot_idx: int) -> void:
 	_rpc_req_diagnose_slot.rpc_id(1, rack_id, slot_idx)
-
-
-## Ausgefallen durch ein defektes Bauteil, das noch niemand in der 3D-Vorschau gefunden hat.
-func is_slot_awaiting_diagnosis(slot: Dictionary) -> bool:
-	return str(slot.get("state", "")) == "crashed" \
-		and str(slot.get("faulty_part", "")) != "" \
-		and not bool(slot.get("diagnosed", false))
-
-
-## Teil, das man dem Server (Einschub oder Schlitten) als kaputt ansieht. "" = nichts zu sehen.
-func get_visible_fault(data: Dictionary) -> String:
-	if str(data.get("state", "")) != "crashed" or bool(data.get("fault_hidden", false)):
-		return ""
-	return str(data.get("faulty_part", ""))
-
-
-func get_component_label(cat: String) -> String:
-	# Das Mainboard ist kein austauschbares Bauteil, braucht aber einen Namen für den Hover.
-	if cat == "mainboard":
-		return tr("Mainboard")
-	return str((COMPONENT_CATALOG.get(cat, {}) as Dictionary).get("label", cat))
-
-
-## Wählt zufällig ein eingebautes Bauteil. Switches haben keine sichtbaren Bauteile in der Vorschau.
-func _pick_faulty_part(slot: Dictionary) -> String:
-	if get_chassis_visual(str(slot.get("item_type", ""))) == "net_switch":
-		return ""
-	var comps: Dictionary = slot.get("components", {}) as Dictionary
-	var cands: Array[String] = ["mainboard"]
-	for cat_v in COMPONENT_ORDER:
-		var cat := str(cat_v)
-		# Dieselbe Regel wie beim Modellaufbau, damit der Defekt immer sichtbar ist.
-		if HardwareMeshFactory.has_part(comps, cat):
-			cands.append(cat)
-	if cands.is_empty():
-		return ""
-	return cands[randi() % cands.size()]
-
-
-@rpc("any_peer", "call_local", "reliable")
-func _rpc_req_diagnose_slot(rack_id: String, slot_idx: int) -> void:
-	if not multiplayer.is_server():
-		return
-	var peer_id := _get_sender_id()
-	if not racks.has(rack_id):
-		return
-	var slots: Array = racks[rack_id]["slots"]
-	if slot_idx < 0 or slot_idx >= slots.size():
-		return
-	var slot: Dictionary = slots[slot_idx]
-	if not is_slot_awaiting_diagnosis(slot):
-		return
-	slot["diagnosed"] = true
-	post_event_f("%s hat den Defekt gefunden: %s in %s Slot %d. Jetzt das Teil in der 3D-Vorschau anklicken, um es zu reparieren.", [
-		NetworkManager.get_player_name(peer_id), get_component_label(str(slot["faulty_part"])),
-		get_rack_display_name(rack_id), slot_idx + 1
-	], "good")
-	_broadcast_racks()
 
 
 func request_toggle_contract(contract_id: String) -> void:
@@ -6119,15 +3425,6 @@ func update_cart_pose_from_host(cart_id: String, pos: Vector3, rot_y: float) -> 
 # ==============================================================================
 # HOST RPC HANDLERS
 # ==============================================================================
-
-func _disconnect_all_cables_of(entity_id: String) -> void:
-	var to_del: Array = []
-	for cid in cables.keys():
-		var c: Dictionary = cables[cid]
-		if str(c["from_id"]) == entity_id or str(c["to_id"]) == entity_id:
-			to_del.append(cid)
-	for cid in to_del:
-		cables.erase(cid)
 
 
 func set_host_only_destructive(enabled: bool) -> void:
@@ -6270,51 +3567,6 @@ func _deny_destructive_action(peer_id: int, action_label: String) -> void:
 	if peer_id != multiplayer.get_unique_id():
 		_rpc_play_sfx.rpc_id(peer_id, "error")
 	tell_peer(peer_id, "Nur der Host darf %s (Host-Schutz aktiv).", [action_label], "warn")
-
-
-@rpc("any_peer", "call_local", "reliable")
-func _rpc_req_buy_item(item_type: String) -> void:
-	if not multiplayer.is_server():
-		return
-	var peer_id := _get_sender_id()
-	if _deny_build(peer_id, "buy"):
-		return
-	if not SecurityGuard.check_rate_limit(peer_id, "buy", 10, 5.0):
-		return
-	if not ITEM_CATALOG.has(item_type):
-		return
-	if get_delivery_zone_free_slots() < 1:
-		_rpc_play_sfx.rpc_id(peer_id, "error")
-		post_event_f("🚫 Lieferzone voll (%d/%d Plätze)! Erst Pakete aus der Einfahrt räumen.", [
-			get_delivery_zone_used_slots(), DELIVERY_ZONE_MAX_CRATES
-		], "warn")
-		return
-	var price := float(ITEM_CATALOG[item_type]["price"])
-	if money < price:
-		_rpc_play_sfx.rpc_id(peer_id, "error")
-		return
-	money -= price
-
-	# Add to Delivery Vehicle! If vehicle is currently approaching, toss right into its cargo hold.
-	if van_phase == "arriving":
-		van_cargo.append(item_type)
-	else:
-		pending_delivery_items.append(item_type)
-		if van_phase == "idle":
-			van_cargo = _pack_van_cargo(pending_delivery_items)
-			pending_delivery_items.clear()
-			scheduled_delivery_day = 0
-			scheduled_delivery_hour = -1
-			pending_delivery_express = false
-			_start_delivery_van()
-
-	_broadcast_van_state()
-	_broadcast_sim_tick()
-	_rpc_play_sfx.rpc("cash")
-	var tmeta: Dictionary = DELIVERY_TIER_META.get(van_delivery_tier, DELIVERY_TIER_META[1])
-	post_event_f("%s bestellte %s — %s %s liefert gleich!", [
-		NetworkManager.get_player_name(peer_id), ITEM_CATALOG[item_type]["name"], str(tmeta["icon"]), str(tmeta["name"])
-	], "good")
 
 
 @rpc("any_peer", "call_local", "reliable")
@@ -6682,74 +3934,6 @@ func _rpc_paper_bin(site: String) -> void:
 
 
 @rpc("any_peer", "call_local", "reliable")
-func _rpc_req_relocate_rack(rack_id: String, pos: Vector3, rot_y: float) -> void:
-	if not multiplayer.is_server():
-		return
-	if not SecurityGuard.is_finite_vec3(pos) or not SecurityGuard.is_finite_float(rot_y):
-		return
-	var peer_id := _get_sender_id()
-	if _deny_build(peer_id, "build"):
-		return
-	if not racks.has(rack_id):
-		return
-	var snapped := Vector3(roundf(pos.x * 2.0) * 0.5, 0.0, roundf(pos.z * 2.0) * 0.5)
-	if not can_place_at(snapped, rack_id):
-		_rpc_play_sfx.rpc_id(peer_id, "error")
-		return
-
-	_disconnect_all_cables_of(rack_id)
-	racks[rack_id]["pos"] = snapped
-	racks[rack_id]["rot_y"] = rot_y
-	_recalculate_networks_and_metrics()
-	_broadcast_cables()
-	_broadcast_racks()
-	_broadcast_coolers()
-	_broadcast_ups()
-	_broadcast_sim_tick()
-	_rpc_play_sfx.rpc("place")
-	post_event_f("%s hat %s umgesetzt (Kabel neu anschließen!).", [NetworkManager.get_player_name(peer_id), get_rack_display_name(rack_id)], "info")
-
-
-@rpc("any_peer", "call_local", "reliable")
-func _rpc_req_sell_rack(rack_id: String) -> void:
-	if not multiplayer.is_server():
-		return
-	var peer_id := _get_sender_id()
-	if not SecurityGuard.check_rate_limit(peer_id, "sell", 6, 5.0):
-		return
-	if not is_destructive_action_allowed(peer_id):
-		_deny_destructive_action(peer_id, "Racks verkaufen")
-		return
-	if not racks.has(rack_id):
-		return
-	var refund := get_rack_sell_value(rack_id)
-	_disconnect_all_cables_of(rack_id)
-	_clear_tickets_for_rack(rack_id)
-	if not active_call.is_empty() and str(active_call.get("rack_id", "")) == rack_id:
-		active_call.clear()
-		_broadcast_call()
-	var sold_name := get_rack_display_name(rack_id)
-	racks.erase(rack_id)
-	# Offene Türen/Schächte dieses Racks aufräumen, damit ein neues Rack mit derselben ID sauber startet.
-	var prefix := rack_id + "|"
-	for pkey in shared_open_panels.keys():
-		if str(pkey).begins_with(prefix):
-			shared_open_panels.erase(pkey)
-			_rpc_sync_panel.rpc(str(pkey), false)
-	money += float(refund)
-	_recalculate_networks_and_metrics()
-	_broadcast_cables()
-	_broadcast_racks()
-	_broadcast_tickets()
-	_broadcast_coolers()
-	_broadcast_ups()
-	_broadcast_crates()
-	_broadcast_sim_tick()
-	_rpc_play_sfx.rpc("sell")
-	post_event_f("%s verkaufte %s für +$%d.", [NetworkManager.get_player_name(peer_id), sold_name, refund], "good")
-
-
-@rpc("any_peer", "call_local", "reliable")
 func _rpc_req_pack_device(kind: String, entity_id: String) -> void:
 	if not multiplayer.is_server():
 		return
@@ -6822,413 +4006,6 @@ func _rpc_req_sell_device(kind: String, entity_id: String) -> void:
 
 
 @rpc("any_peer", "call_local", "reliable")
-func _rpc_req_install_module(rack_id: String, slot_idx: int) -> void:
-	if not multiplayer.is_server():
-		return
-	var peer_id := _get_sender_id()
-	var held := get_player_held_crate(peer_id)
-	if held.is_empty():
-		return
-	var item_type := str(held["item_type"])
-	if str(ITEM_CATALOG[item_type]["category"]) != "module":
-		return
-	if not racks.has(rack_id):
-		return
-	var slots: Array = racks[rack_id]["slots"]
-	if slot_idx < 0 or slot_idx >= slots.size():
-		return
-	if str(slots[slot_idx]["item_type"]) != "":
-		_rpc_play_sfx.rpc_id(peer_id, "error")
-		return
-
-	var held_mod_cid := str(held["id"])
-	var mod_pcount := maxi(1, int(crates[held_mod_cid].get("pack_count", 1)))
-	if mod_pcount > 1:
-		crates[held_mod_cid]["pack_count"] = mod_pcount - 1
-	else:
-		crates.erase(held_mod_cid)
-		if not bool(held.get("unboxed", false)):
-			_spawn_empty_carton("server", _carton_drop_pos(racks[rack_id]["pos"], float(racks[rack_id].get("rot_y", 0.0))), 0.6)
-			_rpc_play_sfx.rpc("carton_open")
-	slots[slot_idx] = {
-		"item_type": item_type,
-		"state": "ok",
-		"repair_progress": 0.0,
-		"fire_level": 0.0,
-		"offline": true, # fährt nach dem Einbau erst hoch
-		"components": _default_components(item_type),
-	}
-	_recalculate_networks_and_metrics()
-	_broadcast_crates()
-	_broadcast_racks()
-	_broadcast_sim_tick()
-	_rpc_play_sfx.rpc("snap")
-	post_event_f("%s baute %s in %s (Slot %d) ein.", [
-		NetworkManager.get_player_name(peer_id),
-		ITEM_CATALOG[item_type]["name"],
-		get_rack_display_name(rack_id),
-		slot_idx + 1,
-	], "good")
-
-
-@rpc("any_peer", "call_local", "reliable")
-func _rpc_req_remove_module(rack_id: String, slot_idx: int) -> void:
-	if not multiplayer.is_server():
-		return
-	var peer_id := _get_sender_id()
-	if is_player_holding_anything(peer_id) or not racks.has(rack_id):
-		_rpc_play_sfx.rpc_id(peer_id, "error")
-		if is_player_holding_anything(peer_id):
-			post_event("Hände voll! Erst Item mit [Q] ablegen oder freien Slot (1–4) wählen.", "warn")
-		return
-	var slots: Array = racks[rack_id]["slots"]
-	if slot_idx < 0 or slot_idx >= slots.size():
-		return
-	var item_type := str(slots[slot_idx]["item_type"])
-	if item_type == "" or str(slots[slot_idx]["state"]) == "burning":
-		_rpc_play_sfx.rpc_id(peer_id, "error")
-		return
-
-	slots[slot_idx] = _make_empty_slot()
-	var cid := _alloc_id("crate")
-	crates[cid] = {"id": cid, "item_type": item_type, "pos": Vector3.ZERO, "held_by": peer_id, "held_slot": get_active_slot(peer_id), "unboxed": true}
-	_recalculate_networks_and_metrics()
-	_broadcast_racks()
-	_broadcast_crates()
-	_broadcast_sim_tick()
-	_rpc_play_sfx.rpc_id(peer_id, "pickup")
-
-
-@rpc("any_peer", "call_local", "reliable")
-func _rpc_req_sell_slot_module(rack_id: String, slot_idx: int) -> void:
-	if not multiplayer.is_server():
-		return
-	var peer_id := _get_sender_id()
-	if not SecurityGuard.check_rate_limit(peer_id, "sell", 8, 5.0):
-		return
-	if not is_destructive_action_allowed(peer_id):
-		_deny_destructive_action(peer_id, "Server-Module verkaufen")
-		return
-	if not racks.has(rack_id):
-		return
-	var slots: Array = racks[rack_id]["slots"]
-	if slot_idx < 0 or slot_idx >= slots.size():
-		return
-	var slot: Dictionary = slots[slot_idx]
-	var item_type := str(slot["item_type"])
-	if item_type == "" or str(slot["state"]) == "burning":
-		_rpc_play_sfx.rpc_id(peer_id, "error")
-		return
-	var stats := get_slot_stats(slot)
-	var refund := int(roundf(float(stats["total_value"]) * SELL_REFUND_RATIO))
-	slots[slot_idx] = _make_empty_slot()
-	money += float(refund)
-	_recalculate_networks_and_metrics()
-	_broadcast_racks()
-	_broadcast_sim_tick()
-	_rpc_play_sfx.rpc("sell")
-	post_event_f("%s verkaufte Modul aus %s Slot %d für +$%d.", [
-		NetworkManager.get_player_name(peer_id), get_rack_display_name(rack_id), slot_idx + 1, refund
-	], "good")
-
-
-@rpc("any_peer", "call_local", "reliable")
-func _rpc_req_upgrade_slot_component(rack_id: String, slot_idx: int, category: String) -> void:
-	# Legacy helper: advances to next part in HardwareCatalog
-	if not multiplayer.is_server() or not racks.has(rack_id):
-		return
-	var slots: Array = racks[rack_id]["slots"]
-	if slot_idx < 0 or slot_idx >= slots.size():
-		return
-	var slot: Dictionary = slots[slot_idx]
-	var comps: Dictionary = HardwareCatalog.normalize_components(slot.get("components", {}), str(slot.get("item_type", "web_server")))
-	var cur_id := str(comps.get(category, HardwareCatalog.DEFAULT_PARTS.get(category, "")))
-	var arr := HardwareCatalog.get_category_parts(category)
-	var idx := HardwareCatalog.get_part_index(category, cur_id)
-	if idx + 1 < arr.size():
-		_rpc_req_install_component(rack_id, slot_idx, category, str((arr[idx + 1] as Dictionary)["id"]))
-
-
-@rpc("any_peer", "call_local", "reliable")
-func _rpc_req_install_component(rack_id: String, slot_idx: int, category: String, part_id: String) -> void:
-	if not multiplayer.is_server():
-		return
-	var peer_id := _get_sender_id()
-	if not racks.has(rack_id) or not HardwareCatalog.PARTS.has(category):
-		return
-	var slots: Array = racks[rack_id]["slots"]
-	if slot_idx < 0 or slot_idx >= slots.size():
-		return
-	var slot: Dictionary = slots[slot_idx]
-	var item_type := str(slot["item_type"])
-	if not is_slot_upgradeable(item_type) or str(slot["state"]) == "burning":
-		_rpc_play_sfx.rpc_id(peer_id, "error")
-		return
-
-	var new_part := HardwareCatalog.get_part(category, part_id)
-	if new_part.is_empty():
-		return
-	var comps := HardwareCatalog.normalize_components(slot.get("components", {}), item_type)
-	var old_id := str(comps.get(category, ""))
-	if old_id == part_id:
-		return
-
-	# v1.0 Unified Warehouse Flow: install purchased parts from parts_inventory (stock defaults always free)!
-	var is_default := HardwareCatalog.is_stock_default_part(part_id)
-	if not is_default:
-		var stock := int(parts_inventory.get(part_id, 0))
-		if stock <= 0:
-			_rpc_play_sfx.rpc_id(peer_id, "error")
-			post_event_f("%s nicht im Teile-Lager! Erst im PC-Shop bestellen.", [str(new_part["name"])], "warn")
-			return
-		parts_inventory[part_id] = stock - 1
-		if int(parts_inventory[part_id]) <= 0:
-			parts_inventory.erase(part_id)
-
-	# Return old swapped-out non-default component neatly back into the Parts Warehouse!
-	if old_id != "" and not HardwareCatalog.is_stock_default_part(old_id):
-		parts_inventory[old_id] = int(parts_inventory.get(old_id, 0)) + 1
-
-	comps[category] = part_id
-	slot["components"] = comps
-	_recalculate_networks_and_metrics()
-	_broadcast_inventory()
-	_broadcast_racks()
-	_broadcast_sim_tick()
-	_rpc_play_sfx.rpc("upgrade")
-	post_event_f("%s baute %s aus dem Lager in %s Slot %d ein!", [
-		NetworkManager.get_player_name(peer_id), str(new_part["name"]), get_rack_display_name(rack_id), slot_idx + 1
-	], "good")
-
-
-@rpc("any_peer", "call_local", "reliable")
-func _rpc_req_buy_install_component(rack_id: String, slot_idx: int, category: String, part_id: String) -> void:
-	if not multiplayer.is_server():
-		return
-	var peer_id := _get_sender_id()
-	if _deny_build(peer_id, "buy"):
-		return
-	if not racks.has(rack_id) or not HardwareCatalog.PARTS.has(category):
-		return
-	var slots: Array = racks[rack_id]["slots"]
-	if slot_idx < 0 or slot_idx >= slots.size():
-		return
-	var slot: Dictionary = slots[slot_idx]
-	var item_type := str(slot["item_type"])
-	if not is_slot_upgradeable(item_type) or str(slot["state"]) == "burning":
-		_rpc_play_sfx.rpc_id(peer_id, "error")
-		return
-	var new_part := HardwareCatalog.get_part(category, part_id)
-	if new_part.is_empty():
-		return
-	var cost := float(new_part.get("cost", 0))
-	if cost <= 0.0 or money < cost or not is_part_unlocked(new_part):
-		_rpc_play_sfx.rpc_id(peer_id, "error")
-		return
-	var comps := HardwareCatalog.normalize_components(slot.get("components", {}), item_type)
-	if str(comps.get(category, "")) == part_id:
-		return
-
-	# Teil direkt ins Lager buchen und sofort über den normalen Einbau-Weg verbauen.
-	money -= cost
-	parts_inventory[part_id] = int(parts_inventory.get(part_id, 0)) + 1
-	_rpc_req_install_component(rack_id, slot_idx, category, part_id)
-	_rpc_play_sfx.rpc("cash")
-
-
-@rpc("any_peer", "call_local", "reliable")
-func _rpc_req_buy_install_module(rack_id: String, slot_idx: int, item_type: String) -> void:
-	if not multiplayer.is_server():
-		return
-	var peer_id := _get_sender_id()
-	if _deny_build(peer_id, "buy"):
-		return
-	if not racks.has(rack_id) or not ITEM_CATALOG.has(item_type):
-		return
-	if str(ITEM_CATALOG[item_type]["category"]) != "module":
-		return
-	var slots: Array = racks[rack_id]["slots"]
-	if slot_idx < 0 or slot_idx >= slots.size():
-		return
-	if str(slots[slot_idx]["item_type"]) != "":
-		_rpc_play_sfx.rpc_id(peer_id, "error")
-		return
-	var cost := float(ITEM_CATALOG[item_type]["price"])
-	if money < cost or not is_item_unlocked(item_type):
-		_rpc_play_sfx.rpc_id(peer_id, "error")
-		return
-
-	money -= cost
-	slots[slot_idx] = {
-		"item_type": item_type,
-		"state": "ok",
-		"repair_progress": 0.0,
-		"fire_level": 0.0,
-		"components": _default_components(item_type),
-	}
-	_recalculate_networks_and_metrics()
-	_broadcast_racks()
-	_broadcast_sim_tick()
-	_rpc_play_sfx.rpc("cash")
-	_rpc_play_sfx.rpc("snap")
-	post_event_f("%s kaufte %s und baute es in %s (Slot %d) ein.", [
-		NetworkManager.get_player_name(peer_id),
-		ITEM_CATALOG[item_type]["name"],
-		get_rack_display_name(rack_id),
-		slot_idx + 1,
-	], "good")
-
-
-@rpc("any_peer", "call_local", "reliable")
-func _rpc_req_checkout_cart(entries: Array, express: bool = false) -> void:
-	if not multiplayer.is_server() or entries.is_empty() or entries.size() > 40:
-		return
-	var peer_id := _get_sender_id()
-	if _deny_build(peer_id, "buy"):
-		return
-	if not SecurityGuard.check_rate_limit(peer_id, "checkout", 6, 5.0):
-		return
-	var total_cost := 0.0
-	var queue_items: Array = []
-
-	for raw in entries:
-		if not (raw is Dictionary):
-			continue
-		var e: Dictionary = raw
-		var kind := str(e.get("kind", "item")) # "item" | "part"
-		var qty := clampi(int(e.get("qty", 1)), 1, 24)
-		if kind == "item":
-			var itype := str(e.get("id", ""))
-			if not ITEM_CATALOG.has(itype) or not is_item_unlocked(itype):
-				continue
-			total_cost += float(ITEM_CATALOG[itype]["price"]) * float(qty)
-			if itype == "kit_bundle_all":
-				for _q in range(qty):
-					for kid in REPAIR_KIT_ORDER:
-						queue_items.append(kid)
-			else:
-				for _q in range(qty):
-					queue_items.append(itype)
-		elif kind == "slot_build":
-			var mb_id := str(e.get("mainboard_id", ""))
-			var comps_d: Dictionary = e.get("components", {}) as Dictionary
-			var bprice := calculate_slot_build_price(mb_id, comps_d)
-			if bprice <= 0 or not ITEM_CATALOG.has(mb_id):
-				continue
-			total_cost += float(bprice)
-			var oid := _alloc_id("build")
-			var rid := str(e.get("rack_id", ""))
-			var sidx := maxi(0, int(e.get("slot_idx", 0)))
-			var rlbl := str(e.get("rack_label", get_rack_display_name(rid) if not rid.is_empty() else "Rack"))
-			pending_build_orders[oid] = {
-				"rack_id": rid,
-				"slot_idx": sidx,
-				"rack_label": rlbl,
-				"mainboard_id": mb_id,
-				"components": comps_d.duplicate(true),
-			}
-			queue_items.append("build:" + oid)
-		elif kind == "part":
-			var cat := str(e.get("cat", ""))
-			var pid := str(e.get("id", ""))
-			var pd := HardwareCatalog.get_part(cat, pid)
-			if pd.is_empty() or int(pd.get("cost", 0)) <= 0 or not is_part_unlocked(pd):
-				continue
-			total_cost += float(pd["cost"]) * float(qty)
-			for _q in range(qty):
-				queue_items.append("part:" + pid)
-		elif kind == "acc":
-			# Zubehör (Sicherung, Werkbank-Material, Werkzeug) kommt per Lieferwagen.
-			var aid := str(e.get("id", ""))
-			var aprice := _accessory_price(aid)
-			if aprice <= 0:
-				continue
-			var room := _accessory_order_room(aid)
-			for qi_prev in queue_items:
-				if str(qi_prev) == "acc:" + aid:
-					room -= 1
-			qty = mini(qty, room)
-			if qty <= 0:
-				continue
-			total_cost += float(aprice) * float(qty)
-			for _q in range(qty):
-				queue_items.append("acc:" + aid)
-
-	var added_parcels: Array = []
-	var packed_now := _pack_items_preview(queue_items, added_parcels)
-	var order_tier := compute_delivery_tier(packed_now)
-	var shipping_fee := float(get_delivery_fee(order_tier, express))
-	var grand_total := total_cost + shipping_fee
-
-	if queue_items.is_empty() or money < grand_total:
-		for qi in queue_items:
-			var qstr := str(qi)
-			if qstr.begins_with("build:"):
-				pending_build_orders.erase(qstr.substr(6))
-		_rpc_play_sfx.rpc_id(peer_id, "error")
-		return
-
-	# Lieferflächen-Limit (max. DELIVERY_ZONE_MAX_CRATES physische Kisten inkl. laufender Lieferungen)
-	var needed_slots := 0
-	for pe in packed_now:
-		if str(pe) != VAN_PARCEL_ITEM:
-			needed_slots += 1
-	var free_slots := get_delivery_zone_free_slots()
-	if needed_slots > free_slots:
-		# Angelegte build_orders wieder aufräumen, da Bestellung abgebrochen wurde
-		for qi in queue_items:
-			var qstr := str(qi)
-			if qstr.begins_with("build:"):
-				pending_build_orders.erase(qstr.substr(6))
-		_rpc_play_sfx.rpc_id(peer_id, "error")
-		post_event_f("🚫 Lieferzone zu voll (%d frei, %d Kisten benötigt)! Erst Pakete aus der Einfahrt holen.", [
-			free_slots, needed_slots
-		], "warn")
-		return
-
-	money -= grand_total
-	if not checklist_ordered_anything:
-		checklist_ordered_anything = true
-		_broadcast_checklist()
-	if van_phase == "arriving":
-		for ap in added_parcels:
-			_van_parcel_parts.append(str(ap))
-		if not added_parcels.is_empty() and not van_cargo.has(VAN_PARCEL_ITEM):
-			van_cargo.push_front(VAN_PARCEL_ITEM)
-		for pn in packed_now:
-			if str(pn) != VAN_PARCEL_ITEM:
-				van_cargo.append(str(pn))
-		order_tier = van_delivery_tier
-	else:
-		for qi in queue_items:
-			pending_delivery_items.append(str(qi))
-		if express:
-			pending_delivery_express = true
-			scheduled_delivery_hour = -1
-			scheduled_delivery_day = 0
-		elif scheduled_delivery_hour < 0:
-			var next_slot := get_next_delivery_slot()
-			scheduled_delivery_day = int(next_slot["day"])
-			scheduled_delivery_hour = int(next_slot["hour"])
-
-	_broadcast_van_state()
-	_broadcast_sim_tick()
-	_rpc_play_sfx.rpc("cash")
-	var tmeta: Dictionary = DELIVERY_TIER_META.get(order_tier, DELIVERY_TIER_META[1])
-	MailManager.on_order(queue_items.size(), total_cost, shipping_fee, get_scheduled_delivery_label(), express or van_phase == "arriving")
-	if express or van_phase == "arriving":
-		post_event_f("🛒 %s bestellte %d Artikel ($%.0f + $%.0f Express-Lieferung) — %s %s ist sofort unterwegs!", [
-			NetworkManager.get_player_name(peer_id), queue_items.size(), total_cost, shipping_fee,
-			str(tmeta["icon"]), str(tmeta["name"])
-		], "good")
-	else:
-		post_event_f("🛒 %s bestellte %d Artikel ($%.0f + $%.0f Versand) — %s %s kommt im Lieferfenster %s!", [
-			NetworkManager.get_player_name(peer_id), queue_items.size(), total_cost, shipping_fee,
-			str(tmeta["icon"]), str(tmeta["name"]), get_scheduled_delivery_label()
-		], "good")
-
-
-@rpc("any_peer", "call_local", "reliable")
 func _rpc_req_sell_inventory_part(part_id: String) -> void:
 	if not multiplayer.is_server():
 		return
@@ -7258,559 +4035,11 @@ func _rpc_req_sell_inventory_part(part_id: String) -> void:
 const RACK_NAME_MAX_LEN := 24
 
 
-## Anzeigename eines Racks: eigener Name oder „Rack N“ (ohne interne Debug-IDs).
-func get_rack_display_name(rack_id: String) -> String:
-	var shown := ""
-	if racks.has(rack_id):
-		shown = str((racks[rack_id] as Dictionary).get("custom_name", ""))
-	if shown.is_empty():
-		var num := rack_id.get_slice("_", rack_id.get_slice_count("_") - 1)
-		shown = ("Rack %s" % num) if num.is_valid_int() else rack_id
-	return shown
-
-
-## Entfernt Steuerzeichen und kürzt auf RACK_NAME_MAX_LEN.
-func _sanitize_rack_name(raw: String) -> String:
-	var out := ""
-	for ch in raw.strip_edges():
-		if ch.unicode_at(0) >= 32:
-			out += ch
-	return out.strip_edges().left(RACK_NAME_MAX_LEN)
-
-
-@rpc("any_peer", "call_local", "reliable")
-func _rpc_req_rename_rack(rack_id: String, new_name: String) -> void:
-	if not multiplayer.is_server():
-		return
-	if not racks.has(rack_id):
-		return
-	var peer_id := _get_sender_id()
-	if not SecurityGuard.check_rate_limit(peer_id, "rename", 6, 10.0):
-		return
-	var r: Dictionary = racks[rack_id]
-	var filtered := SecurityGuard.sanitize_label(new_name, RACK_NAME_MAX_LEN, "")
-	if not new_name.strip_edges().is_empty() and filtered.is_empty():
-		_rpc_play_sfx.rpc_id(peer_id, "error")
-		return
-	var clean := _sanitize_rack_name(filtered.left(RACK_NAME_MAX_LEN * 4))
-	if clean == str(r.get("custom_name", "")):
-		return
-	var old_name := get_rack_display_name(rack_id)
-	r["custom_name"] = clean
-	_broadcast_racks()
-	post_event_f("%s hat %s in %s umbenannt.", [NetworkManager.get_player_name(peer_id), old_name, get_rack_display_name(rack_id)], "info")
-
-
-@rpc("any_peer", "call_local", "reliable")
-func _rpc_req_set_rack_rental(rack_id: String, rental_type: String) -> void:
-	if not multiplayer.is_server():
-		return
-	var peer_id := _get_sender_id()
-	if _deny_build(peer_id, "business"):
-		return
-	if not racks.has(rack_id) or not HardwareCatalog.RENTAL_PROFILES.has(rental_type):
-		return
-	var r: Dictionary = racks[rack_id]
-	var services := _get_rack_services(r)
-	var pname := str(NetworkManager.get_player_name(peer_id))
-
-	# "none" beendet alle Dienste. Jeder andere Dienst wird an- oder ausgeschaltet,
-	# so kann ein Rack mehrere Dienste gleichzeitig vermieten.
-	if rental_type == "none":
-		if services.is_empty():
-			return
-		services.clear()
-		post_event_f("%s beendete alle Vermietungen von %s.", [pname, get_rack_display_name(rack_id)], "info")
-	else:
-		var prof: Dictionary = HardwareCatalog.RENTAL_PROFILES[rental_type]
-		var idx := _find_service(services, rental_type)
-		if idx >= 0:
-			var gone: Dictionary = services[idx]
-			services.remove_at(idx)
-			post_event_f("%s beendete %s (%s) auf %s.", [pname, str(prof["short"]), str(gone.get("customer", "")), get_rack_display_name(rack_id)], "info")
-		else:
-			if services.size() >= MAX_SERVICES_PER_RACK:
-				_rpc_play_sfx.rpc_id(peer_id, "error")
-				post_event_f("%s hat schon %d Dienste. Beende erst einen, bevor du einen neuen startest.", [get_rack_display_name(rack_id), MAX_SERVICES_PER_RACK], "warn")
-				return
-			var cname := HardwareCatalog.pick_customer_name(rental_type, _next_entity_num + racks.size() + day_number + services.size())
-			var start_users := _start_users_for(rental_type)
-			services.append({"type": rental_type, "customer": cname, "users": start_users, "trend": 0.0})
-			if services.size() == 1:
-				r["satisfaction"] = 95.0
-				r["grace_timer"] = 18.0
-			else:
-				r["grace_timer"] = maxf(float(r.get("grace_timer", 0.0)), 10.0)
-			post_event_f("🤝 %s vermietet %s als %s an %s (%d Start-User, Ruf: %s)!", [
-				pname, get_rack_display_name(rack_id), str(prof["short"]), cname, int(start_users), get_reputation_label()
-			], "good")
-
-	_sync_rack_rental_fields(r)
-	_clear_tickets_for_rack(rack_id)
-	if not active_call.is_empty() and str(active_call.get("rack_id", "")) == rack_id:
-		active_call.clear()
-		_broadcast_call()
-	_rpc_play_sfx.rpc("cash")
-	_broadcast_racks()
-	_broadcast_tickets()
-	_broadcast_sim_tick()
-
-
-@rpc("any_peer", "call_local", "reliable")
-func _rpc_req_reply_ticket(ticket_id: String, action: String) -> void:
-	if not multiplayer.is_server():
-		return
-	do_reply_ticket(ticket_id, action, _get_sender_id())
-
-
-func do_reply_ticket(ticket_id: String, action: String, peer_id: int) -> void:
-	if not support_tickets.has(ticket_id):
-		return
-	var t: Dictionary = support_tickets[ticket_id]
-	var rid := str(t.get("rack_id", ""))
-
-	match action:
-		"reassure":
-			if bool(t.get("reassured", false)):
-				return
-			t["reassured"] = true
-			if racks.has(rid):
-				racks[rid]["satisfaction"] = minf(100.0, float(racks[rid].get("satisfaction", 70.0)) + 12.0)
-				racks[rid]["grace_timer"] = maxf(float(racks[rid].get("grace_timer", 0.0)), 45.0)
-			_rpc_play_sfx.rpc("ticket_notify")
-			post_event_f("⌨ %s antwortete auf Ticket %s — Kunde beruhigt (+45s Zeit zum Aufrüsten).", [NetworkManager.get_player_name(peer_id), ticket_id], "info")
-		"compensate":
-			if bool(t.get("compensated", false)) or money < 60.0:
-				_rpc_play_sfx.rpc_id(peer_id, "error")
-				return
-			money -= 60.0
-			t["compensated"] = true
-			if racks.has(rid):
-				racks[rid]["satisfaction"] = minf(100.0, float(racks[rid].get("satisfaction", 60.0)) + 24.0)
-				racks[rid]["grace_timer"] = maxf(float(racks[rid].get("grace_timer", 0.0)), 75.0)
-			_rpc_play_sfx.rpc("cash")
-			post_event_f("💰 %s gewährte $60 Rabatt für Ticket %s (+24%% Zufriedenheit).", [NetworkManager.get_player_name(peer_id), ticket_id], "good")
-		"resolve":
-			if not is_ticket_issue_fixed(t):
-				_rpc_play_sfx.rpc_id(peer_id, "error")
-				post_event_f("Problem bei %s besteht noch! Erst Hardware/Kabel/Router beheben.", [get_rack_display_name(rid)], "warn")
-				return
-			var cname := str(t.get("customer", "Kunde"))
-			support_tickets.erase(ticket_id)
-			if racks.has(rid):
-				racks[rid]["satisfaction"] = minf(100.0, float(racks[rid].get("satisfaction", 80.0)) + 16.0)
-			money += 35.0
-			_rpc_play_sfx.rpc("cash")
-			post_event_f("✅ Ticket %s von %s gelöst! (+$35 Support-Bonus & +16%% Zufriedenheit)", [ticket_id, cname], "good")
-
-	_broadcast_tickets()
-	_broadcast_racks()
-	_broadcast_sim_tick()
-
-
-@rpc("any_peer", "call_local", "reliable")
-func _rpc_req_answer_call() -> void:
-	if not multiplayer.is_server() or active_call.is_empty():
-		return
-	if str(active_call.get("state", "")) != "ringing":
-		return
-	active_call["state"] = "answered"
-	active_call["timer"] = 0.0
-	_rpc_play_sfx.rpc("phone_pickup")
-	_broadcast_call()
-
-
-@rpc("any_peer", "call_local", "reliable")
-func _rpc_req_resolve_call(choice: String) -> void:
-	if not multiplayer.is_server() or active_call.is_empty():
-		return
-	var peer_id := _get_sender_id()
-	var rid := str(active_call.get("rack_id", ""))
-	var cname := str(active_call.get("customer", "Kunde"))
-	match choice:
-		"upgrade_promise":
-			if racks.has(rid):
-				racks[rid]["satisfaction"] = minf(100.0, float(racks[rid].get("satisfaction", 60.0)) + 14.0)
-				racks[rid]["grace_timer"] = maxf(float(racks[rid].get("grace_timer", 0.0)), 60.0)
-			post_event_f("📞 %s versprach %s sofortiges Upgrade (+60s Schonfrist).", [NetworkManager.get_player_name(peer_id), cname], "good")
-		"restart_compensate":
-			if money >= 60.0:
-				money -= 60.0
-				if racks.has(rid):
-					racks[rid]["satisfaction"] = minf(100.0, float(racks[rid].get("satisfaction", 60.0)) + 26.0)
-					racks[rid]["grace_timer"] = maxf(float(racks[rid].get("grace_timer", 0.0)), 80.0)
-				post_event_f("📞 %s gab %s $60 Gutschrift am Telefon (+26%% Zufriedenheit).", [NetworkManager.get_player_name(peer_id), cname], "good")
-			else:
-				_rpc_play_sfx.rpc_id(peer_id, "error")
-				return
-		_:
-			if racks.has(rid):
-				racks[rid]["grace_timer"] = maxf(float(racks[rid].get("grace_timer", 0.0)), 20.0)
-			post_event_f("📞 Anruf von %s beendet.", [cname], "info")
-
-	active_call.clear()
-	_call_cooldown = 38.0
-	_rpc_play_sfx.rpc("phone_hangup")
-	_broadcast_call()
-	_broadcast_sim_tick()
-
-
-@rpc("any_peer", "call_local", "reliable")
-func _rpc_req_connect_cable(cable_type: String, from_id: String, to_id: String, from_slot: int, to_slot: int) -> void:
-	if not multiplayer.is_server():
-		return
-	var peer_id := _get_sender_id()
-	if _deny_build(peer_id, "cable"):
-		return
-	if cable_type != "power" and cable_type != "network" and cable_type != "cluster":
-		return
-	if from_id == to_id:
-		_rpc_play_sfx.rpc_id(peer_id, "error")
-		return
-	if not _is_valid_cable_endpoint(cable_type, from_id) or not _is_valid_cable_endpoint(cable_type, to_id):
-		_rpc_play_sfx.rpc_id(peer_id, "error")
-		return
-
-	for cid in cables.keys():
-		var c: Dictionary = cables[cid]
-		if str(c["cable_type"]) == cable_type:
-			var a := str(c["from_id"])
-			var b := str(c["to_id"])
-			if (a == from_id and b == to_id) or (a == to_id and b == from_id):
-				_rpc_play_sfx.rpc_id(peer_id, "error")
-				return
-
-	if cable_type == "power" and (from_id == WALL_BREAKER_ID or to_id == WALL_BREAKER_ID) \
-			and count_cables_on("power", WALL_BREAKER_ID) >= get_max_ports("power", WALL_BREAKER_ID):
-		post_event("Der Stromkasten hat nur eine Steckdose. Schließe dort eine Stromleiste an und verteile von ihr weiter.", "warn")
-		_rpc_play_sfx.rpc_id(peer_id, "error")
-		return
-
-	var rule := StripRules.plan(cable_type, from_id, from_slot, to_id, to_slot)
-	if not bool(rule["ok"]):
-		_rpc_cable_hint.rpc_id(peer_id, str(rule["msg"]))
-		_rpc_play_sfx.rpc_id(peer_id, "error")
-		return
-
-	if count_cables_on(cable_type, from_id) >= get_max_ports(cable_type, from_id):
-		post_event_f("Kein freier %s-Port an %s (Rack-Switch oder Upgrade nötig).", [
-			_cable_type_label(cable_type), from_id.to_upper()
-		], "warn")
-		_rpc_play_sfx.rpc_id(peer_id, "error")
-		return
-
-	if count_cables_on(cable_type, to_id) >= get_max_ports(cable_type, to_id):
-		post_event_f("Kein freier %s-Port an %s.", [
-			_cable_type_label(cable_type), to_id.to_upper()
-		], "warn")
-		_rpc_play_sfx.rpc_id(peer_id, "error")
-		return
-
-	var use_from_slot := int(rule["a_slot"]) if StripRules.role(cable_type, from_id) == "strip" else pick_free_slot(cable_type, from_id, from_slot)
-	var use_to_slot := int(rule["b_slot"]) if StripRules.role(cable_type, to_id) == "strip" else pick_free_slot(cable_type, to_id, to_slot)
-	var cab_id := _alloc_id("cable")
-	cables[cab_id] = {
-		"id": cab_id, "cable_type": cable_type, "from_id": from_id, "to_id": to_id,
-		"from_slot": use_from_slot, "to_slot": use_to_slot,
-	}
-	_recalculate_networks_and_metrics()
-	_broadcast_cables()
-	_broadcast_racks()
-	_broadcast_coolers()
-	_broadcast_ups()
-	_broadcast_sim_tick()
-	_rpc_play_sfx.rpc("cable")
-	var label := "%skabel" % _cable_type_label(cable_type)
-	post_event_f("%s verband %s: %s ↔ %s", [NetworkManager.get_player_name(peer_id), label, from_id.to_upper(), to_id.to_upper()], "info")
-
-
-## Hinweis nur für den Spieler, der falsch gesteckt hat.
-@rpc("authority", "call_local", "reliable")
-func _rpc_cable_hint(msg: String) -> void:
-	cable_hint.emit(tr(msg))
-
-
 ## Verleihende Racks behalten diesen Anteil ihrer Hardware als Reserve für die eigenen Mieter.
 const CLUSTER_LENDER_RESERVE := 0.85
 ## Ein leihendes Rack holt sich so viel, dass seine Auslastung unter diesem Wert bleibt.
 const CLUSTER_BORROW_TARGET := 0.85
 const CLUSTER_RESOURCES: Array[String] = ["ram_gb", "cpu_score", "gpu_score", "storage_tb"]
-
-
-## Racks, die über ein Cluster-Kabel direkt mit rack_id verbunden sind.
-func _cluster_neighbors(rack_id: String) -> Array[String]:
-	var out: Array[String] = []
-	for cid in cables.keys():
-		var c: Dictionary = cables[cid]
-		if str(c.get("cable_type", "")) != "cluster":
-			continue
-		var a := str(c.get("from_id", ""))
-		var b := str(c.get("to_id", ""))
-		if a == rack_id and racks.has(b):
-			out.append(b)
-		elif b == rack_id and racks.has(a):
-			out.append(a)
-	return out
-
-
-## Freie Hardware je Cluster-Rack aus der Auslastung des letzten Ticks.
-## Racks ohne Strom, ohne laufende Server, mit Brand oder überlasteter PSU verleihen nichts,
-## ebenso Racks, die selbst gerade leihen.
-func _compute_cluster_spare() -> Dictionary:
-	var spare: Dictionary = {}
-	for rid in racks.keys():
-		var rack_id := str(rid)
-		if count_cables_on("cluster", rack_id) == 0:
-			continue
-		var r: Dictionary = racks[rid]
-		if not bool(r.get("powered", false)) or _rack_has_fire(r):
-			continue
-		var hw := get_rack_hardware_summary(rack_id)
-		if int(hw["active_servers"]) <= 0 or bool(hw["psu_overloaded"]):
-			continue
-		var m: Dictionary = r["metrics"] if r.get("metrics") is Dictionary else {}
-		var lent_last: Variant = m.get("cluster_borrowed", {})
-		if lent_last is Dictionary and not (lent_last as Dictionary).is_empty():
-			continue
-		var has_tenants := not _get_rack_services(r).is_empty()
-		var used_frac := {
-			"ram_gb": float(m.get("ram_pct", 0.0)) / 100.0,
-			"cpu_score": float(m.get("cpu_pct", 0.0)) / 100.0,
-			"gpu_score": float(m.get("gpu_pct", 0.0)) / 100.0,
-			"storage_tb": float(m.get("storage_pct", 0.0)) / 100.0,
-		}
-		var free: Dictionary = {}
-		for key in CLUSTER_RESOURCES:
-			var total := float(hw[key])
-			var used := total * float(used_frac[key]) if has_tenants else 0.0
-			free[key] = maxf(0.0, total * CLUSTER_LENDER_RESERVE - used)
-		spare[rack_id] = free
-	return spare
-
-
-## Ergänzt hw um geliehene Kapazität der Nachbar-Racks und verbraucht sie in spare.
-## Gibt die geliehenen Mengen je Ressource zurück (leer, wenn nichts geliehen wurde).
-func _borrow_cluster_capacity(rack_id: String, hw: Dictionary, users: int, prof: Dictionary, spare: Dictionary) -> Dictionary:
-	var borrowed: Dictionary = {}
-	var neighbors := _cluster_neighbors(rack_id)
-	if neighbors.is_empty():
-		return borrowed
-	var needs := {
-		"ram_gb": float(users) * float(prof["ram_gb_per_user"]),
-		"cpu_score": float(users) * float(prof["cpu_per_user"]),
-		"gpu_score": float(users) * float(prof["gpu_per_user"]),
-		"storage_tb": float(users) * float(prof["storage_tb_per_user"]),
-	}
-	for key in CLUSTER_RESOURCES:
-		var want := float(needs[key]) / CLUSTER_BORROW_TARGET - float(hw[key])
-		if want <= 0.0:
-			continue
-		var got := 0.0
-		for nid in neighbors:
-			if not spare.has(nid):
-				continue
-			var ns: Dictionary = spare[nid]
-			var take := minf(want - got, float(ns.get(key, 0.0)))
-			if take <= 0.0:
-				continue
-			ns[key] = float(ns[key]) - take
-			got += take
-			if got >= want:
-				break
-		if got > 0.0:
-			hw[key] = float(hw[key]) + got
-			borrowed[key] = got
-	return borrowed
-
-
-func _cable_type_label(cable_type: String) -> String:
-	match cable_type:
-		"power":
-			return "Strom"
-		"cluster":
-			return "Cluster"
-		_:
-			return "Netzwerk"
-
-
-func _is_valid_cable_endpoint(cable_type: String, endpoint_id: String) -> bool:
-	# Cluster-Kabel verbinden nur Racks untereinander.
-	if cable_type == "cluster":
-		return racks.has(endpoint_id)
-	if cable_type == "power":
-		if endpoint_id == WALL_BREAKER_ID:
-			return true
-		if endpoint_id == HALL_C_BREAKER_ID and room_level >= 2:
-			return true
-		if endpoint_id == HALL_NORD_BREAKER_ID and halle_nord_owned:
-			return true
-		# Das Goldis Innengerät hat keine Strombuchse.
-		return racks.has(endpoint_id) or (coolers.has(endpoint_id) and not is_indoor_unit(endpoint_id)) or ups_units.has(endpoint_id) or is_power_strip_decor(endpoint_id)
-	else:
-		if endpoint_id == WALL_ROUTER_ID:
-			return true
-		if endpoint_id == HALL_C_ROUTER_ID and room_level >= 2:
-			return true
-		if endpoint_id == HALL_NORD_ROUTER_ID and halle_nord_owned:
-			return true
-		return racks.has(endpoint_id) or is_lan_strip_decor(endpoint_id)
-
-
-@rpc("any_peer", "call_local", "reliable")
-func _rpc_req_disconnect_cable_slot(cable_type: String, endpoint_id: String, slot_idx: int) -> void:
-	if not multiplayer.is_server():
-		return
-	if _deny_build(_get_sender_id(), "cable"):
-		return
-	var target_cid := ""
-	if slot_idx >= 0:
-		var smap := get_cable_slot_map(cable_type, endpoint_id)
-		for cid in smap.keys():
-			if int(smap[cid]) == slot_idx and cables.has(cid):
-				target_cid = str(cid)
-				break
-	if target_cid == "":
-		_rpc_req_disconnect_cables_on(cable_type, endpoint_id)
-		return
-	cables.erase(target_cid)
-	_recalculate_networks_and_metrics()
-	_broadcast_cables()
-	_broadcast_racks()
-	_broadcast_coolers()
-	_broadcast_ups()
-	_broadcast_sim_tick()
-	_rpc_play_sfx.rpc("cable_cut")
-
-
-@rpc("any_peer", "call_local", "reliable")
-func _rpc_req_disconnect_cables_on(cable_type: String, endpoint_id: String) -> void:
-	if not multiplayer.is_server():
-		return
-	if _deny_build(_get_sender_id(), "cable"):
-		return
-	var to_remove: Array = []
-	for cid in cables.keys():
-		var c: Dictionary = cables[cid]
-		if str(c["cable_type"]) == cable_type:
-			if str(c["from_id"]) == endpoint_id or str(c["to_id"]) == endpoint_id:
-				to_remove.append(cid)
-	if to_remove.is_empty():
-		return
-	cables.erase(to_remove[to_remove.size() - 1])
-	_recalculate_networks_and_metrics()
-	_broadcast_cables()
-	_broadcast_racks()
-	_broadcast_coolers()
-	_broadcast_ups()
-	_broadcast_sim_tick()
-	_rpc_play_sfx.rpc("cable_cut")
-
-
-## Zufällige Netzausfälle der Stadtwerke (nur Host). Der Hauptschalter fällt ab, die USV überbrückt,
-## und nach Ablauf kommt das Netz von selbst zurück.
-func _tick_grid_outage(dt: float) -> void:
-	if grid_outage_left > 0.0:
-		grid_outage_left = maxf(0.0, grid_outage_left - dt)
-		if grid_outage_left <= 0.0:
-			_end_grid_outage()
-		return
-	if day_number < GRID_OUTAGE_FIRST_DAY:
-		return
-	if _grid_outage_cooldown < 0.0:
-		_grid_outage_cooldown = _roll_grid_outage_cooldown()
-	_grid_outage_cooldown -= dt
-	if _grid_outage_cooldown <= 0.0:
-		_grid_outage_cooldown = _roll_grid_outage_cooldown()
-		_start_grid_outage(randf_range(GRID_OUTAGE_MIN_SEC, GRID_OUTAGE_MAX_SEC))
-
-
-## Sekunden bis zum nächsten geplanten Netzausfall (0 = unbekannt). Nur auf dem Host gültig.
-func get_next_outage_in() -> float:
-	if day_number < GRID_OUTAGE_FIRST_DAY or grid_outage_left > 0.0:
-		return 0.0
-	return maxf(0.0, _grid_outage_cooldown)
-
-
-func _roll_grid_outage_cooldown() -> float:
-	return randf_range(0.8, 2.2) * float(DAY_LENGTH_SECONDS)
-
-
-## Restdauer des Netzausfalls in Spielminuten (für HUD und Hinweise).
-func get_grid_outage_minutes() -> int:
-	if grid_outage_left <= 0.0:
-		return 0
-	return maxi(1, roundi(grid_outage_left / float(DAY_LENGTH_SECONDS) * 1440.0))
-
-
-func _broadcast_power_change() -> void:
-	_recalculate_networks_and_metrics()
-	_broadcast_racks()
-	_broadcast_coolers()
-	_broadcast_ups()
-	_broadcast_sim_tick()
-
-
-func _start_grid_outage(duration: float) -> void:
-	# 2-MVA Notstrom-Dieselgenerator übernimmt bei Netzausfall komplett unterbrechungsfrei!
-	if has_building_upgrade("upg_diesel_gen"):
-		post_event("⚡ Stadtwerke-Netzausfall erkannt — 2-MVA Notstrom-Dieselgenerator hat automatisch übernommen (0 s Ausfallzeit)!", "good")
-		_rpc_play_sfx.rpc("save")
-		return
-	_grid_breaker_restore = breaker_on
-	grid_outage_left = duration
-	breaker_on = false
-	overload_timer = 0.0
-	_broadcast_power_change()
-	_rpc_play_sfx.rpc("power_down")
-	var minutes := get_grid_outage_minutes()
-	if ups_backup_active:
-		_rpc_play_sfx.rpc("ups_beep")
-		post_event_f("NETZAUSFALL! Die Stadtwerke melden eine Störung (ca. %d Min.). USV-Notstrom hat übernommen.", [minutes], "warn")
-	else:
-		post_event_f("NETZAUSFALL! Die Stadtwerke melden eine Störung (ca. %d Min.). Ohne USV steht alles still.", [minutes], "alert")
-
-
-func _end_grid_outage() -> void:
-	grid_outage_left = 0.0
-	var restore := _grid_breaker_restore and has_working_fuse()
-	_grid_breaker_restore = false
-	if restore:
-		breaker_on = true
-		overload_timer = 0.0
-	_broadcast_power_change()
-	if restore:
-		_rpc_play_sfx.rpc("breaker_on")
-		post_event("Netz wieder da: Die Stadtwerke haben die Störung behoben, der Strom läuft wieder.", "good")
-	else:
-		post_event("Netz wieder da. Der Hauptschalter ist aus und muss von Hand eingeschaltet werden.", "info")
-
-
-@rpc("any_peer", "call_local", "reliable")
-func _rpc_req_toggle_breaker() -> void:
-	if not multiplayer.is_server():
-		return
-	var peer_id := _get_sender_id()
-	if not breaker_on and grid_outage_left > 0.0:
-		# Wunsch merken: Nach dem Netzausfall schaltet der Hauptschalter wieder ein.
-		_grid_breaker_restore = true
-		_rpc_play_sfx.rpc_id(peer_id, "error")
-		post_event("Hauptschalter bleibt aus: Netzausfall der Stadtwerke. Der Strom kommt automatisch zurück.", "warn")
-		return
-	if not breaker_on and not has_working_fuse():
-		_rpc_play_sfx.rpc_id(peer_id, "error")
-		post_event("Hauptschalter lässt sich nicht einschalten: Im Sicherungskasten steckt keine intakte Sicherung.", "warn")
-		return
-	breaker_on = not breaker_on
-	overload_timer = 0.0
-	_recalculate_networks_and_metrics()
-	_broadcast_racks()
-	_broadcast_coolers()
-	_broadcast_ups()
-	_broadcast_sim_tick()
-	_rpc_play_sfx.rpc("breaker_on" if breaker_on else "breaker_trip")
-	post_event_f("%s hat die Hauptsicherung EINGESCHALTET." if breaker_on else "%s hat die Hauptsicherung ABGESCHALTET.", [
-		NetworkManager.get_player_name(peer_id),
-	], "good" if breaker_on else "warn")
 
 
 @rpc("any_peer", "call_local", "reliable")
@@ -7950,137 +4179,6 @@ func _rpc_req_spray_extinguisher(rack_id: String, slot_idx: int) -> void:
 
 
 @rpc("any_peer", "call_local", "reliable")
-func _rpc_req_repair_slot(rack_id: String, slot_idx: int, amount: float) -> void:
-	if not multiplayer.is_server():
-		return
-	if not SecurityGuard.is_finite_float(amount):
-		return
-	var peer_id := _get_sender_id()
-	if not SecurityGuard.check_rate_limit(peer_id, "repair", 25, 2.0):
-		return
-	if not racks.has(rack_id):
-		return
-	var slots: Array = racks[rack_id]["slots"]
-	if slot_idx < 0 or slot_idx >= slots.size():
-		return
-	var slot: Dictionary = slots[slot_idx]
-	if str(slot["state"]) != "crashed":
-		return
-	# Erst das defekte Teil finden, dann reparieren.
-	if is_slot_awaiting_diagnosis(slot):
-		return
-	var speed_mult := get_repair_speed_multiplier()
-	var used_kit := false
-	if maint_kits > 0 and float(slot["repair_progress"]) <= 0.001:
-		maint_kits -= 1
-		used_kit = true
-	if used_kit or bool(slot.get("_using_kit", false)):
-		slot["_using_kit"] = true
-		speed_mult *= 2.2
-	slot["repair_progress"] = minf(1.0, float(slot["repair_progress"]) + clampf(amount * speed_mult, 0.0, 1.0))
-	if float(slot["repair_progress"]) >= 1.0:
-		var full_ok := bool(slot.get("_using_kit", false))
-		slot["state"] = "ok"
-		slot["offline"] = true # nach der Reparatur neu hochfahren
-		slot["repair_progress"] = 0.0
-		slot["faulty_part"] = ""
-		slot["diagnosed"] = false
-		slot.erase("_using_kit")
-		slot["dust_level"] = 0.0 if full_ok else 35.0
-		slot["thermal_health"] = 100.0 if full_ok else 72.0
-		# Schnell geflickt ist nicht ordentlich repariert: volle Qualität gibt es nur an der Werkbank.
-		slot["build_quality"] = mini(get_build_quality(slot), RACK_REPAIR_QUALITY_KIT if full_ok else RACK_REPAIR_QUALITY)
-		_recalculate_networks_and_metrics()
-		_broadcast_sim_tick()
-		var diag_str := tr("notdürftig mit Ersatzteil-Kit (Bauqualität höchstens 70 %)") if full_ok else tr("notdürftig (Bauqualität höchstens 50 %)")
-		post_event_f("%s hat %s Slot %d %s repariert!", [
-			NetworkManager.get_player_name(peer_id), get_rack_display_name(rack_id), slot_idx + 1, diag_str
-		], "good")
-		_rpc_play_sfx.rpc("repair")
-	_broadcast_racks()
-
-
-@rpc("any_peer", "call_local", "reliable")
-func _rpc_req_toggle_contract(contract_id: String) -> void:
-	if not multiplayer.is_server():
-		return
-	if _deny_build(_get_sender_id(), "business"):
-		return
-	do_toggle_contract(contract_id, _get_sender_id())
-
-
-func do_toggle_contract(contract_id: String, peer_id: int) -> void:
-	if not contracts.has(contract_id):
-		return
-	var c: Dictionary = contracts[contract_id]
-	var now_active := not bool(c["active"])
-	if now_active and (get_active_contract_count() >= get_max_contracts_limit() or MarketManager.is_contract_taken(c)):
-		_rpc_play_sfx.rpc_id(peer_id, "error")
-		return
-	if now_active and str(c.get("bid_rival", "")) != "":
-		# Gegengebot: Der Kunde bleibt, zahlt aber etwas weniger.
-		c["payout_orig"] = int(c["payout_per_cycle"])
-		c["payout_per_cycle"] = MarketManager.contract_payout(c)
-	elif not now_active and c.has("payout_orig"):
-		c["payout_per_cycle"] = int(c["payout_orig"])
-		c.erase("payout_orig")
-	MarketManager.clear_bid(c)
-	c["active"] = now_active
-	c["status"] = "ok" if now_active else "idle"
-	if bool(c.get("random", false)):
-		if now_active:
-			c["days_left"] = int(c.get("duration_days", RANDOM_CONTRACT_DURATION_MIN))
-		else:
-			# Ein gekündigter befristeter Vertrag ist weg und kann nicht neu angenommen werden.
-			contracts.erase(contract_id)
-	_recalculate_networks_and_metrics()
-	_broadcast_sim_tick()
-	_rpc_play_sfx.rpc("click")
-	post_event_f("%s hat Vertrag '%s' angenommen." if now_active else "%s hat Vertrag '%s' gekündigt.", [
-		NetworkManager.get_player_name(peer_id), str(c["title"]),
-	], "good" if now_active else "info")
-
-
-@rpc("any_peer", "call_local", "reliable")
-func _rpc_req_upgrade_power() -> void:
-	if not multiplayer.is_server():
-		return
-	var peer_id := _get_sender_id()
-	if _deny_build(peer_id, "expand"):
-		return
-	if power_fuse_stock > 0:
-		_rpc_play_sfx.rpc_id(peer_id, "error")
-		post_event("Die Drehsicherung liegt schon im Lager. Setze sie am Sicherungskasten in F2 ein.", "warn")
-		return
-	if _power_fuse_on_way():
-		_rpc_play_sfx.rpc_id(peer_id, "error")
-		post_event("Die Drehsicherung ist schon bestellt und kommt mit dem Lieferwagen.", "warn")
-		return
-	if power_tier + 1 >= POWER_TIERS.size():
-		return
-	var next_tier: Dictionary = POWER_TIERS[power_tier + 1]
-	var cost := float(next_tier["cost"])
-	if money < cost:
-		_rpc_play_sfx.rpc_id(peer_id, "error")
-		return
-	money -= cost
-	# Wie beim Warenkorb: Zubehör kommt ins Sammelpaket des Lieferwagens.
-	if van_phase != "arriving":
-		pending_delivery_items.append(POWER_FUSE_ACC)
-	else:
-		_van_parcel_parts.append(POWER_FUSE_ACC)
-		if not van_cargo.has(VAN_PARCEL_ITEM):
-			van_cargo.push_front(VAN_PARCEL_ITEM)
-	_broadcast_van_state()
-	_broadcast_fuses()
-	_broadcast_sim_tick()
-	_rpc_play_sfx.rpc("cash")
-	post_event_f("%s hat eine Drehsicherung für %s bestellt. Sie kommt mit dem Lieferwagen im Sammelpaket.", [
-		NetworkManager.get_player_name(peer_id), str(next_tier["label"])
-	], "good")
-
-
-@rpc("any_peer", "call_local", "reliable")
 func _rpc_req_research(branch: String) -> void:
 	if not multiplayer.is_server():
 		return
@@ -8104,30 +4202,6 @@ func _rpc_req_research(branch: String) -> void:
 	var node: Dictionary = RESEARCH_TREE[branch]
 	post_event_f("%s erforschte %s Stufe %d!", [
 		NetworkManager.get_player_name(peer_id), str(node["label"]), new_level
-	], "good")
-
-
-@rpc("any_peer", "call_local", "reliable")
-func _rpc_req_upgrade_router() -> void:
-	if not multiplayer.is_server():
-		return
-	var peer_id := _get_sender_id()
-	if _deny_build(peer_id, "expand"):
-		return
-	if router_tier + 1 >= ROUTER_TIERS.size():
-		return
-	var next_r: Dictionary = ROUTER_TIERS[router_tier + 1]
-	var cost := float(next_r["cost"])
-	if money < cost:
-		_rpc_play_sfx.rpc_id(peer_id, "error")
-		return
-	money -= cost
-	router_tier += 1
-	_recalculate_networks_and_metrics()
-	_broadcast_sim_tick()
-	_rpc_play_sfx.rpc("upgrade")
-	post_event_f("%s installierte neuen Router: %s!", [
-		NetworkManager.get_player_name(peer_id), str(next_r["label"])
 	], "good")
 
 
@@ -8474,56 +4548,6 @@ func _rpc_sync_inventory(data: Dictionary) -> void:
 	inventory_changed.emit()
 
 
-# ==============================================================================
-# SICHERUNGSKASTEN: Sicherungen kaufen, einsetzen, bei Überlast durchbrennen lassen
-# ==============================================================================
-func _make_fuse_slots(state: String) -> Array:
-	var arr: Array = []
-	for _i in range(FUSE_SLOT_COUNT):
-		arr.append(state)
-	return arr
-
-
-func _sanitize_fuses(data: Variant) -> Array:
-	if not (data is Array):
-		return _make_fuse_slots("ok")
-	var src: Array = data
-	var arr: Array = []
-	for i in range(FUSE_SLOT_COUNT):
-		var s := str(src[i]) if i < src.size() else "empty"
-		arr.append(s if s == "ok" or s == "blown" else "empty")
-	return arr
-
-
-func count_working_fuses() -> int:
-	var n := 0
-	for f in breaker_fuses:
-		if str(f) == "ok":
-			n += 1
-	return n
-
-
-## Der Hauptschalter lässt sich nur einschalten, solange mindestens eine intakte Sicherung steckt.
-func has_working_fuse() -> bool:
-	return count_working_fuses() > 0
-
-
-## Die Kastentür muss offen sein, bevor Sicherungen und der Hauptschalter bedient werden können.
-func is_breaker_door_open() -> bool:
-	return shared_open_panels.has(_panel_key(WALL_BREAKER_ID, "breaker:door"))
-
-
-func _blow_random_fuse() -> void:
-	var ok_idx: Array[int] = []
-	for i in range(breaker_fuses.size()):
-		if str(breaker_fuses[i]) == "ok":
-			ok_idx.append(i)
-	if ok_idx.is_empty():
-		return
-	breaker_fuses[ok_idx[randi() % ok_idx.size()]] = "blown"
-	_broadcast_fuses()
-
-
 func _broadcast_fuses() -> void:
 	_rpc_sync_fuses.rpc(breaker_fuses, fuse_stock, power_fuse_stock, _power_fuse_on_way())
 
@@ -8536,115 +4560,6 @@ func _rpc_sync_fuses(fuses: Array, stock: int, power_stock: int, power_on_way: b
 		power_fuse_stock = clampi(power_stock, 0, 1)
 		power_fuse_on_way_synced = power_on_way
 	fuses_changed.emit()
-
-
-## Server: sucht die Drehsicherung in allen Lieferwarteschlangen.
-func _power_fuse_on_way() -> bool:
-	return pending_delivery_items.has(POWER_FUSE_ACC) \
-		or van_cargo.has(POWER_FUSE_ACC) \
-		or _van_parcel_parts.has(POWER_FUSE_ACC)
-
-
-## Für die UI: Ist die Drehsicherung bestellt, aber noch nicht geliefert?
-func is_power_fuse_on_way() -> bool:
-	if multiplayer.is_server():
-		return _power_fuse_on_way()
-	return power_fuse_on_way_synced
-
-
-@rpc("any_peer", "call_local", "reliable")
-func _rpc_req_buy_fuse() -> void:
-	if not multiplayer.is_server():
-		return
-	var peer_id := _get_sender_id()
-	if money < float(FUSE_PRICE):
-		_rpc_play_sfx.rpc_id(peer_id, "error")
-		return
-	money -= float(FUSE_PRICE)
-	fuse_stock += 1
-	_broadcast_fuses()
-	_broadcast_sim_tick()
-	_rpc_play_sfx.rpc("cash")
-
-
-## Preis eines Zubehörteils aus dem Warenkorb (0 = unbekannte ID).
-func _accessory_price(aid: String) -> int:
-	match aid:
-		"fuse":
-			return FUSE_PRICE
-		"screw_box":
-			return SCREW_BOX_PRICE
-		"paste_tube":
-			return PASTE_TUBE_PRICE
-	if aid.begins_with("tool_") and BENCH_TOOLS.has(aid.substr(5)):
-		return int(BENCH_TOOLS[aid.substr(5)]["price"])
-	return 0
-
-
-## Wie viele Stück noch bestellt werden dürfen. Lieferungen, die unterwegs sind, zählen mit.
-func _accessory_order_room(aid: String) -> int:
-	var key := "acc:" + aid
-	var on_way := pending_delivery_items.count(key) + van_cargo.count(key) + _van_parcel_parts.count(key)
-	match aid:
-		"screw_box":
-			return maxi(0, (BENCH_SCREWS_MAX - bench_screws) / SCREW_BOX_COUNT - on_way)
-		"paste_tube":
-			return maxi(0, int((BENCH_PASTE_MAX - bench_paste) / PASTE_TUBE_USES) - on_way)
-	if aid.begins_with("tool_"):
-		var tid := aid.substr(5)
-		var need := str((BENCH_TOOLS.get(tid, {}) as Dictionary).get("needs", ""))
-		var need_ok := need == "" or has_bench_tool(need) or pending_delivery_items.has("acc:tool_" + need) or van_cargo.has("acc:tool_" + need) or _van_parcel_parts.has("acc:tool_" + need)
-		return 0 if (has_bench_tool(tid) or on_way > 0 or not need_ok) else 1
-	return 20
-
-
-@rpc("any_peer", "call_local", "reliable")
-func _rpc_req_insert_fuse(slot_idx: int) -> void:
-	if not multiplayer.is_server():
-		return
-	var peer_id := _get_sender_id()
-	if slot_idx < 0 or slot_idx >= breaker_fuses.size():
-		return
-	if slot_idx == POWER_FUSE_SLOT and power_fuse_stock > 0:
-		_install_power_fuse(peer_id)
-		return
-	if str(breaker_fuses[slot_idx]) == "ok":
-		return
-	if fuse_stock <= 0:
-		_rpc_play_sfx.rpc_id(peer_id, "error")
-		post_event("Keine Sicherung im Lager. Kaufe Sicherungen am PC im Shop unter \"Klima & USV\".", "warn")
-		return
-	fuse_stock -= 1
-	breaker_fuses[slot_idx] = "ok"
-	_broadcast_fuses()
-	_rpc_play_sfx.rpc("pickup")
-	post_event_f("%s hat eine Sicherung in Steckplatz %d eingesetzt.", [
-		NetworkManager.get_player_name(peer_id), slot_idx + 1,
-	], "good")
-
-
-## Setzt die gekaufte Drehsicherung in F2 ein: Stromstufe +1, die alte Sicherung landet in der Hand.
-func _install_power_fuse(peer_id: int) -> void:
-	if power_tier + 1 >= POWER_TIERS.size():
-		power_fuse_stock = 0
-		_broadcast_fuses()
-		return
-	if is_player_holding_anything(peer_id):
-		_rpc_play_sfx.rpc_id(peer_id, "error")
-		post_event("Hände frei machen: Die alte Sicherung wird dir beim Einsetzen in die Hand gegeben.", "warn")
-		return
-	power_fuse_stock = 0
-	power_tier += 1
-	var cid := _alloc_id("crate")
-	crates[cid] = {"id": cid, "item_type": OLD_FUSE_ITEM, "pos": Vector3.ZERO, "held_by": peer_id, "held_slot": get_active_slot(peer_id)}
-	_recalculate_networks_and_metrics()
-	_broadcast_fuses()
-	_broadcast_crates()
-	_broadcast_sim_tick()
-	_rpc_play_sfx.rpc("upgrade")
-	post_event_f("%s hat die Drehsicherung in F2 eingesetzt: Stromversorgung jetzt %s!", [
-		NetworkManager.get_player_name(peer_id), str(POWER_TIERS[power_tier]["label"])
-	], "good")
 
 
 func _broadcast_tickets() -> void:
@@ -8935,21 +4850,6 @@ func get_crate_display_label(crate: Dictionary) -> String:
 	return itype + suffix
 
 
-func calculate_slot_build_price(mainboard_id: String, comps: Dictionary) -> int:
-	if not ITEM_CATALOG.has(mainboard_id):
-		return 0
-	var total := int(ITEM_CATALOG[mainboard_id].get("price", 0))
-	for cat_v in COMPONENT_ORDER:
-		var cat := str(cat_v)
-		var pid := str(comps.get(cat, ""))
-		if pid.is_empty():
-			continue
-		var pd := HardwareCatalog.get_part(cat, pid)
-		if not pd.is_empty():
-			total += maxi(0, int(pd.get("cost", 0)))
-	return total
-
-
 func _ensure_starter_shelf_kits() -> void:
 	if start_shelf_done:
 		return
@@ -8981,147 +4881,10 @@ func _make_start_shelf() -> Dictionary:
 	return decor_items[START_SHELF_ID]
 
 
-## Spielstände vor v2.9: festes Regal und 4er-Regale auf das neue System umstellen.
-func _migrate_shelves() -> void:
-	for did in decor_items.keys():
-		var d: Dictionary = decor_items[did]
-		if str(d.get("item_type", "")) != "prop_storage_shelf":
-			continue
-		var old: Array = _decor_list(did, "stored_items")
-		if old.size() != 4:
-			continue
-		d["stored_items"] = []
-		var arr := ShelfSpec.units(d)
-		for i in 4:
-			if old[i] is Dictionary:
-				arr[i * 5 + 1] = old[i]
-	if start_shelf_done:
-		return
-	start_shelf_done = true
-	var left: Array = []
-	var d0 := _make_start_shelf()
-	for k in storage_shelf_slots.keys():
-		if not str(k).begins_with("shelf_0:"):
-			continue
-		var item: Dictionary = (storage_shelf_slots[k] as Dictionary).duplicate(true)
-		item["held_by"] = 0
-		item["pos"] = Vector3.ZERO
-		var at := ShelfSpec.first_fit(d0, item)
-		if at >= 0:
-			ShelfSpec.units(d0)[at] = item
-		else:
-			left.append(item)
-		storage_shelf_slots.erase(k)
-	# Was nicht ins Regal passt (große Geräte), steht davor.
-	for i in left.size():
-		var c: Dictionary = left[i]
-		var cid := _alloc_id("crate")
-		c["id"] = cid
-		c["pos"] = Vector3(-3.6 + float(i / 3) * 0.75, 0.0, -2.9 + float(i % 3) * 0.75)
-		crates[cid] = c
-
-
 ## --- Gemeinsamer Warenkorb (Rack-Konfigurator + PC-Shop) ---
-
-func cart_add_entry(kind: String, id: String, cat: String, display_name: String, price: int, amount: int = 1) -> void:
-	var add_n := maxi(1, amount)
-	var key := "%s:%s" % [kind, id]
-	for item in shopping_cart:
-		if str(item.get("key", "")) == key:
-			item["qty"] = mini(int(item.get("qty", 1)) + add_n, 24)
-			cart_changed.emit()
-			return
-	shopping_cart.append({
-		"key": key,
-		"kind": kind,
-		"id": id,
-		"cat": cat,
-		"name": display_name,
-		"price": price,
-		"qty": mini(add_n, 24),
-	})
-	cart_changed.emit()
-
-
-func cart_add_slot_build(rack_id: String, slot_idx: int, mainboard_id: String, comps: Dictionary) -> bool:
-	if not ITEM_CATALOG.has(mainboard_id):
-		return false
-	var rlabel := get_rack_display_name(rack_id)
-	var key := "slot_build:%s:%d" % [rack_id, slot_idx]
-	var price := calculate_slot_build_price(mainboard_id, comps)
-	var mb_name := str(ITEM_CATALOG[mainboard_id]["name"])
-	var entry := {
-		"key": key,
-		"kind": "slot_build",
-		"id": mainboard_id,
-		"cat": "slot_build",
-		"rack_id": rack_id,
-		"slot_idx": slot_idx,
-		"rack_label": rlabel,
-		"mainboard_id": mainboard_id,
-		"components": comps.duplicate(true),
-		"name": "%s · Slot %d (%s)" % [rlabel, slot_idx + 1, mb_name],
-		"price": price,
-		"qty": 1,
-	}
-	for i in range(shopping_cart.size()):
-		if str(shopping_cart[i].get("key", "")) == key:
-			shopping_cart[i] = entry
-			cart_changed.emit()
-			return true
-	shopping_cart.append(entry)
-	cart_changed.emit()
-	return true
-
-
-func cart_remove_entry(key: String) -> void:
-	for i in range(shopping_cart.size() - 1, -1, -1):
-		if str(shopping_cart[i].get("key", "")) == key:
-			shopping_cart.remove_at(i)
-			cart_changed.emit()
-			return
-
-
-func cart_change_qty(key: String, delta: int) -> void:
-	for i in range(shopping_cart.size() - 1, -1, -1):
-		if str(shopping_cart[i].get("key", "")) == key:
-			if str(shopping_cart[i].get("kind", "")) == "slot_build":
-				if delta < 0:
-					shopping_cart.remove_at(i)
-					cart_changed.emit()
-				return
-			var nq := int(shopping_cart[i].get("qty", 1)) + delta
-			if nq <= 0:
-				shopping_cart.remove_at(i)
-			else:
-				shopping_cart[i]["qty"] = mini(nq, 24)
-			cart_changed.emit()
-			return
-
-
-func cart_clear() -> void:
-	shopping_cart.clear()
-	cart_changed.emit()
-
-
-func get_cart_count() -> int:
-	var n := 0
-	for item in shopping_cart:
-		n += int(item.get("qty", 1))
-	return n
-
-
-func get_cart_total() -> int:
-	var t := 0
-	for item in shopping_cart:
-		t += int(item.get("price", 0)) * int(item.get("qty", 1))
-	return t
 
 
 ## --- Ausfahrbare Rack-Schächte (Teleskopschienen) ---
-
-func is_slot_extended(rack_id: String, slot_idx: int) -> bool:
-	return is_shared_panel_open(rack_id, "slot_%d" % slot_idx)
 
 
 func request_toggle_slot_extended(rack_id: String, slot_idx: int) -> void:
@@ -9136,113 +4899,6 @@ func request_pull_server_tray(rack_id: String, slot_idx: int) -> void:
 
 func request_insert_server_tray(rack_id: String, slot_idx: int) -> void:
 	_rpc_req_insert_server_tray.rpc_id(1, rack_id, slot_idx)
-
-
-@rpc("any_peer", "call_local", "reliable")
-func _rpc_req_pull_server_tray(rack_id: String, slot_idx: int) -> void:
-	if not multiplayer.is_server():
-		return
-	var peer_id := _get_sender_id()
-	if is_player_holding_anything(peer_id) or not racks.has(rack_id):
-		_rpc_play_sfx.rpc_id(peer_id, "error")
-		if is_player_holding_anything(peer_id):
-			post_event("Hände voll! Erst Item mit [Q] ablegen oder freien Slot (1–4) wählen.", "warn")
-		return
-	var slots: Array = racks[rack_id]["slots"]
-	if slot_idx < 0 or slot_idx >= slots.size():
-		return
-	var slot: Dictionary = slots[slot_idx]
-	var itype := str(slot.get("item_type", ""))
-	if itype == "" or str(slot.get("state", "")) == "burning":
-		_rpc_play_sfx.rpc_id(peer_id, "error")
-		return
-	var rlabel := get_rack_display_name(rack_id)
-	_tray_from_slot(rack_id, slot_idx, slot, peer_id)
-	slots[slot_idx] = _make_empty_slot()
-	_recalculate_networks_and_metrics()
-	_broadcast_racks()
-	_broadcast_crates()
-	_broadcast_sim_tick()
-	_rpc_play_sfx.rpc_id(peer_id, "pickup")
-	post_event_f("🔧 %s hat den Server-Schlitten aus %s · Slot %d herausgezogen.", [
-		NetworkManager.get_player_name(peer_id), rlabel, slot_idx + 1
-	], "info")
-
-
-## Server aus dem Einschub als Schlitten in die Hand nehmen; liefert die Kisten-ID.
-func _tray_from_slot(rack_id: String, slot_idx: int, slot: Dictionary, peer_id: int) -> String:
-	var rlabel := get_rack_display_name(rack_id)
-	var itype := str(slot.get("item_type", ""))
-	var st := str(slot.get("state", "ok"))
-	var cid := _alloc_id("crate")
-	crates[cid] = {
-		"id": cid,
-		"item_type": "server_tray",
-		"pos": Vector3.ZERO,
-		"held_by": peer_id,
-		"held_slot": get_active_slot(peer_id),
-		"label": "%s · Slot %d (%s)" % [rlabel, slot_idx + 1, "DEFEKT" if st == "crashed" else "OK"],
-		"tray_data": {
-			"mainboard_id": itype,
-			"components": (slot.get("components", {}) as Dictionary).duplicate(true),
-			"state": st,
-			"faulty_part": str(slot.get("faulty_part", "")),
-			"diagnosed": bool(slot.get("diagnosed", false)),
-			"fault_hidden": bool(slot.get("fault_hidden", false)),
-			"build_quality": get_build_quality(slot),
-			"source_rack_id": rack_id,
-			"source_slot_idx": slot_idx,
-		},
-	}
-	return cid
-
-
-@rpc("any_peer", "call_local", "reliable")
-func _rpc_req_insert_server_tray(rack_id: String, slot_idx: int) -> void:
-	if not multiplayer.is_server():
-		return
-	var peer_id := _get_sender_id()
-	var held := get_player_held_crate(peer_id)
-	if held.is_empty() or str(held.get("item_type", "")) != "server_tray":
-		_rpc_play_sfx.rpc_id(peer_id, "error")
-		return
-	if not racks.has(rack_id):
-		return
-	var slots: Array = racks[rack_id]["slots"]
-	if slot_idx < 0 or slot_idx >= slots.size():
-		return
-	if str(slots[slot_idx].get("item_type", "")) != "":
-		_rpc_play_sfx.rpc_id(peer_id, "error")
-		return
-	slots[slot_idx] = _slot_from_tray(held.get("tray_data", {}) as Dictionary)
-	crates.erase(str(held["id"]))
-	_recalculate_networks_and_metrics()
-	_broadcast_crates()
-	_broadcast_racks()
-	_broadcast_sim_tick()
-	_rpc_play_sfx.rpc("snap")
-	post_event_f("✅ %s hat den Server in %s · Slot %d eingesetzt!", [
-		NetworkManager.get_player_name(peer_id), get_rack_display_name(rack_id), slot_idx + 1
-	], "good")
-
-
-func _slot_from_tray(td: Dictionary) -> Dictionary:
-	var mb_id := str(td.get("mainboard_id", "web_server"))
-	if not ITEM_CATALOG.has(mb_id):
-		mb_id = "web_server"
-	var st := str(td.get("state", "ok"))
-	return {
-		"item_type": mb_id,
-		"state": st,
-		"faulty_part": str(td.get("faulty_part", "")) if st == "crashed" else "",
-		"diagnosed": bool(td.get("diagnosed", false)) if st == "crashed" else false,
-		"fault_hidden": bool(td.get("fault_hidden", false)) if st == "crashed" else false,
-		"build_quality": get_build_quality(td),
-		"repair_progress": 0.0,
-		"fire_level": 0.0,
-		"offline": true, # fährt nach dem Einschieben erst hoch
-		"components": (td.get("components", _default_components(mb_id)) as Dictionary).duplicate(true),
-	}
 
 
 ## --- Funktionales 3D-Lagerregal ---
@@ -10347,61 +6003,7 @@ func _recompute_layout_bonuses() -> void:
 		cable_mgmt_bonus = clampf((float(tidy) / float(maxi(1, total_c))) * 0.12, 0.0, 0.12)
 
 
-func _approx_endpoint_pos(eid: String) -> Vector3:
-	if racks.has(eid):
-		return racks[eid].get("pos", Vector3.ZERO) as Vector3
-	if coolers.has(eid):
-		return coolers[eid].get("pos", Vector3.ZERO) as Vector3
-	if ups_units.has(eid):
-		return ups_units[eid].get("pos", Vector3.ZERO) as Vector3
-	if eid == WALL_BREAKER_ID:
-		return Vector3(-4.5, 1.5, -4.3)
-	if eid == WALL_ROUTER_ID:
-		return Vector3(0.4, 1.8, -4.3)
-	if eid == HALL_C_BREAKER_ID:
-		return Vector3(21.0, 1.5, -4.3)
-	if eid == HALL_C_ROUTER_ID:
-		return Vector3(21.0, 1.8, -2.5)
-	if eid == HALL_NORD_BREAKER_ID:
-		return HALLE_NORD_ORIGIN + Vector3(-8.2, 1.5, -5.7)
-	if eid == HALL_NORD_ROUTER_ID:
-		return HALLE_NORD_ORIGIN + Vector3(-4.6, 1.8, -5.7)
-	return Vector3.ZERO
-
-
 # --- Gebrauchtmarkt / Tages-Deals (B-Ware mit 35–45% Rabatt) ---
-
-func _generate_daily_deals() -> void:
-	if not multiplayer.is_server():
-		return
-	daily_deals.clear()
-	var pool_items: Array[String] = ["rack", "web_server", "game_server", "storage_server", "ups", "cooler"]
-	if get_company_level() >= 2:
-		pool_items.append("cloud_server")
-	if get_company_level() >= 3:
-		pool_items.append("rack_pro")
-		pool_items.append("ai_server")
-	pool_items.shuffle()
-	var count := mini(3, pool_items.size())
-	for i in range(count):
-		var itype := pool_items[i]
-		if not ITEM_CATALOG.has(itype):
-			continue
-		var meta: Dictionary = ITEM_CATALOG[itype]
-		var orig := int(meta["price"])
-		var disc_pct := randi_range(35, 45)
-		var deal_price := maxi(50, int(roundf(float(orig) * (1.0 - float(disc_pct) / 100.0))))
-		daily_deals.append({
-			"deal_id": "deal_d%d_%d" % [day_number, i],
-			"item_type": itype,
-			"name": str(meta["name"]) + " (B-Ware)",
-			"seller": USED_SELLERS[(day_number + i) % USED_SELLERS.size()],
-			"orig_price": orig,
-			"price": deal_price,
-			"discount_pct": disc_pct,
-			"sold": false,
-		})
-	_rpc_sync_daily_deals.rpc(daily_deals.duplicate(true))
 
 
 @rpc("authority", "call_local", "reliable")
@@ -10412,57 +6014,6 @@ func _rpc_sync_daily_deals(deals: Array) -> void:
 
 func request_buy_daily_deal(deal_id: String) -> void:
 	_rpc_req_buy_daily_deal.rpc_id(1, deal_id)
-
-
-@rpc("any_peer", "call_local", "reliable")
-func _rpc_req_buy_daily_deal(deal_id: String) -> void:
-	if not multiplayer.is_server():
-		return
-	var peer_id := _get_sender_id()
-	if _deny_build(peer_id, "buy"):
-		return
-	if not SecurityGuard.check_rate_limit(peer_id, "buy", 8, 5.0):
-		return
-	if get_delivery_zone_free_slots() < 1:
-		_rpc_play_sfx.rpc_id(peer_id, "error")
-		post_event("Lieferzone voll! Erst Pakete aus der Einfahrt räumen.", "warn")
-		return
-	var found_idx := -1
-	for i in range(daily_deals.size()):
-		if str(daily_deals[i].get("deal_id", "")) == deal_id:
-			found_idx = i
-			break
-	if found_idx < 0 or bool(daily_deals[found_idx].get("sold", false)):
-		_rpc_play_sfx.rpc_id(peer_id, "error")
-		return
-	var deal: Dictionary = daily_deals[found_idx]
-	var price := float(deal["price"])
-	if money < price:
-		_rpc_play_sfx.rpc_id(peer_id, "error")
-		return
-	var item_type := str(deal["item_type"])
-	if not ITEM_CATALOG.has(item_type):
-		return
-	money -= price
-	deal["sold"] = true
-	if van_phase == "arriving":
-		van_cargo.append(item_type)
-	else:
-		pending_delivery_items.append(item_type)
-		if van_phase == "idle":
-			van_cargo = _pack_van_cargo(pending_delivery_items)
-			pending_delivery_items.clear()
-			scheduled_delivery_day = 0
-			scheduled_delivery_hour = -1
-			pending_delivery_express = false
-			_start_delivery_van()
-	_rpc_sync_daily_deals.rpc(daily_deals.duplicate(true))
-	_broadcast_van_state()
-	_broadcast_sim_tick()
-	_rpc_play_sfx.rpc("cash")
-	post_event_f("%s schnappte sich %s für $%d (-%d%%) aus dem Gebrauchtmarkt!", [
-		NetworkManager.get_player_name(peer_id), str(deal["name"]), int(price), int(deal["discount_pct"])
-	], "good")
 
 
 # --- Karriere-Meilensteine (bodenständige Großkunden-Ziele) ---
@@ -10505,74 +6056,6 @@ func _check_career_milestones() -> void:
 
 
 # --- Co-op Team-Aufträge (zeitbasierte Bonusziele) ---
-
-func _roll_team_order() -> void:
-	if not multiplayer.is_server():
-		return
-	var active_slots := 0
-	for rk in racks.values():
-		for sl in (rk as Dictionary).get("slots", []):
-			if not str((sl as Dictionary).get("item_type", "")).is_empty():
-				active_slots += 1
-	var pick := day_number % 3
-	if pick == 0:
-		active_team_order = {
-			"kind": "uptime_streak",
-			"title": "Team-Auftrag: 90 Sek. störungsfreier Betrieb",
-			"progress": 0.0,
-			"target": 90.0,
-			"reward": 850 + day_number * 220,
-			"done": false,
-		}
-	elif pick == 1:
-		var goal_slots := maxi(2, active_slots + 2)
-		active_team_order = {
-			"kind": "expand_slots",
-			"title": "Team-Auftrag: %d aktive Server-Einschübe betreiben" % goal_slots,
-			"progress": float(active_slots),
-			"target": float(goal_slots),
-			"reward": 1100 + day_number * 260,
-			"done": false,
-		}
-	else:
-		active_team_order = {
-			"kind": "cool_ops",
-			"title": "Team-Auftrag: 75 Sek. unter 50 °C Raumtemperatur",
-			"progress": 0.0,
-			"target": 75.0,
-			"reward": 950 + day_number * 240,
-			"done": false,
-		}
-
-
-func _tick_team_order(dt: float) -> void:
-	if not multiplayer.is_server() or active_team_order.is_empty() or bool(active_team_order.get("done", false)):
-		return
-	var kind := str(active_team_order.get("kind", ""))
-	var target := float(active_team_order.get("target", 90.0))
-	var prog := float(active_team_order.get("progress", 0.0))
-	if kind == "uptime_streak":
-		if (breaker_on or ups_backup_active) and not has_any_fire() and not ddos_active and racks.size() >= 1:
-			prog += dt
-	elif kind == "cool_ops":
-		if (breaker_on or ups_backup_active) and room_temp < 50.0 and racks.size() >= 1:
-			prog += dt
-	elif kind == "expand_slots":
-		var running := 0
-		for rk in racks.values():
-			if bool((rk as Dictionary).get("powered", false)):
-				for sl in (rk as Dictionary).get("slots", []):
-					if not str((sl as Dictionary).get("item_type", "")).is_empty() and str((sl as Dictionary).get("state", "")) == "ok":
-						running += 1
-		prog = float(running)
-	active_team_order["progress"] = minf(prog, target)
-	if prog >= target:
-		active_team_order["done"] = true
-		var rew := int(active_team_order.get("reward", 1000))
-		money += float(rew)
-		reputation = clampf(reputation + 2.5, 0.0, 100.0)
-		_rpc_play_sfx.rpc("cash")
-		post_event_f("🤝 %s abgeschlossen! Team-Bonus: +$%d!", [str(active_team_order["title"]), rew], "good")
 
 
 # --- 3D-Ping-System & Spieler-Emotes (Co-op) ---
@@ -10660,16 +6143,6 @@ func request_set_delivery_site(site: String) -> void:
 	_rpc_req_set_delivery_site.rpc_id(1, site)
 
 
-@rpc("any_peer", "call_local", "reliable")
-func _rpc_req_set_delivery_site(site: String) -> void:
-	if not multiplayer.is_server():
-		return
-	var target := "halle_nord" if (site == "halle_nord" and halle_nord_owned) else "garage"
-	delivery_target_site = target
-	_rpc_sync_halle_nord.rpc(halle_nord_owned, delivery_target_site)
-	_broadcast_sim_tick()
-
-
 @rpc("authority", "call_local", "reliable")
 func _rpc_sync_halle_nord(owned: bool, del_site: String) -> void:
 	var changed_site := (delivery_target_site != del_site)
@@ -10680,7 +6153,6 @@ func _rpc_sync_halle_nord(owned: bool, del_site: String) -> void:
 	if changed_site:
 		delivery_site_changed.emit()
 	state_updated.emit()
-
 
 
 # ---------------------------------------------------------------- Kaufbare Einrichtung, Gebäude-Upgrades & Tiefes Wartungssystem
@@ -10695,45 +6167,6 @@ func has_building_upgrade(uid: String) -> bool:
 
 func is_construction_active(uid: String) -> bool:
 	return active_constructions.has(uid)
-
-
-func get_repair_speed_multiplier() -> float:
-	var mult := 1.0
-	for did in decor_items.keys():
-		if str((decor_items[did] as Dictionary).get("item_type", "")) == "prop_esd_workbench":
-			mult = 1.35
-			break
-	return mult
-
-
-func get_fault_diagnosis_info(slot: Dictionary) -> Dictionary:
-	var part := str(slot.get("faulty_part", ""))
-	if FAULT_DIAGNOSIS_META.has(part):
-		return FAULT_DIAGNOSIS_META[part] as Dictionary
-	return {"code": "ERR-GEN-01", "cause": "Allgemeine Hardware-Störung", "tool": "Wartungs-Kit"}
-
-
-func get_maintenance_warnings() -> Array[Dictionary]:
-	var out: Array[Dictionary] = []
-	for rid in racks.keys():
-		var rack: Dictionary = racks[rid]
-		var slots: Array = rack.get("slots", [])
-		for i in range(slots.size()):
-			var sl: Dictionary = slots[i]
-			if str(sl.get("item_type", "")) == "":
-				continue
-			var dust := float(sl.get("dust_level", 0.0))
-			var th_hp := float(sl.get("thermal_health", 100.0))
-			if str(sl.get("state", "ok")) != "ok" or dust >= 65.0 or th_hp <= 35.0:
-				out.append({
-					"rack_id": rid,
-					"rack_name": get_rack_display_name(rid),
-					"slot_idx": i,
-					"state": str(sl.get("state", "ok")),
-					"dust": int(roundf(dust)),
-					"health": int(roundf(th_hp)),
-				})
-	return out
 
 
 func request_buy_building_upgrade(uid: String) -> void:
@@ -10797,76 +6230,12 @@ func _tick_constructions(dt: float) -> void:
 		_rpc_play_sfx.rpc("save")
 
 
-## Wartung lohnt sich erst ab sichtbarem Staub bzw. gealterter Wärmeleitpaste.
-func is_slot_maintainable(slot: Dictionary) -> bool:
-	return roundf(float(slot.get("dust_level", 0.0))) >= MAINTAIN_MIN_DUST \
-		or roundf(float(slot.get("thermal_health", 100.0))) <= MAINTAIN_MAX_THERMAL
-
-
 func request_maintain_slot(rack_id: String, slot_idx: int) -> void:
 	_rpc_req_maintain_slot.rpc_id(1, rack_id, slot_idx)
 
 
-@rpc("any_peer", "call_local", "reliable")
-func _rpc_req_maintain_slot(rack_id: String, slot_idx: int) -> void:
-	if not multiplayer.is_server():
-		return
-	var peer_id := _get_sender_id()
-	if not SecurityGuard.check_rate_limit(peer_id, "maintain", 10, 5.0):
-		return
-	if not racks.has(rack_id):
-		return
-	var slots: Array = racks[rack_id]["slots"]
-	if slot_idx < 0 or slot_idx >= slots.size():
-		return
-	var slot: Dictionary = slots[slot_idx]
-	if str(slot.get("item_type", "")) == "" or str(slot.get("state", "ok")) != "ok":
-		return
-	if not is_slot_maintainable(slot):
-		_rpc_play_sfx.rpc_id(peer_id, "error")
-		return
-	if maint_kits <= 0:
-		_rpc_play_sfx.rpc_id(peer_id, "error")
-		post_event("Keine Wartungs-Kits mehr! Am PC im Shop oder am Ersatzteil-Schrank auffüllen.", "warn")
-		return
-	maint_kits -= 1
-	slot["dust_level"] = 0.0
-	slot["thermal_health"] = 100.0
-	racks[rack_id]["temp"] = maxf(22.0, float(racks[rack_id].get("temp", 35.0)) - 3.0)
-	_broadcast_racks()
-	_broadcast_sim_tick()
-	_rpc_play_sfx.rpc("repair")
-	post_event_f("🧹 %s hat %s Slot %d gewartet (Staub 0 %%, Wärmeleitpaste 100 %% — Ausfallrisiko minimal!).", [
-		NetworkManager.get_player_name(peer_id), get_rack_display_name(rack_id), slot_idx + 1
-	], "good")
-
-
 func request_refill_maint_kits() -> void:
 	_rpc_req_refill_maint_kits.rpc_id(1)
-
-
-@rpc("any_peer", "call_local", "reliable")
-func _rpc_req_refill_maint_kits() -> void:
-	if not multiplayer.is_server():
-		return
-	var peer_id := _get_sender_id()
-	if maint_kits >= 12:
-		_rpc_play_sfx.rpc_id(peer_id, "error")
-		return
-	var has_cabinet := false
-	for did in decor_items.keys():
-		if str((decor_items[did] as Dictionary).get("item_type", "")) == "prop_parts_cabinet":
-			has_cabinet = true
-			break
-	var cost := 20.0 if has_cabinet else 45.0
-	if money < cost:
-		_rpc_play_sfx.rpc_id(peer_id, "error")
-		return
-	money -= cost
-	maint_kits = mini(12, maint_kits + 3)
-	_broadcast_sim_tick()
-	_rpc_play_sfx.rpc("snap")
-	post_event_f("🧰 +3 Wartungs- & Ersatzteil-Kits aufgefüllt (Vorrat: %d, Kosten: $%d).", [maint_kits, int(cost)], "good")
 
 
 func get_decor_name(decor_id: String) -> String:
@@ -11042,3 +6411,792 @@ func _rpc_sync_building_upgrades(bu: Dictionary, ac: Dictionary) -> void:
 	building_upgrades_changed.emit()
 	constructions_changed.emit()
 	state_updated.emit()
+
+
+# ==============================================================================
+# Spielstand-Migrationen: Weiterleitungen nach scripts/autoload/game_state/save_migrations.gd
+# ==============================================================================
+
+func _migrate_strip_ports() -> Array:
+	return _Migrations._migrate_strip_ports()
+
+
+func _migrate_mounted_strips(data: Dictionary) -> void:
+	_Migrations._migrate_mounted_strips(data)
+
+
+func _migrate_shelves() -> void:
+	_Migrations._migrate_shelves()
+
+
+# ==============================================================================
+# Strom: Weiterleitungen nach scripts/autoload/game_state/power.gd
+# ==============================================================================
+
+func get_estimated_daily_bill() -> int:
+	return _Power.get_estimated_daily_bill()
+
+
+func _roll_electricity_rate(current: float) -> float:
+	return _Power._roll_electricity_rate(current)
+
+
+func is_power_strip_decor(eid: String) -> bool:
+	return _Power.is_power_strip_decor(eid)
+
+
+func is_ups_type(item_type: String) -> bool:
+	return _Power.is_ups_type(item_type)
+
+
+func get_ups_type(u: Dictionary) -> String:
+	return _Power.get_ups_type(u)
+
+
+func get_ups_spec(u: Dictionary) -> Dictionary:
+	return _Power.get_ups_spec(u)
+
+
+func get_ups_health(u: Dictionary) -> float:
+	return _Power.get_ups_health(u)
+
+
+func get_ups_capacity(u: Dictionary) -> float:
+	return _Power.get_ups_capacity(u)
+
+
+func get_ups_stored_wh(u: Dictionary) -> float:
+	return _Power.get_ups_stored_wh(u)
+
+
+func is_ups_ready(u: Dictionary) -> bool:
+	return _Power.is_ups_ready(u)
+
+
+func get_ups_total_out() -> float:
+	return _Power.get_ups_total_out()
+
+
+func get_ups_runtime_minutes() -> int:
+	return _Power.get_ups_runtime_minutes()
+
+
+func get_ups_swap_cost(u: Dictionary) -> int:
+	return _Power.get_ups_swap_cost(u)
+
+
+@rpc("any_peer", "call_local", "reliable")
+func _rpc_req_swap_ups_cells(uid: String) -> void:
+	_Power._rpc_req_swap_ups_cells(uid)
+
+
+func is_strip_type(item_type: String) -> bool:
+	return _Power.is_strip_type(item_type)
+
+
+func is_strip_on(did: String) -> bool:
+	return _Power.is_strip_on(did)
+
+
+func is_wall_strip(d: Dictionary) -> bool:
+	return _Power.is_wall_strip(d)
+
+
+func get_strip_limit(did: String) -> int:
+	return _Power.get_strip_limit(did)
+
+
+func get_chain_root(did: String) -> String:
+	return _Power.get_chain_root(did)
+
+
+func is_strip_fed(ctype: String, did: String) -> bool:
+	return _Power.is_strip_fed(ctype, did)
+
+
+func feeds_next_strip(ctype: String, did: String) -> bool:
+	return _Power.feeds_next_strip(ctype, did)
+
+
+func get_chain_load(did: String) -> int:
+	return _Power.get_chain_load(did)
+
+
+func get_chain_length(did: String) -> int:
+	return _Power.get_chain_length(did)
+
+
+func get_strip_load(did: String) -> int:
+	return _Power.get_strip_load(did)
+
+
+@rpc("any_peer", "call_local", "reliable")
+func _rpc_req_toggle_strip(did: String) -> void:
+	_Power._rpc_req_toggle_strip(did)
+
+
+func _tick_strips(dt: float) -> void:
+	_Power._tick_strips(dt)
+
+
+func _compute_strip_loads(device_watts: Dictionary) -> void:
+	_Power._compute_strip_loads(device_watts)
+
+
+func get_strip_wall_spot(hit: Vector3, normal: Vector3) -> Dictionary:
+	return _Power.get_strip_wall_spot(hit, normal)
+
+
+func can_place_strip_on_wall(pos: Vector3, rot_y: float, ignore_id: String = "") -> bool:
+	return _Power.can_place_strip_on_wall(pos, rot_y, ignore_id)
+
+
+func can_place_strip_at(pos: Vector3, ignore_id: String = "") -> bool:
+	return _Power.can_place_strip_at(pos, ignore_id)
+
+
+func get_boot_seconds(item_type: String) -> float:
+	return _Power.get_boot_seconds(item_type)
+
+
+func is_slot_on(slot: Dictionary) -> bool:
+	return _Power.is_slot_on(slot)
+
+
+func _apply_rack_power_changes() -> void:
+	_Power._apply_rack_power_changes()
+
+
+func _refresh_slot_power() -> void:
+	_Power._refresh_slot_power()
+
+
+func _update_slot_boot(dt: float) -> void:
+	_Power._update_slot_boot(dt)
+
+
+func _tick_grid_outage(dt: float) -> void:
+	_Power._tick_grid_outage(dt)
+
+
+func get_next_outage_in() -> float:
+	return _Power.get_next_outage_in()
+
+
+func get_grid_outage_minutes() -> int:
+	return _Power.get_grid_outage_minutes()
+
+
+func _broadcast_power_change() -> void:
+	_Power._broadcast_power_change()
+
+
+func _start_grid_outage(duration: float) -> void:
+	_Power._start_grid_outage(duration)
+
+
+func _end_grid_outage() -> void:
+	_Power._end_grid_outage()
+
+
+@rpc("any_peer", "call_local", "reliable")
+func _rpc_req_toggle_breaker() -> void:
+	_Power._rpc_req_toggle_breaker()
+
+
+@rpc("any_peer", "call_local", "reliable")
+func _rpc_req_upgrade_power() -> void:
+	_Power._rpc_req_upgrade_power()
+
+
+func _make_fuse_slots(state: String) -> Array:
+	return _Power._make_fuse_slots(state)
+
+
+func _sanitize_fuses(data: Variant) -> Array:
+	return _Power._sanitize_fuses(data)
+
+
+func count_working_fuses() -> int:
+	return _Power.count_working_fuses()
+
+
+func has_working_fuse() -> bool:
+	return _Power.has_working_fuse()
+
+
+func is_breaker_door_open() -> bool:
+	return _Power.is_breaker_door_open()
+
+
+func _blow_random_fuse() -> void:
+	_Power._blow_random_fuse()
+
+
+func _power_fuse_on_way() -> bool:
+	return _Power._power_fuse_on_way()
+
+
+func is_power_fuse_on_way() -> bool:
+	return _Power.is_power_fuse_on_way()
+
+
+@rpc("any_peer", "call_local", "reliable")
+func _rpc_req_buy_fuse() -> void:
+	_Power._rpc_req_buy_fuse()
+
+
+@rpc("any_peer", "call_local", "reliable")
+func _rpc_req_insert_fuse(slot_idx: int) -> void:
+	_Power._rpc_req_insert_fuse(slot_idx)
+
+
+# ==============================================================================
+# Kabel: Weiterleitungen nach scripts/autoload/game_state/cables.gd
+# ==============================================================================
+
+func count_cables_on(cable_type: String, endpoint_id: String) -> int:
+	return _Cables.count_cables_on(cable_type, endpoint_id)
+
+
+func get_cable_slot_map(cable_type: String, endpoint_id: String) -> Dictionary:
+	return _Cables.get_cable_slot_map(cable_type, endpoint_id)
+
+
+func get_cable_slot_maps(cable_type: String) -> Dictionary:
+	return _Cables.get_cable_slot_maps(cable_type)
+
+
+func is_lan_strip_decor(eid: String) -> bool:
+	return _Cables.is_lan_strip_decor(eid)
+
+
+func get_cable_on_slot(cable_type: String, endpoint_id: String, slot_idx: int) -> Dictionary:
+	return _Cables.get_cable_on_slot(cable_type, endpoint_id, slot_idx)
+
+
+func get_max_ports(cable_type: String, endpoint_id: String) -> int:
+	return _Cables.get_max_ports(cable_type, endpoint_id)
+
+
+func _count_rack_switches(rack_id: String) -> int:
+	return _Cables._count_rack_switches(rack_id)
+
+
+func get_lan_chain_root(did: String) -> String:
+	return _Cables.get_lan_chain_root(did)
+
+
+func _recalculate_networks_and_metrics() -> void:
+	_Cables._recalculate_networks_and_metrics()
+
+
+func _disconnect_all_cables_of(entity_id: String) -> void:
+	_Cables._disconnect_all_cables_of(entity_id)
+
+
+@rpc("any_peer", "call_local", "reliable")
+func _rpc_req_connect_cable(cable_type: String, from_id: String, to_id: String, from_slot: int, to_slot: int) -> void:
+	_Cables._rpc_req_connect_cable(cable_type, from_id, to_id, from_slot, to_slot)
+
+
+@rpc("authority", "call_local", "reliable")
+func _rpc_cable_hint(msg: String) -> void:
+	_Cables._rpc_cable_hint(msg)
+
+
+func _compute_cluster_spare() -> Dictionary:
+	return _Cables._compute_cluster_spare()
+
+
+func _borrow_cluster_capacity(rack_id: String, hw: Dictionary, users: int, prof: Dictionary, spare: Dictionary) -> Dictionary:
+	return _Cables._borrow_cluster_capacity(rack_id, hw, users, prof, spare)
+
+
+@rpc("any_peer", "call_local", "reliable")
+func _rpc_req_disconnect_cable_slot(cable_type: String, endpoint_id: String, slot_idx: int) -> void:
+	_Cables._rpc_req_disconnect_cable_slot(cable_type, endpoint_id, slot_idx)
+
+
+@rpc("any_peer", "call_local", "reliable")
+func _rpc_req_disconnect_cables_on(cable_type: String, endpoint_id: String) -> void:
+	_Cables._rpc_req_disconnect_cables_on(cable_type, endpoint_id)
+
+
+@rpc("any_peer", "call_local", "reliable")
+func _rpc_req_upgrade_router() -> void:
+	_Cables._rpc_req_upgrade_router()
+
+
+func _approx_endpoint_pos(eid: String) -> Vector3:
+	return _Cables._approx_endpoint_pos(eid)
+
+
+# ==============================================================================
+# Einkauf und Lieferung: Weiterleitungen nach scripts/autoload/game_state/delivery.gd
+# ==============================================================================
+
+func get_delivery_fee(tier: int, express: bool = false) -> int:
+	return _Delivery.get_delivery_fee(tier, express)
+
+
+func get_next_delivery_slot_label() -> String:
+	return _Delivery.get_next_delivery_slot_label()
+
+
+func get_scheduled_delivery_label() -> String:
+	return _Delivery.get_scheduled_delivery_label()
+
+
+func _update_delivery_van(delta: float) -> void:
+	_Delivery._update_delivery_van(delta)
+
+
+func _start_delivery_van() -> void:
+	_Delivery._start_delivery_van()
+
+
+func _apply_spot(c: Dictionary, sp: Dictionary, site: String) -> void:
+	_Delivery._apply_spot(c, sp, site)
+
+
+@rpc("authority", "call_remote", "reliable")
+func _rpc_sync_van_plan(plan: Dictionary) -> void:
+	_Delivery._rpc_sync_van_plan(plan)
+
+
+@rpc("any_peer", "call_local", "reliable")
+func _rpc_sign_delivery() -> void:
+	_Delivery._rpc_sign_delivery()
+
+
+func _reset_van_trip() -> void:
+	_Delivery._reset_van_trip()
+
+
+func is_bulk_packable(item_type: String) -> bool:
+	return _Delivery.is_bulk_packable(item_type)
+
+
+func get_delivery_zone_used_slots() -> int:
+	return _Delivery.get_delivery_zone_used_slots()
+
+
+func get_delivery_zone_free_slots() -> int:
+	return _Delivery.get_delivery_zone_free_slots()
+
+
+func get_max_delivery_slots() -> int:
+	return _Delivery.get_max_delivery_slots()
+
+
+func preview_cart_delivery(entries: Array) -> Dictionary:
+	return _Delivery.preview_cart_delivery(entries)
+
+
+func _deliver_parts_parcel() -> void:
+	_Delivery._deliver_parts_parcel()
+
+
+func _broadcast_van_state() -> void:
+	_Delivery._broadcast_van_state()
+
+
+@rpc("authority", "call_local", "reliable")
+func _rpc_sync_van_state(phase: String, phase_t: float, cargo_n: int, pending_n: int, trip: Dictionary) -> void:
+	_Delivery._rpc_sync_van_state(phase, phase_t, cargo_n, pending_n, trip)
+
+
+@rpc("any_peer", "call_local", "reliable")
+func _rpc_req_buy_item(item_type: String) -> void:
+	_Delivery._rpc_req_buy_item(item_type)
+
+
+@rpc("any_peer", "call_local", "reliable")
+func _rpc_req_checkout_cart(entries: Array, express: bool = false) -> void:
+	_Delivery._rpc_req_checkout_cart(entries, express)
+
+
+func _accessory_price(aid: String) -> int:
+	return _Delivery._accessory_price(aid)
+
+
+func _accessory_order_room(aid: String) -> int:
+	return _Delivery._accessory_order_room(aid)
+
+
+func cart_add_entry(kind: String, id: String, cat: String, display_name: String, price: int, amount: int = 1) -> void:
+	_Delivery.cart_add_entry(kind, id, cat, display_name, price, amount)
+
+
+func cart_add_slot_build(rack_id: String, slot_idx: int, mainboard_id: String, comps: Dictionary) -> bool:
+	return _Delivery.cart_add_slot_build(rack_id, slot_idx, mainboard_id, comps)
+
+
+func cart_change_qty(key: String, delta: int) -> void:
+	_Delivery.cart_change_qty(key, delta)
+
+
+func cart_clear() -> void:
+	_Delivery.cart_clear()
+
+
+func get_cart_count() -> int:
+	return _Delivery.get_cart_count()
+
+
+func get_cart_total() -> int:
+	return _Delivery.get_cart_total()
+
+
+func _generate_daily_deals() -> void:
+	_Delivery._generate_daily_deals()
+
+
+@rpc("any_peer", "call_local", "reliable")
+func _rpc_req_buy_daily_deal(deal_id: String) -> void:
+	_Delivery._rpc_req_buy_daily_deal(deal_id)
+
+
+@rpc("any_peer", "call_local", "reliable")
+func _rpc_req_set_delivery_site(site: String) -> void:
+	_Delivery._rpc_req_set_delivery_site(site)
+
+
+# ==============================================================================
+# Racks: Weiterleitungen nach scripts/autoload/game_state/racks.gd
+# ==============================================================================
+
+func _alloc_rack_id() -> String:
+	return _Racks._alloc_rack_id()
+
+
+func _default_components(server_type: String = "web_server") -> Dictionary:
+	return _Racks._default_components(server_type)
+
+
+func _make_empty_slot() -> Dictionary:
+	return _Racks._make_empty_slot()
+
+
+func _make_rack_data(rack_id: String, rack_type: String, pos: Vector3, rot_y: float) -> Dictionary:
+	return _Racks._make_rack_data(rack_id, rack_type, pos, rot_y)
+
+
+func _ensure_loaded_compat() -> void:
+	_Racks._ensure_loaded_compat()
+
+
+func is_slot_upgradeable(item_type: String) -> bool:
+	return _Racks.is_slot_upgradeable(item_type)
+
+
+func get_chassis_visual(item_type: String) -> String:
+	return _Racks.get_chassis_visual(item_type)
+
+
+func get_mainboards(mb_cat: String = "") -> Array:
+	return _Racks.get_mainboards(mb_cat)
+
+
+func get_build_quality(data: Dictionary) -> int:
+	return _Racks.get_build_quality(data)
+
+
+func get_slot_sloppiness(slot: Dictionary) -> float:
+	return _Racks.get_slot_sloppiness(slot)
+
+
+func get_slot_stats(slot: Dictionary) -> Dictionary:
+	return _Racks.get_slot_stats(slot)
+
+
+func _compute_slot_stats(slot: Dictionary) -> Dictionary:
+	return _Racks._compute_slot_stats(slot)
+
+
+func get_rack_hardware_summary(rack_id: String) -> Dictionary:
+	return _Racks.get_rack_hardware_summary(rack_id)
+
+
+func get_rack_sell_value(rack_id: String) -> int:
+	return _Racks.get_rack_sell_value(rack_id)
+
+
+func get_device_sell_value(kind: String, eid: String) -> int:
+	return _Racks.get_device_sell_value(kind, eid)
+
+
+func is_shared_panel_open(entity_id: String, panel_id: String) -> bool:
+	return _Racks.is_shared_panel_open(entity_id, panel_id)
+
+
+func panel_key(entity_id: String, panel_id: String) -> String:
+	return _Racks.panel_key(entity_id, panel_id)
+
+
+func is_panel_key_open(key: String) -> bool:
+	return _Racks.is_panel_key_open(key)
+
+
+func _panel_key(entity_id: String, panel_id: String) -> String:
+	return _Racks._panel_key(entity_id, panel_id)
+
+
+func _sanitize_open_panels(data: Variant) -> Dictionary:
+	return _Racks._sanitize_open_panels(data)
+
+
+@rpc("any_peer", "call_local", "reliable")
+func _rpc_req_toggle_panel(entity_id: String, panel_id: String) -> void:
+	_Racks._rpc_req_toggle_panel(entity_id, panel_id)
+
+
+func _close_slot_panel(rack_id: String, slot_idx: int) -> void:
+	_Racks._close_slot_panel(rack_id, slot_idx)
+
+
+@rpc("authority", "call_local", "reliable")
+func _rpc_sync_panel(key: String, opened: bool) -> void:
+	_Racks._rpc_sync_panel(key, opened)
+
+
+func is_slot_awaiting_diagnosis(slot: Dictionary) -> bool:
+	return _Racks.is_slot_awaiting_diagnosis(slot)
+
+
+func get_visible_fault(data: Dictionary) -> String:
+	return _Racks.get_visible_fault(data)
+
+
+func get_component_label(cat: String) -> String:
+	return _Racks.get_component_label(cat)
+
+
+func _pick_faulty_part(slot: Dictionary) -> String:
+	return _Racks._pick_faulty_part(slot)
+
+
+@rpc("any_peer", "call_local", "reliable")
+func _rpc_req_diagnose_slot(rack_id: String, slot_idx: int) -> void:
+	_Racks._rpc_req_diagnose_slot(rack_id, slot_idx)
+
+
+@rpc("any_peer", "call_local", "reliable")
+func _rpc_req_relocate_rack(rack_id: String, pos: Vector3, rot_y: float) -> void:
+	_Racks._rpc_req_relocate_rack(rack_id, pos, rot_y)
+
+
+@rpc("any_peer", "call_local", "reliable")
+func _rpc_req_sell_rack(rack_id: String) -> void:
+	_Racks._rpc_req_sell_rack(rack_id)
+
+
+@rpc("any_peer", "call_local", "reliable")
+func _rpc_req_install_module(rack_id: String, slot_idx: int) -> void:
+	_Racks._rpc_req_install_module(rack_id, slot_idx)
+
+
+@rpc("any_peer", "call_local", "reliable")
+func _rpc_req_remove_module(rack_id: String, slot_idx: int) -> void:
+	_Racks._rpc_req_remove_module(rack_id, slot_idx)
+
+
+@rpc("any_peer", "call_local", "reliable")
+func _rpc_req_sell_slot_module(rack_id: String, slot_idx: int) -> void:
+	_Racks._rpc_req_sell_slot_module(rack_id, slot_idx)
+
+
+@rpc("any_peer", "call_local", "reliable")
+func _rpc_req_upgrade_slot_component(rack_id: String, slot_idx: int, category: String) -> void:
+	_Racks._rpc_req_upgrade_slot_component(rack_id, slot_idx, category)
+
+
+@rpc("any_peer", "call_local", "reliable")
+func _rpc_req_install_component(rack_id: String, slot_idx: int, category: String, part_id: String) -> void:
+	_Racks._rpc_req_install_component(rack_id, slot_idx, category, part_id)
+
+
+@rpc("any_peer", "call_local", "reliable")
+func _rpc_req_buy_install_component(rack_id: String, slot_idx: int, category: String, part_id: String) -> void:
+	_Racks._rpc_req_buy_install_component(rack_id, slot_idx, category, part_id)
+
+
+@rpc("any_peer", "call_local", "reliable")
+func _rpc_req_buy_install_module(rack_id: String, slot_idx: int, item_type: String) -> void:
+	_Racks._rpc_req_buy_install_module(rack_id, slot_idx, item_type)
+
+
+func get_rack_display_name(rack_id: String) -> String:
+	return _Racks.get_rack_display_name(rack_id)
+
+
+@rpc("any_peer", "call_local", "reliable")
+func _rpc_req_rename_rack(rack_id: String, new_name: String) -> void:
+	_Racks._rpc_req_rename_rack(rack_id, new_name)
+
+
+@rpc("any_peer", "call_local", "reliable")
+func _rpc_req_repair_slot(rack_id: String, slot_idx: int, amount: float) -> void:
+	_Racks._rpc_req_repair_slot(rack_id, slot_idx, amount)
+
+
+func calculate_slot_build_price(mainboard_id: String, comps: Dictionary) -> int:
+	return _Racks.calculate_slot_build_price(mainboard_id, comps)
+
+
+func is_slot_extended(rack_id: String, slot_idx: int) -> bool:
+	return _Racks.is_slot_extended(rack_id, slot_idx)
+
+
+@rpc("any_peer", "call_local", "reliable")
+func _rpc_req_pull_server_tray(rack_id: String, slot_idx: int) -> void:
+	_Racks._rpc_req_pull_server_tray(rack_id, slot_idx)
+
+
+func _tray_from_slot(rack_id: String, slot_idx: int, slot: Dictionary, peer_id: int) -> String:
+	return _Racks._tray_from_slot(rack_id, slot_idx, slot, peer_id)
+
+
+@rpc("any_peer", "call_local", "reliable")
+func _rpc_req_insert_server_tray(rack_id: String, slot_idx: int) -> void:
+	_Racks._rpc_req_insert_server_tray(rack_id, slot_idx)
+
+
+func _slot_from_tray(td: Dictionary) -> Dictionary:
+	return _Racks._slot_from_tray(td)
+
+
+func get_fault_diagnosis_info(slot: Dictionary) -> Dictionary:
+	return _Racks.get_fault_diagnosis_info(slot)
+
+
+func get_maintenance_warnings() -> Array[Dictionary]:
+	return _Racks.get_maintenance_warnings()
+
+
+func is_slot_maintainable(slot: Dictionary) -> bool:
+	return _Racks.is_slot_maintainable(slot)
+
+
+@rpc("any_peer", "call_local", "reliable")
+func _rpc_req_maintain_slot(rack_id: String, slot_idx: int) -> void:
+	_Racks._rpc_req_maintain_slot(rack_id, slot_idx)
+
+
+@rpc("any_peer", "call_local", "reliable")
+func _rpc_req_refill_maint_kits() -> void:
+	_Racks._rpc_req_refill_maint_kits()
+
+
+# ==============================================================================
+# Verträge: Weiterleitungen nach scripts/autoload/game_state/contracts.gd
+# ==============================================================================
+
+func get_max_contracts_limit() -> int:
+	return _Contracts.get_max_contracts_limit()
+
+
+func get_open_ticket_count() -> int:
+	return _Contracts.get_open_ticket_count()
+
+
+func is_ticket_issue_fixed(ticket: Dictionary) -> bool:
+	return _Contracts.is_ticket_issue_fixed(ticket)
+
+
+func get_active_contract_count() -> int:
+	return _Contracts.get_active_contract_count()
+
+
+func get_contract_display_order() -> Array[String]:
+	return _Contracts.get_contract_display_order()
+
+
+func _fill_random_contract_offers() -> int:
+	return _Contracts._fill_random_contract_offers()
+
+
+func _advance_random_contracts() -> void:
+	_Contracts._advance_random_contracts()
+
+
+func _process_contract_payouts() -> void:
+	_Contracts._process_contract_payouts()
+
+
+func _update_rack_rentals_and_support(dt: float) -> void:
+	_Contracts._update_rack_rentals_and_support(dt)
+
+
+func _get_rack_services(r: Dictionary) -> Array:
+	return _Contracts._get_rack_services(r)
+
+
+func get_reputation_tier() -> int:
+	return _Contracts.get_reputation_tier()
+
+
+func get_reputation_label() -> String:
+	return _Contracts.get_reputation_label()
+
+
+func _update_service_users(svc: Dictionary, sat: float, online: bool, dt: float, time_wave: float, load_pct: float = 0.0) -> int:
+	return _Contracts._update_service_users(svc, sat, online, dt, time_wave, load_pct)
+
+
+func _blend_service_profiles(services: Array) -> Dictionary:
+	return _Contracts._blend_service_profiles(services)
+
+
+func _clear_tickets_for_rack(rack_id: String) -> void:
+	_Contracts._clear_tickets_for_rack(rack_id)
+
+
+func _create_support_ticket(rack_id: String, rack: Dictionary, issue_key: String) -> void:
+	_Contracts._create_support_ticket(rack_id, rack, issue_key)
+
+
+func get_ticket_sla_remaining(ticket: Dictionary) -> float:
+	return _Contracts.get_ticket_sla_remaining(ticket)
+
+
+@rpc("any_peer", "call_local", "reliable")
+func _rpc_req_set_rack_rental(rack_id: String, rental_type: String) -> void:
+	_Contracts._rpc_req_set_rack_rental(rack_id, rental_type)
+
+
+@rpc("any_peer", "call_local", "reliable")
+func _rpc_req_reply_ticket(ticket_id: String, action: String) -> void:
+	_Contracts._rpc_req_reply_ticket(ticket_id, action)
+
+
+func do_reply_ticket(ticket_id: String, action: String, peer_id: int) -> void:
+	_Contracts.do_reply_ticket(ticket_id, action, peer_id)
+
+
+@rpc("any_peer", "call_local", "reliable")
+func _rpc_req_answer_call() -> void:
+	_Contracts._rpc_req_answer_call()
+
+
+@rpc("any_peer", "call_local", "reliable")
+func _rpc_req_resolve_call(choice: String) -> void:
+	_Contracts._rpc_req_resolve_call(choice)
+
+
+@rpc("any_peer", "call_local", "reliable")
+func _rpc_req_toggle_contract(contract_id: String) -> void:
+	_Contracts._rpc_req_toggle_contract(contract_id)
+
+
+func do_toggle_contract(contract_id: String, peer_id: int) -> void:
+	_Contracts.do_toggle_contract(contract_id, peer_id)
+
+
+func _roll_team_order() -> void:
+	_Contracts._roll_team_order()
+
+
+func _tick_team_order(dt: float) -> void:
+	_Contracts._tick_team_order(dt)

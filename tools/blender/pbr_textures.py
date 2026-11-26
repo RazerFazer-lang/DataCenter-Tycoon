@@ -1203,6 +1203,9 @@ def generate_all(cache_dir: str) -> dict:
 
 
 if __name__ == "__main__":
-    out = os.path.join(os.path.dirname(os.path.abspath(__file__)), "_pbr_cache")
+    import sys
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    import dct_paths
+    out = dct_paths.PBR_CACHE
     res = generate_all(out)
     print(f"PBR TEXTURES READY: {len(res)} sets in {out}")

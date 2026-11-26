@@ -1,4 +1,8 @@
-"""Exportiert jedes DCT-Modell (Root-Empty mit Property "dct_model_id") als eigene .glb nach assets/models/.
+"""Exportiert jedes DCT-Modell (Root-Empty mit Property "dct_model_id") als eigene .glb nach assets/models/
+(bzw. dct_paths.MODELS_DIR). Fehlt eine der Collections, wird nur die vorhandene exportiert.
+
+Ohne GUI (so ruft build_all.py es auf):
+    blender -b --factory-startup --python build_utilities.py --python export_models.py
 
 Aufruf in Blender:
     p = r"<pfad>/export_models.py"
@@ -9,20 +13,29 @@ Spiel entspricht. Blender Z oben / Front -Y wird beim Export (export_yup) zu God
 Custom Properties (dct_*) landen als glTF-Extras im Modell.
 """
 import os
+import sys
 
 import bpy
 
 COLLECTIONS = ("DCT_Racks", "DCT_Utilities")
 HERE = os.path.dirname(os.path.abspath(__file__))
-OUT_DIR = os.path.normpath(os.path.join(HERE, "..", "..", "assets", "models"))
+if HERE not in sys.path:
+    sys.path.insert(0, HERE)
+
+import dct_paths  # noqa: E402
+
+OUT_DIR = dct_paths.MODELS_DIR
 
 
 def model_roots():
     found = []
-    for cn in COLLECTIONS:
-        coll = bpy.data.collections.get(cn)
+    colls = [bpy.data.collections.get(cn) for cn in COLLECTIONS]
+    if all(c is None for c in colls):
+        raise RuntimeError(f"Collections {COLLECTIONS} fehlen. Erst build_racks.py bzw. build_utilities.py ausfuehren.")
+    for cn, coll in zip(COLLECTIONS, colls):
         if coll is None:
-            raise RuntimeError(f"Collection {cn} fehlt. Erst build_racks.py bzw. build_utilities.py ausfuehren.")
+            print(f"Collection {cn} fehlt, uebersprungen.")
+            continue
         for ob in coll.all_objects:
             if ob.parent is None and "dct_model_id" in ob:
                 found.append(ob)

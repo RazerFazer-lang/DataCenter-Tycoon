@@ -18,6 +18,7 @@ Benoetigt Blender 4.x oder neuer (Principled BSDF mit "Emission Color" und "Emis
 """
 import math
 import os
+import sys
 
 import bmesh
 import bpy
@@ -26,7 +27,12 @@ from mathutils import Euler, Matrix, Vector
 MODEL_ID = "terminal_desk"
 COLLECTION = "DCT_Desk"
 HERE = os.path.dirname(os.path.abspath(__file__))
-OUT_DIR = os.path.normpath(os.path.join(HERE, "..", "..", "assets", "models"))
+if HERE not in sys.path:
+    sys.path.insert(0, HERE)
+
+import dct_paths  # noqa: E402
+
+OUT_DIR = dct_paths.MODELS_DIR
 IDENT = Matrix.Identity(4)
 
 # Achsen fuer Zylinder: Blender-Zylinder liegen auf Z, Godot-Y entspricht Blender-Z.

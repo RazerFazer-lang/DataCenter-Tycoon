@@ -20,7 +20,12 @@ import bpy
 from mathutils import Matrix, Vector, noise
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-OUT = os.path.normpath(os.path.join(HERE, "..", "..", "assets", "models", "human.glb"))
+if HERE not in sys.path:
+    sys.path.insert(0, HERE)
+
+import dct_paths  # noqa: E402
+
+OUT = os.path.join(dct_paths.MODELS_DIR, "human.glb")
 V = Vector
 
 

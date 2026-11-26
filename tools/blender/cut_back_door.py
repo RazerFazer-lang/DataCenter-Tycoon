@@ -7,7 +7,11 @@ import bmesh
 from mathutils import Vector as V
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-OUT = os.path.join(os.path.dirname(os.path.dirname(HERE)), "assets", "models")
+if HERE not in sys.path:
+    sys.path.insert(0, HERE)
+import dct_paths  # noqa: E402
+
+OUT = dct_paths.MODELS_DIR
 # Spielkoordinaten
 X0, X1, Y1, Z0, Z1 = -6.05, -5.30, 2.10, 3.17, 4.13
 # Blender: x = x, y = -z, z = y

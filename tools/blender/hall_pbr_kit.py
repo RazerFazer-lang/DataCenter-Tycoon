@@ -30,11 +30,12 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 if SCRIPT_DIR not in sys.path:
     sys.path.insert(0, SCRIPT_DIR)
 
+import dct_paths
 import pbr_textures
 from build_delivery_van import PartBuilder, _ensure_gltf_ao_group, _load_img, _new_mat, _save_rgb, g
 
-CACHE_DIR = os.path.join(SCRIPT_DIR, "_pbr_cache")
-OUT_MODELS_DIR = os.path.normpath(os.path.join(SCRIPT_DIR, "..", "..", "assets", "models"))
+CACHE_DIR = dct_paths.PBR_CACHE
+OUT_MODELS_DIR = dct_paths.MODELS_DIR
 
 
 # ===========================================================================
