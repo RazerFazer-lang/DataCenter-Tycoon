@@ -79,7 +79,9 @@ func _process(delta: float) -> void:
 			_yaw = lerp_angle(_yaw, atan2(-d.x, -d.z), clampf(delta * 9.0, 0.0, 1.0))
 		speed = TechnicianManager.WALK_SPEED if t < 1.0 else 0.0
 	else:
-		position = position.lerp(v.get("pos", position), clampf(delta * 6.0, 0.0, 1.0))
+		var want: Vector3 = v.get("pos", position)
+		# Nach dem Shuttle oder einem Schichtwechsel steht er woanders: dort erscheinen, nicht hinübergleiten.
+		position = want if position.distance_to(want) > 3.0 else position.lerp(want, clampf(delta * 6.0, 0.0, 1.0))
 		if phase == "work":
 			# Zur Werkbank schauen (sie steht bei x = -4,95 an der Westwand).
 			_yaw = lerp_angle(_yaw, PI * 0.5, clampf(delta * 6.0, 0.0, 1.0))

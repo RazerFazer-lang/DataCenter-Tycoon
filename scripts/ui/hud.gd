@@ -87,6 +87,7 @@ var _sub_prompt_lbl: Label
 var _pause_overlay: ColorRect
 var _pause_card: PanelContainer
 var _pause_world_lbl: Label
+var _pause_runs_lbl: Label
 var _save_section: VBoxContainer
 var _save_name_input: LineEdit
 var _pause_master_slider: HSlider
@@ -180,6 +181,9 @@ func set_pause_visible(show_pause: bool) -> void:
 		var is_host := NetworkManager.is_in_session and multiplayer.is_server()
 		if is_host and not NetworkManager.public_ip.is_empty():
 			_pause_world_lbl.text += "  •  " + tr("IP für Freunde: %s (Port %d)") % [NetworkManager.public_ip, NetworkManager.hosted_port]
+		var coop := NetworkManager.players.size() > 1 or not multiplayer.is_server()
+		_pause_runs_lbl.text = tr("Co-op: Die Welt läuft für alle weiter, auch während dieses Menü offen ist.") if coop \
+			else tr("Die Spielzeit läuft weiter, auch während dieses Menü offen ist.")
 		_save_section.visible = is_host
 		_pause_admin_btn.visible = AdminManager.is_local_admin() or AdminManager.login_available
 		_refresh_pause_players()
@@ -1424,6 +1428,11 @@ func _build_pause_overlay() -> void:
 	_pause_world_lbl.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
 	UIStyle.style_label(_pause_world_lbl, 12, UIStyle.COL_TEXT_SUB)
 	head_v.add_child(_pause_world_lbl)
+	# Das Menü hält nichts an: Uhr, Server und Mitspieler laufen weiter (auch beim Host).
+	_pause_runs_lbl = Label.new()
+	_pause_runs_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	UIStyle.style_label(_pause_runs_lbl, 12, UIStyle.COL_AMBER)
+	head_v.add_child(_pause_runs_lbl)
 
 	var accent := ColorRect.new()
 	accent.custom_minimum_size = Vector2(56, 2)

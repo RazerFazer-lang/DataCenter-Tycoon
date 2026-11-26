@@ -1,9 +1,24 @@
 {
-  "version": "3.2.0",
-  "launcher_version": "3.2.0",
-  "codename": "v3.2.0 Performance-Paket",
+  "version": "3.2.1",
+  "launcher_version": "3.2.1",
+  "codename": "v3.2.1 Stabilität & Fehler",
   "release_date": "2026-11-26",
   "changelog": [
+    {
+      "version": "v3.2.1",
+      "date": "2026-11-26",
+      "title": "Update 3.2.1: Stabilität & Fehler",
+      "items": [
+        "[CO-OP] Beim Beitreten prüfen Host und Client, ob sie genau denselben Programmstand haben. Passt er nicht, kommt eine klare Meldung statt tausender Netzwerkfehler.",
+        "[CO-OP] Beitreten klappt auch, wenn ein anderes Programm (z. B. MSI Center) fast alle UDP-Ports belegt. Ist gar keiner mehr frei, sagt das Spiel, woran es liegt.",
+        "[SPIELSTAND] Spielstände gelten nicht mehr fälschlich als „manipuliert“, wenn eine Kommazahl knapp an einer Rundungsgrenze lag.",
+        "[TECHNIKER] In Halle Nord laufen Techniker jetzt sichtbar vom Shuttle zum Rack und wieder zurück.",
+        "[TECHNIKER] Das Personal-Fenster zeigt Aufträge, an die der Techniker nicht herankommt, und hat einen Knopf „Jetzt erneut versuchen“.",
+        "[CO-OP] Das Pausemenü zeigt an, dass die Welt für alle weiterläuft.",
+        "[FEHLER] Kein Fehler mehr im Log, wenn kleine Schrift sofort wieder verschwindet. Engine-Fehler stehen jetzt mit Spielkontext im Log, das hilft bei der Fehlersuche.",
+        "[CO-OP] Alle Mitspieler brauchen v3.2.1."
+      ]
+    },
     {
       "version": "v3.2.0",
       "date": "2026-11-26",

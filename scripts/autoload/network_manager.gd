@@ -37,6 +37,26 @@ const DISCOVERY_INTERVAL := 1.0
 const DISCOVERY_TIMEOUT_MS := 3500
 const DISCOVERY_MAGIC := "DCT_LAN_1"
 const DISCOVERY_MAX_BYTES := 512
+## Ausweich-Ports für den Client, falls Windows keinen zufälligen Port mehr vergibt
+## (unterhalb des Windows-Bereichs 49152–65535, den z. B. MSI Center komplett belegen kann).
+const CLIENT_PORT_FALLBACK := 38200
+const CLIENT_PORT_FALLBACK_COUNT := 40
+const NO_UDP_PORTS_TEXT := "Windows hat keinen freien UDP-Port mehr. Meist hält ein anderes Programm alle Ports fest (bekannt: MSI Center, Dienst „MSI.CentralServer“). Beende es oder starte den PC neu und versuche es dann noch einmal."
+## Alle Skripte mit @rpc. Ihre Netzwerkfunktionen gehen in die Prüfsumme bei der Anmeldung ein
+## (tests/stability_check.gd prüft, dass die Liste vollständig ist).
+const RPC_SCRIPTS: Array[String] = [
+	"res://scripts/autoload/admin_manager.gd",
+	"res://scripts/autoload/decor_manager.gd",
+	"res://scripts/autoload/finance_manager.gd",
+	"res://scripts/autoload/game_state.gd",
+	"res://scripts/autoload/mail_manager.gd",
+	"res://scripts/autoload/market_manager.gd",
+	"res://scripts/autoload/network_manager.gd",
+	"res://scripts/autoload/outdoor_manager.gd",
+	"res://scripts/autoload/pc_screen_state.gd",
+	"res://scripts/autoload/technician_manager.gd",
+	"res://scripts/world/world_controller.gd",
+]
 
 const PLAYER_COLORS := [
 	Color(0.22, 0.72, 0.98), # Cyan
@@ -67,6 +87,9 @@ var _crypto := Crypto.new()
 var _joining: bool = false
 var _join_password: String = ""
 var _join_error: String = ""
+var _net_build: String = ""
+## Nur für Tests: tut so, als vergäbe Windows keinen UDP-Port mehr.
+var test_no_udp_ports: bool = false
 
 ## peer_id -> Ping in ms (Host = 0). Wird vom Host verteilt.
 var player_pings: Dictionary = {}
@@ -219,9 +242,12 @@ func _start_host_internal(player_name: String, port: int, loaded_state: Dictiona
 		SettingsManager.save_settings()
 
 	var peer := ENetMultiplayerPeer.new()
-	var err := peer.create_server(port, MAX_PLAYERS if dedicated else MAX_PLAYERS - 1)
+	var err := peer.create_server(port, MAX_PLAYERS if dedicated else MAX_PLAYERS - 1) if not test_no_udp_ports else ERR_CANT_CREATE
 	if err != OK:
-		connection_failed.emit(tr("Port %d konnte nicht geöffnet werden (Fehler %d).") % [port, err])
+		if free_udp_port() <= 0:
+			connection_failed.emit(tr(NO_UDP_PORTS_TEXT))
+		else:
+			connection_failed.emit(tr("Port %d (UDP) ist schon belegt, vermutlich von einem zweiten Spiel oder Server auf diesem PC. Beende es oder wähle einen anderen Port (Fehler %d).") % [port, err])
 		return err
 
 	multiplayer.multiplayer_peer = peer
@@ -271,8 +297,14 @@ func join_game(ip: String, player_name: String, port: int = DEFAULT_PORT, passwo
 	_last_join = {"ip": clean_ip, "port": port, "password": _join_password}
 	_kick_reason = ""
 
+	# Eigenen Port vorher fest belegen: Sonst sucht Windows erst beim ersten Senden einen, und gibt
+	# es keinen mehr, scheitert jedes Paket still und am Ende steht nur „Keine Antwort vom Host“.
+	var local_port := free_udp_port()
+	if local_port <= 0:
+		connection_failed.emit(tr(NO_UDP_PORTS_TEXT))
+		return ERR_CANT_CREATE
 	var peer := ENetMultiplayerPeer.new()
-	var err := peer.create_client(clean_ip, port)
+	var err := peer.create_client(clean_ip, port, 0, 0, 0, local_port)
 	if err != OK:
 		connection_failed.emit(tr("Verbindung zu %s:%d fehlgeschlagen (Fehler %d).") % [clean_ip, port, err])
 		return err
@@ -281,6 +313,25 @@ func join_game(ip: String, player_name: String, port: int = DEFAULT_PORT, passwo
 	multiplayer.multiplayer_peer = peer
 	DisplayServer.window_set_title("DataCenter Tycoon Co-op [CLIENT - %s]" % local_player_name)
 	return OK
+
+
+## Ein freier lokaler UDP-Port: zuerst einer, den Windows vergibt, sonst einer aus dem Ausweichbereich.
+## 0 = keiner frei.
+func free_udp_port() -> int:
+	if test_no_udp_ports:
+		return 0
+	var probe := PacketPeerUDP.new()
+	if probe.bind(0) == OK:
+		var p := probe.get_local_port()
+		probe.close()
+		if p > 0:
+			return p
+	for p in range(CLIENT_PORT_FALLBACK, CLIENT_PORT_FALLBACK + CLIENT_PORT_FALLBACK_COUNT):
+		var t := PacketPeerUDP.new()
+		if t.bind(p) == OK:
+			t.close()
+			return p
+	return 0
 
 
 func leave_session() -> void:
@@ -400,6 +451,7 @@ func _on_peer_authenticating(peer_id: int) -> void:
 	_send_auth_msg(peer_id, {
 		"t": "hello",
 		"v": UIStyle.game_version(),
+		"b": net_build_id(),
 		"pw": not host_password.is_empty(),
 		"nonce": nonce,
 	})
@@ -424,21 +476,28 @@ func _handle_client_login(peer_id: int, msg: Dictionary) -> void:
 		return # Unerwartete Nachricht: auth_timeout trennt den Client.
 	var nonce := str(_auth_nonces[peer_id])
 	_auth_nonces.erase(peer_id) # Ein Versuch pro Verbindung.
-	var reason := ""
-	var client_ip := _get_peer_ip(peer_id)
-	var client_version := str(msg.get("v", "?")).left(32)
-	if is_ip_banned(client_ip):
-		reason = "Du wurdest vom Host aus dieser Sitzung gebannt."
-	elif client_version != UIStyle.game_version():
-		reason = _version_mismatch_text(UIStyle.game_version(), client_version, false)
-	elif not host_password.is_empty() and str(msg.get("proof", "")) != _password_proof(nonce, host_password):
-		reason = "Falsches Passwort."
+	var reason := login_reject_reason(msg, nonce, _get_peer_ip(peer_id))
 	if not reason.is_empty():
 		# Nicht bestätigen: Der Client trennt sich selbst, sonst greift AUTH_TIMEOUT.
 		_send_auth_msg(peer_id, {"t": "result", "ok": false, "reason": reason})
 		return
 	_send_auth_msg(peer_id, {"t": "result", "ok": true})
 	(multiplayer as SceneMultiplayer).complete_auth(peer_id)
+
+
+## Warum der Host eine Anmeldung ablehnt (unübersetzt, der Client übersetzt). Leer = angenommen.
+func login_reject_reason(msg: Dictionary, nonce: String, client_ip: String) -> String:
+	var client_version := str(msg.get("v", "?")).left(32)
+	var client_build := str(msg.get("b", "")).left(32)
+	if is_ip_banned(client_ip):
+		return "Du wurdest vom Host aus dieser Sitzung gebannt."
+	if client_version != UIStyle.game_version():
+		return _version_mismatch_text(UIStyle.game_version(), client_version, false)
+	if client_build != net_build_id():
+		return _build_mismatch_text(net_build_id(), client_build, false)
+	if not host_password.is_empty() and str(msg.get("proof", "")) != _password_proof(nonce, host_password):
+		return "Falsches Passwort."
+	return ""
 
 
 func _handle_host_reply(msg: Dictionary) -> void:
@@ -451,6 +510,11 @@ func _handle_host_reply(msg: Dictionary) -> void:
 				_join_error = _version_mismatch_text(host_version, UIStyle.game_version())
 				_fail_join.call_deferred(_join_error)
 				return
+			var host_build := str(msg.get("b", "")).left(32)
+			if host_build != net_build_id():
+				_join_error = _build_mismatch_text(host_build, net_build_id())
+				_fail_join.call_deferred(_join_error)
+				return
 			if bool(msg.get("pw", false)) and _join_password.is_empty():
 				_join_error = tr("Diese Welt ist mit einem Passwort geschützt. Trage es unter „Passwort“ ein.")
 				_fail_join.call_deferred(_join_error)
@@ -458,6 +522,7 @@ func _handle_host_reply(msg: Dictionary) -> void:
 			_send_auth_msg(1, {
 				"t": "login",
 				"v": UIStyle.game_version(),
+				"b": net_build_id(),
 				"proof": _password_proof(str(msg.get("nonce", "")), _join_password),
 			})
 		"result":
@@ -480,6 +545,50 @@ func _fail_join(reason: String) -> void:
 func _version_mismatch_text(host_version: String, client_version: String, localize: bool = true) -> String:
 	var fmt := "Andere Spielversion: Host hat %s, Client hat %s. Beide brauchen dieselbe Version."
 	return (tr(fmt) if localize else fmt) % [host_version, client_version]
+
+
+## Gleiche Version, anderer Programmstand: Die Netzwerkfunktionen passen nicht zusammen.
+func _build_mismatch_text(host_build: String, client_build: String, localize: bool = true) -> String:
+	var fmt := "Gleiche Spielversion, aber ein anderer Programmstand (Netzwerk-Prüfsumme Host %s, Client %s). Beide brauchen denselben Download, am einfachsten über den Launcher."
+	return (tr(fmt) if localize else fmt) % [host_build if not host_build.is_empty() else "?", client_build if not client_build.is_empty() else "?"]
+
+
+## Prüfsumme aller Netzwerkfunktionen (Name, @rpc-Einstellungen, Parameter) der Skripte in RPC_SCRIPTS.
+## Weicht sie ab, laufen sonst tausende „rpc node checksum failed“-Fehler auf, ohne dass jemand erfährt, warum.
+func net_build_id() -> String:
+	if not _net_build.is_empty():
+		return _net_build
+	var parts := PackedStringArray()
+	for path in RPC_SCRIPTS:
+		var scr := load(path) as Script
+		if scr == null:
+			parts.append(path + ":fehlt")
+			continue
+		var args := {}
+		for m in scr.get_script_method_list():
+			var sig := PackedStringArray()
+			for a in (m["args"] as Array):
+				sig.append("%s:%d" % [str(a["name"]), int(a["type"])])
+			args[str(m["name"])] = ",".join(sig)
+		var rows := PackedStringArray()
+		var cfg: Variant = scr.get_rpc_config()
+		if cfg is Dictionary:
+			# Als String sortieren: StringNames sortiert Godot nach Speicheradresse, also je Start anders.
+			var names := PackedStringArray()
+			for n in (cfg as Dictionary).keys():
+				names.append(str(n))
+			names.sort()
+			for n in names:
+				var c: Variant = (cfg as Dictionary).get(StringName(n), (cfg as Dictionary).get(n))
+				var ck := PackedStringArray()
+				if c is Dictionary:
+					for k in (c as Dictionary).keys():
+						ck.append("%s=%s" % [str(k), str(c[k])])
+				ck.sort()
+				rows.append("%s(%s)%s" % [n, str(args.get(n, "")), ";".join(ck)])
+		parts.append(path.get_file() + ":" + "|".join(rows))
+	_net_build = "\n".join(parts).sha256_text().left(10)
+	return _net_build
 
 
 func _password_proof(nonce: String, password: String) -> String:
@@ -852,7 +961,7 @@ func _on_connected_to_server() -> void:
 
 
 func _on_connection_failed() -> void:
-	_fail_join(tr("Keine Antwort vom Host. Prüfe IP-Adresse, Port (7777) oder VPN."))
+	_fail_join(tr("Keine Antwort vom Host. Prüfe IP-Adresse, Port (%d) oder VPN.") % int(_last_join.get("port", DEFAULT_PORT)))
 
 
 func _on_server_disconnected() -> void:

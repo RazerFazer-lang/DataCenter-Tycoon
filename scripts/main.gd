@@ -24,9 +24,15 @@ var _pc_entering: bool = false
 var _pc_enter_token: int = 0
 # Der Ladebildschirm läuft einmal beim Programmstart, danach kommt das Hauptmenü.
 var _startup_done: bool = false
+## Schreibt zu Engine-Fehlern den Spielkontext ins Log (siehe ErrorWatch).
+var error_watch: ErrorWatch = null
 
 
 func _ready() -> void:
+	error_watch = ErrorWatch.new()
+	error_watch.context_provider = _error_context
+	OS.add_logger(error_watch)
+
 	loading_screen = LoadingScreen.new()
 	$UI.add_child(loading_screen)
 	loading_screen.loading_finished.connect(_on_loading_finished)
@@ -92,6 +98,37 @@ func _ready() -> void:
 	# Ablauf: Verion-Digital Studio- & Titel-Intro -> nahtloser Ladebildschirm -> 3D-Hauptmenü.
 	intro_splash.start_intro()
 	_warm_up_views()
+
+
+## Vor dem Abbau abmelden: Godot meldet beim Beenden noch Dinge, wenn GDScript schon heruntergefahren ist.
+func _exit_tree() -> void:
+	if error_watch != null:
+		OS.remove_logger(error_watch)
+		error_watch = null
+
+
+## Wo war man, als ein Engine-Fehler kam? Eine Zeile fürs Log, ohne persönliche Daten.
+func _error_context() -> String:
+	var parts := PackedStringArray()
+	if not NetworkManager.is_in_session:
+		parts.append("Hauptmenü")
+	else:
+		parts.append("%s, %d Spieler" % ["Host" if multiplayer.is_server() else "Client", NetworkManager.players.size()])
+		var lp: Node3D = world.local_player if world != null else null
+		if lp != null:
+			var p := lp.position
+			var site := "Halle Nord" if p.z < -80.0 else ("Garage" if OutdoorWorld.HALL.has_point(Vector2(p.x, p.z)) else "draußen")
+			parts.append("%s (%.1f, %.1f, %.1f)" % [site, p.x, p.y, p.z])
+		parts.append("Tag %d %s Uhr" % [GameState.day_number, GameState.get_time_string()])
+	var open := PackedStringArray()
+	for n: Node in [intro_splash, loading_screen, main_menu, terminal_ui, rack_inspector, workbench_ui, admin_ui, avatar_ui]:
+		if n != null and n is CanvasItem and (n as CanvasItem).visible:
+			open.append(n.get_class() if n.get_script() == null else str((n.get_script() as Script).get_global_name()))
+	if _is_paused:
+		open.append("Pause")
+	parts.append("offen: " + (", ".join(open) if not open.is_empty() else "nichts"))
+	parts.append("%.1f s nach Start, Bild %d, %d Knoten" % [Time.get_ticks_msec() / 1000.0, Engine.get_frames_drawn(), int(Performance.get_monitor(Performance.OBJECT_NODE_COUNT))])
+	return " | ".join(parts)
 
 
 ## Blickpunkte, die beim ersten Hinsehen sonst kurz ruckeln (Shader, Pipelines, Texturen).

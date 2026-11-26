@@ -37,6 +37,12 @@
       "items": [
         {
           "tag": "neu",
+          "version": "v3.2.1",
+          "title": "Stabilität & Fehler",
+          "desc": "Klare Meldungen bei falschem Programmstand und fehlenden Ports, keine falschen „manipuliert“-Spielstände, Techniker laufen sichtbar in Halle Nord, liegengebliebene Aufträge im Personal-Fenster."
+        },
+        {
+          "tag": "neu",
           "version": "v3.2",
           "title": "Performance-Paket",
           "desc": "Mehr FPS ohne Grafikverlust, kein Ruckler beim ersten Rundgang, schnellerer Simulationstakt, weniger Netzverkehr und ein kleinerer Download."

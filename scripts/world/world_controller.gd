@@ -667,7 +667,14 @@ func get_port_world_pos(cable_type: String, endpoint_id: String) -> Variant:
 
 func _on_node_added_label(n: Node) -> void:
 	if n is Label3D:
-		_limit_small_label.call_deferred(n)
+		# Nur die ID merken: Wird die Schrift noch im selben Bild gelöscht, scheitert sonst der verzögerte Aufruf.
+		_limit_small_label_id.call_deferred(n.get_instance_id())
+
+
+static func _limit_small_label_id(id: int) -> void:
+	var n: Object = instance_from_id(id)
+	if n != null:
+		_limit_small_label(n)
 
 
 ## Kleine Schrift (unter 10 cm hoch) blendet weich aus, sobald sie nur noch etwa 4 Pixel hoch wäre.

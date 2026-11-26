@@ -100,6 +100,8 @@ func _ready() -> void:
 	MarketManager.action_result.connect(_on_app_result.bind("market"))
 	GameState.call_changed.connect(_refresh_call_popup)
 	FinanceManager.finance_changed.connect(_on_finance_changed)
+	# „Gerade: …“ und liegengebliebene Aufträge im Personal-Fenster aktuell halten.
+	TechnicianManager.technician_changed.connect(_mark_dirty.bind(["staff"]))
 	FinanceManager.action_result.connect(_on_finance_result)
 	visibility_changed.connect(_on_visibility_changed)
 	visibility_changed.connect(_close_price_overlay)

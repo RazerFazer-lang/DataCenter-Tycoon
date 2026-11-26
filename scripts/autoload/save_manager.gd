@@ -53,7 +53,7 @@ func save_world(save_id: String, display_name: String, state_data: Dictionary, m
 	var clean_display := SecurityGuard.sanitize_label(display_name, 32, clean_id)
 
 	var serialized_state := _serialize_state(state_data)
-	var state_sig := SecurityGuard.compute_save_signature(serialized_state)
+	var state_sig := signature_for_file(serialized_state)
 	var rack_count := (state_data.get("racks", {}) as Dictionary).size()
 	var payload := {
 		"version": SAVE_FORMAT_VERSION,
@@ -83,6 +83,14 @@ func save_world(save_id: String, display_name: String, state_data: Dictionary, m
 	file.store_string(json_text)
 	file.close()
 	return {"ok": true, "save_id": clean_id, "display_name": clean_display, "path": path}
+
+
+## Signatur über genau die Werte, die beim Laden wieder aus der Datei kommen. JSON schreibt Kommazahlen
+## nur mit 14 Stellen und macht ganze Zahlen zu Kommazahlen. Lag ein Wert knapp an einer Rundungsgrenze,
+## rundete die Prüfung nach dem Laden anders als beim Speichern, und der Spielstand galt als „manipuliert“.
+func signature_for_file(serialized_state: Dictionary) -> String:
+	var stored: Variant = JSON.parse_string(JSON.stringify(serialized_state))
+	return SecurityGuard.compute_save_signature(stored if stored is Dictionary else serialized_state)
 
 
 func load_world_file(save_id: String) -> Dictionary:

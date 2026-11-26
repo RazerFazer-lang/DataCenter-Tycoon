@@ -10,7 +10,11 @@ const WALK_SPEED := 1.5
 const HOME := Vector3(-3.35, 0.0, 3.35)
 const BENCH_STAND := Vector3(-4.05, 0.0, 2.25)
 const SHUTTLE := Vector3(-4.6, 0.0, -3.4)
+## Haltestelle in Halle Nord (vor dem Shuttle-Kiosk), relativ zu GameState.HALLE_NORD_ORIGIN.
+const NORD_STOP := Vector3(3.2, 0.0, -3.9)
 const SHUTTLE_TIME := 12.0
+## Wie lange ein Auftrag liegen bleibt, wenn der Techniker nicht hinkommt.
+const BLOCKED_MS := 60000
 const THINK_INTERVAL := 1.5
 const YIELD_TIME := 12.0
 const DAY_START := 6.0 / 24.0
@@ -46,6 +50,7 @@ var _skips: Dictionary = {}
 var _job: Dictionary = {}          # {kind, rack, slot, crate, fixed}
 var _warned: Dictionary = {}
 var _unreachable: Dictionary = {}  # Kiste/Rack -> Zeitpunkt, bis zu dem es liegen bleibt
+var _unreachable_why: Dictionary = {}  # Kiste/Rack -> was der Techniker vorhatte
 var _post_wait: float = 0.0
 var _rng := RandomNumberGenerator.new()
 
@@ -67,6 +72,7 @@ func reset() -> void:
 	_skips = {}
 	_warned = {}
 	_unreachable = {}
+	_unreachable_why = {}
 	_outdoor_read = false
 	_outdoor_cells = []
 	_after = Callable()
@@ -143,6 +149,67 @@ func _rpc_req_set_duty(emp_id: String, duty: String, on: bool) -> void:
 	d[duty] = on
 	e["duties"] = d
 	FinanceManager.sync_employees()
+
+
+## Liegengebliebene Aufträge sofort wieder versuchen (Knopf im Personal-Fenster).
+func request_retry_blocked() -> void:
+	_rpc_req_retry_blocked.rpc_id(1)
+
+
+@rpc("any_peer", "call_local", "reliable")
+func _rpc_req_retry_blocked() -> void:
+	if not multiplayer.is_server() or _unreachable.is_empty():
+		return
+	if not SecurityGuard.check_rate_limit(_sender(), "tech_opt", 12, 5.0):
+		return
+	_unreachable = {}
+	_unreachable_why = {}
+	_yield_left = 0.0
+	_think = 0.0
+	_warned.erase("noway")
+	_send_blocked()
+
+
+## Nur die Liste der liegengebliebenen Aufträge neu verteilen (ohne den Laufweg neu zu starten).
+func _send_blocked() -> void:
+	if view.is_empty():
+		return
+	view["blocked"] = _blocked_list()
+	_rpc_sync_blocked.rpc(view["blocked"])
+
+
+@rpc("authority", "call_local", "reliable")
+func _rpc_sync_blocked(list: Array) -> void:
+	if view.is_empty():
+		return
+	view["blocked"] = list
+	view["blocked_stamp"] = Time.get_ticks_msec()
+	technician_changed.emit()
+
+
+## [[Bezeichnung, Sekunden bis zum nächsten Versuch, Grund], …]
+func _blocked_list() -> Array:
+	var out: Array = []
+	var now := Time.get_ticks_msec()
+	for id in _unreachable.keys():
+		var left := int(_unreachable[id]) - now
+		if left <= 0:
+			_unreachable.erase(id)
+			_unreachable_why.erase(id)
+			continue
+		out.append([_blocked_label(str(id)), int(ceilf(float(left) / 1000.0)), str(_unreachable_why.get(id, ""))])
+	return out
+
+
+func _blocked_label(id: String) -> String:
+	if GameState.racks.has(id):
+		var p: Vector3 = GameState.racks[id].get("pos", Vector3.ZERO)
+		return GameState.get_rack_display_name(id) + (" (%s)" % tr("Halle Nord") if _is_remote(p) else "")
+	if GameState.crates.has(id):
+		var c: Dictionary = GameState.crates[id]
+		var p2: Vector3 = c.get("pos", Vector3.ZERO)
+		return GameState.get_crate_display_label(c) + (" (%s)" % tr("Halle Nord") if _is_remote(p2) else "")
+	return id
 
 
 func _sender() -> int:
@@ -232,7 +299,8 @@ func _leave_bench() -> void:
 func _set_phase(phase: String, text: String, path: Array = [], dur: float = 0.0) -> void:
 	_phase = phase
 	var carry := str(_job.get("carry", ""))
-	view = {"id": _emp_id, "name": str(_me().get("name", "")), "phase": phase, "path": path, "dur": dur, "pos": _pos, "text": text, "carry": carry, "stamp": Time.get_ticks_msec()}
+	view = {"id": _emp_id, "name": str(_me().get("name", "")), "phase": phase, "path": path, "dur": dur, "pos": _pos, "text": text, "carry": carry,
+		"blocked": _blocked_list(), "stamp": Time.get_ticks_msec()}
 	_rpc_sync_view.rpc(view)
 
 
@@ -256,10 +324,17 @@ func _run_after() -> void:
 
 # ------------------------------------------------------------------ Wege
 
-func _walk_to(target: Vector3, text: String, after: Callable) -> void:
+## Zu einem Ort laufen. Liegt er am anderen Standort, fährt das Shuttle. Ohne Weg: if_no_way, sonst _no_way.
+func _walk_to(target: Vector3, text: String, after: Callable, if_no_way: Callable = Callable()) -> void:
+	if _is_remote(target) != _is_remote(_pos):
+		_ride(target, text, after)
+		return
 	var way := find_path(_pos, target)
 	if way.is_empty():
-		_no_way()
+		if if_no_way.is_valid():
+			if_no_way.call()
+		else:
+			_no_way(text)
 		return
 	_path = way
 	_use_back_door(way)
@@ -273,10 +348,11 @@ func _walk_to(target: Vector3, text: String, after: Callable) -> void:
 
 
 ## Kein Weg dorthin (Tor zu, Ware hinter dem Zaun): Auftrag liegen lassen und später wieder versuchen.
-func _no_way() -> void:
+func _no_way(why: String = "") -> void:
 	for k in ["crate", "rack"]:
 		if str(_job.get(k, "")) != "":
-			_unreachable[str(_job[k])] = Time.get_ticks_msec() + 60000
+			_unreachable[str(_job[k])] = Time.get_ticks_msec() + BLOCKED_MS
+			_unreachable_why[str(_job[k])] = why
 	_drop_carried()
 	_job = {}
 	_yield_left = 3.0
@@ -284,11 +360,11 @@ func _no_way() -> void:
 	_set_phase("idle", tr("wartet, der Weg ist versperrt"))
 
 
-## Führt der Weg durch die Hintertür, macht der Techniker sie auf.
 func _is_unreachable(id: String) -> bool:
 	return Time.get_ticks_msec() < int(_unreachable.get(id, 0))
 
 
+## Führt der Weg durch die Hintertür, macht der Techniker sie auf.
 func _use_back_door(way: Array) -> void:
 	if bool(OutdoorManager.state.get("door", false)):
 		return
@@ -319,8 +395,10 @@ const BACK_DOOR := Rect2(-6.3, 3.4, 1.4, 0.5)
 ## Wände und ein geschlossenes Tor sind immer dicht. Ist der Weg nur zugestellt, zwängt sich der
 ## Techniker zwischen den Möbeln durch. Leer heißt: dort kommt man nicht hin.
 func find_path(a: Vector3, b: Vector3) -> Array:
+	if _is_remote(a) != _is_remote(b):
+		return [] # Zwischen den Standorten fährt das Shuttle (siehe _ride).
 	for with_things in [true, false]:
-		var grid := _build_grid(with_things)
+		var grid := _build_nord_grid(with_things) if _is_remote(a) else _build_grid(with_things)
 		var sa := _free_cell(grid, a)
 		var sb := _free_cell(grid, b)
 		if sa == Vector2i.MAX or sb == Vector2i.MAX:
@@ -423,9 +501,10 @@ func _block_things(grid: AStarGrid2D) -> void:
 			_block_entity(grid, k, Vector2(0.36, 0.52))
 
 
+## Gilt für Garage und Halle Nord: Was außerhalb des Rasters steht, übergeht _block.
 func _block_entity(grid: AStarGrid2D, e: Dictionary, half: Vector2) -> void:
 	var p: Variant = e.get("pos", null)
-	if p is Vector3 and (p as Vector3).z > -100.0:
+	if p is Vector3:
 		_block(grid, Vector2((p as Vector3).x, (p as Vector3).z), half, float(e.get("rot_y", 0.0)))
 
 
@@ -441,6 +520,47 @@ func _block(grid: AStarGrid2D, c: Vector2, half: Vector2, rot: float) -> void:
 			var d := Vector2(x * CELL, y * CELL) - c
 			if grid.is_in_boundsv(id) and absf(d.dot(ax)) < h.x and absf(d.dot(az)) < h.y:
 				grid.set_point_solid(id, true)
+
+
+## Feste Einbauten in Halle Nord (lokal, Mitte und halbe Größe): Leitstand, Stromverteiler mit Router,
+## Shuttle-Kiosk, Lagerregale an der Westwand, ESD-Werkbank.
+const NORD_SOLID := [[7.1, -4.1, 2.8, 1.85], [-6.9, -5.2, 3.2, 0.75], [3.2, -5.1, 0.9, 0.85], [-9.55, 1.85, 0.28, 1.63], [-6.9, 5.45, 0.78, 0.41]]
+
+## Raster für Halle Nord: nur der Innenraum, Wände sind der Rand.
+func _build_nord_grid(with_things: bool) -> AStarGrid2D:
+	var oz := GameState.HALLE_NORD_ORIGIN.z
+	var grid := AStarGrid2D.new()
+	var lo := Vector2i(int(ceilf(-9.6 / CELL)), int(ceilf((oz - 5.6) / CELL)))
+	var hi := Vector2i(int(floorf(9.6 / CELL)), int(floorf((oz + 5.6) / CELL)))
+	grid.region = Rect2i(lo, hi - lo + Vector2i.ONE)
+	grid.cell_size = Vector2(CELL, CELL)
+	grid.diagonal_mode = AStarGrid2D.DIAGONAL_MODE_ONLY_IF_NO_OBSTACLES
+	grid.update()
+	for b in NORD_SOLID:
+		_block(grid, Vector2(float(b[0]), float(b[1]) + oz), Vector2(float(b[2]), float(b[3])), 0.0)
+	if with_things:
+		_block_things(grid)
+	return grid
+
+
+func _nord_stop() -> Vector3:
+	return GameState.HALLE_NORD_ORIGIN + NORD_STOP
+
+
+## Zwischen Garage und Halle Nord: zur Haltestelle gehen, mit dem Shuttle fahren (dabei unsichtbar)
+## und drüben von der Haltestelle aus weiterlaufen.
+func _ride(target: Vector3, text: String, after: Callable) -> void:
+	var to_nord := _is_remote(target)
+	var there := _nord_stop() if to_nord else SHUTTLE
+	var ride_text := tr("mit dem Shuttle nach Halle Nord") if to_nord else tr("mit dem Shuttle zurück")
+	var go := func():
+		_after = func():
+			_pos = there
+			_walk_to(target, text, after)
+		_wait = SHUTTLE_TIME
+		_set_phase("wait", ride_text)
+	# Ist die Haltestelle zugestellt, nimmt er trotzdem das Shuttle, statt festzusitzen.
+	_walk_to(_nord_stop() if not to_nord else SHUTTLE, text, go, go)
 
 
 func _wall_x(grid: AStarGrid2D, wx: float, z0: float, z1: float) -> void:
@@ -509,21 +629,18 @@ func _is_remote(p: Vector3) -> bool:
 	return p.z < -100.0
 
 
-## Zu einem Ort gehen; nach Halle Nord fährt das Shuttle.
+## Zu einem Ort gehen; nach Halle Nord und zurück fährt das Shuttle (siehe _ride).
 func _travel(target: Vector3, text: String, after: Callable) -> void:
-	if not _is_remote(target):
-		_walk_to(target, text, after)
-		return
-	_walk_to(SHUTTLE, text, func():
-		_after = after
-		_wait = SHUTTLE_TIME
-		_set_phase("wait", tr("mit dem Shuttle nach Halle Nord")))
-	# Während der Fahrt ist die Figur nicht zu sehen (Phase "wait" mit Text).
+	_walk_to(target, text, after)
 
 
 # ------------------------------------------------------------------ Arbeit finden
 
 func _idle(text: String) -> void:
+	# Nach einem Einsatz in Halle Nord fährt er zurück an seinen Platz.
+	if _is_remote(_pos):
+		_walk_to(HOME, text, func(): _set_phase("idle", text))
+		return
 	if _pos.distance_to(HOME) > 0.4:
 		var way := find_path(_pos, HOME)
 		# Steht sein Platz voll, wartet er so nah dran, wie es geht.
@@ -742,13 +859,7 @@ func _fetch(rack_id: String, slot_idx: int, text: String) -> void:
 			return
 		GameState.crates[cid]["tech"] = true
 		_job["carry"] = cid
-		var back := func(): _walk_to(BENCH_STAND, tr("trägt den Server zur Werkbank"), _put_crate_on_bench)
-		if _is_remote(_rack_front(rack_id)):
-			_after = back
-			_wait = SHUTTLE_TIME
-			_set_phase("wait", tr("mit dem Shuttle zurück"))
-		else:
-			back.call())
+		_walk_to(BENCH_STAND, tr("trägt den Server zur Werkbank"), _put_crate_on_bench))
 
 
 func _try_install_from_bench() -> bool:

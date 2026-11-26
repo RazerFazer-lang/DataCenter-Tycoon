@@ -126,6 +126,7 @@ static func _technician_options(info: VBoxContainer, e: Dictionary) -> void:
 	var on_duty: bool = str(TechnicianManager.view.get("id", "")) == eid
 	if on_duty:
 		info.add_child(_label(_t("Gerade: %s") % str(TechnicianManager.view.get("text", "")), 12, COL_GOOD, true))
+		_blocked_jobs(info)
 	var row := HBoxContainer.new()
 	row.add_theme_constant_override("separation", 6)
 	info.add_child(row)
@@ -137,6 +138,35 @@ static func _technician_options(info: VBoxContainer, e: Dictionary) -> void:
 		var on: bool = TechnicianManager.has_duty(e, duty)
 		row.add_child(_button(("✓ " if on else "✗ ") + _t(str(d[1])), COL_GOOD if on else COL_MUTED,
 			func(): TechnicianManager.request_set_duty(eid, duty, not on)))
+
+
+## Aufträge, an die der Techniker nicht herankam: was, wann er es wieder versucht, Knopf für sofort.
+static func _blocked_jobs(info: VBoxContainer) -> void:
+	var list: Array = TechnicianManager.view.get("blocked", []) if TechnicianManager.view.get("blocked", []) is Array else []
+	if list.is_empty():
+		return
+	var since := float(Time.get_ticks_msec() - int(TechnicianManager.view.get("blocked_stamp", TechnicianManager.view.get("stamp", 0)))) / 1000.0
+	var shown := 0
+	for b_v in list:
+		if not (b_v is Array) or (b_v as Array).size() < 3:
+			continue
+		var b: Array = b_v
+		var left := int(ceilf(float(b[1]) - since))
+		if left <= 0:
+			continue
+		var what := str(b[2]).strip_edges()
+		var line := _t("Kommt nicht hin: %s") % str(b[0])
+		if what != "":
+			line += "  •  " + _t("wollte: %s") % what
+		line += "  •  " + _t("neuer Versuch in %d s") % left
+		info.add_child(_label(line, 12, COL_WARN, true))
+		shown += 1
+	if shown == 0:
+		return
+	info.add_child(_label("Meist steht etwas im Weg oder das Garagentor ist zu.", 11, COL_MUTED, true))
+	var retry := _button(_t("Jetzt erneut versuchen"), COL_ACCENT, func(): TechnicianManager.request_retry_blocked())
+	retry.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
+	info.add_child(retry)
 
 
 # ---------------------------------------------------------------- Bank
