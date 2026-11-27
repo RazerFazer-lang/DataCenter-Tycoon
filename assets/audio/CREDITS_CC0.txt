@@ -1,3 +1,5 @@
 CC0 1.0 Universal (Public Domain) Audio Assets:
 - footstep_0.ogg .. footstep_4.ogg: Kenney "Impact Sounds" (footstep_concrete_000..004.ogg), CC0 1.0 (https://kenney.nl/assets/impact-sounds)
 - extinguisher_start.wav, extinguisher_loop.wav, extinguisher_stop.wav: Sliced from Freesound #642961 "Fire Extinguisher" by tranzfusion, CC0 1.0 (https://freesound.org/s/642961/)
+- pen_write_loop.ogg: aus BigSoundBank "Pencil #1" (https://bigsoundbank.com/s0221.html) und "Pencil, signature #1-#3" (https://bigsoundbank.com/s3236.html, s3237.html, s3238.html), Pausen entfernt und aneinandergesetzt, CC0 (public domain)
+- pen_click.ogg: Ausschnitt aus BigSoundBank "Pen click" (https://bigsoundbank.com/s0613.html), CC0 (public domain)

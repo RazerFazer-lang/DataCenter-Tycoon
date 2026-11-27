@@ -24,6 +24,7 @@ const SCRIPTS: Array[String] = [
 	"res://scripts/ui/finance_apps.gd",
 	"res://scripts/server/dedicated_server.gd",
 	"res://scripts/ui/whats_new.gd",
+	"res://scripts/ui/changelog_page.gd",
 	"res://scripts/data/steam_bridge.gd",
 	"res://scripts/autoload/achievement_manager.gd",
 	"res://scripts/autoload/game_state/power.gd",

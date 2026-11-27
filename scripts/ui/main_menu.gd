@@ -89,6 +89,9 @@ var _server_list: VBoxContainer
 var _server_timer: Timer
 ## Liste auf der Seite ERFOLGE.
 var _achievements_box: VBoxContainer
+## Reiter CHANGELOG und die Version, die vor diesem Start zuletzt gesehen wurde (alles danach ist „NEU“).
+var _changelog_page: ChangelogPage
+var _changelog_new_after := ""
 ## Auswahl der Schwierigkeit beim neuen Spiel (GAME-10).
 var _difficulty_option: OptionButton
 
@@ -115,28 +118,34 @@ func _ready() -> void:
 	_check_whats_new.call_deferred()
 
 
-## REL-06: Nach einem Update einmal zeigen, was neu ist.
+## REL-06: Nach einem Update einmal den Reiter CHANGELOG öffnen. Neue Versionen sind dort markiert.
 func _check_whats_new() -> void:
 	var current := UIStyle.game_version()
 	if DisplayServer.get_name() == "headless":
 		return
 	var returning := not SaveManager.list_saves().is_empty()
 	if WhatsNew.should_show(SettingsManager.last_seen_version, current, returning):
-		_open_whats_new(SettingsManager.last_seen_version)
-	elif SettingsManager.last_seen_version != current:
+		_changelog_new_after = SettingsManager.last_seen_version if SettingsManager.last_seen_version != "" else _previous_version(current)
+		_open_changelog()
+	if SettingsManager.last_seen_version != current:
 		SettingsManager.remember_seen_version(current)
 
 
-## Zeigt die Neuigkeiten seit after ("" = die letzten Versionen).
-func _open_whats_new(after: String = "") -> void:
-	if get_node_or_null("WhatsNew") != null:
+## Version vor current im Changelog (für Spieler, die noch keine gesehene Version gespeichert haben).
+func _previous_version(current: String) -> String:
+	var best := ""
+	for e in WhatsNew.load_changelog():
+		var v := str((e as Dictionary).get("version", ""))
+		if WhatsNew.compare(v, current) < 0 and (best == "" or WhatsNew.compare(v, best) > 0):
+			best = v
+	return best
+
+
+func _open_changelog() -> void:
+	if _changelog_page == null:
 		return
-	var current := UIStyle.game_version()
-	var dlg := WhatsNew.new()
-	dlg.name = "WhatsNew"
-	add_child(dlg)
-	dlg.setup(WhatsNew.entries_between(WhatsNew.load_changelog(), after, current), current)
-	dlg.closed.connect(func() -> void: SettingsManager.remember_seen_version(current))
+	_changelog_page.setup(WhatsNew.load_changelog(), _changelog_new_after, _display_font)
+	_switch_page("changelog")
 
 
 func refresh_on_show() -> void:
@@ -282,7 +291,7 @@ func _switch_page(page_id: String, animate: bool = true) -> void:
 	if _skin_editor_panel != null:
 		_skin_editor_panel.set_preview_active(page_id == "skin_editor")
 	if _content_card != null:
-		_content_card.custom_minimum_size.x = 900.0 if page_id == "skin_editor" else 520.0
+		_content_card.custom_minimum_size.x = 900.0 if page_id == "skin_editor" else (820.0 if page_id == "changelog" else 520.0)
 
 
 func _parse_port(text: String) -> int:
@@ -828,6 +837,7 @@ func _build_ui() -> void:
 	_pages["skin_editor"] = _skin_editor_panel
 	_pages["settings"] = _build_settings_page()
 	_pages["achievements"] = _build_achievements_page()
+	_pages["changelog"] = _build_changelog_page()
 	for p in _pages.values():
 		stack.add_child(p as Control)
 
@@ -935,6 +945,7 @@ func _build_nav_column() -> Control:
 	_add_nav_button(nav_v, "join_game", "CO-OP BEITRETEN", "Per IP mit Freunden spielen")
 	_add_nav_button(nav_v, "skin_editor", "FIGUR", "Gesicht, Kleidung und Outfits")
 	_add_nav_button(nav_v, "achievements", "ERFOLGE", "Was du schon geschafft hast")
+	_add_nav_button(nav_v, "changelog", "CHANGELOG", "Alle Updates und Neuerungen")
 	_add_nav_button(nav_v, "settings", "EINSTELLUNGEN", "Grafik, Audio und Steuerung")
 
 	var spacer := Control.new()
@@ -972,7 +983,7 @@ func _build_footer() -> Control:
 	news_btn.focus_mode = Control.FOCUS_NONE
 	news_btn.add_theme_font_size_override("font_size", 11)
 	news_btn.add_theme_color_override("font_color", Color(UIStyle.COL_GOLD_TEXT, 0.85))
-	news_btn.pressed.connect(_open_whats_new)
+	news_btn.pressed.connect(_open_changelog)
 	footer.add_child(news_btn)
 
 	var ver_lbl := Label.new()
@@ -1352,6 +1363,17 @@ func _build_join_game_page() -> Control:
 
 
 ## REL-07: Erfolge des Spielers über alle Welten.
+func _build_changelog_page() -> Control:
+	var v := VBoxContainer.new()
+	v.add_theme_constant_override("separation", 6)
+	v.add_child(_page_heading("CHANGELOG", "Alle Updates, neueste zuerst. Links eine Version wählen, rechts steht, was sie gebracht hat."))
+	_changelog_page = ChangelogPage.new()
+	_changelog_page.name = "Changelog"
+	v.add_child(_changelog_page)
+	_changelog_page.setup(WhatsNew.load_changelog(), _changelog_new_after, _display_font)
+	return v
+
+
 func _build_achievements_page() -> Control:
 	var scroll := ScrollContainer.new()
 	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED

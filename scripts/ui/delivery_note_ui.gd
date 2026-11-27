@@ -449,7 +449,7 @@ func _process(delta: float) -> void:
 		_pen_from = _pen_pos
 		_pen_blend = 0.0
 		if over:
-			SfxManager.play("click", -20.0, 1.7)
+			SfxManager.play("pen_click", -8.0, randf_range(0.96, 1.04))
 	Input.mouse_mode = Input.MOUSE_MODE_HIDDEN if over else Input.MOUSE_MODE_VISIBLE
 	var park: Array = _parked()
 	var target: Vector2 = mouse if _pen_held else park[0]

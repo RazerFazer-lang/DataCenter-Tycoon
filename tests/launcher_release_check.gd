@@ -97,23 +97,26 @@ func _check_whats_new_logic() -> void:
 
 func _check_whats_new_dialog() -> void:
 	var current := str(ProjectSettings.get_setting("application/config/version", ""))
-	var entries := WhatsNew.entries_between(WhatsNew.load_changelog(), "3.2.1", current)
-	var dlg := WhatsNew.new()
-	root.add_child(dlg)
-	dlg.setup(entries, current)
+	var log := WhatsNew.load_changelog()
+	var CP: GDScript = load("res://scripts/ui/changelog_page.gd")
+	var page: Control = CP.new()
+	root.add_child(page)
+	page.call("setup", log, "3.5.0")
 	await wait(2)
-	var rows := 0
+	chk("Changelog: jede Version in der Liste", page.find_children("Version_*", "Button", true, false).size() == log.size(), log.size())
+	chk("Changelog: neueste Version ist gewählt", WhatsNew.compare(page.call("selected"), current) == 0, page.call("selected"))
+	chk("Changelog: neue Versionen sind markiert", page.call("is_new", current) and not page.call("is_new", "3.5.0") and not page.call("is_new", "3.4.0"))
 	var want := 0
-	for e in entries:
-		want += (e["items"] as Array).size()
-	for n in dlg.find_children("Punkt_*", "HBoxContainer", true, false):
-		rows += 1
-	chk("Fenster zeigt jeden Punkt der neuen Versionen", rows == want and want > 0, [rows, want])
-	var closed := [false]
-	dlg.closed.connect(func() -> void: closed[0] = true)
-	dlg.close()
+	for e in log:
+		if WhatsNew.compare(str(e["version"]), "3.6.0") == 0:
+			want = (e["items"] as Array).size()
+	page.call("select", "v3.6.0")
 	await wait(2)
-	chk("Fenster schließt", closed[0] and not is_instance_valid(dlg))
+	var rows := page.find_children("Punkt_*", "HBoxContainer", true, false).size()
+	chk("Changelog: zeigt jeden Punkt der gewählten Version", rows == want and want > 0, [rows, want])
+	chk("Changelog: Kennungen landen im richtigen Bereich", CP.category_of("NEU / STROM") == "neu" and CP.category_of("FIX") == "fix" and CP.category_of("CO-OP") == "coop" and CP.category_of("PERFORMANCE") == "technik" and CP.category_of("WAS ANDERES") == "sonst")
+	chk("Changelog: Titel ohne „Update x:“", CP.short_title("Update 3.6.1: Lieferschein mit Unterschrift") == "Lieferschein mit Unterschrift")
+	page.queue_free()
 	var sm := root.get_node("SettingsManager")
 	sm.remember_seen_version("3.4.0")
 	var cfg := ConfigFile.new()
@@ -131,6 +134,8 @@ func _check_menu_page() -> void:
 		return
 	var pages: Dictionary = menu.get("_pages")
 	chk("Hauptmenü hat die Seite ERFOLGE", pages.has("achievements"))
+	chk("Hauptmenü hat den Reiter CHANGELOG", pages.has("changelog") and (menu.get("_nav_buttons") as Dictionary).has("changelog"))
+	chk("Kein Changelog-Overlay mehr", menu.find_child("WhatsNew", true, false) == null)
 	menu.call("_switch_page", "achievements", false)
 	var box: VBoxContainer = menu.get("_achievements_box")
 	await wait(2)

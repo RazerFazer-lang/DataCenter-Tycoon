@@ -193,6 +193,10 @@ func _load_external_audio_samples() -> void:
 		_footstep_count = loaded_steps
 		_sounds["footstep"] = _sounds["footstep_0"]
 
+	# Kugelschreiber-Klick beim Aufnehmen des Stifts (Lieferschein), echte Aufnahme
+	var pen_click := _load_audio_file("pen_click")
+	if pen_click != null:
+		_sounds["pen_click"] = pen_click
 	var ext_start := _load_audio_file("extinguisher_start")
 	if ext_start != null:
 		_sounds["extinguisher_start"] = ext_start

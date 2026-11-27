@@ -1,8 +1,8 @@
 class_name SignaturePad
 extends Control
 ## Feld für eine handschriftliche Unterschrift mit der Maus. Die Strichstärke folgt dem Tempo wie bei einem
-## Kugelschreiber: langsam dick, schnell dünn. Beim Schreiben kratzt der Stift hörbar über das Papier,
-## je schneller, desto lauter. Mit readonly zeigt es nur fertige Striche (z. B. den Fahrer).
+## Kugelschreiber: langsam dick, schnell dünn. Beim Schreiben ist eine echte Aufnahme von Stift auf Papier
+## zu hören, je schneller, desto lauter. Mit readonly zeigt es nur fertige Striche (z. B. den Fahrer).
 
 signal changed
 
@@ -20,20 +20,14 @@ var _drawing := false
 var _last_t := 0
 ## Fertige Striche (0..1), die bei jeder Größenänderung neu auf das Feld gelegt werden.
 var _source: Array = []
-# Schreibgeräusch: gefiltertes Rauschen, Lautstärke folgt dem Tempo.
-const MIX := 22050.0
+# Schreibgeräusch: echte Aufnahme (Stift auf Papier, CC0, siehe assets/audio/CREDITS_CC0.txt).
+# Sie läuft in Schleife, solange geschrieben wird; Lautstärke und etwas Tonhöhe folgen dem Tempo.
+const WRITE_LOOP := "res://assets/audio/pen_write_loop.ogg"
+const WRITE_DB := -3.0
 var _audio: AudioStreamPlayer
-var _pb: AudioStreamGeneratorPlayback
 var _amp := 0.0
 var _amp_target := 0.0
 var _last_move := 0
-var _tick := 0.0
-var _w_prev := 0.0
-var _hp := 0.0
-var _lp := 0.0
-var _body := 0.0
-var _grain := 1.0
-var _grain_n := 0
 
 
 func _ready() -> void:
@@ -45,64 +39,35 @@ func _ready() -> void:
 		queue_redraw()
 	)
 	if not readonly:
-		var gen := AudioStreamGenerator.new()
-		gen.mix_rate = MIX
-		gen.buffer_length = 0.08
 		_audio = AudioStreamPlayer.new()
-		_audio.stream = gen
-		_audio.volume_db = -4.0
+		if ResourceLoader.exists(WRITE_LOOP):
+			var st: AudioStream = (load(WRITE_LOOP) as AudioStream).duplicate()
+			if st is AudioStreamOggVorbis:
+				(st as AudioStreamOggVorbis).loop = true
+			_audio.stream = st
+		_audio.volume_db = -80.0
 		add_child(_audio)
-		visibility_changed.connect(_sync_audio)
-		_sync_audio.call_deferred()
 
 
 func is_drawing() -> bool:
 	return _drawing
 
 
-func _sync_audio() -> void:
-	if _audio == null or not is_inside_tree():
+func _process(delta: float) -> void:
+	if _audio == null or _audio.stream == null:
 		return
-	if is_visible_in_tree() and not _audio.playing:
-		_audio.play()
-		_pb = _audio.get_stream_playback() as AudioStreamGeneratorPlayback
-	elif not is_visible_in_tree() and _audio.playing:
-		_audio.stop()
-		_pb = null
-
-
-func _process(_delta: float) -> void:
-	if _pb == null:
-		return
-	if not _drawing or Time.get_ticks_msec() - _last_move > 45:
+	if not _drawing or Time.get_ticks_msec() - _last_move > 60:
 		_amp_target = 0.0
-	var n := _pb.get_frames_available()
-	if n <= 0:
-		return
+	# Schnell lauter beim Ansetzen, etwas langsamer leiser beim Stillhalten.
+	_amp = lerpf(_amp, _amp_target, clampf(delta * (30.0 if _amp_target > _amp else 12.0), 0.0, 1.0))
 	var gain := SettingsManager.get_effective_sfx_gain()
-	var buf := PackedVector2Array()
-	buf.resize(n)
-	for i in n:
-		_amp += (_amp_target - _amp) * (0.012 if _amp_target > _amp else 0.0035)
-		if _amp < 0.0004 and _tick < 0.0004:
-			continue
-		var w := randf_range(-1.0, 1.0)
-		# Hochpass gegen Rumpeln, Tiefpass gegen Zischen: übrig bleibt das Kratzen der Kugel.
-		_hp = 0.86 * (_hp + w - _w_prev)
-		_w_prev = w
-		_lp += 0.5 * (_hp - _lp)
-		# Das Brett darunter klingt dumpf mit.
-		_body += 0.03 * (w - _body)
-		_grain_n -= 1
-		if _grain_n <= 0:
-			_grain = randf_range(0.5, 1.0)
-			_grain_n = randi_range(40, 160)
-		var v := (_lp * 0.50 * _grain + _body * 0.85) * _amp
-		if _tick > 0.0004:
-			v += (w * 0.35 + _body * 3.2) * _tick
-			_tick *= 0.982
-		buf[i] = Vector2(v, v) * gain
-	_pb.push_buffer(buf)
+	if _amp > 0.02 and gain > 0.005 and is_visible_in_tree():
+		if not _audio.playing:
+			_audio.play(randf() * maxf(0.0, _audio.stream.get_length() - 2.0))
+		_audio.volume_db = WRITE_DB + linear_to_db(_amp * gain)
+		_audio.pitch_scale = 0.94 + 0.12 * _amp_target
+	elif _audio.playing and _amp <= 0.02:
+		_audio.stop()
 
 
 func clear() -> void:
@@ -176,7 +141,6 @@ func _gui_input(event: InputEvent) -> void:
 		if mb.pressed:
 			_drawing = true
 			_last_t = Time.get_ticks_msec()
-			_tick = 0.9
 			_strokes.append(PackedVector2Array([mb.position]))
 			_widths.append(PackedFloat32Array([W_MAX * 0.7]))
 			if _strokes.size() > DeliveryNote.MAX_STROKES:
@@ -201,7 +165,7 @@ func _gui_input(event: InputEvent) -> void:
 		var speed := dist / maxf(1.0, float(now - _last_t))
 		_last_t = now
 		var target := clampf(W_MAX - speed * 1.35, W_MIN, W_MAX)
-		_amp_target = clampf(pow(speed / 1.3, 0.7), 0.15, 1.0)
+		_amp_target = clampf(pow(speed / 1.3, 0.7), 0.2, 1.0)
 		_last_move = now
 		s.append(p)
 		w.append(lerpf(w[w.size() - 1], target, 0.35))
