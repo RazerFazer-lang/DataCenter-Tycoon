@@ -1,9 +1,20 @@
 {
-  "version": "3.6.1",
-  "launcher_version": "3.6.1",
-  "codename": "v3.6.1 Lieferschein mit Unterschrift",
+  "version": "3.6.2",
+  "launcher_version": "3.6.2",
+  "codename": "v3.6.2 Changelog im Hauptmenü",
   "release_date": "2026-11-27",
   "changelog": [
+    {
+      "version": "v3.6.2",
+      "date": "2026-11-27",
+      "title": "Update 3.6.2: Changelog im Hauptmenü",
+      "items": [
+        "[NEU] Reiter CHANGELOG im Hauptmenü: links alle Versionen mit Datum und Kurztitel, rechts die gewählte Version, nach Bereichen sortiert (Neu, Gameplay, Verbesserungen, Grafik & Ton, Co-op, Technik, Fehler behoben).",
+        "[VERBESSERUNG] Nach einem Update öffnet das Hauptmenü den Reiter einmal und markiert neue Versionen. Das alte Fenster „Neu in Version“ ist weg.",
+        "[AUDIO] Lieferschein: Schreiben und Stift-Klick sind jetzt echte Aufnahmen. Lautstärke und Klang folgen deinem Schreibtempo.",
+        "[CO-OP] Alle Mitspieler brauchen v3.6.2."
+      ]
+    },
     {
       "version": "v3.6.1",
       "date": "2026-11-27",

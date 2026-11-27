@@ -1,0 +1,10 @@
+{
+  "title": "Changelog im Hauptmenü",
+  "items": [
+    "[NEU] Reiter CHANGELOG im Hauptmenü: links alle Versionen mit Datum und Kurztitel, rechts die gewählte Version, nach Bereichen sortiert (Neu, Gameplay, Verbesserungen, Grafik & Ton, Co-op, Technik, Fehler behoben).",
+    "[VERBESSERUNG] Nach einem Update öffnet das Hauptmenü den Reiter einmal und markiert neue Versionen. Das alte Fenster „Neu in Version“ ist weg.",
+    "[AUDIO] Lieferschein: Schreiben und Stift-Klick sind jetzt echte Aufnahmen. Lautstärke und Klang folgen deinem Schreibtempo.",
+    "[CO-OP] Alle Mitspieler brauchen v3.6.2."
+  ],
+  "roadmap": "Changelog als eigener Reiter im Hauptmenü, echte Aufnahmen für das Schreiben mit dem Stift."
+}

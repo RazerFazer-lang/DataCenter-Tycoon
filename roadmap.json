@@ -42,6 +42,12 @@
       "items": [
         {
           "tag": "neu",
+          "version": "v3.6.2",
+          "title": "Changelog im Hauptmenü",
+          "desc": "Changelog als eigener Reiter im Hauptmenü, echte Aufnahmen für das Schreiben mit dem Stift."
+        },
+        {
+          "tag": "neu",
           "version": "v3.6.1",
           "title": "Lieferschein mit Unterschrift",
           "desc": "Lieferschein auf dem Klemmbrett, Unterschrift mit Stift und Schreibgeräusch, der Fahrer wartet beim Unterschreiben."
