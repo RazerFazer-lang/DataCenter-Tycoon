@@ -42,6 +42,12 @@
       "items": [
         {
           "tag": "neu",
+          "version": "v3.6.1",
+          "title": "Lieferschein mit Unterschrift",
+          "desc": "Lieferschein auf dem Klemmbrett, Unterschrift mit Stift und Schreibgeräusch, der Fahrer wartet beim Unterschreiben."
+        },
+        {
+          "tag": "neu",
           "version": "v3.6.0",
           "title": "Gameplay & Wirtschaft",
           "desc": "Diesel-Notstrom, Strompreis über den Tag, Investoren und Bilanz, SLA-Stufen, Firewall, neues Personal, Fernwärme, Zertifikate, Schwierigkeitsgrade und freundlichere Gesichter."

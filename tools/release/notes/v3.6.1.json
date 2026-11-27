@@ -1,0 +1,13 @@
+{
+  "title": "Lieferschein mit Unterschrift",
+  "items": [
+    "[NEU] Lieferschein beim Fahrer: [E] zeigt ihn auf dem Klemmbrett mit Nummer, Datum, Empfänger, Lieferadresse, Fahrzeug, Kennzeichen, Fahrer und allen Positionen mit Menge und Gewicht.",
+    "[NEU] Selbst unterschreiben: Mit dem Kugelschreiber in der Hand unterschreibst du mit der Maus, hörst den Stift über das Papier kratzen und drückst auf Unterzeichnen. Danach kommt der Stempel „ERHALTEN“.",
+    "[GAMEPLAY] Solange jemand den Lieferschein in der Hand hat, wartet der Fahrer. Im Co-op sehen alle, wer gerade unterschreibt.",
+    "[VERBESSERUNG] Die Mail von Cloud Express nennt die Lieferschein-Nummer und wer unterschrieben hat.",
+    "[GRAFIK] Der Fahrer hält jetzt ein Klemmbrett statt eines Tablets.",
+    "[FIX] Fahrzeugnamen der Lieferung sind auf Englisch übersetzt.",
+    "[CO-OP] Alle Mitspieler brauchen v3.6.1."
+  ],
+  "roadmap": "Lieferschein auf dem Klemmbrett, Unterschrift mit Stift und Schreibgeräusch, der Fahrer wartet beim Unterschreiben."
+}
