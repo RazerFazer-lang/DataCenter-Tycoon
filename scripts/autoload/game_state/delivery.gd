@@ -139,6 +139,13 @@ static func _begin_unloading() -> void:
 		if it.begins_with("build:"):
 			var bd: Dictionary = GameState.pending_build_orders.get(it.substr(6), {})
 			e["label"] = "%s · Slot %d" % [str(bd.get("rack_label", "Rack")), int(bd.get("slot_idx", 0)) + 1]
+	# Lieferschein mit laufender Nummer je Tag
+	if GameState._van_note_day != GameState.day_number:
+		GameState._van_note_day = GameState.day_number
+		GameState._van_note_seq = 0
+	GameState._van_note_seq += 1
+	GameState.van_plan["doc"] = DeliveryNote.build(GameState.van_plan, GameState.van_delivery_tier, GameState.van_site,
+		GameState._van_parcel_parts.size(), GameState.day_number, GameState.get_time_string(), GameState.current_save_name, GameState._van_note_seq)
 	GameState._rpc_sync_van_plan.rpc(GameState.van_plan)
 	GameState._rpc_play_sfx.rpc("van_horn")
 	var tmeta: Dictionary = GameState.DELIVERY_TIER_META.get(GameState.van_delivery_tier, GameState.DELIVERY_TIER_META[1])
@@ -167,6 +174,14 @@ static func _update_van_trip() -> void:
 			if GameState._van_drop_i >= drops.size() and GameState.van_phase_time >= float(GameState.van_plan.get("end", 0.0)):
 				_set_van_trip("sign")
 		"sign":
+			# Hat jemand den Schein in der Hand, wartet der Fahrer (höchstens VAN_SIGN_HOLD_MAX).
+			if GameState.van_sign_peer != 0:
+				var held := float(Time.get_ticks_msec() - GameState._van_sign_since) / 1000.0
+				if not NetworkManager.players.has(GameState.van_sign_peer) or held > GameState.VAN_SIGN_HOLD_MAX:
+					GameState.van_sign_peer = 0
+					_broadcast_van_state()
+				else:
+					GameState.van_trip_time = minf(GameState.van_trip_time, GameState.VAN_SIGN_TIME - 2.0)
 			if GameState.van_trip_time >= GameState.VAN_SIGN_TIME:
 				GameState.post_event("📝 Niemand da zum Unterschreiben: Der Fahrer hat die Lieferung abgestellt.", "info")
 				_set_van_trip("enter")
@@ -175,13 +190,15 @@ static func _update_van_trip() -> void:
 				GameState.van_phase = "departing"
 				GameState.van_phase_time = 0.0
 				GameState.van_trip_phase = ""
-				MailManager.on_delivery_done(GameState.van_trip_total)
+				MailManager.on_delivery_done(GameState.van_trip_total, GameState.van_plan.get("doc", {}), str(GameState.van_plan.get("signed_by", "")))
 				_broadcast_van_state()
 		_:
 			_begin_unloading()
 
 
 static func _set_van_trip(step: String) -> void:
+	if step != "sign":
+		GameState.van_sign_peer = 0
 	GameState.van_trip_phase = step
 	GameState.van_trip_time = 0.0
 	_broadcast_van_state()
@@ -215,10 +232,31 @@ static func _spot_still_free(e: Dictionary) -> bool:
 	return true
 
 
-static func _rpc_sign_delivery() -> void:
+## action: "open" (Schein in der Hand, Fahrer wartet), "close" (zurückgegeben) oder "sign" (mit Unterschrift).
+static func _rpc_sign_delivery(action: String, strokes: Array) -> void:
 	if not GameState.multiplayer.is_server() or GameState.van_phase != "unloading" or GameState.van_trip_phase != "sign":
 		return
 	var peer_id := GameState._get_sender_id()
+	var busy := GameState.van_sign_peer != 0 and GameState.van_sign_peer != peer_id and NetworkManager.players.has(GameState.van_sign_peer)
+	match action:
+		"open":
+			if busy:
+				return
+			GameState.van_sign_peer = peer_id
+			GameState._van_sign_since = Time.get_ticks_msec()
+			_broadcast_van_state()
+			return
+		"close":
+			if GameState.van_sign_peer == peer_id:
+				GameState.van_sign_peer = 0
+				_broadcast_van_state()
+			return
+		"sign":
+			if busy or not DeliveryNote.valid_signature(strokes):
+				return
+		_:
+			return
+	GameState.van_plan["signed_by"] = NetworkManager.get_player_name(peer_id)
 	GameState.reputation = minf(100.0, GameState.reputation + GameState.VAN_SIGN_REPUTATION)
 	FinanceManager.credit_public(GameState.VAN_SIGN_TIP, "Lieferbonus")
 	GameState._rpc_play_sfx.rpc("sign_pen")
@@ -228,6 +266,7 @@ static func _rpc_sign_delivery() -> void:
 
 
 static func _reset_van_trip() -> void:
+	GameState.van_sign_peer = 0
 	GameState.van_trip_phase = ""
 	GameState.van_trip_time = 0.0
 	GameState.van_trip_done = 0
@@ -508,6 +547,7 @@ static func _broadcast_van_state() -> void:
 		"done": GameState.van_trip_done,
 		"total": GameState.van_trip_total,
 		"tier": GameState.van_delivery_tier,
+		"signer": GameState.van_sign_peer,
 		"sched_day": GameState.scheduled_delivery_day,
 		"sched_hour": GameState.scheduled_delivery_hour,
 		"express": GameState.pending_delivery_express,
@@ -527,6 +567,7 @@ static func _rpc_sync_van_state(phase: String, phase_t: float, cargo_n: int, pen
 		GameState.van_trip_done = maxi(int(trip.get("done", 0)), 0)
 		GameState.van_trip_total = maxi(int(trip.get("total", 0)), 0)
 		GameState.van_delivery_tier = clampi(int(trip.get("tier", 1)), 1, 3)
+		GameState.van_sign_peer = int(trip.get("signer", 0))
 		GameState.scheduled_delivery_day = int(trip.get("sched_day", 0))
 		GameState.scheduled_delivery_hour = int(trip.get("sched_hour", -1))
 		GameState.pending_delivery_express = bool(trip.get("express", false))

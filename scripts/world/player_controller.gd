@@ -1519,7 +1519,7 @@ func _handle_primary_interact() -> void:
 			else:
 				DecorManager.request_use(eid)
 		"delivery_sign":
-			GameState.request_sign_delivery()
+			_world.open_delivery_note()
 		"workbench":
 			GameState.select_bench(eid)
 			var wb := GameState.workbench_state
@@ -2327,7 +2327,10 @@ func _fill_context_prompt() -> void:
 			current_prompt = str(dp[0])
 			current_sub_prompt = str(dp[1])
 		"delivery_sign":
-			current_prompt = tr("[E] Lieferung unterschreiben")
+			if GameState.van_sign_peer != 0 and GameState.van_sign_peer != peer_id:
+				current_prompt = tr("%s unterschreibt gerade den Lieferschein") % NetworkManager.get_player_name(GameState.van_sign_peer)
+			else:
+				current_prompt = tr("[E] Lieferschein ansehen und unterschreiben")
 		"parts_cabinet":
 			current_prompt = tr("[E] +3 Wartungs- & Ersatzteil-Kits auffüllen ($20 • Vorrat: %d/12)") % GameState.maint_kits
 			current_sub_prompt = tr("[F] Umsetzen oder verkaufen")

@@ -211,6 +211,8 @@ const VAN_SIGN_TIME := 20.0
 const VAN_ENTER_TIME := 9.0
 const VAN_SIGN_REPUTATION := 0.4
 const VAN_SIGN_TIP := 8.0
+## So lange wartet der Fahrer höchstens, während jemand den Lieferschein in der Hand hat.
+const VAN_SIGN_HOLD_MAX := 150.0
 const VAN_PARCEL_ITEM := "parts_parcel" # Sammelpaket für bestellte Bauteile
 
 const HALL_B_COST := 1800
@@ -1332,6 +1334,11 @@ var van_trip_total: int = 0
 var van_site: String = "garage"
 var van_plan: Dictionary = {}
 var _van_drop_i: int = 0
+## Wer gerade den Lieferschein unterschreibt (0 = niemand). Der Fahrer wartet dann.
+var van_sign_peer: int = 0
+var _van_sign_since: int = 0
+var _van_note_day: int = 0
+var _van_note_seq: int = 0
 var _van_spot: Dictionary = {}
 var _van_parcel_parts: Array = []
 
@@ -1415,9 +1422,14 @@ func is_world_paused_for_empty_server() -> bool:
 	return NetworkManager.is_dedicated and NetworkManager.players.is_empty()
 
 
-## Unterschrift auf dem Tablet des Fahrers.
-func request_sign_delivery() -> void:
-	_rpc_sign_delivery.rpc_id(1)
+## Lieferschein des Fahrers: Öffnen hält den Fahrer fest, Schließen gibt ihn wieder frei.
+func request_delivery_note(open: bool) -> void:
+	_rpc_sign_delivery.rpc_id(1, "open" if open else "close", [])
+
+
+## Unterschrift auf dem Lieferschein: Striche mit Punkten von 0 bis 1 (siehe DeliveryNote).
+func request_sign_delivery(strokes: Array) -> void:
+	_rpc_sign_delivery.rpc_id(1, "sign", strokes)
 
 
 func get_level_revenue_mult() -> float:
@@ -6956,8 +6968,8 @@ func _rpc_sync_van_plan(plan: Dictionary) -> void:
 
 
 @rpc("any_peer", "call_local", "reliable")
-func _rpc_sign_delivery() -> void:
-	_Delivery._rpc_sign_delivery()
+func _rpc_sign_delivery(action: String, strokes: Array) -> void:
+	_Delivery._rpc_sign_delivery(action, strokes)
 
 
 func _reset_van_trip() -> void:

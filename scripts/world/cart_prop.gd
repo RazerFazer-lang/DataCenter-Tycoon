@@ -78,7 +78,9 @@ func _setup_audio() -> void:
 
 
 func _process(delta: float) -> void:
-	if pushed_by != multiplayer.get_unique_id():
+	# Nach dem Verlassen der Sitzung gibt es kurz keinen Peer mehr.
+	var me := multiplayer.get_unique_id() if multiplayer.has_multiplayer_peer() else 0
+	if pushed_by != me:
 		position = position.lerp(_target_pos, clampf(delta * 15.0, 0.0, 1.0))
 		rotation.y = lerp_angle(rotation.y, _target_rot_y, clampf(delta * 15.0, 0.0, 1.0))
 

@@ -16,6 +16,7 @@ var loading_screen: LoadingScreen
 var workbench_ui: WorkbenchUI
 var admin_ui: AdminUI
 var avatar_ui: AvatarEditorUI
+var delivery_note_ui: DeliveryNoteUI
 var _avatar_from_pause := false
 var _is_paused: bool = false
 var _menu_orbit_angle: float = 0.0
@@ -58,6 +59,10 @@ func _ready() -> void:
 	hud.admin_requested.connect(_open_admin)
 	AdminManager.teleport_requested.connect(_on_admin_teleport)
 
+	delivery_note_ui = DeliveryNoteUI.new()
+	$UI.add_child(delivery_note_ui)
+	delivery_note_ui.closed.connect(_on_delivery_note_closed)
+
 	avatar_ui = AvatarEditorUI.new()
 	$UI.add_child(avatar_ui)
 	avatar_ui.closed.connect(_on_avatar_closed)
@@ -82,6 +87,7 @@ func _ready() -> void:
 	world.rack_inspect_requested.connect(_open_rack_inspector)
 	world.device_inspect_requested.connect(_open_device_inspector)
 	world.workbench_open_requested.connect(_open_workbench_ui)
+	world.delivery_note_requested.connect(_open_delivery_note)
 
 	terminal_ui.close_requested.connect(_close_terminal)
 	terminal_ui.typing_state_changed.connect(_on_terminal_typing_changed)
@@ -126,7 +132,7 @@ func _error_context() -> String:
 			parts.append("%s (%.1f, %.1f, %.1f)" % [site, p.x, p.y, p.z])
 		parts.append("Tag %d %s Uhr" % [GameState.day_number, GameState.get_time_string()])
 	var open := PackedStringArray()
-	for n: Node in [intro_splash, loading_screen, main_menu, terminal_ui, rack_inspector, workbench_ui, admin_ui, avatar_ui]:
+	for n: Node in [intro_splash, loading_screen, main_menu, terminal_ui, rack_inspector, workbench_ui, admin_ui, avatar_ui, delivery_note_ui]:
 		if n != null and n is CanvasItem and (n as CanvasItem).visible:
 			open.append(n.get_class() if n.get_script() == null else str((n.get_script() as Script).get_global_name()))
 	if _is_paused:
@@ -391,6 +397,8 @@ func _input(event: InputEvent) -> void:
 			get_viewport().set_input_as_handled()
 			if avatar_ui.visible:
 				avatar_ui.close()
+			elif delivery_note_ui.visible:
+				delivery_note_ui.close()
 			elif admin_ui.visible:
 				_close_admin()
 			elif workbench_ui != null and workbench_ui.visible:
@@ -475,6 +483,7 @@ func _leave_to_menu() -> void:
 
 func _return_to_menu_ui() -> void:
 	admin_ui.visible = false
+	delivery_note_ui.visible = false
 	avatar_ui.close()
 	_is_paused = false
 	_pc_entering = false
@@ -562,6 +571,31 @@ func _close_rack_inspector() -> void:
 	if world.local_player != null:
 		world.local_player.set_ui_locked(false)
 	Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
+
+
+## Lieferschein des Fahrers: Der Spieler liest ihn und unterschreibt mit der Maus.
+func _open_delivery_note() -> void:
+	if _is_paused or terminal_ui.visible or rack_inspector.visible or workbench_ui.visible or admin_ui.visible or delivery_note_ui.visible or _pc_entering:
+		return
+	if GameState.van_phase != "unloading" or GameState.van_trip_phase != "sign":
+		return
+	var who := GameState.van_sign_peer
+	if who != 0 and who != multiplayer.get_unique_id():
+		hud.show_toast(tr("%s unterschreibt gerade den Lieferschein") % NetworkManager.get_player_name(who), true)
+		return
+	delivery_note_ui.open()
+	if world.local_player != null:
+		world.local_player.set_ui_locked(true)
+	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
+
+
+func _on_delivery_note_closed() -> void:
+	if not NetworkManager.is_in_session:
+		return
+	if world.local_player != null:
+		world.local_player.set_ui_locked(false)
+	if not (terminal_ui.visible or rack_inspector.visible or workbench_ui.visible or admin_ui.visible or avatar_ui.visible or _is_paused):
+		Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
 
 
 func _open_workbench_ui() -> void:

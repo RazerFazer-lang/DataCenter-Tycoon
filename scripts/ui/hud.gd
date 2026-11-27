@@ -493,7 +493,10 @@ func _refresh_van_badge() -> void:
 		"unloading":
 			var total_n := maxi(GameState.van_trip_total, 1)
 			var done_n := mini(GameState.van_trip_done, total_n)
-			_van_lbl.text = tr("Fahrer wartet auf Unterschrift [E]") if GameState.van_trip_phase == "sign" else tr("Fahrer lädt aus  •  %d / %d") % [done_n, total_n]
+			if GameState.van_trip_phase == "sign":
+				_van_lbl.text = tr("%s unterschreibt den Lieferschein") % NetworkManager.get_player_name(GameState.van_sign_peer) if GameState.van_sign_peer != 0 else tr("Fahrer wartet auf Unterschrift [E]")
+			else:
+				_van_lbl.text = tr("Fahrer lädt aus  •  %d / %d") % [done_n, total_n]
 			_van_lbl.add_theme_color_override("font_color", UIStyle.COL_TEXT_MAIN)
 			_van_bar.value = float(done_n) / float(total_n) * 100.0
 			_set_bar_color(_van_bar, UIStyle.COL_GREEN)

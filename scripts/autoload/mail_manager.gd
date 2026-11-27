@@ -433,10 +433,16 @@ func on_order(count: int, goods: float, shipping: float, slot_label: String, exp
 	post("order", "CloudParts.de", "bestellung@cloudparts.vrn", _t("Bestellbestätigung"), lines)
 
 
-func on_delivery_done(crates: int) -> void:
-	post("order", "Cloud Express", "zustellung@cloudexpress.vrn", _t("Deine Lieferung ist da"), [
+func on_delivery_done(crates: int, doc: Dictionary = {}, signed_by: String = "") -> void:
+	var lines: Array = [
 		_t("Guten Tag,"), _t("wir haben deine Lieferung vor dem Tor abgestellt (%d Kisten).", [crates]) if crates > 0 else _t("wir haben dein Paket abgegeben. Die Teile liegen im Lager."),
-	])
+	]
+	if not doc.is_empty():
+		if signed_by != "":
+			lines.append(_t("Lieferschein %s, unterschrieben von %s.", [str(doc.get("no", "")), signed_by]))
+		else:
+			lines.append(_t("Lieferschein %s: Niemand hat unterschrieben, die Ware wurde trotzdem abgestellt.", [str(doc.get("no", ""))]))
+	post("order", "Cloud Express", "zustellung@cloudexpress.vrn", _t("Deine Lieferung ist da"), lines)
 
 
 func _client_addr(client: String) -> String:

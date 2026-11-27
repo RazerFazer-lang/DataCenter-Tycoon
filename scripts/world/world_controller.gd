@@ -9,6 +9,7 @@ signal rack_inspect_requested(rack_id: String, slot_index: int)
 signal device_inspect_requested(kind: String, entity_id: String)
 signal workbench_open_requested
 signal locker_open_requested
+signal delivery_note_requested
 
 var local_player: PlayerController = null
 
@@ -615,6 +616,10 @@ func open_locker() -> void:
 
 func open_workbench() -> void:
 	workbench_open_requested.emit()
+
+
+func open_delivery_note() -> void:
+	delivery_note_requested.emit()
 
 
 func open_rack_inspector(rack_id: String, slot_index: int = 0) -> void:

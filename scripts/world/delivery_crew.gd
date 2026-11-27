@@ -26,26 +26,37 @@ func _ready() -> void:
 	_tablet.rotation_degrees.x = 48.0
 	_tablet.visible = false
 	_body.add_child(_tablet)
+	# Klemmbrett mit Lieferschein (passt zum Lieferschein-Fenster beim Unterschreiben)
 	var mi := MeshInstance3D.new()
 	var bm := BoxMesh.new()
-	bm.size = Vector3(0.22, 0.012, 0.16)
+	bm.size = Vector3(0.24, 0.010, 0.33)
 	mi.mesh = bm
 	var mt := StandardMaterial3D.new()
-	mt.albedo_color = Color(0.06, 0.06, 0.07)
+	mt.albedo_color = Color(0.47, 0.32, 0.19)
+	mt.roughness = 0.7
 	mi.material_override = mt
 	_tablet.add_child(mi)
 	var sc := MeshInstance3D.new()
 	var qm := BoxMesh.new()
-	qm.size = Vector3(0.20, 0.004, 0.14)
+	qm.size = Vector3(0.215, 0.003, 0.29)
 	sc.mesh = qm
-	sc.position.y = 0.008
+	sc.position = Vector3(0.0, 0.0065, 0.012)
 	var ms := StandardMaterial3D.new()
-	ms.albedo_color = Color(0.85, 0.92, 1.0)
-	ms.emission_enabled = true
-	ms.emission = Color(0.7, 0.85, 1.0)
-	ms.emission_energy_multiplier = 0.8
+	ms.albedo_color = Color(0.96, 0.95, 0.92)
+	ms.roughness = 0.9
 	sc.material_override = ms
 	_tablet.add_child(sc)
+	var clip := MeshInstance3D.new()
+	var cm := BoxMesh.new()
+	cm.size = Vector3(0.09, 0.016, 0.03)
+	clip.mesh = cm
+	clip.position = Vector3(0.0, 0.010, -0.150)
+	var mc := StandardMaterial3D.new()
+	mc.albedo_color = Color(0.72, 0.74, 0.77)
+	mc.metallic = 0.85
+	mc.roughness = 0.3
+	clip.material_override = mc
+	_tablet.add_child(clip)
 	_bubble = Label3D.new()
 	_bubble.position = Vector3(0.0, 2.02, 0.0)
 	_bubble.font_size = 30

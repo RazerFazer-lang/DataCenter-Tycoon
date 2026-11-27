@@ -573,10 +573,13 @@ func _delivery() -> void:
 	chk("Fahrer wartet auf die Unterschrift", gs.van_trip_phase == "sign")
 	var rep0: float = gs.reputation
 	var m0: float = gs.money
-	gs.request_sign_delivery()
+	gs.request_sign_delivery([])
+	await wait(1)
+	chk("ohne Unterschrift geht es nicht", gs.van_trip_phase == "sign" and gs.money == m0)
+	gs.request_sign_delivery(load("res://scripts/data/delivery_note.gd").test_signature())
 	await wait(2)
 	chk("Unterschrift bringt Ruf und Trinkgeld", gs.reputation > rep0 and gs.money > m0 and gs.van_trip_phase == "enter")
-	gs.request_sign_delivery()
+	gs.request_sign_delivery(load("res://scripts/data/delivery_note.gd").test_signature())
 	await wait(1)
 	chk("nur einmal", absf(gs.money - m0 - gs.VAN_SIGN_TIP) < 0.01)
 	_run_van(40.0)
