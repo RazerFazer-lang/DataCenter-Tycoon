@@ -24,7 +24,7 @@ Liegt daneben `v3.5.0.md`, ist das der Text des GitHub-Releases, sonst wird er a
 
 Schalter: `-DryRun` (bis Schritt 8, nichts wird committet oder hochgeladen), `-SkipTests`, `-FullTests`, `-SkipSmoke`, `-NoDelta`, `-Godot <pfad>` (oder Umgebungsvariable `DCT_GODOT`).
 
-Bricht bei jedem Fehler ab. Logs liegen in `%TEMP%\dct_release\v<Version>\logs`.
+Bricht bei jedem Fehler ab. Logs liegen in `dist\work\v<Version>\logs`.
 `Roadmap.txt`, Logs, `dist/` und Build-Ordner können nicht in den Commit geraten.
 
 ## Signieren (REL-04)

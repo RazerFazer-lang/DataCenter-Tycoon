@@ -36,9 +36,13 @@ param(
 # Abgebrochen wird deshalb gezielt: Fail() und -ErrorAction Stop an den wichtigen Stellen.
 $ErrorActionPreference = 'Continue'
 $Root = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
-$Dist = Join-Path $Root 'dist\release'
-$Work = Join-Path $env:TEMP "dct_release\v$Version"
-$Iso = Join-Path $env:TEMP 'dct_release\appdata'
+$ReleaseDist = Join-Path $Root 'dist\release'
+# Ein Probelauf schreibt nicht über die echten Release-Dateien: Die nächste Version baut ihr Delta gegen sie.
+$Dist = if ($DryRun) { Join-Path $Root 'dist\dryrun' } else { $ReleaseDist }
+# Nicht unter %TEMP%: Beim Release von v3.6.0 sind dort zweimal Ordner mitten im Lauf verschwunden.
+# dist/ ist in .gitignore, die .gdignore (siehe unten) hält Godot aus dem Ordner heraus.
+$Work = Join-Path $Root "dist\work\v$Version"
+$Iso = Join-Path $Root 'dist\work\appdata'
 $Tag = "v$Version"
 $GameZip = "DataCenterTycoon-$Tag-win64.zip"
 $LauncherZip = "DataCenterLauncher-$Tag-win64.zip"
@@ -49,7 +53,7 @@ $Started = Get-Date
 
 function Step([string]$Text) {
   $script:StepNo++
-  # Leere Ordner unter %TEMP% räumt Windows manchmal mitten im Lauf weg (Speicheroptimierung). Darum vor jedem Schritt neu anlegen.
+  # Fehlende Arbeitsordner vor jedem Schritt neu anlegen, falls sie jemand weggeräumt hat.
   if ($script:StepNo -gt 1) { New-Item -ItemType Directory -Force "$Work\game", "$Work\launcher", "$Work\logs", $Iso, "$Iso\l" -ErrorAction SilentlyContinue | Out-Null }
   Write-Host ""
   Write-Host ("[{0,2}] {1}" -f $script:StepNo, $Text) -ForegroundColor Cyan
@@ -108,7 +112,9 @@ Write-Host "  Godot:     $Godot"
 Write-Host "  Arbeit:    $Work"
 Write-Host ("  Vorversion für kleines Update: " + $(if ($Prev) { $Prev } else { "keine" }))
 Remove-Item -Recurse -Force $Work -ErrorAction SilentlyContinue
-New-Item -ItemType Directory -Force "$Work\game", "$Work\launcher", "$Work\logs", $Iso, "$Iso\l", $Dist -ErrorAction Stop | Out-Null
+New-Item -ItemType Directory -Force "$Work\game", "$Work\launcher", "$Work\logs", $Iso, "$Iso\l", $Dist, $ReleaseDist -ErrorAction Stop | Out-Null
+# Godot soll dist/ nicht als Teil des Projekts einlesen (exportierte .pck, Zips, Arbeitsordner).
+if (-not (Test-Path "$Root\dist\.gdignore")) { New-Item -ItemType File "$Root\dist\.gdignore" -ErrorAction Stop | Out-Null }
 
 # ---------------------------------------------------------------- Version
 Step "Version $Version setzen und Changelog eintragen"
@@ -189,9 +195,9 @@ foreach ($a in $Assets) { $h = Sha $a; Write-Host ("  {0}  {1:N1} MB  {2}" -f (S
 # ---------------------------------------------------------------- Kleines Update (REL-02)
 if ($Prev -and -not $NoDelta) {
   Step "Kleines Update von $Prev"
-  $prevZip = "$Dist\DataCenterTycoon-$Prev-win64.zip"
+  $prevZip = "$ReleaseDist\DataCenterTycoon-$Prev-win64.zip"
   if (-not (Test-Path $prevZip)) {
-    gh release download $Prev --repo $Repo --pattern "DataCenterTycoon-$Prev-win64.zip" --dir $Dist
+    gh release download $Prev --repo $Repo --pattern "DataCenterTycoon-$Prev-win64.zip" --dir $ReleaseDist
     if ($LASTEXITCODE -ne 0) { Fail "Vorversion $Prev nicht ladbar." }
   }
   $delta = "$Dist\DataCenterTycoon-$Tag-from-$Prev-win64.delta"
@@ -202,8 +208,13 @@ if ($Prev -and -not $NoDelta) {
   Expand-Archive -Path $prevZip -DestinationPath "$check\old" -Force -ErrorAction Stop
   $code = Run 'dotnet' @('run', '--project', (Q "$Root\tools\delta\DeltaTool.csproj"), '-c', 'Release', '--', 'apply', '--delta', (Q $delta), '--install', (Q "$check\old"), '--out', (Q "$check\new")) "$Work\logs\delta_apply.log"
   if ($code -ne 0) { Fail "Delta lässt sich nicht anwenden (Log: $Work\logs\delta_apply.log)" }
-  foreach ($f in Get-ChildItem "$Work\game" -File) {
-    $a = (Get-FileHash $f.FullName).Hash; $b = (Get-FileHash (Join-Path "$check\new" $f.Name)).Hash
+  # Fehlt der Spielordner, darf die Gegenprobe nicht stillschweigend „ok“ melden (so beinahe bei v3.6.0).
+  $newFiles = @(Get-ChildItem "$Work\game" -File -ErrorAction SilentlyContinue)
+  if ($newFiles.Count -lt 3) { Fail "Delta-Gegenprobe: $Work\game fehlt oder ist unvollständig ($($newFiles.Count) Dateien)." }
+  foreach ($f in $newFiles) {
+    $other = Join-Path "$check\new" $f.Name
+    if (-not (Test-Path $other)) { Fail "Delta-Gegenprobe: $($f.Name) fehlt nach dem Anwenden." }
+    $a = (Get-FileHash $f.FullName).Hash; $b = (Get-FileHash $other).Hash
     if ($a -ne $b) { Fail "Delta-Gegenprobe: $($f.Name) weicht ab." }
   }
   $null = Sha $delta
@@ -213,7 +224,7 @@ if ($Prev -and -not $NoDelta) {
 
 if ($DryRun) {
   Write-Host ""
-  Write-Host "Probedurchlauf fertig ($([int]((Get-Date) - $Started).TotalMinutes) Min.). Nichts committet, nichts hochgeladen." -ForegroundColor Green
+  Write-Host "Probedurchlauf fertig ($([int]((Get-Date) - $Started).TotalMinutes) Min.). Nichts committet, nichts hochgeladen. Zips in $Dist." -ForegroundColor Green
   Write-Host "Die Versionsdateien sind lokal schon auf $Version gesetzt (git diff zeigt sie)."
   exit 0
 }
