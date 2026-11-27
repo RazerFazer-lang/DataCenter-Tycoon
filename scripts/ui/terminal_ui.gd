@@ -14,6 +14,9 @@ var _call_popup: PanelContainer
 var _call_body: VBoxContainer
 ## Apps, deren Fenster neu gezeichnet werden müssen (App -> true).
 var _dirty_apps: Dictionary = {}
+## Scrollstellungen, die nach dem Neuzeichnen noch gesetzt werden müssen: app -> {"vals": Array[int], "frames": int}.
+## Die neue Liste kennt ihre Höhe erst nach ein paar Layout-Durchläufen und würde sonst auf 0 zurückspringen.
+var _scroll_restore: Dictionary = {}
 var _dirty_accum := 0.0
 var _mouse_down := false
 var _idle_accum := 0.0
@@ -128,6 +131,8 @@ func _process(delta: float) -> void:
 		_price_overlay.set_meta("vt", true)
 		_price_overlay.add_to_group("verion_overlay")
 	_process_dirty(delta)
+	if not _scroll_restore.is_empty():
+		_apply_scroll_restore()
 
 	if not _typing_ticket_id.is_empty():
 		_typing_timer -= delta
@@ -514,8 +519,13 @@ func _render_window(app: String) -> void:
 	var parts := tr(str(meta["title"])).split(" — ", true, 1)
 	w.set_title(parts[0], parts[1] if parts.size() > 1 else "", str(meta["icon"]))
 	var scrolls: Array[int] = []
+	var pending: Array = (_scroll_restore.get(app, {}) as Dictionary).get("vals", [])
 	for sc in w.body.find_children("*", "ScrollContainer", true, false):
-		scrolls.append((sc as ScrollContainer).scroll_vertical)
+		var v := (sc as ScrollContainer).scroll_vertical
+		# Läuft das Zurücksetzen vom letzten Neuzeichnen noch, gilt dessen Ziel.
+		if scrolls.size() < pending.size():
+			v = maxi(v, int(pending[scrolls.size()]))
+		scrolls.append(v)
 	for c in w.body.get_children():
 		w.body.remove_child(c)
 		c.queue_free()
@@ -556,6 +566,27 @@ func _render_window(app: String) -> void:
 			sc.get_v_scroll_bar().max_value = maxf(sc.get_v_scroll_bar().max_value, 100000.0)
 			sc.scroll_vertical = scrolls[i]
 		i += 1
+	if scrolls.any(func(v: int) -> bool: return v > 0):
+		_scroll_restore[app] = {"vals": scrolls, "frames": 12}
+
+
+## Setzt gemerkte Scrollstellungen erneut, bis die neu gebaute Liste lang genug ist.
+func _apply_scroll_restore() -> void:
+	for app in _scroll_restore.keys():
+		var r: Dictionary = _scroll_restore[app]
+		var w := _desktop.window(app) if _desktop != null else null
+		r["frames"] = int(r["frames"]) - 1
+		if w == null or int(r["frames"]) < 0:
+			_scroll_restore.erase(app)
+			continue
+		var vals: Array = r["vals"]
+		var i := 0
+		for sc_n in w.body.find_children("*", "ScrollContainer", true, false):
+			if i < vals.size() and int(vals[i]) > 0:
+				var sc := sc_n as ScrollContainer
+				if sc.scroll_vertical != int(vals[i]):
+					sc.scroll_vertical = int(vals[i])
+			i += 1
 
 
 func _refresh_tray() -> void:

@@ -137,17 +137,7 @@ def build_own_hall_exterior(tex: dict, lib: dict):
         pb.box((lx, 2.82, 4.92), (0.26, 0.09, 0.06), lamp_glow, bevel=0.006)
 
     pb.box((0.0, 3.68, 4.84), (4.10, 0.56, 0.06), steel_dark, bevel=0.012)
-    for cx in (11.4, 17.6):
-        pb.box((cx, 0.12, 5.32), (1.85, 0.24, 0.92), concrete, bevel=0.015, uv_scale=1.8)
-        pb.box((cx, 0.94, 5.32), (1.65, 1.40, 0.72), galv, bevel=0.025)
-        pb.box((cx, 1.66, 5.32), (1.70, 0.06, 0.76), steel_dark, bevel=0.01)
-        for fx in (-0.42, 0.42):
-            pb.cyl((cx + fx, 0.96, 5.69), 0.34, 0.34, 0.05, steel_dark, axis_g="z", seg=22)
-            pb.cyl((cx + fx, 0.96, 5.71), 0.29, 0.29, 0.03, rubber, axis_g="z", seg=20)
-            for b_ang in (0, 60, 120):
-                pb.box((cx + fx, 0.96, 5.72), (0.56, 0.045, 0.02), alu, rot_g_deg=(0, 0, float(b_ang)), bevel=0.003)
-        for py in (0.48, 0.62):
-            add_pipe_run(pb, [(cx + 0.65, py, 5.10), (cx + 0.65, py, 4.72)], 0.028, copper, seg=12)
+    # Die beiden Rueckkuehler vor Halle B/C sind seit v3.6.3 weg: Spieler stellen eigene Aussengeraete auf.
 
     pb.box((-3.85, 1.48, 4.86), (0.64, 0.78, 0.22), galv, bevel=0.015)
     pb.box((-3.85, 1.48, 4.98), (0.56, 0.70, 0.02), steel_dark, bevel=0.004)

@@ -1103,6 +1103,15 @@ const BUILDING_UPGRADE_CATALOG := {
 		"effect": "Deckt tagsüber bis zu 60 % der Last und spart so vor allem teuren Tagstrom (Dach-PV & Solar-Carport)",
 		"desc": "Bautrupp installiert Photovoltaik-Module & Solar-Carport mit E-Ladesäulen.",
 	},
+	"upg_exterior_lights": {
+		"name": "Außenbeleuchtung",
+		"price": 1200,
+		"duration": 35.0,
+		"req_nord": false,
+		"icon": "💡",
+		"effect": "Leuchten an Tor und Fassade, Wegleuchten vor den Hallen. Nachts hell, Diebe kommen seltener",
+		"desc": "Bautrupp montiert LED-Wandleuchten an der Fassade und setzt Wegleuchten vor die Garage und die Hallen.",
+	},
 	"upg_district_heat": {
 		"name": "Fernwärme-Übergabestation",
 		"price": 3600,
@@ -1160,7 +1169,7 @@ const BUILDING_UPGRADE_CATALOG := {
 }
 const BUILDING_UPGRADE_ORDER: Array[String] = [
 	"upg_pv_solar", "upg_roof_chillers", "upg_security_gate",
-	"upg_noc_suite", "upg_cold_aisle_pro", "upg_diesel_gen", "upg_district_heat",
+	"upg_noc_suite", "upg_cold_aisle_pro", "upg_diesel_gen", "upg_district_heat", "upg_exterior_lights",
 ]
 ## Anteil der Defekte ohne sichtbare Spuren; die findet man nur mit POST-Code und Messgerät.
 const FAULT_HIDDEN_CHANCE := 0.5

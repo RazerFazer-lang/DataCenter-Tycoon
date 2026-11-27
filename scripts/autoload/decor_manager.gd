@@ -4,9 +4,14 @@ extends Node
 
 signal buffs_changed
 signal thief_changed
+## Kaffeevollautomat: Brühen beginnt (on = true) oder ist fertig. Auf allen Rechnern.
+signal brew_changed(machine: String, on: bool)
 
 const COFFEE_SECS := 180.0
 const COFFEE_COST := 4.0
+## So lange brüht der Kaffeevollautomat (passt zur Aufnahme coffee_brew.ogg).
+const BREW_SECS := 10.0
+const COFFEE_MACHINES: Array[String] = ["garage", "nord"]
 const WATER_SECS := 90.0
 const REST_SECS := 240.0
 const REST_SIT_TIME := 6.0
@@ -33,6 +38,8 @@ const CAM_SMOKE_WARN := 78.0
 
 const THIEF_LEVEL := 2
 const THIEF_CHANCE := 0.40
+## Faktor auf die Diebstahl-Chance mit Außenbeleuchtung.
+const EXTERIOR_LIGHT_THIEF := 0.75
 const THIEF_CAM_FACTOR := 0.35
 const THIEF_WALK := 1.7
 const THIEF_RUN := 4.3
@@ -57,6 +64,8 @@ var _dehum_accum := 0.0
 var _cam_accum := 0.0
 var _aisles: Array = []
 var _aisles_dirty := true
+## Laufende Brühvorgänge: Maschine -> {"peer", "t"} (Host). Clients kennen nur, welche Maschine läuft.
+var brewing: Dictionary = {}
 
 
 func _ready() -> void:
@@ -65,6 +74,7 @@ func _ready() -> void:
 
 
 func reset() -> void:
+	brewing = {}
 	buffs.clear()
 	thief = {}
 	_warned.clear()
@@ -425,6 +435,67 @@ func _use_tool_cart(d: Dictionary, peer: int) -> void:
 	GameState.shelf_changed.emit()
 
 
+# ---------------------------------------------------------------- Kaffeevollautomat
+
+func is_brewing(machine: String) -> bool:
+	return brewing.has(machine)
+
+
+func request_brew(machine: String) -> void:
+	_rpc_brew.rpc_id(1, machine)
+
+
+## Text am Automaten für diesen Spieler: [Hauptzeile, Nebenzeile]
+func brew_prompt(machine: String, peer: int) -> Array:
+	if is_brewing(machine):
+		return [tr("Kaffee läuft …"), ""]
+	if not has_power():
+		return [tr("Kaffeevollautomat: kein Strom"), ""]
+	var left := float(get_buffs(peer).get("coffee", 0.0))
+	if left > COFFEE_SECS - 10.0:
+		return [tr("Kaffee wirkt noch"), ""]
+	return [tr("[E] Kaffee kochen (kostenlos)"), tr("3 Minuten schneller laufen und arbeiten")]
+
+
+@rpc("any_peer", "call_local", "reliable")
+func _rpc_brew(machine: String) -> void:
+	if not multiplayer.is_server() or not machine in COFFEE_MACHINES:
+		return
+	var peer := _sender()
+	if not SecurityGuard.check_rate_limit(peer, "decor_use", 12, 4.0):
+		return
+	if machine == "nord" and not GameState.has_building_upgrade("upg_noc_suite"):
+		return
+	if brewing.has(machine) or not has_power() or float(get_buffs(peer).get("coffee", 0.0)) > COFFEE_SECS - 10.0:
+		GameState._rpc_play_sfx.rpc_id(peer, "error")
+		return
+	brewing[machine] = {"peer": peer, "t": BREW_SECS}
+	_rpc_brew_fx.rpc(machine, true)
+
+
+@rpc("authority", "call_local", "reliable")
+func _rpc_brew_fx(machine: String, on: bool) -> void:
+	if not multiplayer.is_server():
+		if on:
+			brewing[machine] = {"peer": 0, "t": BREW_SECS}
+		else:
+			brewing.erase(machine)
+	brew_changed.emit(machine, on)
+
+
+func _tick_brew(delta: float) -> void:
+	for m in brewing.keys():
+		var b: Dictionary = brewing[m]
+		b["t"] = float(b["t"]) - delta
+		if float(b["t"]) > 0.0:
+			continue
+		brewing.erase(m)
+		var peer := int(b["peer"])
+		add_buff(peer, "coffee", COFFEE_SECS)
+		_rpc_brew_fx.rpc(m, false)
+		GameState.tell_peer(peer, "☕ Dein Kaffee ist fertig: 3 Minuten schneller laufen und arbeiten.", [], "good")
+
+
 @rpc("any_peer", "call_local", "reliable")
 func _rpc_rest(did: String) -> void:
 	if not multiplayer.is_server():
@@ -453,6 +524,7 @@ func tick(delta: float) -> void:
 		_cam_accum = 0.0
 		_tick_cameras()
 	_tick_thief(delta)
+	_tick_brew(delta)
 
 
 func run_day() -> void:
@@ -559,6 +631,9 @@ func _tick_thief(_delta: float) -> void:
 		chance *= 0.75
 	chance *= OutdoorManager.thief_factor()
 	chance *= Staff.thief_factor()
+	# Außenbeleuchtung (Gebäude-Ausbau): Wer gesehen wird, kommt seltener.
+	if GameState.has_building_upgrade("upg_exterior_lights"):
+		chance *= EXTERIOR_LIGHT_THIEF
 	if randf() < chance:
 		if bool(OutdoorManager.state["gate"]):
 			OutdoorManager.force_gate_open()

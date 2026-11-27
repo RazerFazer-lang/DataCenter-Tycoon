@@ -70,11 +70,15 @@ func _get_site_position(uid: String, site_str: String) -> Vector3:
 			return Vector3(7.5, 0.0, 7.2)
 		if uid == "upg_district_heat":
 			return Vector3(-5.4, 0.0, 7.9)
+		if uid == "upg_exterior_lights":
+			return Vector3(6.0, 0.0, 8.6)
 		return Vector3(-5.0, 0.0, 7.2)
 	var o := GameState.HALLE_NORD_ORIGIN
 	match uid:
 		"upg_district_heat":
 			return Vector3(-5.4, 0.0, 7.9)
+		"upg_exterior_lights":
+			return Vector3(6.0, 0.0, 8.6)
 		"upg_pv_solar":
 			return o + Vector3(19.0, 0.0, 3.0)
 		"upg_diesel_gen":

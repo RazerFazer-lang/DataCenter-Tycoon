@@ -25,6 +25,9 @@ var _hn_upg_noc_node: Node3D
 var _hn_upg_cold_aisle_node: Node3D
 var _garage_upg_pv_node: Node3D
 var _garage_upg_heat_node: Node3D
+## Außenbeleuchtung (Gebäude-Ausbau): Knoten und Lampen [Licht, Leucht-Material, Stärke]
+var _garage_upg_lights_node: Node3D
+var _garage_lights: Array = []
 var _hn_aisle_temp_lbls: Array[Label3D] = []
 
 var _partition_b: StaticBody3D
@@ -144,6 +147,7 @@ func _ready() -> void:
 	_build_shuttle_terminal(self, Vector3(-5.38, 1.42, -3.55), 90.0, false)
 	_build_garage_pv_upgrade()
 	_build_garage_heat_upgrade()
+	_build_garage_lights_upgrade()
 	add_child(ConstructionCrew.new())
 	add_child(TechnicianNpc.new())
 	# GAME-07: Sicherheitsdienst und Reinigung
@@ -371,6 +375,7 @@ func _update_dynamic_visuals() -> void:
 		gf.light_energy = 0.48 * day_sky_factor
 	if _exterior_lamp_light != null:
 		_exterior_lamp_light.light_energy = 2.6 if (is_night and power_alive) else 0.0
+	_update_garage_lights(get_process_delta_time())
 	if _street_lamp_light != null:
 		_street_lamp_light.light_energy = 3.2 if is_night else 0.0
 	if _street_lamp_mat != null:
@@ -805,13 +810,6 @@ func _build_exterior_environment() -> void:
 		_add_box_visual(self, Vector3(11.85, 1.9, 4.76), Vector3(19.35, 3.82, 0.08), brick_mat)
 		_add_box_visual(self, Vector3(0.0, 3.4, 4.76), Vector3(4.42, 0.82, 0.08), brick_mat)
 
-	# Deutsche 240L-Mülltonne (Blender ext_trash_bin.glb) links neben dem Garagentor
-	var bin := ModelLoader.instantiate_custom_model("ext_trash_bin")
-	if bin != null:
-		bin.position = Vector3(-3.35, 0.0, 5.35)
-		bin.rotation_degrees.y = 180.0
-		add_child(bin)
-
 	# Deutsche Peitschen-Straßenlaterne (Blender ext_street_lamp.glb) an der Einfahrtsecke
 	var corner_lamp := ModelLoader.instantiate_custom_model("ext_street_lamp")
 	if corner_lamp != null:
@@ -836,32 +834,13 @@ func _build_exterior_environment() -> void:
 
 func _build_delivery_zone() -> void:
 	var yellow_mat := _mat(Color(0.95, 0.74, 0.12), 0.55, 0.05)
-	var dark_mat := _mat(Color(0.14, 0.16, 0.18), 0.6, 0.2)
 
 	_add_box_visual(self, Vector3(0.0, 0.012, 5.1), Vector3(4.2, 0.015, 0.10), yellow_mat)
 	_add_box_visual(self, Vector3(0.0, 0.012, 7.9), Vector3(4.2, 0.015, 0.10), yellow_mat)
 	_add_box_visual(self, Vector3(-2.05, 0.012, 6.5), Vector3(0.10, 0.015, 2.9), yellow_mat)
 	_add_box_visual(self, Vector3(2.05, 0.012, 6.5), Vector3(0.10, 0.015, 2.9), yellow_mat)
 
-	for bx in [-2.45, 2.45]:
-		var b_cyl := MeshInstance3D.new()
-		var cm := CylinderMesh.new()
-		cm.top_radius = 0.085
-		cm.bottom_radius = 0.095
-		cm.height = 0.92
-		b_cyl.mesh = cm
-		b_cyl.material_override = yellow_mat
-		b_cyl.position = Vector3(float(bx), 0.46, 4.95)
-		add_child(b_cyl)
-		var b_cap := MeshInstance3D.new()
-		var ccm := CylinderMesh.new()
-		ccm.top_radius = 0.088
-		ccm.bottom_radius = 0.088
-		ccm.height = 0.12
-		b_cap.mesh = ccm
-		b_cap.material_override = dark_mat
-		b_cap.position = Vector3(float(bx), 0.76, 4.95)
-		add_child(b_cap)
+	# Die gelben Poller links und rechts vom Tor stecken schon im Fassadenmodell (own_hall_exterior.glb).
 
 	# Zwei feste Paletten für kleine Kartons
 	for sp in DeliveryPlan.SMALL_PALLETS:
@@ -2267,6 +2246,7 @@ func _build_wall_decor() -> void:
 	if coffee_station != null:
 		coffee_station.position = Vector3(4.48, 0.0, -4.02)
 		add_child(coffee_station)
+		coffee_station.add_child(CoffeeMachineFx.make("garage"))
 	else:
 		var table_mat := MatLib.get_mat("wood_desk")
 		_add_box_visual(self, Vector3(4.48, 0.38, -4.02), Vector3(0.64, 0.76, 0.48), table_mat)
@@ -2892,6 +2872,7 @@ func _build_halle_nord_site() -> void:
 	if coffee != null:
 		coffee.position = Vector3(9.40, 0.905, -5.15)
 		_hn_upg_noc_node.add_child(coffee)
+		coffee.add_child(CoffeeMachineFx.make("nord"))
 
 	var pc_desk := Node3D.new()
 	pc_desk.position = Vector3(7.25, 0.0, -4.55)
@@ -3082,7 +3063,74 @@ func _build_garage_heat_upgrade() -> void:
 	_add_collider_box(_garage_upg_heat_node, Vector3(0.0, 0.75, -0.05), Vector3(1.3, 1.5, 0.95))
 
 
+## Außenbeleuchtung: Wandstrahler an Tor, Hallen-Fassade und Seiten, Wegleuchten vor den Hallen.
+## Sichtbar nach dem Ausbau 'upg_exterior_lights', nachts an (wie die Gartenlampen).
+func _build_garage_lights_upgrade() -> void:
+	_garage_upg_lights_node = Node3D.new()
+	_garage_upg_lights_node.name = "ExteriorLights"
+	add_child(_garage_upg_lights_node)
+	# [Position, Drehung] der Wandstrahler (Wand bei z 0 des Modells, leuchtet nach vorn unten)
+	for e in [[Vector3(-3.05, 2.55, 4.90), 0.0], [Vector3(3.05, 2.55, 4.90), 0.0], [Vector3(11.6, 2.80, 4.90), 0.0],
+			[Vector3(21.0, 2.80, 4.90), 0.0], [Vector3(-5.90, 2.60, 2.6), -90.0], [Vector3(21.90, 2.60, 3.4), 90.0]]:
+		var p: Vector3 = e[0]
+		var m := ModelLoader.instantiate_custom_model("wall_lamp")
+		if m == null:
+			continue
+		m.position = p
+		m.rotation_degrees.y = float(e[1])
+		_garage_upg_lights_node.add_child(m)
+		var out := Basis(Vector3.UP, deg_to_rad(float(e[1]))) * Vector3(0.0, -0.20, 0.55)
+		_add_upgrade_lamp(m, p + out, 7.5, 1.6)
+	# Wegleuchten (mit Kollision, damit man nicht hindurchläuft)
+	for p in [Vector3(-4.3, 0.0, 9.4), Vector3(-7.4, 0.0, 9.2), Vector3(11.0, 0.0, 8.0), Vector3(16.0, 0.0, 8.0), Vector3(20.5, 0.0, 8.0)]:
+		var b := ModelLoader.instantiate_custom_model("bollard_lamp")
+		if b == null:
+			continue
+		b.position = p
+		_garage_upg_lights_node.add_child(b)
+		_add_collider_box(_garage_upg_lights_node, p + Vector3(0.0, 0.5, 0.0), Vector3(0.16, 1.0, 0.16))
+		_add_upgrade_lamp(b, p + Vector3(0.0, 0.92, 0.0), 4.4, 0.9)
+
+
+func _add_upgrade_lamp(m: Node3D, pos: Vector3, rng: float, energy: float) -> void:
+	var l := OmniLight3D.new()
+	l.position = pos
+	l.omni_range = rng
+	l.light_color = Color(1.0, 0.88, 0.68)
+	l.light_energy = 0.0
+	l.visible = false
+	l.distance_fade_enabled = true
+	l.distance_fade_begin = 30.0
+	l.distance_fade_length = 8.0
+	_garage_upg_lights_node.add_child(l)
+	var gm: StandardMaterial3D = null
+	var g := m.find_child("Glow", true, false) as MeshInstance3D
+	if g != null and g.get_active_material(0) is StandardMaterial3D:
+		gm = (g.get_active_material(0) as StandardMaterial3D).duplicate() as StandardMaterial3D
+		gm.emission_enabled = true
+		gm.emission = Color(1.0, 0.86, 0.62)
+		gm.emission_energy_multiplier = 0.0
+		g.material_override = gm
+	_garage_lights.append([l, gm, energy])
+
+
+func _update_garage_lights(delta: float) -> void:
+	if _garage_upg_lights_node == null or not _garage_upg_lights_node.visible:
+		return
+	var on := OutdoorManager.lamps_on() if GameState.is_active else false
+	for e in _garage_lights:
+		var l: OmniLight3D = e[0]
+		l.light_energy = move_toward(l.light_energy, float(e[2]) if on else 0.0, delta * 2.0)
+		l.visible = l.light_energy > 0.01
+		if e[1] != null:
+			(e[1] as StandardMaterial3D).emission_energy_multiplier = 3.0 * l.light_energy / float(e[2])
+
+
 func _sync_building_upgrades_visuals() -> void:
+	if _garage_upg_lights_node != null:
+		var lights_on := GameState.has_building_upgrade("upg_exterior_lights")
+		_garage_upg_lights_node.visible = lights_on
+		_set_collisions_enabled_recursive(_garage_upg_lights_node, lights_on)
 	if _garage_upg_pv_node != null:
 		_garage_upg_pv_node.visible = GameState.has_building_upgrade("upg_pv_solar")
 	if _garage_upg_heat_node != null:

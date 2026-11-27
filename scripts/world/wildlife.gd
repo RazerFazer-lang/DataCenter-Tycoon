@@ -22,6 +22,14 @@ var _hedgehog: Dictionary = {}
 var _flies: Array = []
 var _t := 0.0
 var _rng := RandomNumberGenerator.new()
+# Katze streicheln: schnurrt (echte Aufnahme), schaut den Spieler an, kleines Herz.
+const PURR := "res://assets/audio/cat_purr_loop.ogg"
+const PET_SECS := 4.5
+var _pet_t := 0.0
+var _pet_from := Vector3.ZERO
+var _purr: AudioStreamPlayer3D
+var _heart: Label3D
+var _purr_vol := 0.0
 
 
 func _ready() -> void:
@@ -30,6 +38,7 @@ func _ready() -> void:
 		for i in int(e[1]):
 			_birds.append(_make_bird(str(e[0]), i))
 	_cat = _make_animal("animal_cat", Vector3(-9.6, 0, 6.6))
+	_setup_cat_petting()
 	_squirrel = _make_animal("animal_squirrel", Vector3(12.5, 0, -8.0))
 	_hedgehog = _make_animal("animal_hedgehog", Vector3(18.0, 0, -8.4))
 	for i in 6:
@@ -352,13 +361,109 @@ func _route(from: Vector3, to: Vector3) -> Vector3:
 	return to
 
 
+func _setup_cat_petting() -> void:
+	var n: Node3D = _cat["n"]
+	var area := Area3D.new()
+	area.collision_layer = 4
+	area.collision_mask = 0
+	area.set_meta("interact_type", "pet_cat")
+	area.set_meta("entity_id", "cat")
+	area.set_meta("wildlife", self)
+	var cs := CollisionShape3D.new()
+	var bs := BoxShape3D.new()
+	bs.size = Vector3(0.40, 0.46, 0.66)
+	cs.shape = bs
+	cs.position = Vector3(0.0, 0.23, 0.0)
+	area.add_child(cs)
+	n.add_child(area)
+	_purr = AudioStreamPlayer3D.new()
+	_purr.position = Vector3(0.0, 0.25, 0.0)
+	_purr.unit_size = 1.4
+	_purr.max_distance = 8.0
+	if ResourceLoader.exists(PURR):
+		var st: AudioStream = (load(PURR) as AudioStream).duplicate()
+		if st is AudioStreamOggVorbis:
+			(st as AudioStreamOggVorbis).loop = true
+		_purr.stream = st
+	n.add_child(_purr)
+	_heart = Label3D.new()
+	_heart.text = "♥"
+	_heart.font_size = 72
+	_heart.pixel_size = 0.004
+	_heart.outline_size = 0
+	_heart.modulate = Color(1.0, 0.42, 0.58, 0.0)
+	_heart.billboard = BaseMaterial3D.BILLBOARD_ENABLED
+	_heart.no_depth_test = false
+	_heart.visible = false
+	n.add_child(_heart)
+
+
+func can_pet() -> bool:
+	return not _cat.is_empty() and (_cat["n"] as Node3D).visible
+
+
+## Spieler streichelt die Katze (nur auf diesem Rechner): Sie bleibt stehen, schaut ihn an, miaut und schnurrt.
+func pet_cat(from: Vector3) -> bool:
+	if not can_pet():
+		return false
+	var n: Node3D = _cat["n"]
+	if _pet_t <= 0.5:
+		SfxManager.play_at("meow", n.global_position + Vector3(0, 0.3, 0), -4.0, _rng.randf_range(0.96, 1.06))
+	_pet_t = PET_SECS
+	_pet_from = from
+	_cat["state"] = "idle"
+	_cat["to"] = n.position
+	_cat["t"] = _rng.randf_range(6.0, 12.0)
+	_heart.visible = true
+	_heart.position = Vector3(0.0, 0.45, 0.0)
+	return true
+
+
+func _update_petting(delta: float) -> void:
+	# Schnurren ein- und ausblenden
+	var want := 1.0 if _pet_t > 0.0 else 0.0
+	_purr_vol = move_toward(_purr_vol, want, delta * (2.5 if want > _purr_vol else 0.8))
+	if _purr != null and _purr.stream != null:
+		if _purr_vol > 0.01:
+			if not _purr.playing:
+				_purr.play(_rng.randf() * 6.0)
+			_purr.volume_db = linear_to_db(_purr_vol * maxf(SettingsManager.get_effective_sfx_gain(), 0.001)) - 2.0
+		elif _purr.playing:
+			_purr.stop()
+	if _heart != null and _heart.visible:
+		var k := clampf((PET_SECS - _pet_t) / 1.6, 0.0, 1.0)
+		_heart.position = Vector3(0.0, 0.45 + k * 0.35, 0.0)
+		_heart.modulate.a = sin(k * PI) * 0.95
+		if k >= 1.0:
+			_heart.visible = false
+
+
 func _update_cat(delta: float, pp: Vector3, night: bool) -> void:
 	var a := _cat
 	var n: Node3D = a["n"]
 	if n == null:
 		return
 	n.visible = not (GameState.is_active and GameState.weather_state == "storm")
+	_update_petting(delta)
 	if not n.visible:
+		_pet_t = 0.0
+		return
+	if _pet_t > 0.0:
+		_pet_t -= delta
+		# Gestreichelt: stehen bleiben, zum Spieler drehen, Kopf hoch, Schwanz ruhig
+		a["sp"] = lerpf(float(a["sp"]), 0.0, 1.0 - exp(-delta * 8.0))
+		var d := _pet_from - n.position
+		if Vector2(d.x, d.z).length() > 0.05:
+			n.rotation.y = lerp_angle(n.rotation.y, atan2(-d.x, -d.z), 1.0 - exp(-delta * 4.0))
+		(a["m"] as Node3D).rotation.x = lerpf((a["m"] as Node3D).rotation.x, 0.0, delta * 4.0)
+		var hd: Node3D = a["head"]
+		if hd != null:
+			hd.rotation.x = lerpf(hd.rotation.x, -0.28 + sin(_t * 3.0) * 0.06, delta * 5.0)
+			hd.rotation.y = lerpf(hd.rotation.y, sin(_t * 1.3) * 0.25, delta * 3.0)
+		var tl: Node3D = a["tail"]
+		if tl != null:
+			tl.rotation.x = 0.35 + sin(_t * 0.9) * 0.08
+			tl.rotation.y = sin(_t * 0.7) * 0.20
 		return
 	a["t"] = float(a["t"]) - delta
 	var near := n.position.distance_to(pp) < 2.4

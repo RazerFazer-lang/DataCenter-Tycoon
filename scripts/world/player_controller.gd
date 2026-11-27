@@ -1082,8 +1082,10 @@ func _act_on_target(primary: bool) -> void:
 			act("pickup", at)
 		"decor_shelf_slot", "workbench", "cart":
 			act("place" if holding else "pickup", at)
-		"terminal", "cooler_unit", "ups_unit", "wall_breaker", "strip_switch", "garage_door", "shuttle_teleport", "delivery_sign":
+		"terminal", "cooler_unit", "ups_unit", "wall_breaker", "strip_switch", "garage_door", "shuttle_teleport", "delivery_sign", "coffee_machine":
 			act("press", at)
+		"pet_cat":
+			act("reach", at)
 		"power_port", "net_port", "cluster_port", "wall_router":
 			act("plug", at)
 		"rack_slot":
@@ -1520,6 +1522,12 @@ func _handle_primary_interact() -> void:
 				DecorManager.request_use(eid)
 		"delivery_sign":
 			_world.open_delivery_note()
+		"coffee_machine":
+			DecorManager.request_brew(eid)
+		"pet_cat":
+			var wl: Node = target.get_meta("wildlife", null)
+			if wl != null:
+				wl.call("pet_cat", global_position)
 		"workbench":
 			GameState.select_bench(eid)
 			var wb := GameState.workbench_state
@@ -2326,6 +2334,12 @@ func _fill_context_prompt() -> void:
 			var dp: Array = DecorManager.prompt_for(eid)
 			current_prompt = str(dp[0])
 			current_sub_prompt = str(dp[1])
+		"coffee_machine":
+			var cp: Array = DecorManager.brew_prompt(eid, peer_id)
+			current_prompt = str(cp[0])
+			current_sub_prompt = str(cp[1])
+		"pet_cat":
+			current_prompt = tr("[E] Katze streicheln")
 		"delivery_sign":
 			if GameState.van_sign_peer != 0 and GameState.van_sign_peer != peer_id:
 				current_prompt = tr("%s unterschreibt gerade den Lieferschein") % NetworkManager.get_player_name(GameState.van_sign_peer)
