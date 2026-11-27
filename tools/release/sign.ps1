@@ -49,10 +49,10 @@ foreach ($f in $Files) {
   if (-not (Test-Path $f)) { Write-Host "  fehlt: $f" -ForegroundColor Red; exit 1 }
   if ($pfx) {
     $ts = if ($env:DCT_SIGN_TIMESTAMP) { $env:DCT_SIGN_TIMESTAMP } else { 'http://timestamp.digicert.com' }
-    & $signtool sign /fd SHA256 /td SHA256 /tr $ts /f $pfx /p $env:DCT_SIGN_PFX_PASSWORD /d "DataCenter Tycoon Co-op" $f | Out-Null
+    & $signtool sign /fd SHA256 /td SHA256 /tr $ts /f $pfx /p $env:DCT_SIGN_PFX_PASSWORD /d "DataCenter Together" $f | Out-Null
   } else {
     $ts = if ($env:DCT_SIGN_TIMESTAMP) { $env:DCT_SIGN_TIMESTAMP } else { 'http://timestamp.acs.microsoft.com' }
-    & $signtool sign /fd SHA256 /td SHA256 /tr $ts /dlib $dlib /dmdf $meta /d "DataCenter Tycoon Co-op" $f | Out-Null
+    & $signtool sign /fd SHA256 /td SHA256 /tr $ts /dlib $dlib /dmdf $meta /d "DataCenter Together" $f | Out-Null
   }
   if ($LASTEXITCODE -ne 0) { Write-Host "  Signieren fehlgeschlagen: $f" -ForegroundColor Red; exit 1 }
   & $signtool verify /pa $f | Out-Null

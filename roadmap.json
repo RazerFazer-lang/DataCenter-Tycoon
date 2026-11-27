@@ -1,5 +1,5 @@
 {
-  "updated": "2026-11-26",
+  "updated": "2026-11-27",
   "columns": [
     {
       "id": "planned",
@@ -7,33 +7,27 @@
       "items": [
         {
           "tag": "neu",
-          "version": "v3.6",
+          "version": "v3.7",
           "title": "Geführter Einstieg",
           "desc": "Die ersten Schritte vom Karton bis zum ersten zahlenden Kunden, mit Hinweisen direkt im Spiel statt im Handbuch."
         },
         {
           "tag": "gameplay",
-          "version": "v3.6",
-          "title": "Strompreis über den Tag & mehr Abgänge am Start-Kasten",
-          "desc": "Nachts ist Strom billiger, der Start-Kasten lässt sich ausbauen. Dazu eine Strom-Übersicht am PC."
+          "version": "v3.7",
+          "title": "Mehr Abgänge am Start-Kasten",
+          "desc": "Der Start-Kasten in der Garage lässt sich ausbauen, damit mehr Stromkreise möglich sind."
         },
         {
           "tag": "verbesserung",
-          "version": "v3.6",
+          "version": "v3.7",
           "title": "Barrierefreiheit & Audio",
           "desc": "Farbenblind-Modus, Kopfwippen abschaltbar, getrennte Lautstärken und Untertitel für Warntöne."
         },
         {
-          "tag": "gameplay",
-          "version": "v3.7",
-          "title": "Kredite, Investoren & Kundenbewertungen",
-          "desc": "Bilanz, Kredite und Investoren, dazu Bewertungen und SLA-Stufen für Kunden."
-        },
-        {
           "tag": "infrastruktur",
           "version": "v4.0",
-          "title": "Halle D, Wasserkühlung & Diesel-Notstrom",
-          "desc": "Mehrstöckige Halle D, flüssigkeitsgekühlte Kreisläufe, Diesel-Notstrom mit N+1-Redundanz und Glasfaser-Backbone."
+          "title": "Halle D, Wasserkühlung & Glasfaser",
+          "desc": "Mehrstöckige Halle D, flüssigkeitsgekühlte Kreisläufe und ein Glasfaser-Backbone zwischen den Hallen."
         }
       ]
     },
@@ -46,6 +40,12 @@
       "id": "done",
       "title": "Fertig",
       "items": [
+        {
+          "tag": "neu",
+          "version": "v3.6.0",
+          "title": "Gameplay & Wirtschaft",
+          "desc": "Diesel-Notstrom, Strompreis über den Tag, Investoren und Bilanz, SLA-Stufen, Firewall, neues Personal, Fernwärme, Zertifikate, Schwierigkeitsgrade und freundlichere Gesichter."
+        },
         {
           "tag": "neu",
           "version": "v3.5.0",

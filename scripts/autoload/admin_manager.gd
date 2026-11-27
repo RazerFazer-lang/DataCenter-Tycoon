@@ -20,7 +20,7 @@ const HOST_ONLY: Array[String] = ["grant", "revoke"]
 const COMMANDS: Array[String] = [
 	"grant", "revoke", "kick", "ban", "goto", "bring", "send_site", "build_on", "build_off",
 	"money_set", "money_add", "reputation", "level",
-	"time", "next_day", "weather", "time_scale",
+	"time", "next_day", "weather", "time_scale", "difficulty",
 	"fire", "crash", "outage", "outage_end", "ddos", "repair_all", "clean_all",
 	"give_item", "give_part", "deliver_now",
 ]
@@ -275,6 +275,11 @@ func _run(sender: int, cmd: String, args: Dictionary) -> String:
 			return "Firmenstufe auf %d gesetzt" % roundi(lv)
 		"time", "next_day", "weather", "time_scale":
 			return _run_world(cmd, args)
+		"difficulty":
+			var lv := str(args.get("v", ""))
+			if not GameState.set_difficulty(lv):
+				return ""
+			return "Schwierigkeit: %s" % Difficulty.display_name(lv)
 		"fire", "crash", "outage", "outage_end", "ddos", "repair_all", "clean_all":
 			return _run_event(cmd)
 		"give_item", "give_part", "deliver_now":
@@ -442,11 +447,9 @@ func _run_event(cmd: String) -> String:
 			GameState._end_grid_outage()
 			return "Netzausfall beendet"
 		"ddos":
-			if GameState.ddos_active:
+			if not Cyber.attack.is_empty():
 				return ""
-			GameState.ddos_active = true
-			GameState._rpc_play_sfx.rpc("alarm")
-			GameState._broadcast_sim_tick()
+			Cyber.start_attack("ddos")
 			return "DDoS-Angriff ausgelöst"
 		"repair_all":
 			var n := 0

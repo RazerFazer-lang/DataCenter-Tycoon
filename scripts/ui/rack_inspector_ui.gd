@@ -2098,9 +2098,11 @@ func _render_device_view(kind: String) -> void:
 				else:
 					var root := GameState.get_lan_chain_root(_entity_id)
 					var mb := float(GameState.lan_chain_mbps.get(root, 0.0))
-					var cap := maxf(1.0, GameState.max_bandwidth_mbps)
+					var cap := GameState.lan_chain_cap()
 					_add_kpi("KETTE", tr("%.0f / %.0f Mbit/s") % [mb, cap], "", UIStyle.COL_RED if mb > cap else UIStyle.COL_BLUE, mb / cap)
-					note = tr("Links weißer Eingang (Uplink), rechts roter Ausgang zur nächsten LAN-Leiste. Alle Leisten der Kette teilen sich den Router-Port.")
+					note = tr("Links weißer Eingang (Uplink), rechts roter Ausgang zur nächsten LAN-Leiste. Alle Leisten der Kette teilen sich einen Uplink mit %.0f Mbit/s.") % cap
+					if mb > cap:
+						note += " " + tr("Überlastet: Die Racks dieser Kette laufen nur mit %d %% und verdienen entsprechend weniger. Eine zweite Kette direkt am Router entlastet.") % int(cap / mb * 100.0)
 			else:
 				var di: Dictionary = GameState.decor_items[_entity_id]
 				var dtype := str(di.get("item_type", ""))

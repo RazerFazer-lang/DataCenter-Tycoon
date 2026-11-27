@@ -17,7 +17,7 @@
         </Border.Effect>
         <StackPanel>
             <TextBlock Text="💥 Das Spiel ist abgestürzt" Foreground="{StaticResource TextMain}" FontSize="19" FontWeight="Bold" Margin="0,0,0,6"/>
-            <TextBlock Text="DataCenter Tycoon wurde unerwartet beendet. Mit einem Klick bereitest du einen Absturzbericht auf GitHub vor. Das hilft uns, den Fehler schnell zu finden."
+            <TextBlock Text="DataCenter Together wurde unerwartet beendet. Mit einem Klick bereitest du einen Absturzbericht auf GitHub vor. Das hilft uns, den Fehler schnell zu finden."
                        Foreground="{StaticResource TextMuted}" FontSize="12.5" TextWrapping="Wrap" Margin="0,0,0,16"/>
 
             <Border Background="#2A1216" BorderBrush="#7A2630" BorderThickness="1" CornerRadius="9" Padding="14,12" Margin="0,0,0,10">

@@ -1,4 +1,4 @@
-# DataCenter Tycoon Co-op (Godot 4 — v1.0.0 Release)
+# DataCenter Together (Godot 4 — v1.0.0 Release)
 
 3D First-Person Co-op DataCenter Simulator (1–4 Spieler über eingebautes ENet) im **einheitlichen AAA Schiefergrau-&-Gold-Design** inkl. **eigenem nativen Windows-Launcher (`DataCenterLauncher.exe`)**, **PC-Shop mit Warenkorb & Teile-Lager**, **66 Hardware-Komponenten (DDR2–DDR5)**, **3-Tab Rack-Overlay**, **echten Einheiten (GB, TB, Mbit/Gbit, Watt — kein „CU“)**, **Rack-Vermietung mit Live-Support & Kundenanrufen**, **PC-Sitz- & Tipp-Animation**, **Lieferwagen-Lieferwagen** und **knackfreier 3D-Soundkulisse**.
 

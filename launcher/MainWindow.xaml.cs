@@ -464,7 +464,7 @@ public partial class MainWindow : Window
         {
             var dlg = new OpenFileDialog
             {
-                Title = "DataCenter Tycoon Release-.zip auswählen",
+                Title = "DataCenter Together Release-.zip auswählen",
                 Filter = "ZIP-Archiv (*.zip)|*.zip"
             };
             if (dlg.ShowDialog() != true) return;
@@ -1062,7 +1062,7 @@ public partial class MainWindow : Window
             File.WriteAllText(Path.Combine(bundleDir, "release_repo.txt"), _config.UpdateManifestUrl.Trim());
 
         var readme =
-            "DATACENTER TYCOON CO-OP — LAUNCHER FÜR FREUNDE\r\n" +
+            "DATACENTER TOGETHER — LAUNCHER FÜR FREUNDE\r\n" +
             "==============================================\r\n" +
             "1. Doppelklick auf DataCenterLauncher.exe\r\n" +
             "2. Klicke auf 'SPIEL HERUNTERLADEN' (kein Godot und kein .NET nötig!)\r\n" +
@@ -1685,7 +1685,7 @@ public partial class MainWindow : Window
             var root = doc.RootElement;
             var updated = root.TryGetProperty("updated", out var up) ? up.GetString() : "";
             RoadmapSubText.Text = string.IsNullOrWhiteSpace(updated)
-                ? "Offizielle Entwicklungs-Roadmap für DataCenter Tycoon."
+                ? "Offizielle Entwicklungs-Roadmap für DataCenter Together."
                 : $"Offizielle Entwicklungs-Roadmap • Stand: {updated}";
 
             if (!root.TryGetProperty("columns", out var cols) || cols.ValueKind != JsonValueKind.Array)

@@ -1,8 +1,8 @@
-; Inno-Setup-Skript für den DataCenter-Tycoon-Launcher.
+; Inno-Setup-Skript für den DataCenter-Together-Launcher.
 ; Installiert nur den Launcher. Das Spiel lädt der Launcher selbst nach %LOCALAPPDATA%\DataCenterTycoon\game.
 ; Bauen: installer\build_installer.ps1 (oder ISCC.exe installer\DataCenterTycoon.iss)
 
-#define AppName "DataCenter Tycoon Co-op"
+#define AppName "DataCenter Together"
 #define AppExeName "DataCenterLauncher.exe"
 #define BundleDir AddBackslash(SourcePath) + "..\dist\Freunde_Launcher"
 #define SourceExe BundleDir + "\" + AppExeName

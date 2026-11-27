@@ -8,6 +8,8 @@ extends RefCounted
 
 const POWER_TOP := 6
 const LAN_TOP := 8
+## GAME-03: Uplink einer LAN-Kette (Mbit/s). Mehr als der Router schafft, geht nie.
+const LAN_CHAIN_MBPS := 1000.0
 ## Abstand der Mitten zweier zusammengesteckter Leisten (Gehäuse 0,71 m + Stecker).
 const LINK_PITCH := 0.74
 ## Seitenbuchsen in Leisten-Koordinaten (Ausgang +X, Eingang -X).

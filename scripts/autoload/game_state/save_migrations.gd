@@ -22,11 +22,19 @@ static func run(data: Dictionary, from_version: int, stage: String) -> Array[int
 				_migrate_shelves()
 			5:
 				_migrate_strip_ports()
+			6:
+				_v6_nord_diesel()
 			_:
 				push_error("Spielstand: %s hat keine Funktion in save_migrations.gd." % SaveSchema.describe(v))
 				continue
 		done.append(v)
 	return done
+
+
+## 6 (v3.6): Das Aggregat an Halle Nord lief früher ohne Tank. Wer es schon hat, bekommt einen vollen Tank.
+static func _v6_nord_diesel() -> void:
+	if GameState.has_building_upgrade("upg_diesel_gen"):
+		Operations.init_nord_tank(true)
 
 
 ## 1 (v0.3): Früher gab es nur room_expanded (an/aus), seitdem die Raumstufe 0 bis 2.

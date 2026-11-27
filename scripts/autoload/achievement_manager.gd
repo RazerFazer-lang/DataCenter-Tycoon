@@ -50,7 +50,8 @@ func _process(delta: float) -> void:
 	if _timer < CHECK_S:
 		return
 	_timer = 0.0
-	if GameState.is_active and NetworkManager.is_in_session:
+	# GAME-10: In der Sandbox zählen Erfolge nicht.
+	if GameState.is_active and NetworkManager.is_in_session and not GameState.is_sandbox():
 		check_now()
 
 

@@ -24,6 +24,7 @@ var _halle_nord_noc_lbl: Label3D
 var _hn_upg_noc_node: Node3D
 var _hn_upg_cold_aisle_node: Node3D
 var _garage_upg_pv_node: Node3D
+var _garage_upg_heat_node: Node3D
 var _hn_aisle_temp_lbls: Array[Label3D] = []
 
 var _partition_b: StaticBody3D
@@ -142,8 +143,13 @@ func _ready() -> void:
 	_build_halle_nord_site()
 	_build_shuttle_terminal(self, Vector3(-5.38, 1.42, -3.55), 90.0, false)
 	_build_garage_pv_upgrade()
+	_build_garage_heat_upgrade()
 	add_child(ConstructionCrew.new())
 	add_child(TechnicianNpc.new())
+	# GAME-07: Sicherheitsdienst und Reinigung
+	add_child(StaffNpc.make("security"))
+	add_child(StaffNpc.make("cleaning"))
+	add_child(StaffNpc.make("auditor"))
 	add_child(AmbientNpcSystem.new())
 	apply_graphics_quality(SettingsManager.graphics_quality)
 	MeshMerger.small_no_shadow(self)
@@ -3019,9 +3025,70 @@ func _build_garage_pv_upgrade() -> void:
 			_add_box_visual(pnl, Vector3(0.0, 0.05, 0.0), Vector3(2.65, 0.04, 1.72), pv)
 
 
+## Fernwärme-Übergabestation links vor dem Tor (GAME-08, sichtbar nach dem Ausbau 'upg_district_heat').
+func _build_garage_heat_upgrade() -> void:
+	_garage_upg_heat_node = Node3D.new()
+	_garage_upg_heat_node.name = "HeatStation"
+	_garage_upg_heat_node.position = Vector3(-5.4, 0.0, 7.6)
+	add_child(_garage_upg_heat_node)
+	var body := _mat(Color(0.34, 0.44, 0.40), 0.45, 0.55)
+	var dark := _mat(Color(0.16, 0.18, 0.20), 0.55, 0.35)
+	var hot := _mat(Color(0.78, 0.22, 0.16), 0.40, 0.10)
+	var cold := _mat(Color(0.18, 0.40, 0.78), 0.40, 0.10)
+	var steel := MatLib.make_brushed_metal(Color(0.66, 0.69, 0.72), 0.32, 0.85)
+	_add_box_visual(_garage_upg_heat_node, Vector3(0.0, 0.06, 0.0), Vector3(1.5, 0.12, 0.9), _mat(Color(0.55, 0.55, 0.54), 0.9, 0.0))
+	_add_box_visual(_garage_upg_heat_node, Vector3(0.0, 0.78, 0.0), Vector3(1.2, 1.32, 0.62), body)
+	_add_box_visual(_garage_upg_heat_node, Vector3(0.0, 1.47, 0.0), Vector3(1.28, 0.06, 0.70), dark)
+	for i in 6:
+		_add_box_visual(_garage_upg_heat_node, Vector3(-0.30, 0.50 + i * 0.09, 0.315), Vector3(0.46, 0.03, 0.01), dark)
+	_add_box_visual(_garage_upg_heat_node, Vector3(0.30, 1.05, 0.315), Vector3(0.36, 0.30, 0.01), _mat(Color(0.92, 0.93, 0.90), 0.6, 0.0))
+	var gauge := MeshInstance3D.new()
+	var cyl := CylinderMesh.new()
+	cyl.top_radius = 0.07
+	cyl.bottom_radius = 0.07
+	cyl.height = 0.03
+	gauge.mesh = cyl
+	gauge.material_override = steel
+	gauge.rotation_degrees.x = 90.0
+	gauge.position = Vector3(0.30, 0.72, 0.33)
+	_garage_upg_heat_node.add_child(gauge)
+	for p in [[-0.36, hot], [0.36, cold]]:
+		var pipe := MeshInstance3D.new()
+		var pm := CylinderMesh.new()
+		pm.top_radius = 0.075
+		pm.bottom_radius = 0.075
+		pm.height = 0.62
+		pipe.mesh = pm
+		pipe.material_override = p[1]
+		pipe.position = Vector3(float(p[0]), 0.31, -0.42)
+		_garage_upg_heat_node.add_child(pipe)
+		var elbow := MeshInstance3D.new()
+		var em := CylinderMesh.new()
+		em.top_radius = 0.075
+		em.bottom_radius = 0.075
+		em.height = 0.22
+		elbow.mesh = em
+		elbow.material_override = p[1]
+		elbow.rotation_degrees.x = 90.0
+		elbow.position = Vector3(float(p[0]), 0.62, -0.34)
+		_garage_upg_heat_node.add_child(elbow)
+	var lbl := Label3D.new()
+	lbl.text = tr("FERNWÄRME")
+	lbl.font_size = 34
+	lbl.pixel_size = 0.0024
+	lbl.modulate = Color(0.95, 0.96, 0.92)
+	lbl.position = Vector3(0.0, 1.30, 0.316)
+	_garage_upg_heat_node.add_child(lbl)
+	_add_collider_box(_garage_upg_heat_node, Vector3(0.0, 0.75, -0.05), Vector3(1.3, 1.5, 0.95))
+
+
 func _sync_building_upgrades_visuals() -> void:
 	if _garage_upg_pv_node != null:
 		_garage_upg_pv_node.visible = GameState.has_building_upgrade("upg_pv_solar")
+	if _garage_upg_heat_node != null:
+		var heat_on := GameState.has_building_upgrade("upg_district_heat")
+		_garage_upg_heat_node.visible = heat_on
+		_set_collisions_enabled_recursive(_garage_upg_heat_node, heat_on)
 	if _hn_upg_noc_node != null:
 		var noc_on := GameState.has_building_upgrade("upg_noc_suite")
 		_hn_upg_noc_node.visible = noc_on

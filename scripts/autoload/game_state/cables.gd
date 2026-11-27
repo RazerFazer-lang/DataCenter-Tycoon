@@ -154,6 +154,7 @@ static func _count_rack_switches(rack_id: String) -> int:
 ## Bandbreite, die über jede LAN-Kette läuft (alle Racks hinter der ersten Leiste am Router).
 static func _compute_lan_chains() -> void:
 	var out := {}
+	var of := {}
 	for rid in GameState.racks.keys():
 		var rack: Dictionary = GameState.racks[rid]
 		if not bool(rack.get("networked", false)):
@@ -172,7 +173,9 @@ static func _compute_lan_chains() -> void:
 				root = cur
 		if root != "":
 			out[root] = float(out.get(root, 0.0)) + mbps
+			of[str(rid)] = root
 	GameState.lan_chain_mbps = out
+	GameState.lan_chain_of = of
 
 
 static func get_lan_chain_root(did: String) -> String:

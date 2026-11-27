@@ -43,7 +43,6 @@ const DEFAULT := {"v": 2, "height": 50, "build": 0, "amount": 50, "fem": 0, "ton
 
 static var _mats: Dictionary = {}
 static var _fabric: NoiseTexture2D
-static var _skin_n: NoiseTexture2D
 
 var look: Dictionary = {}
 var keep_all := false
@@ -116,7 +115,7 @@ func move(world_vel: Vector3) -> void:
 
 ## Höhe der Augen über dem Boden (je nach Körpergröße).
 func eye_height() -> float:
-	return 1.655 * _root.scale.y
+	return 1.645 * _root.scale.y
 
 
 func root_scale() -> float:
@@ -304,7 +303,7 @@ func _color_for(mat: String) -> Color:
 			return TONES[look["tone"]]
 		"Lip":
 			var tn := TONES[look["tone"]]
-			return tn.lerp(Color(0.62, 0.22, 0.24), 0.34 + 0.14 * float(look["fem"]) / 100.0)
+			return tn.lerp(Color(0.66, 0.27, 0.28), 0.32 + 0.14 * float(look["fem"]) / 100.0)
 		"Eye_Iris":
 			return EYES[look["eyes"]]
 		"Hair":
@@ -349,33 +348,38 @@ static func _make(nm: String, src: StandardMaterial3D, col: Color) -> StandardMa
 	var m := src.duplicate() as StandardMaterial3D
 	m.resource_name = nm
 	m.albedo_color = col
-	m.vertex_color_use_as_albedo = nm == "Skin" or nm == "Hair"
+	# Punktfarben: Wangen, Lidschatten und Iris-Verlauf kommen aus dem Modell.
+	m.vertex_color_use_as_albedo = nm in ["Skin", "Hair", "Eye_Iris", "Eye_White"]
 	m.vertex_color_is_srgb = true
 	if nm.begins_with("Top_") or nm.begins_with("Bottom_") or nm == "Acc_A":
 		m.normal_enabled = true
-		m.normal_texture = _noise(false)
+		m.normal_texture = _noise()
 		m.normal_scale = 0.35
 		m.uv1_triplanar = true
 		m.uv1_scale = Vector3.ONE * 9.0
 		m.roughness = 0.88
 	elif nm == "Skin":
-		m.normal_enabled = true
-		m.normal_texture = _noise(true)
-		m.normal_scale = 0.12
-		m.uv1_triplanar = true
-		m.uv1_scale = Vector3.ONE * 14.0
-		m.roughness = 0.58
-		m.rim_enabled = true
+		# Matte, glatte Haut ohne Rauschtextur (die machte Flecken). Ein Hauch Rim für weiche Konturen.
 		# Kein Subsurface Scattering: Godot legt dafür bei JEDEM Material im Spiel eine zweite Pipeline an (+1,3 GB RAM).
-		m.rim = 0.18
-		m.rim_tint = 0.6
-	elif nm == "Hair":
-		m.roughness = 0.55
+		m.normal_enabled = false
+		m.roughness = 0.74
+		m.metallic_specular = 0.35
 		m.rim_enabled = true
-		m.rim = 0.35
-		m.rim_tint = 0.7
+		m.rim = 0.06
+		m.rim_tint = 0.8
+	elif nm == "Lip":
+		m.roughness = 0.6
+		m.metallic_specular = 0.4
+	elif nm == "Hair":
+		m.roughness = 0.68
+		m.metallic_specular = 0.4
+		m.rim_enabled = true
+		m.rim = 0.18
+		m.rim_tint = 0.8
 	elif nm.begins_with("Eye_"):
-		m.roughness = 0.12
+		# Leichter Glanzpunkt, aber kein Glasauge
+		m.roughness = 0.32 if nm == "Eye_White" else 0.22
+		m.metallic_specular = 0.45
 		m.specular_mode = BaseMaterial3D.SPECULAR_SCHLICK_GGX
 	elif nm == "Glass":
 		m.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
@@ -385,14 +389,12 @@ static func _make(nm: String, src: StandardMaterial3D, col: Color) -> StandardMa
 	return m
 
 
-static func _noise(skin: bool) -> NoiseTexture2D:
-	if skin and _skin_n != null:
-		return _skin_n
-	if not skin and _fabric != null:
+static func _noise() -> NoiseTexture2D:
+	if _fabric != null:
 		return _fabric
 	var n := FastNoiseLite.new()
-	n.noise_type = FastNoiseLite.TYPE_CELLULAR if skin else FastNoiseLite.TYPE_SIMPLEX
-	n.frequency = 0.16 if skin else 0.22
+	n.noise_type = FastNoiseLite.TYPE_SIMPLEX
+	n.frequency = 0.22
 	var t := NoiseTexture2D.new()
 	t.width = 256
 	t.height = 256
@@ -400,10 +402,7 @@ static func _noise(skin: bool) -> NoiseTexture2D:
 	t.as_normal_map = true
 	t.bump_strength = 3.0
 	t.noise = n
-	if skin:
-		_skin_n = t
-	else:
-		_fabric = t
+	_fabric = t
 	return t
 
 
@@ -418,9 +417,9 @@ func _shape(mi: MeshInstance3D) -> void:
 	for i in range(1, BUILDS.size()):
 		_set_key(mi, BUILDS[i], amt if int(look["build"]) == i else 0.0)
 	_set_key(mi, "Body_Fem", float(look["fem"]) / 100.0)
-	if str(mi.name) in ["Face", "Lips"]:
-		for k in FACE_KEYS:
-			_set_key(mi, FACE_SHAPES[k], float(look[k]) / 100.0)
+	# Gesichtsformen tragen Gesicht, Lippen, Mund, Brauen und Bärte gemeinsam (sonst stäche die Haut durch).
+	for k in FACE_KEYS:
+		_set_key(mi, FACE_SHAPES[k], float(look[k]) / 100.0)
 
 
 ## Mimik: Werte 0..1 für Blink, Mouth_Open, Smile, Frown, Brow_Up, Brow_Angry, Squint.

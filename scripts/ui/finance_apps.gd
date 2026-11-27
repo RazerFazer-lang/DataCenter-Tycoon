@@ -117,6 +117,12 @@ static func _work_text(role: String, skill: int, done: int) -> String:
 		return _t("Bezahlt Rechnungen %s  •  %d Rechnungen bezahlt") % [when, done]
 	if role == "technician":
 		return _t("Arbeitsqualität etwa %d %%  •  %d Server fertig") % [40 + skill * 11, done]
+	if role == "netadmin":
+		return _t("Blockt Angreifer an der Firewall  •  %d Angriffe abgewehrt") % done
+	if role == "security":
+		return _t("Nachts im Dienst, Diebe %d %% seltener  •  %d Diebe gestellt") % [int((1.0 - clampf(0.6 - 0.06 * float(skill), 0.25, 0.6)) * 100.0), done]
+	if role == "cleaning":
+		return _t("Tagsüber im Dienst, braucht etwa %d s je Rack  •  %d Racks entstaubt") % [int(maxf(4.0, 12.0 - float(skill) * 1.4)), done]
 	return ""
 
 
@@ -233,6 +239,8 @@ static func render_bank(host: Control, feedback: String, feedback_ok: bool) -> v
 		card.add_child(repay)
 
 	# Angebote
+	_investors(body)
+
 	_section(body, "Kreditangebote")
 	for o_v in FinanceScript.LOAN_OFFERS:
 		var offer: Dictionary = o_v
@@ -579,3 +587,104 @@ static func _button(text: String, bg: Color, on_press: Callable, enabled: bool =
 	b.pressed.connect(func(): SfxManager.play("click", -8.0, 1.0))
 	b.pressed.connect(on_press)
 	return b
+
+# ---------------------------------------------------------------- GAME-04 Investoren (in der Bank)
+
+static func _investors(body: VBoxContainer) -> void:
+	_section(body, "Investoren")
+	var info := _card(body)
+	info.add_child(_label("Ein Investor zahlt sofort eine große Summe ein und bekommt dafür eine Zeit lang einen Anteil an allen Einnahmen aus Verträgen und Mieten. Keine Raten, keine Zinsen, aber jeder Umsatz wird kleiner.", 12, COL_MUTED, true))
+	for inv in FinanceManager.investors.values():
+		var card := _card(body, COL_ACCENT)
+		var top := HBoxContainer.new()
+		card.add_child(top)
+		var t := _label("%s  •  %d %%" % [_t(str(inv["title"])), int(float(inv["share"]) * 100.0)], 15, COL_TEXT)
+		t.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		top.add_child(t)
+		top.add_child(_label(_t("noch %d von %d Tagen") % [int(inv["days_left"]), int(inv["days_total"])], 13, COL_TEXT))
+		card.add_child(_bar(1.0 - float(inv["days_left"]) / maxf(1.0, float(inv["days_total"])), COL_ACCENT))
+		card.add_child(_label(_t("Eingezahlt %s  •  bisher ausgezahlt %s") % [_money(float(inv["amount"])), _money(float(inv.get("paid", 0.0)))], 12, COL_MUTED, true))
+		var cost: int = FinanceManager.get_buyout_cost(inv)
+		var iid := str(inv["id"])
+		var b := _button(_t("Anteile zurückkaufen %s") % _money(float(cost)), COL_ACCENT, func(): FinanceManager.request_buyout_investor(iid), GameState.money >= float(cost))
+		b.size_flags_horizontal = Control.SIZE_SHRINK_END
+		card.add_child(b)
+	for o in FinanceScript.INVESTOR_OFFERS:
+		var offer: Dictionary = o
+		var why: String = FinanceManager.get_investor_block_reason(offer)
+		var card := _card(body)
+		var top := HBoxContainer.new()
+		card.add_child(top)
+		var t := _label(_t(str(offer["title"])), 15, COL_TEXT)
+		t.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		top.add_child(t)
+		top.add_child(_label(_money(float(offer["amount"])), 15, COL_GOOD))
+		card.add_child(_label(_t("Dafür %d %% der Einnahmen für %d Tage  •  ab Firmenstufe %d") % [int(float(offer["share"]) * 100.0), int(offer["days"]), int(offer["min_level"])], 12, COL_MUTED, true))
+		if why != "":
+			card.add_child(_label(_t(why), 12, COL_WARN, true))
+		var oid := str(offer["id"])
+		var b := _button(_t("Annehmen"), COL_ACCENT, func(): FinanceManager.request_accept_investor(oid), why == "")
+		b.size_flags_horizontal = Control.SIZE_SHRINK_END
+		card.add_child(b)
+
+
+# ---------------------------------------------------------------- GAME-04 Monatsbilanz
+
+static func render_balance(host: Control, feedback: String, feedback_ok: bool) -> void:
+	var body := _scroll_body(host)
+	_header(body, "chart", "Monatsbilanz", "Einnahmen, Ausgaben und Ergebnis je Monat (30 Spieltage). Was nicht einzeln gebucht ist, steht unter Einkäufe & Sonstiges.")
+	_feedback_bar(body, feedback, feedback_ok)
+	var m := FinanceManager.month_of(GameState.day_number)
+	var cur: Dictionary = FinanceManager.month_summary(m)
+	var prev: Dictionary = FinanceManager.month_summary(m - 1) if m > 1 else {}
+	_stat_tiles(body, [
+		["Kontostand", _money(GameState.money), COL_BAD if GameState.money < 0.0 else COL_GOOD],
+		["Firmenwert", _money(float(GameState.get_company_value())), COL_TEXT],
+		["Schulden", _money(FinanceManager.get_total_debt()), COL_BAD if FinanceManager.get_total_debt() > 0.0 else COL_TEXT],
+		[_t("Ergebnis Monat %d") % m, _money(float(cur["net"])), COL_GOOD if float(cur["net"]) >= 0.0 else COL_BAD],
+	])
+	var card := _card(body)
+	var grid := GridContainer.new()
+	grid.columns = 3
+	grid.add_theme_constant_override("h_separation", 24)
+	grid.add_theme_constant_override("v_separation", 4)
+	card.add_child(grid)
+	grid.add_child(_label("Posten", 13, COL_MUTED))
+	grid.add_child(_label(_t("Monat %d (Tag %d–%d)") % [m, int(cur["from"]), mini(int(cur["to"]), GameState.day_number)], 13, COL_MUTED))
+	grid.add_child(_label(_t("Monat %d") % (m - 1) if m > 1 else _t("Vormonat"), 13, COL_MUTED))
+	for cat in FinanceScript.LEDGER_CATS.keys():
+		var a := float((cur["cats"] as Dictionary).get(cat, 0.0))
+		var b := float((prev.get("cats", {}) as Dictionary).get(cat, 0.0)) if not prev.is_empty() else 0.0
+		if absf(a) < 0.5 and absf(b) < 0.5:
+			continue
+		grid.add_child(_label(_t(str(FinanceScript.LEDGER_CATS[cat])), 13, COL_TEXT))
+		grid.add_child(_label(_money(a), 13, COL_GOOD if a >= 0.0 else COL_BAD))
+		grid.add_child(_label(_money(b) if not prev.is_empty() else "–", 13, COL_MUTED))
+	for row in [["Einnahmen", "income", COL_GOOD], ["Ausgaben", "expense", COL_BAD], ["Ergebnis", "net", COL_TEXT]]:
+		grid.add_child(_label(_t(str(row[0])), 14, COL_TEXT))
+		var va := float(cur[str(row[1])]) * (-1.0 if str(row[1]) == "expense" else 1.0)
+		grid.add_child(_label(_money(va), 14, row[2] if str(row[1]) != "net" else (COL_GOOD if va >= 0.0 else COL_BAD)))
+		var vb := float(prev.get(str(row[1]), 0.0)) * (-1.0 if str(row[1]) == "expense" else 1.0)
+		grid.add_child(_label(_money(vb) if not prev.is_empty() else "–", 14, COL_MUTED))
+	# Ergebnis der letzten 30 Tage als Balken
+	_section(body, "Ergebnis je Tag (letzte 30 Tage)")
+	var bars_card := _card(body)
+	var days: Array = FinanceManager.daily_net(30)
+	var top := 1.0
+	for d in days:
+		top = maxf(top, absf(float(d[1])))
+	var bars := HBoxContainer.new()
+	bars.add_theme_constant_override("separation", 2)
+	bars.custom_minimum_size = Vector2(0, 90)
+	bars_card.add_child(bars)
+	for d in days:
+		var v := float(d[1])
+		var col := VBoxContainer.new()
+		col.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		col.alignment = BoxContainer.ALIGNMENT_END
+		bars.add_child(col)
+		var r := ColorRect.new()
+		r.custom_minimum_size = Vector2(0, maxf(2.0, absf(v) / top * 80.0))
+		r.color = COL_GOOD if v >= 0.0 else COL_BAD
+		r.tooltip_text = _t("Tag %d: %s") % [int(d[0]), _money(v)]
+		col.add_child(r)

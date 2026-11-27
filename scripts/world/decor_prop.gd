@@ -43,6 +43,11 @@ var _sign_lbl: Label3D
 var _drawers: Array[Node3D] = []
 var _info_lbl: Label3D
 var _slow := 0.0
+## GAME-01 Notstromaggregat: Abgas, Brummen und leichtes Zittern, solange es läuft.
+var _gen_fx: CPUParticles3D
+var _gen_snd: AudioStreamPlayer3D
+var _gen_body: Node3D
+var _gen_running := false
 
 
 func setup(did: String, itype: String, data: Dictionary) -> void:
@@ -107,6 +112,19 @@ func apply_data(data: Dictionary) -> void:
 		"prop_tool_cart":
 			if _info_lbl != null:
 				_info_lbl.text = "%d/%d" % [DecorManager.kit_count(data), DecorManager.TOOL_CART_SLOTS]
+		"prop_diesel_gen":
+			var run := bool(data.get("running", false))
+			if run != _gen_running:
+				_gen_running = run
+				if _gen_fx != null:
+					_gen_fx.emitting = run
+				if _gen_snd != null:
+					if run:
+						_gen_snd.play()
+					else:
+						_gen_snd.stop()
+				if not run and _gen_body != null:
+					_gen_body.position = Vector3.ZERO
 
 
 func _process(delta: float) -> void:
@@ -120,6 +138,8 @@ func _process(delta: float) -> void:
 	for f in _fans:
 		if GameState.is_active and DecorManager.is_dehum_running(GameState.decor_items.get(decor_id, {})):
 			f.rotate_object_local(Vector3.BACK, delta * 9.0)
+	if _gen_running and _gen_body != null:
+		_gen_body.position = Vector3(sin(_anim_t * 61.0), 0.0, cos(_anim_t * 53.0)) * 0.0025
 	_slow += delta
 	if _slow < 0.5:
 		return
@@ -293,6 +313,25 @@ func _build_generic() -> void:
 						MeshMerger.no_shadow(f)
 		"prop_tool_cart":
 			_info_lbl = _small_label(Vector3(0.255, 0.925, 0.2565), 22, 0.0016, Color(0.95, 0.95, 0.92))
+		"prop_diesel_gen":
+			use = "decor_info"
+			_gen_body = mdl
+			var tip_pos := Vector3(-0.72, 1.85, -0.18)
+			if mdl != null:
+				var tip := mdl.find_child("Exhaust_Tip", true, false) as Node3D
+				if tip != null:
+					tip_pos = tip.position
+			_gen_fx = RealisticVfx.create_diesel_exhaust(tip_pos)
+			_gen_fx.emitting = false
+			add_child(_gen_fx)
+			var stream := SfxManager.get_loop_stream("diesel_gen_idle")
+			if stream != null:
+				_gen_snd = AudioStreamPlayer3D.new()
+				_gen_snd.stream = stream
+				_gen_snd.unit_size = 4.0
+				_gen_snd.max_distance = 40.0
+				_gen_snd.bus = "SFX" if AudioServer.get_bus_index("SFX") >= 0 else "Master"
+				add_child(_gen_snd)
 	if item_type == "prop_logo_sign":
 		_area(use, Vector3(0.0, 0.0, 0.06), Vector3(s.x, s.y, 0.2))
 		return

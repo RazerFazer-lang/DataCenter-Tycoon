@@ -552,12 +552,13 @@ func _tick_thief(_delta: float) -> void:
 	var targets := thief_targets()
 	if targets.is_empty():
 		return
-	var chance := THIEF_CHANCE
+	var chance := THIEF_CHANCE * GameState.diff("events")
 	if has_camera(Vector3(0.0, 0.0, 6.0)):
 		chance *= THIEF_CAM_FACTOR
 	if not GameState.garage_door_open:
 		chance *= 0.75
 	chance *= OutdoorManager.thief_factor()
+	chance *= Staff.thief_factor()
 	if randf() < chance:
 		if bool(OutdoorManager.state["gate"]):
 			OutdoorManager.force_gate_open()
@@ -614,6 +615,13 @@ func _run_thief() -> void:
 	if who != 0 and str(thief["phase"]) != "flee":
 		catch_thief(who)
 		return
+	# GAME-07: Der Wachdienst stellt Diebe auch selbst.
+	if str(thief["phase"]) != "flee" and Staff.guard_catches(pos):
+		var g := Staff.worker("security")
+		if not g.is_empty():
+			g["work_done"] = int(g.get("work_done", 0)) + 1
+		catch_thief(0, Staff.guard_name())
+		return
 	if float(thief["t"]) < float(thief["dur"]):
 		return
 	var cid := str(thief["crate"])
@@ -649,7 +657,7 @@ func _flee(pos: Vector3) -> void:
 	_go_out(pos, "flee")
 
 
-func catch_thief(peer: int) -> void:
+func catch_thief(peer: int, by_name: String = "") -> void:
 	var pos := thief_pos()
 	var carry: Dictionary = thief.get("carry", {})
 	if not carry.is_empty():
@@ -661,7 +669,7 @@ func catch_thief(peer: int) -> void:
 		thief["carry"] = {}
 		GameState._broadcast_crates()
 	GameState.reputation = minf(100.0, GameState.reputation + 0.5)
-	GameState.post_event_f("🏃 %s hat den Dieb verjagt!", [NetworkManager.get_player_name(peer)], "good")
+	GameState.post_event_f("🏃 %s hat den Dieb verjagt!", [by_name if by_name != "" else NetworkManager.get_player_name(peer)], "good")
 	GameState._rpc_play_sfx.rpc("whistle")
 	_flee(pos)
 

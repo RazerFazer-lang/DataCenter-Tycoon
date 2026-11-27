@@ -78,7 +78,9 @@ func _check_schema_table() -> void:
 	chk("Schema: Kommazahl aus JSON wird gelesen", SaveSchema.version_of({"schema": 3.0}) == 3)
 	chk("Schema: Version 0 braucht alle Migrationen", SaveSchema.pending(0, "data").size() + SaveSchema.pending(0, "world").size() == SaveSchema.CURRENT)
 	chk("Schema: aktueller Stand braucht keine", SaveSchema.pending(SaveSchema.CURRENT, "data").is_empty() and SaveSchema.pending(SaveSchema.CURRENT, "world").is_empty())
-	chk("Schema: nur die neueren laufen", Array(SaveSchema.pending(4, "world")) == [5], SaveSchema.pending(4, "world"))
+	var newer: Array = Array(SaveSchema.pending(4, "world")) + Array(SaveSchema.pending(4, "data"))
+	newer.sort()
+	chk("Schema: nur die neueren laufen", newer == range(5, SaveSchema.CURRENT + 1), newer)
 
 
 func _count_strip_crates() -> int:

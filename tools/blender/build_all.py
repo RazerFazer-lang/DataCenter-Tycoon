@@ -67,6 +67,7 @@ GENERATORS = [
     Gen("build_human", note="human"),
     Gen("build_nature_d", note="Baeume, Buesche, Voegel, Tiere (+ Blatt-Texturen)"),
     Gen("build_outdoor_d", note="Spind, Tor, Tuer, Garten, Lampen, Pflanzen"),
+    Gen("build_gameplay_g", note="decor_diesel_gen (Notstromaggregat, GAME-01)"),
 ]
 
 # Nicht in der Liste, mit Grund (Regel: aktuell ist, was heute in assets/models liegt).

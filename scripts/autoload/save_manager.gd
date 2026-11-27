@@ -1,5 +1,5 @@
 extends Node
-## Handles saving, listing, loading, and deleting DataCenter Tycoon Co-op worlds
+## Handles saving, listing, loading, and deleting DataCenter Together worlds
 ## as clean human-readable JSON files in user://saves/. Backward-compatible with v0.2 saves.
 
 const SAVES_SUBDIR := "saves"

@@ -7,7 +7,30 @@ extends RefCounted
 
 
 static func get_estimated_daily_bill() -> int:
-	return int(roundf(GameState.daily_kwh * GameState.electricity_rate))
+	return int(roundf(GameState.daily_energy_cost + GameState.daily_peak_kw * PowerTariff.PEAK_CHARGE_PER_KW))
+
+
+## GAME-02: Netzbezug dieses Takts abrechnen. Arbeitspreis nach Tarif der Stunde, die höchste Netzlast
+## des Tages zählt für den Leistungspreis. Solar deckt tagsüber einen Teil, USV-Laden kommt dazu,
+## Peak-Shaving geht ab.
+static func account_energy(dt: float, charge_kw: float, shave_kw: float) -> void:
+	var hour := PowerTariff.hour_of(GameState.time_of_day)
+	var load_kw := float(GameState.total_watts) / 1000.0
+	var solar_kw := 0.0
+	if GameState.has_building_upgrade("upg_pv_solar"):
+		solar_kw = load_kw * PowerTariff.solar_share(hour, GameState.weather_state)
+	var grid_kw := maxf(0.0, (load_kw - solar_kw - shave_kw) * OutdoorManager.power_mult()) + charge_kw
+	GameState.solar_kw_now = solar_kw
+	GameState.shave_kw_now = shave_kw
+	GameState.grid_kw_now = 0.0 if GameState.on_generator else grid_kw
+	# GAME-01: Läuft das Aggregat, kommt nichts vom Netz. Den Diesel rechnet Operations ab.
+	if GameState.on_generator:
+		return
+	# Verbrauch in Spielstunden: ein Spieltag zählt 24 Stunden Last.
+	var kwh := grid_kw * dt / GameState.DAY_LENGTH_SECONDS * 24.0
+	GameState.daily_kwh += kwh
+	GameState.daily_energy_cost += kwh * GameState.electricity_rate * PowerTariff.mult_at(hour)
+	GameState.daily_peak_kw = maxf(GameState.daily_peak_kw, grid_kw)
 
 
 ## Neuer Tagespreis: zufällige Änderung, die zum Grundpreis zurückzieht. Nur auf dem Host.
@@ -486,7 +509,7 @@ static func get_next_outage_in() -> float:
 
 
 static func _roll_grid_outage_cooldown() -> float:
-	return randf_range(0.8, 2.2) * float(GameState.DAY_LENGTH_SECONDS)
+	return randf_range(0.8, 2.2) * float(GameState.DAY_LENGTH_SECONDS) / maxf(GameState.diff("events"), 0.1)
 
 
 ## Restdauer des Netzausfalls in Spielminuten (für HUD und Hinweise).
@@ -505,11 +528,8 @@ static func _broadcast_power_change() -> void:
 
 
 static func _start_grid_outage(duration: float) -> void:
-	# 2-MVA Notstrom-Dieselgenerator übernimmt bei Netzausfall komplett unterbrechungsfrei!
-	if GameState.has_building_upgrade("upg_diesel_gen"):
-		GameState.post_event("⚡ Stadtwerke-Netzausfall erkannt — 2-MVA Notstrom-Dieselgenerator hat automatisch übernommen (0 s Ausfallzeit)!", "good")
-		GameState._rpc_play_sfx.rpc("save")
-		return
+	# Seit GAME-01 übernehmen Aggregate nicht mehr sofort: Sie springen nach einigen Sekunden an
+	# (Operations.tick_generators), die USV muss bis dahin überbrücken.
 	GameState._grid_breaker_restore = GameState.breaker_on
 	GameState.grid_outage_left = duration
 	GameState.breaker_on = false

@@ -4,7 +4,7 @@ Entwurf für die Steam-Seite. Die Zahlen stammen aus dem Spiel, Stand v3.5. Was 
 
 ## Deutsch
 
-**Name:** DataCenter Tycoon Co-op
+**Name:** DataCenter Together
 
 **Kurzbeschreibung** (höchstens 300 Zeichen):
 Baue in der Ich-Perspektive dein eigenes Rechenzentrum, von der Garage bis zur Halle. Schraube Server an der Werkbank zusammen, verlege Strom- und Netzkabel, halte Kunden bei Laune und rette sie aus Bränden und Stromausfällen. Allein oder im Co-op mit bis zu vier Freunden.

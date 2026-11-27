@@ -550,7 +550,7 @@ public static class DeltaPatch
             throw new DeltaPatchException("Update-Paket ist beschädigt (zu kurz).");
         fs.ReadExactly(prefix);
         if (!prefix[..8].SequenceEqual(Magic))
-            throw new DeltaPatchException("Das ist kein Update-Paket von DataCenter Tycoon.");
+            throw new DeltaPatchException("Das ist kein Update-Paket von DataCenter Together.");
         int format = BinaryPrimitives.ReadInt32LittleEndian(prefix[8..]);
         if (format != FormatVersion)
             throw new DeltaPatchException($"Update-Paket hat ein unbekanntes Format (v{format}). Bitte den Launcher aktualisieren.");

@@ -68,7 +68,8 @@ func _check_version_files() -> void:
 	var cols := {}
 	for col in r["columns"]:
 		cols[str(col["id"])] = (col["items"] as Array).size()
-	chk("Launcher-Roadmap hat Geplant, In Arbeit und Fertig", int(cols.get("planned", 0)) >= 3 and int(cols.get("in_progress", 0)) >= 1 and int(cols.get("done", 0)) >= 20, cols)
+	# „In Arbeit“ ist direkt nach einem Release leer: bump_version.js verschiebt das Paket nach „Fertig“.
+	chk("Launcher-Roadmap hat Geplant, In Arbeit und Fertig", int(cols.get("planned", 0)) >= 3 and cols.has("in_progress") and int(cols.get("done", 0)) >= 20, cols)
 
 
 # --- REL-06 ---

@@ -1,16 +1,16 @@
 class_name IntroSplash
 extends Control
-## Ruhiges, erwachsenes, 100 % KI-freies Studio- & Titel-Intro für Verion-Digital / DataCenter Tycoon Co-op.
+## Ruhiges, erwachsenes, 100 % KI-freies Studio- & Titel-Intro für Vexom Studio / DataCenter Together.
 ## Übernimmt nahtlos aus dem Boot-Splash (#0B0D10):
-##   Phase 1 (0.0 – 3.5 s): Messerscharfes Vektor-Logo "VERION - DIGITAL" auf Mattschwarz + Power-On-Sound
-##   Phase 2 (3.5 – 6.4 s): Echtes Blender-3D-Studio-Key-Art unserer Spiel-Racks + "DATACENTER TYCOON"
+##   Phase 1 (0.0 – 3.5 s): Messerscharfes Vektor-Logo "VEXOM STUDIO" auf Mattschwarz + Power-On-Sound
+##   Phase 2 (3.5 – 6.4 s): Echtes Blender-3D-Studio-Key-Art unserer Spiel-Racks + "DATACENTER TOGETHER"
 ## Jederzeit per Leertaste, Enter, ESC oder Mausklick sauber überspringbar.
 
 signal intro_fading_out
 signal intro_finished
 
 const BG_COLOR := Color(0.0431, 0.0510, 0.0627, 1.0) # Exakt identisch mit boot_splash/bg_color (#0B0D10)
-const EMBLEM_PATH := "res://assets/branding/verion_digital_emblem.png"
+const EMBLEM_PATH := "res://assets/branding/vexom_emblem.png"
 const KEYART_PATH := "res://assets/branding/title_keyart.png"
 
 const PHASE_STUDIO_END := 3.5
@@ -117,7 +117,7 @@ func _process(delta: float) -> void:
 		_skip_lbl.modulate.a = clampf((_elapsed - 0.7) / 0.6, 0.0, 0.55)
 
 	if _elapsed < PHASE_STUDIO_END:
-		# --- PHASE 1: VERION-DIGITAL (ruhig, klar, selbstbewusst) ---
+		# --- PHASE 1: VEXOM STUDIO (ruhig, klar, selbstbewusst) ---
 		var p := _elapsed
 		var fade_out := _smoothstep(clampf((PHASE_STUDIO_END - p) / 0.55, 0.0, 1.0))
 		_studio_box.modulate.a = fade_out
@@ -131,7 +131,7 @@ func _process(delta: float) -> void:
 
 		_studio_sub_lbl.modulate.a = _smoothstep(clampf((p - 0.75) / 0.50, 0.0, 1.0))
 	else:
-		# --- PHASE 2: ECHTES 3D-STUDIO-KEY-ART + DATACENTER TYCOON ---
+		# --- PHASE 2: ECHTES 3D-STUDIO-KEY-ART + DATACENTER TOGETHER ---
 		if not _phase2_triggered:
 			_phase2_triggered = true
 			_studio_box.visible = false
@@ -215,7 +215,7 @@ func _build_ui() -> void:
 	_letterbox.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	add_child(_letterbox)
 
-	# 4. PHASE 1: VERION-DIGITAL VEKTOR-STUDIO-REVEAL
+	# 4. PHASE 1: VEXOM STUDIO VEKTOR-STUDIO-REVEAL
 	var studio_center := CenterContainer.new()
 	studio_center.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	studio_center.mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -238,7 +238,7 @@ func _build_ui() -> void:
 	_studio_box.add_child(_emblem_rect)
 
 	_studio_name_lbl = Label.new()
-	_studio_name_lbl.text = "VERION - DIGITAL"
+	_studio_name_lbl.text = "VEXOM  STUDIO"
 	_studio_name_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	UIStyle.style_label(_studio_name_lbl, 28, Color(0.94, 0.95, 0.97), wide_font, true)
 	_studio_box.add_child(_studio_name_lbl)
@@ -258,7 +258,7 @@ func _build_ui() -> void:
 	UIStyle.style_label(_studio_sub_lbl, 11, Color(0.68, 0.72, 0.78), display_font)
 	_studio_box.add_child(_studio_sub_lbl)
 
-	# 5. PHASE 2: DATACENTER TYCOON CO-OP TITLE LOCKUP
+	# 5. PHASE 2: DATACENTER TOGETHER TITLE LOCKUP
 	var title_center := CenterContainer.new()
 	title_center.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	title_center.mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -271,13 +271,13 @@ func _build_ui() -> void:
 	title_center.add_child(_title_box)
 
 	_title_eyebrow = Label.new()
-	_title_eyebrow.text = "VERION-DIGITAL"
+	_title_eyebrow.text = "VEXOM STUDIO"
 	_title_eyebrow.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	UIStyle.style_label(_title_eyebrow, 12, Color(0.93, 0.66, 0.16, 0.92), wide_font)
 	_title_box.add_child(_title_eyebrow)
 
 	_title_main = Label.new()
-	_title_main.text = "DATACENTER TYCOON"
+	_title_main.text = "DATACENTER TOGETHER"
 	_title_main.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	UIStyle.style_label(_title_main, 52, Color(0.97, 0.98, 1.0), display_font, true)
 	_title_box.add_child(_title_main)

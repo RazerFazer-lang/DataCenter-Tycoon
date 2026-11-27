@@ -32,6 +32,7 @@ func _ready() -> void:
 	error_watch = ErrorWatch.new()
 	error_watch.context_provider = _error_context
 	OS.add_logger(error_watch)
+	DisplayServer.window_set_title(UIStyle.GAME_TITLE)
 	# Fenster schließen erst nach der Übergabe an einen Mitspieler (Host-Wechsel), siehe _notification.
 	if not DedicatedServerScript.is_requested():
 		get_tree().auto_accept_quit = false
@@ -99,7 +100,7 @@ func _ready() -> void:
 		add_child(server)
 		return
 
-	# Ablauf: Verion-Digital Studio- & Titel-Intro -> nahtloser Ladebildschirm -> 3D-Hauptmenü.
+	# Ablauf: Vexom-Studio- & Titel-Intro -> nahtloser Ladebildschirm -> 3D-Hauptmenü.
 	intro_splash.start_intro()
 	_warm_up_views()
 

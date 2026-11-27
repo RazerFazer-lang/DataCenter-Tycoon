@@ -1,5 +1,5 @@
 extends Node
-## Host-authoritative simulation state and RPC router for DataCenter Tycoon Co-op (v0.3).
+## Host-authoritative simulation state and RPC router for DataCenter Together (v0.3).
 ## Supports 4U/6U Racks, 6 Interactive Server Component Categories (CPU/GPU/RAM/SSD/Cooling/PSU),
 ## UPS Backup Batteries, Rack Move/Sell, 3 Halls (Garage + Hall B + Enterprise Hall C),
 ## 4-Minute Day/Night Cycle, Daily kWh Electricity Bill, Contracts, AI Platform, and Emergencies.
@@ -673,6 +673,18 @@ const ITEM_CATALOG := {
 		"color": Color(0.92, 0.46, 0.14),
 		"desc": "3 m breit, zwei Ebenen. Nur hier passen große Geräte wie Racks, USV-Schränke und Kühlgeräte hinein.",
 	},
+	"prop_diesel_gen": {
+		"name": "Notstromaggregat 40 kVA",
+		"category": "placeable",
+		"is_decor": true,
+		"price": 2600,
+		"watts": 0,
+		"compute": 0,
+		"heat": 0.0,
+		"unlock_level": 2,
+		"color": Color(0.80, 0.80, 0.76),
+		"desc": "Diesel-Notstrom: springt bei Netzausfall nach 15 s an, die USV überbrückt bis dahin. 200-l-Tank, Diesel in der PC-App Betrieb bestellen. Nur auf dem Rasen rechts vom Garagentor.",
+	},
 	"prop_sofa": {
 		"name": "Sofa-Ecke",
 		"category": "placeable",
@@ -1036,6 +1048,12 @@ const TICKET_ESCALATION_REP_PENALTY := 2.0
 # Authoritative world state
 var is_active: bool = false
 var money: float = 1200.0
+## Schwierigkeitsgrad der Welt (GAME-10): "easy", "normal", "hard" oder "sandbox".
+var difficulty: String = Difficulty.DEFAULT
+## Wird vor dem Hosten im Hauptmenü gesetzt und von initialize_new_world übernommen.
+var pending_difficulty: String = Difficulty.DEFAULT
+## Geld vor dem Wechsel in die Sandbox. Beim Zurückwechseln kommt es zurück (-1 = keins gemerkt).
+var money_before_sandbox: float = -1.0
 var breaker_on: bool = true
 ## Anzahl der Sicherungs-Steckplätze im Wand-Sicherungskasten und Preis einer Ersatzsicherung.
 const FUSE_SLOT_COUNT := 4
@@ -1080,8 +1098,17 @@ const BUILDING_UPGRADE_CATALOG := {
 		"duration": 50.0,
 		"req_nord": false,
 		"icon": "☀",
-		"effect": "-28 % laufende Stromkosten (Dach-PV & Solar-Carport mit Wallboxen)",
+		"effect": "Deckt tagsüber bis zu 60 % der Last und spart so vor allem teuren Tagstrom (Dach-PV & Solar-Carport)",
 		"desc": "Bautrupp installiert Photovoltaik-Module & Solar-Carport mit E-Ladesäulen.",
+	},
+	"upg_district_heat": {
+		"name": "Fernwärme-Übergabestation",
+		"price": 3600,
+		"duration": 50.0,
+		"req_nord": false,
+		"icon": "♨",
+		"effect": "Verkauft die Abwärme der Racks ins Fernwärmenetz: Geld je kWh (im Winter mehr) und Ruf",
+		"desc": "Bautrupp verlegt die Fernwärmeleitung und setzt Wärmetauscher an die Rückkühlung.",
 	},
 	"upg_diesel_gen": {
 		"name": "2-MVA Notstrom-Dieselgenerator",
@@ -1089,7 +1116,7 @@ const BUILDING_UPGRADE_CATALOG := {
 		"duration": 65.0,
 		"req_nord": true,
 		"icon": "⚡",
-		"effect": "Übernimmt bei Stadtwerke-Netzausfall automatisch (kein Blackout!)",
+		"effect": "Springt bei Netzausfall nach 12 s an, die USV überbrückt. 2.000-l-Tank, Diesel in der App Betrieb bestellen.",
 		"desc": "Schwerlast-Dieselaggregat im Schallschutz-Container inkl. Kabelbrücke zur Halle.",
 	},
 	"upg_security_gate": {
@@ -1131,7 +1158,7 @@ const BUILDING_UPGRADE_CATALOG := {
 }
 const BUILDING_UPGRADE_ORDER: Array[String] = [
 	"upg_pv_solar", "upg_roof_chillers", "upg_security_gate",
-	"upg_noc_suite", "upg_cold_aisle_pro", "upg_diesel_gen",
+	"upg_noc_suite", "upg_cold_aisle_pro", "upg_diesel_gen", "upg_district_heat",
 ]
 ## Anteil der Defekte ohne sichtbare Spuren; die findet man nur mit POST-Code und Messgerät.
 const FAULT_HIDDEN_CHANCE := 0.5
@@ -1164,6 +1191,17 @@ var ddos_cooldown: float = 55.0
 var day_number: int = 1
 var time_of_day: float = 0.36 # 0..1 (0.36 ≈ 08:38)
 var daily_kwh: float = 0.0
+## GAME-02: Arbeitspreis des laufenden Tags (Summe kWh × Tarif der Stunde) und höchste Netzlast in kW.
+var daily_energy_cost: float = 0.0
+var daily_peak_kw: float = 0.0
+var last_peak_kw: float = 0.0
+var last_energy_cost: float = 0.0
+## Für Anzeigen: Netzbezug, Solarleistung und von der USV gekappte Leistung gerade jetzt (kW).
+var grid_kw_now: float = 0.0
+var solar_kw_now: float = 0.0
+var shave_kw_now: float = 0.0
+## GAME-01: Der Strom kommt gerade vom Dieselaggregat (Netzausfall).
+var on_generator: bool = false
 var last_daily_bill: int = 0
 ## Strompreis des laufenden Tags in $/kWh.
 var electricity_rate: float = ELECTRICITY_RATE_PER_KWH
@@ -1196,6 +1234,8 @@ var carts: Dictionary = {}
 var crates: Dictionary = {}
 var cables: Dictionary = {}
 var contracts: Dictionary = {}
+## GAME-05: Kundenbewertungen [{day, client, stars, text}], die neuesten hinten.
+var reviews: Array = []
 var parts_inventory: Dictionary = {} # part_id -> int count in player's warehouse!
 ## Gemeinsamer Warenkorb für PC-Shop & Rack-Konfigurator (lokal pro Spieler).
 var shopping_cart: Array = []
@@ -1382,7 +1422,7 @@ func request_sign_delivery() -> void:
 
 func get_level_revenue_mult() -> float:
 	var lvl_b: Dictionary = COMPANY_LEVEL_BENEFITS.get(get_company_level(), {})
-	return float(lvl_b.get("rev_mult", 1.0)) + float(career_completed.size()) * 0.03
+	return (float(lvl_b.get("rev_mult", 1.0)) + float(career_completed.size()) * 0.03) * diff("revenue")
 
 
 func get_level_discount_mult() -> float:
@@ -1406,7 +1446,10 @@ func initialize_new_world(save_id: String = "mein_datacenter", save_name: String
 		current_save_name = "Mein DataCenter"
 	world_uid = _new_world_uid()
 	build_allowed = {}
-	money = 1800.0
+	difficulty = Difficulty.valid(pending_difficulty)
+	pending_difficulty = Difficulty.DEFAULT
+	money_before_sandbox = -1.0
+	money = float(Difficulty.LEVELS[difficulty]["start_money"])
 	# Neuer Spielstand: F1 und F2 mit intakten Sicherungen bestückt, F3/F4 leer, Hauptschalter an.
 	breaker_fuses = _make_fuse_slots("empty")
 	breaker_fuses[0] = "ok"
@@ -1506,6 +1549,8 @@ func export_save_data() -> Dictionary:
 		data["pending_delivery_express"] = false
 	data["finance"] = FinanceManager.export_data()
 	data["market"] = MarketManager.export_data()
+	data["operations"] = Operations.export_data()
+	data["cyber"] = Cyber.export_data()
 	data["mail"] = MailManager.export_data()
 	data["checklist_dismissed"] = checklist_dismissed
 	var history := get_node_or_null("/root/StatsHistory")
@@ -1548,6 +1593,10 @@ func load_from_save_data(data: Dictionary, save_id: String, display_name: String
 	FinanceManager.import_data(saved_finance if saved_finance is Dictionary else {})
 	var saved_market: Variant = data.get("market", {})
 	MarketManager.import_data(saved_market if saved_market is Dictionary else {})
+	var saved_ops: Variant = data.get("operations", {})
+	Operations.import_data(saved_ops if saved_ops is Dictionary else {})
+	var saved_cyber: Variant = data.get("cyber", {})
+	Cyber.import_data(saved_cyber if saved_cyber is Dictionary else {})
 	var saved_mail: Variant = data.get("mail", {})
 	MailManager.import_data(saved_mail if saved_mail is Dictionary else {})
 	# Queue any items that were in transit when the game was saved
@@ -1621,6 +1670,9 @@ func clear_local_state() -> void:
 	is_active = false
 	FinanceManager.reset()
 	MarketManager.reset()
+	Operations.reset()
+	Cyber.reset()
+	Staff.reset()
 	MailManager.reset()
 	DecorManager.reset()
 	OutdoorManager.reset()
@@ -1715,6 +1767,8 @@ func build_snapshot() -> Dictionary:
 	return {
 		"current_save_name": current_save_name,
 		"money": money,
+		"difficulty": difficulty,
+		"money_before_sandbox": money_before_sandbox,
 		"breaker_on": breaker_on,
 		"breaker_fuses": breaker_fuses.duplicate(),
 		"fuse_stock": fuse_stock,
@@ -1744,6 +1798,10 @@ func build_snapshot() -> Dictionary:
 		"time_of_day": time_of_day,
 		"clock_scale": clock_scale,
 		"daily_kwh": daily_kwh,
+		"daily_energy_cost": daily_energy_cost,
+		"daily_peak_kw": daily_peak_kw,
+		"last_peak_kw": last_peak_kw,
+		"last_energy_cost": last_energy_cost,
 		"last_daily_bill": last_daily_bill,
 		"electricity_rate": electricity_rate,
 		"last_bill_rate": last_bill_rate,
@@ -1764,6 +1822,7 @@ func build_snapshot() -> Dictionary:
 		"crates": crates.duplicate(true),
 		"cables": cables.duplicate(true),
 		"contracts": contracts.duplicate(true),
+		"reviews": reviews.duplicate(true),
 		"parts_inventory": parts_inventory.duplicate(true),
 		"support_tickets": support_tickets.duplicate(true),
 		"active_call": active_call.duplicate(true),
@@ -1849,6 +1908,8 @@ func _apply_snapshot(snap: Dictionary) -> void:
 	# Alte Spielstände mit room_expanded stellt SaveSchema-Migration 1 vorher um.
 	room_level = clampi(int(snap.get("room_level", 0)), 0, 2)
 	halle_nord_owned = bool(snap.get("halle_nord_owned", false))
+	difficulty = Difficulty.valid(str(snap.get("difficulty", Difficulty.DEFAULT)))
+	money_before_sandbox = float(snap.get("money_before_sandbox", -1.0))
 	delivery_target_site = str(snap.get("delivery_target_site", "garage"))
 	if not halle_nord_owned:
 		delivery_target_site = "garage"
@@ -1866,6 +1927,10 @@ func _apply_snapshot(snap: Dictionary) -> void:
 	# Ein Spielstand startet immer mit normaler Uhr, Mitspieler übernehmen das Tempo des Hosts.
 	clock_scale = 1.0 if multiplayer.is_server() else clampf(float(snap.get("clock_scale", 1.0)), 0.0, 10.0)
 	daily_kwh = float(snap.get("daily_kwh", 0.0))
+	daily_energy_cost = float(snap.get("daily_energy_cost", daily_kwh * float(snap.get("electricity_rate", ELECTRICITY_RATE_PER_KWH))))
+	daily_peak_kw = float(snap.get("daily_peak_kw", 0.0))
+	last_peak_kw = float(snap.get("last_peak_kw", 0.0))
+	last_energy_cost = float(snap.get("last_energy_cost", 0.0))
 	last_daily_bill = int(snap.get("last_daily_bill", 0))
 	electricity_rate = clampf(float(snap.get("electricity_rate", ELECTRICITY_RATE_PER_KWH)), ELECTRICITY_RATE_MIN, ELECTRICITY_RATE_MAX)
 	last_bill_rate = clampf(float(snap.get("last_bill_rate", ELECTRICITY_RATE_PER_KWH)), ELECTRICITY_RATE_MIN, ELECTRICITY_RATE_MAX)
@@ -1886,6 +1951,11 @@ func _apply_snapshot(snap: Dictionary) -> void:
 	crates = snap.get("crates", {}).duplicate(true)
 	cables = snap.get("cables", {}).duplicate(true)
 	contracts = snap.get("contracts", {}).duplicate(true)
+	reviews = []
+	for rv in (snap.get("reviews", []) if snap.get("reviews", []) is Array else []):
+		if rv is Dictionary and reviews.size() < Sla.REVIEWS_MAX:
+			reviews.append({"day": int(rv.get("day", 1)), "client": str(rv.get("client", "")).left(40),
+				"stars": clampi(int(rv.get("stars", 3)), 1, 5), "text": str(rv.get("text", "")).left(120)})
 	parts_inventory = snap.get("parts_inventory", {}).duplicate(true)
 	support_tickets = snap.get("support_tickets", {}).duplicate(true)
 	active_call = snap.get("active_call", {}).duplicate(true)
@@ -2406,6 +2476,8 @@ func has_indoor_unit() -> bool:
 
 ## Platzierungsprüfung je nach Gerätetyp: Außengeräte auf den Rasen, Innengeräte an die Wand, alles andere in die Halle.
 func can_place_item_at(item_type: String, pos: Vector3, rot_y: float = 0.0, ignore_rack_id: String = "") -> bool:
+	if item_type == DIESEL_GEN_TYPE:
+		return can_place_generator_at(pos, ignore_rack_id)
 	if is_heat_pump_type(item_type):
 		return can_place_heat_pump_at(pos)
 	if item_type == INDOOR_UNIT_TYPE:
@@ -2467,6 +2539,13 @@ var _strip_feeds: Dictionary = {}
 var _lan_parent: Dictionary = {}
 ## Bandbreite je LAN-Kette (Mbit/s), gespeichert an der ersten Leiste am Router.
 var lan_chain_mbps: Dictionary = {}
+## GAME-03: Rack -> erste LAN-Leiste seiner Kette (nur Host, für die Drosselung im Sim-Takt).
+var lan_chain_of: Dictionary = {}
+
+
+## Was eine LAN-Kette höchstens trägt: Uplink der Leiste, aber nie mehr als der Router.
+func lan_chain_cap() -> float:
+	return minf(StripRules.LAN_CHAIN_MBPS, maxf(1.0, max_bandwidth_mbps))
 ## Gesamtlast je Kette, gespeichert an der ersten Leiste am Kasten.
 var chain_loads: Dictionary = {}
 var _chain_over: Dictionary = {}
@@ -2498,7 +2577,32 @@ func snap_place_pos(item_type: String, pos: Vector3) -> Vector3:
 	return Vector3(roundf(pos.x * f) / f, 0.0, roundf(pos.z * f) / f)
 
 
-func can_place_heat_pump_at(pos: Vector3) -> bool:
+## GAME-01: Notstromaggregate stehen wie die Außengeräte auf dem Rasen, mit etwas mehr Abstand.
+const DIESEL_GEN_TYPE := "prop_diesel_gen"
+const GEN_SPACING := 1.7
+
+
+func can_place_generator_at(pos: Vector3, ignore_id: String = "") -> bool:
+	if not can_place_heat_pump_at(pos, ignore_id):
+		return false
+	for cid in coolers.keys():
+		var c: Dictionary = coolers[cid]
+		if str(c.get("cooler_type", "cooler")) == INDOOR_UNIT_TYPE:
+			continue
+		var cpos: Vector3 = c["pos"]
+		if Vector2(cpos.x - pos.x, cpos.z - pos.z).length() < GEN_SPACING:
+			return false
+	return true
+
+
+func can_place_heat_pump_at(pos: Vector3, ignore_id: String = "") -> bool:
+	for did in decor_items.keys():
+		var d: Dictionary = decor_items[did]
+		if str(did) == ignore_id or str(d.get("item_type", "")) != DIESEL_GEN_TYPE:
+			continue
+		var gp: Vector3 = d["pos"]
+		if Vector2(gp.x - pos.x, gp.z - pos.z).length() < GEN_SPACING:
+			return false
 	if pos.x < HEAT_PUMP_LAWN_MIN.x or pos.x > HEAT_PUMP_LAWN_MAX.x:
 		return false
 	if pos.z < HEAT_PUMP_LAWN_MIN.y or pos.z > HEAT_PUMP_LAWN_MAX.y:
@@ -2767,7 +2871,7 @@ func get_part_required_level(pd: Dictionary) -> int:
 
 
 func is_part_unlocked(pd: Dictionary) -> bool:
-	return get_company_level() >= get_part_required_level(pd)
+	return is_sandbox() or get_company_level() >= get_part_required_level(pd)
 
 
 ## Artikel mit 'unlock_level' und Mainboards werden nach Firmenstufe freigeschaltet.
@@ -2782,7 +2886,36 @@ func get_item_required_level(item_type: String) -> int:
 
 
 func is_item_unlocked(item_type: String) -> bool:
-	return get_company_level() >= get_item_required_level(item_type)
+	return is_sandbox() or get_company_level() >= get_item_required_level(item_type)
+
+
+# --- Schwierigkeit (GAME-10) ---
+
+## Faktor des aktuellen Schwierigkeitsgrads: "revenue", "costs", "failures" oder "events".
+func diff(key: String) -> float:
+	return Difficulty.mult(difficulty, key)
+
+
+func is_sandbox() -> bool:
+	return Difficulty.is_sandbox(difficulty)
+
+
+## Nur Host (Admin-Menü, Serverkonsole). Wechsel in die Sandbox merkt sich das Geld und gibt es beim
+## Zurückwechseln wieder, sonst wäre die Sandbox ein Geldautomat.
+func set_difficulty(level: String) -> bool:
+	if not multiplayer.is_server() or not Difficulty.LEVELS.has(level) or level == difficulty:
+		return false
+	if level == "sandbox":
+		money_before_sandbox = money
+		money = Difficulty.SANDBOX_MONEY
+	elif is_sandbox():
+		money = money_before_sandbox if money_before_sandbox >= 0.0 else float(Difficulty.LEVELS[level]["start_money"])
+		money_before_sandbox = -1.0
+	difficulty = level
+	post_event_f("🎚 Schwierigkeit jetzt: %s.", [Difficulty.display_name(level)], "info")
+	_broadcast_sim_tick()
+	state_updated.emit()
+	return true
 
 
 # ==============================================================================
@@ -2791,25 +2924,28 @@ func is_item_unlocked(item_type: String) -> bool:
 
 func _run_simulation_step(dt: float) -> void:
 	var prev_ups_backup := ups_backup_active
+	if is_sandbox():
+		money = maxf(money, Difficulty.SANDBOX_MONEY)
 	_recalculate_networks_and_metrics()
 
-	# 0. Day/Night Clock & kWh Meter (PV-Solaranlage spart 28 % laufenden Strom!)
-	var kw_now := float(total_watts) / 1000.0
-	if breaker_on:
-		var pv_mult := (0.72 if has_building_upgrade("upg_pv_solar") else 1.0) * OutdoorManager.power_mult()
-		# Verbrauch in Spielstunden: ein Spieltag zählt 24 Stunden Last (realistische kWh pro Tag).
-		daily_kwh += kw_now * pv_mult * (dt / DAY_LENGTH_SECONDS) * 24.0
+	# 0. Tageswechsel. Den Netzbezug rechnet seit GAME-02 _Power.account_energy() weiter unten ab,
+	# nach Tarif der Stunde und mit Solaranlage, USV-Laden und Peak-Shaving.
 	if _day_rollover_pending:
 		_day_rollover_pending = false
 		day_number += 1
 		var bill := get_estimated_daily_bill()
 		var billed_kwh := daily_kwh
 		daily_kwh = 0.0
+		last_energy_cost = daily_energy_cost
+		last_peak_kw = daily_peak_kw
+		daily_energy_cost = 0.0
+		daily_peak_kw = 0.0
 		last_daily_bill = bill
 		last_bill_rate = electricity_rate
 		electricity_rate = _roll_electricity_rate(electricity_rate)
 		post_event_f("⚡ Strompreis für Tag %d: $%.2f pro kWh.", [day_number, electricity_rate], "info")
 		_advance_random_contracts()
+		_Contracts._daily_rental_reviews()
 		_check_company_milestones()
 		_generate_daily_deals()
 		_roll_team_order()
@@ -2823,6 +2959,9 @@ func _run_simulation_step(dt: float) -> void:
 			post_event_f("☀ Tag %d beginnt – keine Stromkosten angefallen.", [day_number], "info")
 
 	_tick_grid_outage(dt * (2.2 if weather_state == "storm" else 1.0))
+	Operations.tick_generators(dt)
+	Operations.tick_heat(dt)
+	Operations.tick_audit(dt)
 	_tick_weather(dt)
 	_tick_constructions(dt)
 	_check_career_milestones()
@@ -2848,12 +2987,38 @@ func _run_simulation_step(dt: float) -> void:
 			if bool(ups_units[uid].get("tripped", false)):
 				ups_units[uid]["tripped"] = false
 				ups_dirty = true
-		for uid in connected_ups_ids:
-			var u: Dictionary = ups_units[uid]
-			if float(u["charge"]) < 100.0:
-				var add_wh := float(get_ups_spec(u)["charge_w"]) * 0.92 * dt / UPS_SECONDS_PER_HOUR
-				u["charge"] = minf(100.0, float(u["charge"]) + add_wh / get_ups_capacity(u) * 100.0)
+		# GAME-02: In der Abendspitze gibt die USV Strom ab (Peak-Shaving) und lädt erst danach wieder.
+		var in_peak := Operations.peak_shaving and PowerTariff.is_peak(PowerTariff.hour_of(time_of_day))
+		var shave_ids: Array = []
+		if in_peak:
+			for uid in connected_ups_ids:
+				if float(ups_units[uid]["charge"]) > PowerTariff.SHAVE_RESERVE:
+					shave_ids.append(uid)
+		var charge_kw := 0.0
+		var shave_kw := 0.0
+		if not shave_ids.is_empty():
+			var out_w := 0.0
+			for uid in shave_ids:
+				out_w += float(get_ups_spec(ups_units[uid])["out"])
+			shave_kw = minf(out_w, float(total_watts)) / 1000.0
+			var need_wh := shave_kw * 1000.0 * dt / UPS_SECONDS_PER_HOUR
+			for uid in shave_ids:
+				var u: Dictionary = ups_units[uid]
+				var spec := get_ups_spec(u)
+				var wh := need_wh * float(spec["out"]) / maxf(1.0, out_w)
+				u["discharging"] = true
+				u["charge"] = maxf(0.0, float(u["charge"]) - wh / get_ups_capacity(u) * 100.0)
+				u["health"] = maxf(UPS_MIN_HEALTH, get_ups_health(u) - wh / float(spec["cap"]) * UPS_WEAR_PER_CYCLE)
 				ups_dirty = true
+		elif not in_peak:
+			for uid in connected_ups_ids:
+				var u: Dictionary = ups_units[uid]
+				if float(u["charge"]) < 100.0:
+					var add_wh := float(get_ups_spec(u)["charge_w"]) * 0.92 * dt / UPS_SECONDS_PER_HOUR
+					u["charge"] = minf(100.0, float(u["charge"]) + add_wh / get_ups_capacity(u) * 100.0)
+					charge_kw += float(get_ups_spec(u)["charge_w"]) / 1000.0
+					ups_dirty = true
+		_Power.account_energy(dt, charge_kw, shave_kw)
 	else:
 		if not active_backup_ids.is_empty():
 			var total_out := get_ups_total_out()
@@ -3013,7 +3178,7 @@ func _run_simulation_step(dt: float) -> void:
 				slot["thermal_health"] = th_hp
 
 				var stats := get_slot_stats(slot)
-				var fmult := float(stats["fault_mult"])
+				var fmult := float(stats["fault_mult"]) * diff("failures")
 				# Wartungs-Faktor: sauber gewartete Server (< 20 % Staub & > 75 % Paste) fallen fast nie aus!
 				var maint_risk := 0.14 if (dust < 20.0 and th_hp > 75.0) else (0.55 if dust < 55.0 else (1.15 + (dust - 55.0) * 0.015))
 				var eff_temp := rtemp + (dust * 0.05) + ((100.0 - th_hp) * 0.03)
@@ -3051,17 +3216,9 @@ func _run_simulation_step(dt: float) -> void:
 		_recalculate_networks_and_metrics()
 		_broadcast_racks()
 
-	# 5. DDoS Random Events
+	# 5. Cyberangriffe (GAME-06): DDoS, Brute-Force und Erpressungstrojaner kommen aus CyberManager.
 	var has_power := breaker_on or ups_backup_active
-	if (ai_platform_level > 0 or get_active_contract_count() >= 2) and total_compute >= 20 and has_power:
-		if not ddos_active:
-			ddos_cooldown -= dt
-			if ddos_cooldown <= 0.0:
-				ddos_active = true
-				var dmult := float(ROUTER_TIERS[clampi(router_tier, 0, ROUTER_TIERS.size() - 1)]["ddos_mult"])
-				ddos_cooldown = randf_range(65.0, 105.0) * dmult
-				post_event("DDOS-ANGRIFF ERKANNT! Am Wand-Router [E] oder am PC abwehren!", "alert")
-				_rpc_play_sfx.rpc("alarm")
+	Cyber.tick(dt)
 
 	# 5a. Wasserschaden: Ein Leck legt einzelne Server eines Racks lahm.
 	if has_power and get_active_contract_count() >= 1:
@@ -3368,8 +3525,23 @@ func request_diagnose_slot(rack_id: String, slot_idx: int) -> void:
 	_rpc_req_diagnose_slot.rpc_id(1, rack_id, slot_idx)
 
 
-func request_toggle_contract(contract_id: String) -> void:
-	_rpc_req_toggle_contract.rpc_id(1, contract_id)
+func request_toggle_contract(contract_id: String, sla: String = "bronze") -> void:
+	_rpc_req_toggle_contract.rpc_id(1, contract_id, sla)
+
+
+## GAME-05: Schnitt der letzten Kundenbewertungen (1..5).
+func rating_avg() -> float:
+	return Sla.average(reviews)
+
+
+## Nur Host: neue Bewertung. Wirkt auf den Ruf und damit auf neue Anfragen.
+func add_review(client: String, stars: int, text: String) -> void:
+	stars = clampi(stars, 1, 5)
+	reviews.append({"day": day_number, "client": client.left(40), "stars": stars, "text": text.left(120)})
+	while reviews.size() > Sla.REVIEWS_MAX:
+		reviews.pop_front()
+	reputation = clampf(reputation + float(stars - 3) * 1.2, 0.0, 100.0)
+	post_event_f("⭐ %s bewertet dich mit %s: „%s“", [client, Sla.stars_text(float(stars)), text], "good" if stars >= 4 else ("info" if stars == 3 else "warn"))
 
 
 func request_upgrade_power() -> void:
@@ -3827,6 +3999,11 @@ func _rpc_req_place_held_structure(pos: Vector3, rot_y: float) -> void:
 			"wall": is_strip_type(item_type) and snapped.y >= STRIP_WALL_MIN_Y,
 			"stored_items": stored,
 		}
+		if item_type == DIESEL_GEN_TYPE:
+			# Ab Werk mit etwas Diesel für den ersten Probelauf.
+			decor_items[did]["fuel"] = 20.0
+			decor_items[did]["running"] = false
+			decor_items[did]["starting"] = 0.0
 		_recalculate_networks_and_metrics()
 		_broadcast_decor_items()
 		post_event_f("%s hat %s aufgestellt.", [NetworkManager.get_player_name(peer_id), ITEM_CATALOG[item_type]["name"]], "good")
@@ -4260,12 +4437,9 @@ func _rpc_req_mitigate_ddos() -> void:
 	if not multiplayer.is_server():
 		return
 	var peer_id := _get_sender_id()
-	if not ddos_active:
-		return
-	ddos_active = false
-	_broadcast_sim_tick()
+	# Seit GAME-06: Am Router oder per Knopf zieht man einen Angreifer heraus, den Rest in der Firewall-App.
+	Cyber.manual_block(peer_id)
 	_rpc_play_sfx.rpc("repair")
-	post_event_f("%s hat den DDoS-Angriff erfolgreich abgewehrt!", [NetworkManager.get_player_name(peer_id)], "good")
 
 
 @rpc("any_peer", "call_local", "reliable")
@@ -4647,6 +4821,12 @@ func _broadcast_sim_tick() -> void:
 		"time_of_day": time_of_day,
 		"clock_scale": clock_scale,
 		"daily_kwh": daily_kwh,
+		"daily_energy_cost": daily_energy_cost,
+		"daily_peak_kw": daily_peak_kw,
+		"grid_kw_now": grid_kw_now,
+		"solar_kw_now": solar_kw_now,
+		"shave_kw_now": shave_kw_now,
+		"on_generator": on_generator,
 		"last_daily_bill": last_daily_bill,
 		"electricity_rate": electricity_rate,
 		"last_bill_rate": last_bill_rate,
@@ -4678,9 +4858,10 @@ func _broadcast_sim_tick() -> void:
 		"halle_nord_owned": halle_nord_owned,
 		"delivery_target_site": delivery_target_site,
 		"maint_kits": maint_kits,
+		"difficulty": difficulty,
 	}
 	# Größere Teile nur bei Änderung. (Die Deko-Liste stand früher hier mit drin, gelesen hat sie keiner.)
-	for k in ["contracts", "research_levels", "career_completed", "active_team_order", "building_upgrades", "active_constructions"]:
+	for k in ["contracts", "research_levels", "career_completed", "active_team_order", "building_upgrades", "active_constructions", "reviews"]:
 		var v: Variant = get(k)
 		var h := hash(v)
 		if _sim_sent_misc.get(k, -1) != h:
@@ -4696,6 +4877,7 @@ func _broadcast_sim_tick() -> void:
 func _rpc_sync_sim_tick(packet: Dictionary) -> void:
 	if not multiplayer.is_server():
 		money = float(packet["money"])
+		difficulty = Difficulty.valid(str(packet.get("difficulty", difficulty)))
 		breaker_on = bool(packet["breaker_on"])
 		ups_backup_active = bool(packet["ups_backup_active"])
 		grid_outage_left = float(packet.get("grid_outage_left", 0.0))
@@ -4730,6 +4912,12 @@ func _rpc_sync_sim_tick(packet: Dictionary) -> void:
 		else:
 			_time_correction = time_diff
 		daily_kwh = float(packet["daily_kwh"])
+		daily_energy_cost = float(packet.get("daily_energy_cost", daily_energy_cost))
+		daily_peak_kw = float(packet.get("daily_peak_kw", daily_peak_kw))
+		grid_kw_now = float(packet.get("grid_kw_now", 0.0))
+		solar_kw_now = float(packet.get("solar_kw_now", 0.0))
+		shave_kw_now = float(packet.get("shave_kw_now", 0.0))
+		on_generator = bool(packet.get("on_generator", false))
 		electricity_rate = float(packet.get("electricity_rate", ELECTRICITY_RATE_PER_KWH))
 		last_bill_rate = float(packet.get("last_bill_rate", ELECTRICITY_RATE_PER_KWH))
 		last_daily_bill = int(packet["last_daily_bill"])
@@ -4753,6 +4941,8 @@ func _rpc_sync_sim_tick(packet: Dictionary) -> void:
 		next_payout_in = float(packet["next_payout_in"])
 		if packet.get("contracts", null) is Dictionary:
 			contracts = (packet["contracts"] as Dictionary).duplicate(true)
+		if packet.get("reviews", null) is Array:
+			reviews = (packet["reviews"] as Array).duplicate(true)
 		weather_state = str(packet.get("weather_state", weather_state))
 		weather_next = str(packet.get("weather_next", ""))
 		airflow_bonus = float(packet.get("airflow_bonus", airflow_bonus))
@@ -7186,12 +7376,12 @@ func _rpc_req_resolve_call(choice: String) -> void:
 
 
 @rpc("any_peer", "call_local", "reliable")
-func _rpc_req_toggle_contract(contract_id: String) -> void:
-	_Contracts._rpc_req_toggle_contract(contract_id)
+func _rpc_req_toggle_contract(contract_id: String, sla: String = "bronze") -> void:
+	_Contracts._rpc_req_toggle_contract(contract_id, sla)
 
 
-func do_toggle_contract(contract_id: String, peer_id: int) -> void:
-	_Contracts.do_toggle_contract(contract_id, peer_id)
+func do_toggle_contract(contract_id: String, peer_id: int, sla: String = "bronze") -> void:
+	_Contracts.do_toggle_contract(contract_id, peer_id, sla)
 
 
 func _roll_team_order() -> void:

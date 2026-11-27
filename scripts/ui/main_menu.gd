@@ -89,6 +89,8 @@ var _server_list: VBoxContainer
 var _server_timer: Timer
 ## Liste auf der Seite ERFOLGE.
 var _achievements_box: VBoxContainer
+## Auswahl der Schwierigkeit beim neuen Spiel (GAME-10).
+var _difficulty_option: OptionButton
 
 
 func _ready() -> void:
@@ -299,6 +301,8 @@ func _on_host_new_pressed() -> void:
 	show_status(tr("Starte neue Co-op Welt '%s' auf Port %d...") % [world_title, port])
 	_busy = true
 	_set_action_buttons_disabled(true)
+	if _difficulty_option != null:
+		GameState.pending_difficulty = Difficulty.ORDER[clampi(_difficulty_option.selected, 0, Difficulty.ORDER.size() - 1)]
 	NetworkManager.host_game(_host_name_input.text, port, world_title, _host_password_input.text)
 
 
@@ -872,7 +876,7 @@ func _build_header() -> Control:
 	header.add_child(title_v)
 
 	var title := Label.new()
-	title.text = "DATACENTER TYCOON"
+	title.text = "DATACENTER TOGETHER"
 	UIStyle.style_label(title, 50, Color(0.96, 0.965, 0.97), _display_font, true)
 	title_v.add_child(title)
 
@@ -972,7 +976,7 @@ func _build_footer() -> Control:
 	footer.add_child(news_btn)
 
 	var ver_lbl := Label.new()
-	ver_lbl.text = "VERION-DIGITAL  •  v%s  •  LIVE-3D-SHOWCASE" % UIStyle.game_version()
+	ver_lbl.text = "VEXOM STUDIO  •  v%s  •  LIVE-3D-SHOWCASE" % UIStyle.game_version()
 	ver_lbl.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	UIStyle.style_label(ver_lbl, 11, Color(UIStyle.COL_TEXT_MAIN, 0.6))
 	footer.add_child(ver_lbl)
@@ -1184,6 +1188,23 @@ func _build_new_game_page() -> Control:
 	v.add_child(_field_label("Welt-Passwort (optional)"))
 	_host_password_input = _make_password_input("Leer lassen = jeder mit deiner IP kann beitreten")
 	v.add_child(_host_password_input)
+
+	# GAME-10: Schwierigkeit der neuen Welt.
+	v.add_child(_field_label("Schwierigkeit"))
+	_difficulty_option = OptionButton.new()
+	for lv in Difficulty.ORDER:
+		_difficulty_option.add_item(tr(Difficulty.display_name(lv)))
+	_difficulty_option.selected = Difficulty.ORDER.find(Difficulty.DEFAULT)
+	_difficulty_option.custom_minimum_size = Vector2(0, 34)
+	UIStyle.style_button(_difficulty_option)
+	v.add_child(_difficulty_option)
+	var diff_note := Label.new()
+	diff_note.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	UIStyle.style_label(diff_note, 12, UIStyle.COL_TEXT_SUB)
+	diff_note.text = tr(str(Difficulty.LEVELS[Difficulty.DEFAULT]["desc"]))
+	_difficulty_option.item_selected.connect(func(i: int) -> void:
+		diff_note.text = tr(str(Difficulty.LEVELS[Difficulty.ORDER[i]]["desc"])))
+	v.add_child(diff_note)
 
 	var note := Label.new()
 	note.text = "Beim Hosten gibt das Spiel den Port per UPnP automatisch im Router frei und zeigt deine öffentliche IP an (auch im Pausemenü). Freunde tragen diese IP unter „Beitreten“ ein. Klappt UPnP nicht, gehen weiterhin LAN-, Tailscale- oder Radmin-VPN-IPs, auch per Late-Join. Dein Fortschritt wird alle 3 Minuten automatisch gespeichert."

@@ -305,7 +305,7 @@ func _build_ui() -> void:
 	top.add_child(logo)
 
 	_title_lbl = Label.new()
-	_title_lbl.text = "DATACENTER TYCOON"
+	_title_lbl.text = "DATACENTER TOGETHER"
 	_title_lbl.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	UIStyle.style_label(_title_lbl, 17, UIStyle.COL_TEXT_MAIN, display_font)
 	top.add_child(_title_lbl)
@@ -315,7 +315,7 @@ func _build_ui() -> void:
 	top.add_child(top_spacer)
 
 	var edition := Label.new()
-	edition.text = "VERION-DIGITAL  •  CO-OP EDITION  •  v%s" % UIStyle.game_version()
+	edition.text = "VEXOM STUDIO  •  CO-OP EDITION  •  v%s" % UIStyle.game_version()
 	edition.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	UIStyle.style_label(edition, 12, UIStyle.COL_TEXT_SUB)
 	top.add_child(edition)

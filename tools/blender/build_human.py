@@ -1,10 +1,11 @@
 """Blender 5.2: eigene, leicht stilisierte Menschen (Paket D, Roadmap 3).
 
   human.glb  Ein Skelett, darauf viele austauschbare Teile:
-    Head, Eyes, Lids, Brows_*, Hair_*, Beard_*, Hands, Arms, Legs, Torso-Kleidung Top_*, Hosen Bottom_*, Schuhe Shoes_*,
-    Kopfbedeckung Hat_*, Brillen Glasses_*, Zubehoer Acc_*
-  Formen (Shape Keys): Koerper Body_Slim/Body_Heavy/Body_Strong/Body_Fem auf allen Koerperteilen,
-    Gesicht Face_* auf Head, dazu Blink, Mouth_Open, Smile, Brow_Up.
+    Face (Kopf mit Hals), Eyes, Lids, Lips, MouthIn, Brows_*, Hair_*, Beard_*, Hands, Arms, Legs, Torso-Kleidung Top_*,
+    Hosen Bottom_*, Schuhe Shoes_*, Kopfbedeckung Hat_*, Brillen Glasses_*, Zubehoer Acc_*
+  Formen (Shape Keys): Koerper Body_Slim/Body_Heavy/Body_Strong/Body_Fem auf allen Koerperteilen (Body_Fem auch auf
+    Face, Lips und Lids), Gesicht Face_* auf Face, Lips, MouthIn und Baerten (Face_Brow auch auf den Brauen), Mimik Blink, Squint, Mouth_Open,
+    Smile, Frown, Brow_Up, Brow_Angry. In Blender stehen alle Formen auf 1, exportiert wird 0.
   Materialien: Skin, Eye_White, Eye_Iris, Eye_Pupil, Hair, Lip, Top_A/B/C, Bottom_A/B, Shoe_A/B, Acc_A/B, Metal, Reflect, Glass, Dark.
 
 Blick nach +Z (Spiel), Fuesse auf y = 0, Groesse 1,80 m, Ruhehaltung: Arme 45 Grad abgesenkt.
@@ -17,6 +18,7 @@ import sys
 
 import bmesh
 import bpy
+import numpy as np
 from mathutils import Matrix, Vector, noise
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -317,6 +319,30 @@ def cut(ob, keep):
     return edit(ob, fn)
 
 
+def cut_iso(ob, kf):
+    """Nur behalten, wo kf(x, y, z) > 0 (Spielkoordinaten). Geschnitten wird genau auf der Nulllinie,
+    deshalb ohne Treppenkanten (cut() wirft ganze Flächen weg)."""
+    def fn(bm):
+        val = {}
+        for v in bm.verts:
+            q = kf(*back(v.co))
+            val[v] = q if abs(q) > 1e-7 else 1e-7
+        new = set()
+        for e in list(bm.edges):
+            a, b = e.verts
+            if (val[a] > 0.0) != (val[b] > 0.0):
+                _e, nv = bmesh.utils.edge_split(e, a, val[a] / (val[a] - val[b]))
+                val[nv] = 0.0
+                new.add(nv)
+        for fc in list(bm.faces):
+            vs = [v for v in fc.verts if v in new]
+            if len(vs) == 2 and bm.edges.get(vs) is None:
+                bmesh.ops.connect_verts(bm, verts=vs)
+        dele = [fc for fc in bm.faces if max(val[v] for v in fc.verts) <= 0.0]
+        bmesh.ops.delete(bm, geom=dele, context="FACES")
+    return edit(ob, fn)
+
+
 def move(ob, fn):
     """Jeden Punkt verschieben: fn(x, y, z, normal) -> (x, y, z)."""
     me = ob.data
@@ -559,14 +585,10 @@ def body_shape(kind, x, y, z):
     return x, y, z
 
 
-HEAD_DY = 0.024
-
-
 def lower(ob):
-    """Kopf naeher an die Schultern setzen (auch in allen Formen)."""
+    """Kopf näher an die Schultern setzen und etwas vergrößern (auch in allen Formen), siehe head_xf."""
     def f(co):
-        x, y, z = back(co)
-        return g(x, y - HEAD_DY * smoothstep(1.46, 1.54, y), z)
+        return g(*head_xf(*back(co)))
     if ob.data.shape_keys:
         for kb in ob.data.shape_keys.key_blocks:
             for d in kb.data:
@@ -603,246 +625,880 @@ def vcol(ob, fn):
 
 
 # ---------------------------------------------------------------- Kopf
+#
+# Freundlich stilisiert: runder Kopf, volle Wangen, große Iris, weiche Lippen. Der Kopf ist ein weiches
+# Abstandsfeld (SDF) aus wenigen Grundformen. Sie werden weich vereinigt, deshalb gibt es an den Nahtstellen
+# keine Dellen und Kanten. Das Netz entsteht grob aus der harten Vereinigung (Voxel-Remesh) und wird dann
+# auf die Nullfläche des Feldes gezogen. Lippen, Brauen, Bart und Brille richten sich nach demselben Feld.
+# Alle Maße vor dem Absenken und Vergrößern (head_xf), Blick nach +Z.
 
-EYE = (0.0315, 1.672, 0.0665)
-EYE_R = 0.0152
+EYE = (0.0322, 1.6715, 0.0615)
+EYE_R = 0.0165
+EYE_A, EYE_BU, EYE_BL, EYE_TILT = 0.0150, 0.0067, 0.0077, 0.06   # Augenöffnung: halbe Breite, oben, unten, Neigung
+EYE_SKIN = 0.0022               # Lidhaut über dem Augapfel
+MOUTH_Y = 1.6075                # Mundlinie (Spalt im Gesicht)
+MOUTH_W = 0.0225                # halbe Mundbreite
+HEAD_DY = 0.030                 # Kopf näher an die Schultern (kürzerer Hals)
+HEAD_S = 1.04                   # Kopf etwas größer (stilisiert)
+HEAD_PIVOT = (1.585, 0.0)       # (y, z), um diesen Punkt wird vergrößert
 
 
 def gauss(d2, s):
     return math.exp(-d2 / (s * s))
 
 
-def head_base():
-    b = Blob()
-    b.ell((0, 1.716, -0.014), (0.0775, 0.0960, 0.0960))
-    b.ell((0, 1.662, 0.026), (0.0640, 0.0860, 0.0620))
-    b.ell((0, 1.606, 0.030), (0.0490, 0.0380, 0.0520))
-    b.ell((0, 1.586, 0.060), (0.0235, 0.0205, 0.0220))
+def _roty(deg):
+    a = math.radians(deg)
+    return np.array([[math.cos(a), 0.0, math.sin(a)], [0.0, 1.0, 0.0], [-math.sin(a), 0.0, math.cos(a)]])
+
+
+def sd_ell(p, c, r, rot=None):
+    """Ellipsoid (Näherung nach Quilez), rot: Spalten = gedrehte Achsen."""
+    q = p - np.asarray(c)
+    if rot is not None:
+        q = q @ rot
+    r = np.asarray(r)
+    k0 = np.sqrt(((q / r) ** 2).sum(1))
+    k1 = np.sqrt(((q / (r * r)) ** 2).sum(1))
+    return k0 * (k0 - 1.0) / np.maximum(k1, 1e-9)
+
+
+def sd_cap(p, a, ra, b, rb):
+    a, b = np.asarray(a), np.asarray(b)
+    ab = b - a
+    t = np.clip(((p - a) @ ab) / ab.dot(ab), 0.0, 1.0)
+    return np.sqrt(((p - a - t[:, None] * ab) ** 2).sum(1)) - (ra + (rb - ra) * t)
+
+
+def smin(a, b, k):
+    if k <= 0.0:
+        return np.minimum(a, b)
+    h = np.maximum(k - np.abs(a - b), 0.0) / k
+    return np.minimum(a, b) - h * h * k * 0.25
+
+
+def head_ops():
+    """(Gruppe, +1 vereinigen / -1 abziehen, Art, Werte, Weichheit)."""
+    ops = [
+        # Schädel: so groß wie das alte (geglättete) Netz, darauf sitzen Haare und Hüte
+        ("skull", 1, "ell", ((0, 1.716, -0.014), (0.0762, 0.0950, 0.0944), None), 0.0),
+        ("face", 1, "ell", ((0, 1.668, 0.020), (0.0700, 0.0720, 0.0630), None), 0.012),    # Gesicht, breit und rund
+        ("face", 1, "ell", ((0, 1.611, 0.021), (0.0525, 0.0480, 0.0590), None), 0.016),    # Kiefer
+        ("face", 1, "ell", ((0, 1.588, 0.050), (0.0290, 0.0225, 0.0270), None), 0.016),    # Kinn
+        ("face", 1, "ell", ((0, 1.611, 0.056), (0.0290, 0.0250, 0.0270), None), 0.014),    # Mundpartie
+        ("face", 1, "ell", ((0, 1.701, 0.0605), (0.0560, 0.0150, 0.0250), None), 0.016),   # Stirn über den Brauen
+    ]
     for s in (-1, 1):
-        b.ell((s * 0.0400, 1.640, 0.050), (0.0260, 0.0250, 0.0230))
-        b.ell((s * 0.0490, 1.618, 0.006), (0.0120, 0.0260, 0.0260))
-        b.ell((s * 0.0805, 1.668, -0.012), (0.0105, 0.0310, 0.0190), (0, s * 22, s * -6))
-        b.sph((s * 0.0115, 1.6410, 0.0985), 0.0086)
-    b.ell((0, 1.699, 0.072), (0.0540, 0.0135, 0.0185))
-    b.cap((0, 1.692, 0.083), 0.0082, (0, 1.646, 0.1055), 0.0118)
-    b.ell((0, 1.6060, 0.0740), (0.0230, 0.0120, 0.0090))
-    b.cap((0, 1.450, -0.022), 0.0640, (0, 1.600, -0.012), 0.0560)
-    b.cap((0, 1.430, -0.026), 0.0800, (0, 1.470, -0.022), 0.0620)
-    ob = b.mesh("Face", 0.0042, 5, 0.5, 10500)
+        ops.append(("face", 1, "ell", ((s * 0.038, 1.638, 0.046), (0.0290, 0.0275, 0.0300), None), 0.020))    # volle Wangen
+    ops += [
+        ("nose", 1, "cap", ((0, 1.688, 0.078), 0.0058, (0, 1.651, 0.0915), 0.0078), 0.010),          # Nasenrücken
+        ("nose", 1, "ell", ((0, 1.6445, 0.0925), (0.0096, 0.0086, 0.0090), None), 0.006),            # runde Spitze
+    ]
+    for s in (-1, 1):
+        ops.append(("nose", 1, "ell", ((s * 0.0094, 1.6395, 0.0855), (0.0064, 0.0058, 0.0064), None), 0.008))  # Nasenflügel
+    ops += [
+        # Hals: unten so weit wie die Kragen, oben etwas kräftiger als früher
+        ("neck", 1, "cap", ((0, 1.450, -0.022), 0.0640, (0, 1.598, -0.008), 0.0585), 0.012),
+        ("neck", 1, "cap", ((0, 1.430, -0.026), 0.0800, (0, 1.470, -0.022), 0.0620), 0.010),
+    ]
+    for s in (-1, 1):
+        # Ohr als schräg gestellte Scheibe, außen eine Mulde (Ohrmuschel)
+        r = _roty(-s * 18.0)
+        ops.append(("ear", 1, "ell", ((s * 0.0755, 1.664, -0.012), (0.0080, 0.0275, 0.0180), r), 0.007))
+        ops.append(("ear", -1, "ell", ((s * 0.0822, 1.662, -0.0098), (0.0042, 0.0185, 0.0106), r), 0.003))
+    for s in (-1, 1):
+        # Lidhaut: dünne Schale über dem Augapfel, darin die mandelförmige Öffnung
+        ops.append(("lid", 1, "sph", ((s * EYE[0], EYE[1], EYE[2]), EYE_R + EYE_SKIN), 0.008))
+    for s in (-1, 1):
+        ops.append(("eye", -1, "hole", (s,), 0.0014))
+    return ops
 
-    def sockets(x, y, z, n):
-        for s in (-1, 1):
-            d2 = (x - s * EYE[0]) ** 2 + ((y - EYE[1]) * 1.25) ** 2
-            if z > 0.03 and d2 < 0.0012:
-                z -= 0.0125 * gauss(d2, 0.0165)
-        # Lippenspalt und Philtrum
-        if z > 0.05 and abs(x) < 0.026:
-            z -= 0.0030 * gauss(((y - 1.6062) ** 2) * 2, 0.0060) * gauss(x * x, 0.020)
-            z -= 0.0016 * gauss(x * x, 0.004) * gauss((y - 1.624) ** 2, 0.009)
-        # Nasenloecher
-        for s in (-1, 1):
-            d2 = (x - s * 0.0085) ** 2 + (y - 1.6335) ** 2 + (z - 0.098) ** 2
-            y += 0.0035 * gauss(d2, 0.0052)
-        # Ohrmuschel
-        for s in (-1, 1):
-            d2 = (x - s * 0.090) ** 2 + (y - 1.670) ** 2 + (z + 0.006) ** 2
-            if d2 < 0.0006:
-                x -= s * 0.0050 * gauss(d2, 0.0120)
-        return x, y, z
-    move(ob, sockets)
-    set_mats(ob, ["Skin", "Mouth"])
 
-    def col(x, y, z):
-        c = [1.0, 1.0, 1.0]
-        lip = 0.0
-        if False:
-            lip = smoothstep(0.0265, 0.016, abs(x)) * gauss(((y - 1.606) * 1.0) ** 2, 0.0068)
-        cheek = 0.0
-        for s in (-1, 1):
-            cheek += gauss((x - s * 0.044) ** 2 + (y - 1.640) ** 2, 0.022) if z > 0.02 else 0
-        nose = gauss(x * x + (y - 1.644) ** 2, 0.014) if z > 0.085 else 0
-        ear = 0.6 if abs(x) > 0.083 else 0.0
-        eye = 0.0
-        for s in (-1, 1):
-            eye += gauss((x - s * EYE[0]) ** 2 + ((y - EYE[1]) * 1.3) ** 2, 0.019) if z > 0.03 else 0
-        under = smoothstep(1.592, 1.565, y) * smoothstep(1.50, 1.55, y) * 0.10
-        c[0] *= 1 - 0.14 * lip - 0.12 * eye - under
-        c[1] *= 1 - 0.30 * lip - 0.045 * cheek - 0.05 * nose - 0.06 * ear - 0.13 * eye - under * 1.1
-        c[2] *= 1 - 0.27 * lip - 0.040 * cheek - 0.045 * nose - 0.05 * ear - 0.13 * eye - under * 1.1
-        return c
-    vcol(ob, col)
+def _ves_r(b):
+    return (EYE_A ** 2 + b * b) / (2.0 * b)
+
+
+def eye_open_y(dx, upper):
+    """Rand der Augenöffnung (Höhe zur Augenmitte) bei dx, nach außen positiv."""
+    ax = min(abs(dx), EYE_A)
+    if upper:
+        r = _ves_r(EYE_BU)
+        y = (EYE_BU - r) + math.sqrt(r * r - ax * ax)
+    else:
+        r = _ves_r(EYE_BL)
+        y = (-EYE_BL + r) - math.sqrt(r * r - ax * ax)
+    return y + EYE_TILT * dx
+
+
+def sd_eyehole(p, s):
+    """Mandelförmige Öffnung (zwei Kreisbögen) als Prisma nach vorn, hinten kurz hinter der Augenmitte zu."""
+    dx = (p[:, 0] - s * EYE[0]) * s
+    dy = p[:, 1] - EYE[1] - EYE_TILT * dx
+    ru, rl = _ves_r(EYE_BU), _ves_r(EYE_BL)
+    du = np.sqrt(dx * dx + (dy - (EYE_BU - ru)) ** 2) - ru
+    dl = np.sqrt(dx * dx + (dy - (rl - EYE_BL)) ** 2) - rl
+    return np.maximum(np.maximum(du, dl), (EYE[2] - 0.004) - p[:, 2])
+
+
+HEAD = head_ops()
+
+
+def sdf(ops, skip=(), grow=0.0):
+    def f(p):
+        d = None
+        for grp, sign, kind, a, k in ops:
+            if grp in skip:
+                continue
+            if kind == "ell":
+                v = sd_ell(p, a[0], a[1], a[2])
+            elif kind == "sph":
+                v = np.sqrt(((p - np.asarray(a[0])) ** 2).sum(1)) - a[1]
+            elif kind == "hole":
+                v = sd_eyehole(p, a[0])
+            else:
+                v = sd_cap(p, *a)
+            if d is None:
+                d = v
+            elif sign > 0:
+                d = smin(d, v, k)
+            else:
+                d = -smin(-d, v, k)
+        return d - grow
+    return f
+
+
+def _verts(ob):
+    co = np.empty(len(ob.data.vertices) * 3)
+    ob.data.vertices.foreach_get("co", co)
+    co = co.reshape(-1, 3)
+    return np.stack([co[:, 0], co[:, 2], -co[:, 1]], 1)
+
+
+def _set_verts(ob, p):
+    ob.data.vertices.foreach_set("co", np.stack([p[:, 0], -p[:, 2], p[:, 1]], 1).ravel())
+    ob.data.update()
+
+
+def _bl(p):
+    """Spiel -> Blender für ein (N, 3)-Feld."""
+    return np.stack([p[:, 0], -p[:, 2], p[:, 1]], 1)
+
+
+def grad(f, p, h=0.0003):
+    out = np.empty_like(p)
+    for i in range(3):
+        e = np.zeros(3)
+        e[i] = h
+        out[:, i] = (f(p + e) - f(p - e)) / (2.0 * h)
+    return out
+
+
+def project_pts(f, p, iters=10, lim=0.004):
+    for _ in range(iters):
+        d = f(p)
+        gr = grad(f, p)
+        st = np.clip(d / np.maximum((gr * gr).sum(1), 1e-8), -lim, lim)
+        p = p - gr * st[:, None]
+    return p
+
+
+def project(ob, f, iters=10):
+    _set_verts(ob, project_pts(f, _verts(ob), iters))
     return ob
 
 
-def face_keys(ob):
-    def jaw_open(x, y, z):
-        k = smoothstep(1.6065, 1.600, y) * smoothstep(-0.02, 0.05, z) * smoothstep(1.50, 1.565, y)
-        return x * (1 - 0.06 * k), y - 0.020 * k, z - 0.006 * k
-    shape(ob, "Mouth_Open", jaw_open)
-
-    def smile(x, y, z):
-        k = 0.0
-        for s in (-1, 1):
-            k += gauss((x - s * 0.022) ** 2 + (y - 1.607) ** 2, 0.014) * (1 if z > 0.05 else 0)
-        ck = 0.0
-        for s in (-1, 1):
-            ck += gauss((x - s * 0.042) ** 2 + (y - 1.634) ** 2, 0.022) * (1 if z > 0.02 else 0)
-        return x * (1 + 0.16 * k), y + 0.0060 * k + 0.0030 * ck, z - 0.0030 * k + 0.0028 * ck
-    shape(ob, "Smile", smile)
-
-    def frown(x, y, z):
-        k = 0.0
-        for s in (-1, 1):
-            k += gauss((x - s * 0.023) ** 2 + (y - 1.606) ** 2, 0.012) * (1 if z > 0.05 else 0)
-        return x, y - 0.0050 * k, z
-    shape(ob, "Frown", frown)
-    fs = {
-        "Face_Jaw": lambda x, y, z: (x * (1 + 0.16 * gauss((y - 1.604) ** 2, 0.036) * smoothstep(-0.06, 0.0, z)), y, z),
-        "Face_Chin": lambda x, y, z: (x, y - 0.012 * gauss((y - 1.585) ** 2 + x * x, 0.030) * smoothstep(0.02, 0.05, z), z + 0.007 * gauss((y - 1.585) ** 2 + x * x, 0.030) * smoothstep(0.02, 0.05, z)),
-        "Face_Cheek": lambda x, y, z: (x * (1 + 0.12 * gauss((y - 1.636) ** 2, 0.030) * smoothstep(0.0, 0.04, z)), y, z + 0.006 * gauss((y - 1.632) ** 2 + (abs(x) - 0.045) ** 2, 0.026) * smoothstep(0.0, 0.04, z)),
-        "Face_Nose": lambda x, y, z: (x * (1 + 0.18 * gauss((y - 1.643) ** 2 + x * x, 0.020) * smoothstep(0.085, 0.10, z)), y - 0.002 * gauss(x * x + (y - 1.65) ** 2, 0.02), z + 0.011 * gauss(x * x + (y - 1.648) ** 2, 0.017) * smoothstep(0.07, 0.09, z)),
-        "Face_Long": lambda x, y, z: (x * 0.965, y + (y - 1.665) * 0.10 * smoothstep(1.55, 1.60, y), z),
-        "Face_Round": lambda x, y, z: (x * (1 + 0.075 * smoothstep(1.56, 1.62, y)), y - (y - 1.665) * 0.06 * smoothstep(1.55, 1.60, y), z * (1 + 0.02 * smoothstep(1.56, 1.62, y))),
-        "Face_Brow": lambda x, y, z: (x, y - 0.0035 * gauss((y - 1.698) ** 2, 0.012) * smoothstep(0.04, 0.06, z), z + 0.0065 * gauss((y - 1.698) ** 2, 0.012) * smoothstep(0.04, 0.06, z)),
-        "Face_Lips": lambda x, y, z: (x * (1 + 0.12 * gauss((y - 1.606) ** 2, 0.010) * smoothstep(0.06, 0.07, z)), y + (y - 1.6062) * 0.5 * gauss((y - 1.606) ** 2, 0.010) * gauss(x * x, 0.02) * smoothstep(0.06, 0.07, z), z + 0.0040 * gauss((y - 1.606) ** 2, 0.010) * gauss(x * x, 0.02) * smoothstep(0.06, 0.07, z)),
-        "Face_Ears": lambda x, y, z: (x + (0.010 if x > 0 else -0.010) * smoothstep(0.076, 0.088, abs(x)) * smoothstep(1.60, 1.64, y), y, z),
-        "Face_Neck": lambda x, y, z: (x * (1 + 0.16 * smoothstep(1.59, 1.55, y)), y, z * (1 + 0.10 * smoothstep(1.59, 1.55, y))),
-    }
-    for k, f in fs.items():
-        shape(ob, k, f)
+def remesh(ob, voxel):
+    r = ob.modifiers.new("r", "REMESH")
+    r.mode = "VOXEL"
+    r.voxel_size = voxel
+    r.adaptivity = 0.0
+    return apply_mods(ob)
 
 
-def mouth():
-    """Lippen als eigene Koerper, dahinter Mundhoehle und Zaehne."""
-    up = Blob()
-    pts = [(-0.0238, 1.6088, 0.0735, 0.0016), (-0.014, 1.6096, 0.0808, 0.0032), (-0.005, 1.6106, 0.0842, 0.0040), (0.0, 1.6094, 0.0846, 0.0036), (0.005, 1.6106, 0.0842, 0.0040), (0.014, 1.6096, 0.0808, 0.0032), (0.0238, 1.6088, 0.0735, 0.0016)]
-    up.chain([((p[0], p[1], p[2]), p[3]) for p in pts])
-    lo = Blob()
-    pts = [(-0.0228, 1.6080, 0.0735, 0.0016), (-0.013, 1.6034, 0.0798, 0.0040), (0.0, 1.6008, 0.0826, 0.0050), (0.013, 1.6034, 0.0798, 0.0040), (0.0228, 1.6080, 0.0735, 0.0016)]
-    lo.chain([((p[0], p[1], p[2]), p[3]) for p in pts])
-    a, b = up.mesh("l", 0.0013, 3, 0.45, 700), lo.mesh("l", 0.0013, 3, 0.45, 600)
-    ob = join("Lips", [a, b])
-    set_mats(ob, ["Lip"])
-    face_keys(ob)
-    cav = Blob()
-    cav.ell((0, 1.6040, 0.0660), (0.0180, 0.0070, 0.0100))
-    c = cav.mesh("c", 0.002, 1, 0.3, 300)
-    set_mats(c, ["Mouth"])
-    th = box("t", [((0, 1.6088, 0.0735), (0.026, 0.0050, 0.0060))], "Teeth", 0.0015)
-    c2 = join("MouthIn", [c, th])
-    shape(c2, "Mouth_Open", lambda x, y, z: (x, y - 0.012 * smoothstep(1.6065, 1.600, y), z))
-    return [ob, c2]
+def relax(ob, f, n=2):
+    for _ in range(n):
+        sm = ob.modifiers.new("s", "SMOOTH")
+        sm.factor = 0.5
+        sm.iterations = 3
+        apply_mods(ob)
+        project(ob, f, 4)
+    return ob
+
+
+def _prim_obj(kind, a, grow=0.0):
+    """Grundform als eigenes Netz (zum Abziehen per Boolean)."""
+    if kind == "hole":
+        s = a[0]
+        ring = []
+        for k in range(48):
+            t = 2 * math.pi * k / 48
+            dx = EYE_A * math.cos(t)
+            y = eye_open_y(dx, math.sin(t) >= 0.0)
+            ring.append((s * (EYE[0] + dx), EYE[1] + y))
+        vs = [g(x, y, EYE[2] - 0.004) for x, y in ring] + [g(x, y, EYE[2] + 0.05) for x, y in ring]
+        fs = [tuple(range(48))[::-1], tuple(range(48, 96))] + [(k, (k + 1) % 48, 48 + (k + 1) % 48, 48 + k) for k in range(48)]
+        me = bpy.data.meshes.new("cut")
+        me.from_pydata(vs, [], fs)
+        me.update()
+        ob = bpy.data.objects.new("cut", me)
+        bpy.context.scene.collection.objects.link(ob)
+        edit(ob, lambda bm: bmesh.ops.recalc_face_normals(bm, faces=bm.faces))
+        return ob
+    vs, fs = unit_sphere(28)
+    q = np.array([tuple(v) for v in vs])
+    if kind == "sph":
+        p = np.asarray(a[0]) + q * (a[1] + grow)
+    else:
+        r = np.asarray(a[1]) + grow
+        p = q * r
+        if a[2] is not None:
+            p = p @ a[2].T
+        p = p + np.asarray(a[0])
+    me = bpy.data.meshes.new("cut")
+    me.from_pydata([tuple(v) for v in _bl(p)], [], fs)
+    me.update()
+    ob = bpy.data.objects.new("cut", me)
+    bpy.context.scene.collection.objects.link(ob)
+    return ob
+
+
+def fine(ob, spots):
+    """Netz um diese Stellen [(Mitte, Radius)] einmal unterteilen (saubere Lidkanten)."""
+    def fn(bm):
+        sel = []
+        for e in bm.edges:
+            c = (e.verts[0].co + e.verts[1].co) * 0.5
+            p = V(back(c))
+            if any((p - V(cc)).length < r for cc, r in spots):
+                sel.append(e)
+        bmesh.ops.subdivide_edges(bm, edges=sel, cuts=1, use_grid_fill=True)
+        bmesh.ops.triangulate(bm, faces=[f for f in bm.faces if len(f.verts) > 4])
+    return edit(ob, fn)
+
+
+def sdf_mesh(name, ops, voxel=0.0032, faces=11000, skip=(), grow=0.0):
+    """Netz der Nullfläche: harte Vereinigung, abziehen, auf das Feld ziehen, neu vernetzen, glätten."""
+    f = sdf(ops, skip, grow)
+    b = Blob()
+    cutters = []
+    for grp, sign, kind, a, k in ops:
+        if grp in skip:
+            continue
+        if sign < 0:
+            cutters.append((kind, a))
+        elif kind == "ell":
+            b.ell(a[0], tuple(r + grow for r in a[1]), (0, 0, 0), 24)
+        elif kind == "sph":
+            b.sph(a[0], a[1] + grow, 18)
+        else:
+            b.cap(a[0], a[1] + grow, a[2], a[3] + grow)
+    ob = b.mesh(name, voxel * 1.25, 0, 0.5, None)
+    if cutters:
+        cs = [_prim_obj(kind, a, -grow) for kind, a in cutters]
+        for c in cs:
+            md = ob.modifiers.new("b", "BOOLEAN")
+            md.operation = "DIFFERENCE"
+            md.solver = "EXACT"
+            md.object = c
+        apply_mods(ob)
+        for c in cs:
+            bpy.data.objects.remove(c)
+    project(ob, f, 14)
+    remesh(ob, voxel)
+    project(ob, f, 8)
+    if any(o[2] == "hole" for o in ops if o[0] not in skip):
+        for r in (0.026, 0.021):
+            fine(ob, [((s * EYE[0], EYE[1], EYE[2]), r) for s in (-1, 1)])
+            project(ob, f, 8)
+    relax(ob, f)
+    deci(ob, faces)
+    # Lange, dünne Dreiecke aus dem Ausdünnen umlegen (sonst Streifen in der Schattierung, z. B. am Hals)
+    edit(ob, lambda bm: (bmesh.ops.triangulate(bm, faces=bm.faces), bmesh.ops.beautify_fill(bm, faces=bm.faces, edges=bm.edges)))
+    relax(ob, f, 1)
+    for p in ob.data.polygons:
+        p.use_smooth = True
+    return ob, f
+
+
+def surf(f, org, d, far=0.12, step=0.0006):
+    """Erster Treffer eines Strahls von org (N, 3) in Richtung d auf die Nullfläche."""
+    org = np.atleast_2d(np.asarray(org, dtype=np.float64))
+    d = np.asarray(d, dtype=np.float64)
+    n = int(far / step)
+    hit = np.full(len(org), far)
+    prev = f(org)
+    found = np.zeros(len(org), bool)
+    for i in range(1, n + 1):
+        cur = f(org + d * (i * step))
+        new = (~found) & (cur < 0.0) & (prev >= 0.0)
+        hit[new] = i * step
+        found |= new
+        prev = cur
+        if found.all():
+            break
+    lo, hi = hit - step, hit
+    for _ in range(18):
+        mid = (lo + hi) * 0.5
+        inside = f(org + d * mid[:, None]) < 0.0
+        hi = np.where(inside, mid, hi)
+        lo = np.where(inside, lo, mid)
+    return org + d * hi[:, None]
+
+
+def surf_z(f, x, y, z0=0.16):
+    x, y = np.atleast_1d(np.asarray(x, float)), np.atleast_1d(np.asarray(y, float))
+    return surf(f, np.stack([x, y, np.full(x.shape, z0)], 1), (0.0, 0.0, -1.0), 0.20)
+
+
+def normal(f, p):
+    gr = grad(f, np.atleast_2d(p))
+    return gr / np.maximum(np.sqrt((gr * gr).sum(1)), 1e-9)[:, None]
+
+
+def key_from(ob, name, p):
+    """Formschlüssel aus fertigen Punkten (Spielkoordinaten, gleiche Reihenfolge wie die Punkte)."""
+    if ob.data.shape_keys is None:
+        ob.shape_key_add(name="Basis")
+    sk = ob.shape_key_add(name=name)
+    sk.data.foreach_set("co", _bl(np.asarray(p)).ravel())
+
+
+def head_xf(x, y, z):
+    """Kopf etwas größer und näher an die Schultern; der Hals unter dem Kinn bleibt."""
+    w = smoothstep(1.50, 1.56, y)
+    s = 1.0 + (HEAD_S - 1.0) * w
+    y2 = HEAD_PIVOT[0] + (y - HEAD_PIVOT[0]) * s
+    z2 = HEAD_PIVOT[1] + (z - HEAD_PIVOT[1]) * s
+    return x * s, y2 - HEAD_DY * smoothstep(1.46, 1.54, y), z2
+
+
+# --- Mimik und Gesichtsformen (Verschiebungsfelder, gelten für Gesicht, Lippen, Mund und Bart)
+
+def jaw_w(x, y, z):
+    """Anteil am Unterkiefer: unter der Mundlinie, hinten am Gelenk und am Hals null."""
+    ax = abs(x)
+    bw = 0.0001 + 0.45 * max(0.0, ax - (MOUTH_W - 0.002))
+    line = MOUTH_Y + 0.30 * max(0.0, ax - MOUTH_W)
+    return smoothstep(line + bw, line - bw, y) * smoothstep(-0.02, 0.05, z) * smoothstep(1.535, 1.572, y)
+
+
+def mouth_open(x, y, z):
+    w = jaw_w(x, y, z)
+    return x * (1 - 0.05 * w), y - 0.013 * w, z - 0.004 * w
+
+
+def smile(x, y, z):
+    k = sum(gauss((x - s * MOUTH_W) ** 2 + (y - MOUTH_Y) ** 2, 0.013) for s in (-1, 1)) * smoothstep(0.04, 0.06, z)
+    ck = sum(gauss((x - s * 0.040) ** 2 + (y - 1.634) ** 2, 0.020) for s in (-1, 1)) * smoothstep(0.02, 0.045, z)
+    return x * (1 + 0.12 * k), y + 0.0045 * k + 0.0025 * ck, z - 0.0025 * k + 0.0022 * ck
+
+
+def frown(x, y, z):
+    k = sum(gauss((x - s * MOUTH_W) ** 2 + (y - MOUTH_Y) ** 2, 0.012) for s in (-1, 1)) * smoothstep(0.04, 0.06, z)
+    return x * (1 - 0.03 * k), y - 0.0045 * k, z
+
+
+def _neck_band(y):
+    return smoothstep(1.53, 1.555, y) * (1 - smoothstep(1.575, 1.60, y))
+
+
+def _lips_w(x, y, z):
+    return gauss(x * x, MOUTH_W * 1.1) * gauss((y - MOUTH_Y) ** 2, 0.009) * smoothstep(0.055, 0.075, z)
+
+
+FACE_FN = {
+    "Face_Jaw": lambda x, y, z: (x * (1 + 0.13 * gauss((y - 1.600) ** 2, 0.030) * smoothstep(-0.04, 0.01, z) * smoothstep(1.545, 1.575, y)), y, z),
+    "Face_Chin": lambda x, y, z: (x, y - 0.006 * gauss(x * x + (y - 1.584) ** 2, 0.024) * smoothstep(0.03, 0.06, z), z + 0.007 * gauss(x * x + (y - 1.584) ** 2, 0.024) * smoothstep(0.03, 0.06, z)),
+    "Face_Cheek": lambda x, y, z: (x + math.copysign(0.0055, x) * gauss((abs(x) - 0.046) ** 2 + (y - 1.636) ** 2, 0.022) * smoothstep(0.0, 0.04, z), y + 0.001 * gauss((abs(x) - 0.046) ** 2 + (y - 1.636) ** 2, 0.022) * smoothstep(0.0, 0.04, z), z + 0.004 * gauss((abs(x) - 0.046) ** 2 + (y - 1.636) ** 2, 0.022) * smoothstep(0.0, 0.04, z)),
+    "Face_Nose": lambda x, y, z: _scale_nose(x, y, z, 0.26, 0.0045),
+    "Face_Long": lambda x, y, z: (x * (1 - 0.05 * smoothstep(1.66, 1.60, y) * smoothstep(1.53, 1.56, y)), y - 0.11 * min(0.09, max(0.0, 1.655 - y)) * smoothstep(1.535, 1.565, y), z),
+    "Face_Round": lambda x, y, z: (x * (1 + 0.07 * smoothstep(1.555, 1.60, y) * (1 - smoothstep(1.645, 1.675, y))), y + 0.06 * max(0.0, 1.64 - y) * smoothstep(1.535, 1.57, y), z + 0.0025 * smoothstep(1.555, 1.60, y) * (1 - smoothstep(1.645, 1.675, y)) * smoothstep(0.02, 0.06, z)),
+    "Face_Brow": lambda x, y, z: (x, y - 0.0015 * gauss((y - 1.700) ** 2, 0.010) * gauss(x * x, 0.05) * smoothstep(0.045, 0.07, z), z + 0.0055 * gauss((y - 1.700) ** 2, 0.010) * gauss(x * x, 0.05) * smoothstep(0.045, 0.07, z)),
+    "Face_Lips": lambda x, y, z: (x * (1 + 0.06 * _lips_w(x, y, z)), MOUTH_Y + (y - MOUTH_Y) * (1 + 0.30 * _lips_w(x, y, z)), z + 0.0016 * _lips_w(x, y, z)),
+    "Face_Ears": lambda x, y, z: (x + math.copysign(0.011, x) * smoothstep(0.068, 0.082, abs(x)) * gauss((y - 1.664) ** 2, 0.035) * smoothstep(0.015, -0.025, z), y, z),
+    "Face_Neck": lambda x, y, z: (x * (1 + 0.12 * _neck_band(y)), y, -0.012 + (z + 0.012) * (1 + 0.08 * _neck_band(y))),
+}
+
+
+def _scale_nose(x, y, z, k, fwd):
+    n = gauss(x * x + (y - 1.646) ** 2, 0.016) * smoothstep(0.080, 0.090, z)
+    return x * (1 + k * n), y + (y - 1.646) * 0.6 * k * n, z + fwd * n + (z - 0.090) * 0.5 * k * n
+
+
+def fem_face(x, y, z):
+    """Weiblichere Züge: schmalerer Kiefer, kleineres Kinn und Nase, weniger Stirnwulst, schmalerer Hals."""
+    jaw = smoothstep(1.64, 1.60, y) * smoothstep(1.535, 1.565, y) * smoothstep(-0.04, 0.01, z)
+    x2 = x * (1 - 0.06 * jaw - 0.05 * _neck_band(y))
+    x2, y2, z2 = _scale_nose(x2, y, z, -0.12, -0.0015)
+    c = gauss(x * x + (y - 1.584) ** 2, 0.024) * smoothstep(0.03, 0.06, z)
+    b = gauss((y - 1.700) ** 2, 0.010) * smoothstep(0.045, 0.07, z)
+    return x2, y2 + 0.003 * c, z2 - 0.002 * c - 0.0025 * b
+
+
+def expr_keys(ob, smile_keys=True):
+    shape(ob, "Mouth_Open", mouth_open)
+    if smile_keys:
+        shape(ob, "Smile", smile)
+        shape(ob, "Frown", frown)
+
+
+def face_keys(ob, fem=True):
+    for k, fn in FACE_FN.items():
+        shape(ob, k, fn)
+    if fem:
+        shape(ob, "Body_Fem", fem_face)
+
+
+# --- Gesicht
+
+def mouth_slit(ob):
+    """Mundspalt: Schnitt entlang der Mundlinie, Ober- und Unterkante getrennt."""
+    def fn(bm):
+        reg = []
+        for fc in bm.faces:
+            x, y, z = back(fc.calc_center_median())
+            if abs(x) < MOUTH_W + 0.008 and abs(y - MOUTH_Y) < 0.010 and z > 0.05:
+                reg.append(fc)
+        geom = reg + list({e for f in reg for e in f.edges}) + list({v for f in reg for v in f.verts})
+        res = bmesh.ops.bisect_plane(bm, geom=geom, dist=0.00002, plane_co=g(0, MOUTH_Y, 0), plane_no=g(0, 1, 0))
+        cut_e = [e for e in res["geom_cut"] if isinstance(e, bmesh.types.BMEdge)]
+        sel = [e for e in cut_e if all(abs(back(v.co)[0]) < MOUTH_W - 0.0015 and back(v.co)[2] > 0.05 for v in e.verts)]
+        bmesh.ops.split_edges(bm, edges=sel)
+        bm.verts.ensure_lookup_table()
+        for v in bm.verts:
+            x, y, z = back(v.co)
+            if not v.is_boundary or abs(y - MOUTH_Y) > 0.00005:
+                continue
+            ys = [back(f.calc_center_median())[1] for f in v.link_faces]
+            lo = sum(1 for q in ys if q < MOUTH_Y)
+            if lo == len(ys):
+                v.co = g(x, y - 0.0004, z)
+            elif lo == 0:
+                v.co = g(x, y + 0.0004, z)
+    return edit(ob, fn)
+
+
+def head_base():
+    ob, f = sdf_mesh("Face", HEAD, 0.0030, 13000)
+    mouth_slit(ob)
+    ob.name = "Face"
+    ob.data.name = "Face"
+    set_mats(ob, ["Skin", "Mouth"])
+
+    def col(x, y, z):
+        cheek = sum(gauss((x - s * 0.044) ** 2 + (y - 1.632) ** 2, 0.020) for s in (-1, 1)) * smoothstep(0.0, 0.03, z)
+        nose = gauss(x * x + (y - 1.646) ** 2, 0.010) * smoothstep(0.086, 0.098, z)
+        ear = smoothstep(0.068, 0.078, abs(x)) * gauss((y - 1.664) ** 2, 0.030) * smoothstep(0.03, 0.0, z)
+        lid = sum(gauss((x - s * EYE[0]) ** 2 + ((y - EYE[1] - 0.012) * 1.5) ** 2, 0.011) for s in (-1, 1)) * smoothstep(0.05, 0.07, z)
+        under = smoothstep(1.585, 1.555, y) * smoothstep(1.50, 1.54, y) * smoothstep(-0.03, 0.03, z)
+        red = 0.028 * cheek + 0.030 * nose + 0.040 * ear
+        return (1 - 0.03 * lid - 0.035 * under, 1 - red - 0.045 * lid - 0.05 * under, 1 - red * 0.9 - 0.045 * lid - 0.05 * under)
+    vcol(ob, col)
+    # Rand der Augenöffnung etwas dunkler (wirkt wie ein weicher Lidstrich)
+    p = _verts(ob)
+    rim = np.zeros(len(p))
+    for s in (-1, 1):
+        rim = np.maximum(rim, np.clip(1.0 - np.abs(sd_eyehole(p, s)) / 0.0009, 0.0, 1.0) * (p[:, 2] > EYE[2]))
+    ca = ob.data.color_attributes["Col"]
+    for lp in ob.data.loops:
+        k = rim[lp.vertex_index]
+        if k > 0.0:
+            c = ca.data[lp.index].color_srgb
+            ca.data[lp.index].color_srgb = (c[0] * (1 - 0.30 * k), c[1] * (1 - 0.34 * k), c[2] * (1 - 0.34 * k), 1.0)
+    return ob, f
 
 
 def eyes():
+    """Augäpfel mit großer Iris: Ringe genau an Pupille, dunklem Irisrand und Iriskante."""
+    P_A, L_A, I_A = 10.8, 23.6, 26.8
+    rings = [0, 4.5, P_A, 14, 18, 21.0, L_A, I_A, 30, 36, 45, 57, 70, 85, 100, 120, 145, 165, 180]
+    seg = 32
     obs = []
     for s in (-1, 1):
+        c = (s * EYE[0], EYE[1], EYE[2])
         bm = bmesh.new()
-        bmesh.ops.create_uvsphere(bm, u_segments=32, v_segments=24, radius=EYE_R, matrix=Matrix.Translation(g(s * EYE[0], EYE[1], EYE[2])) @ Matrix.Rotation(math.radians(90), 4, "X"))
+        rows = []
+        for a in rings:
+            ar = math.radians(a)
+            if a in (0, 180):
+                rows.append([bm.verts.new(g(c[0], c[1], c[2] + EYE_R * math.cos(ar)))])
+                continue
+            rows.append([bm.verts.new(g(c[0] + EYE_R * math.sin(ar) * math.cos(2 * math.pi * k / seg), c[1] + EYE_R * math.sin(ar) * math.sin(2 * math.pi * k / seg), c[2] + EYE_R * math.cos(ar))) for k in range(seg)])
+        fmats = []
+        for i in range(len(rows) - 1):
+            a, b2 = rows[i], rows[i + 1]
+            mid = (rings[i] + rings[i + 1]) * 0.5
+            mi = 2 if mid < P_A else (1 if mid < I_A else 0)
+            for k in range(seg):
+                if len(a) == 1:
+                    fc = bm.faces.new((a[0], b2[k], b2[(k + 1) % seg]))
+                elif len(b2) == 1:
+                    fc = bm.faces.new((a[k], b2[0], a[(k + 1) % seg]))
+                else:
+                    fc = bm.faces.new((a[k], b2[k], b2[(k + 1) % seg], a[(k + 1) % seg]))
+                fmats.append(mi)
+        bmesh.ops.recalc_face_normals(bm, faces=bm.faces)
         me = bpy.data.meshes.new("e")
         bm.to_mesh(me)
         bm.free()
         ob = bpy.data.objects.new("e", me)
         bpy.context.scene.collection.objects.link(ob)
-
-        def pick(x, y, z, s=s):
-            d = math.hypot(x - s * EYE[0], y - EYE[1])
-            if z < EYE[2]:
-                return 0
-            return 2 if d < 0.0036 else 1 if d < 0.0080 else 0
-        set_mats(ob, ["Eye_White", "Eye_Iris", "Eye_Pupil"], pick)
-        for p in me.polygons:
+        ob.data.materials.clear()
+        for n in ("Eye_White", "Eye_Iris", "Eye_Pupil"):
+            ob.data.materials.append(mat(n))
+        for p, mi in zip(me.polygons, fmats):
             p.use_smooth = True
+            p.material_index = mi
+        # Farbe: Iris zum Rand dunkel, oben im Schatten des Lids; Weiß zu den Winkeln hin etwas grauer
+        ca = me.color_attributes.new(name="Col", type="BYTE_COLOR", domain="CORNER")
+        for p in me.polygons:
+            for li in p.loop_indices:
+                x, y, z = back(me.vertices[me.loops[li].vertex_index].co)
+                dx, dy, dz = x - c[0], y - c[1], z - c[2]
+                ang = math.degrees(math.acos(max(-1.0, min(1.0, dz / EYE_R))))
+                if p.material_index == 1:
+                    v = 1.0 - 0.62 * smoothstep(L_A - 2.5, L_A + 0.6, ang) - 0.22 * smoothstep(-0.001, 0.006, dy) + 0.10 * smoothstep(-0.002, -0.006, dy)
+                    v *= 1.0 - 0.18 * smoothstep(16.0, P_A, ang)
+                    col = (v, v, v)
+                elif p.material_index == 0:
+                    v = 0.97 - 0.13 * smoothstep(30.0, 62.0, ang) - 0.05 * smoothstep(0.0, 0.010, dy)
+                    col = (v, v, v * 0.99)
+                else:
+                    col = (1.0, 1.0, 1.0)
+                ca.data[li].color_srgb = (min(1.0, col[0]), min(1.0, col[1]), min(1.0, col[2]), 1.0)
         obs.append(ob)
     return join("Eyes", obs)
 
 
-def lids():
-    """Augenlider als Kugelschale, Blink dreht sie zu."""
-    obs = []
+# --- Lider: Schalen unter der Lidhaut, Blinzeln dreht sie um die Querachse des Auges in die Öffnung
+
+LID_TOP, LID_BOT = 84.0, -82.0
+LID_UP = (EYE_R + 0.0005, 0.0005, 0.0008)     # Oberlid: innen, Dicke oben, Dicke an der Kante
+LID_LO = (EYE_R + 0.0002, 0.0004, 0.0006)     # Unterlid liegt enger am Auge (kein Durchstechen beim Schließen)
+
+
+def _el(y, az, rad):
+    return math.degrees(math.asin(max(-0.999, min(0.999, y / (rad * math.cos(math.radians(az)))))))
+
+
+def lid_edge(az, upper):
+    """Kante der Lidschale: offen knapp hinter dem Rand der Öffnung versteckt."""
+    rad = EYE_R + 0.0010
+    dx = rad * math.sin(math.radians(az))
+    return _el(eye_open_y(dx, upper) + (0.0008 if upper else -0.0008), az, rad)
+
+
+def lid_meet(az):
+    """Hier treffen sich die Lider beim Blinzeln (das Oberlid macht den größten Teil des Wegs)."""
+    rad = EYE_R + 0.0010
+    dx = rad * math.sin(math.radians(az))
+    return _el(0.40 * eye_open_y(dx, True) + 0.60 * eye_open_y(dx, False), az, rad)
+
+
+def lid_pt(s, az, el, rad):
+    a, e = math.radians(az), math.radians(el)
+    return (s * (EYE[0] + rad * math.sin(a)), EYE[1] + rad * math.cos(a) * math.sin(e), EYE[2] + rad * math.cos(a) * math.cos(e))
+
+
+def lids(f):
+    """Ober- und Unterlid als dünne Schale, Oberlid mit Wimpern. Die Formschlüssel werden direkt aus den
+    Parametern gerechnet: Blink, Squint und Body_Fem (längere Wimpern)."""
+    base, blink, squint, fem, faces, mats, cols = [], [], [], [], [], [], []
+
+    def add(p0, p1, p2, p3, col):
+        base.append(p0)
+        blink.append(p1)
+        squint.append(p2)
+        fem.append(p3)
+        cols.append(col)
+        return len(base) - 1
+
+    def lid_map(el, edge, el0, tgt):
+        return el0 + (tgt - el0) * (el - el0) / (edge - el0)
+
+    azs = [-78 + 156 * k / 20.0 for k in range(21)]
     for s in (-1, 1):
-        for top in (True, False):
-            bm = bmesh.new()
-            rows = []
-            r = EYE_R + 0.0012
-            a0, a1 = (100, 17) if top else (-95, -31)
-            for i in range(9):
-                el = math.radians(a0 + (a1 - a0) * i / 8.0)
-                row = []
-                for k in range(15):
-                    az = math.radians(-82 + 164 * k / 14.0)
-                    # Schale um die x-Achse des Auges
-                    x = r * math.sin(az)
-                    rr = r * math.cos(az)
-                    y, z = rr * math.sin(el), rr * math.cos(el)
-                    row.append(bm.verts.new(g(s * EYE[0] + x, EYE[1] + y, EYE[2] + z)))
-                rows.append(row)
-            for i in range(8):
-                for k in range(14):
-                    f = (rows[i][k], rows[i][k + 1], rows[i + 1][k + 1], rows[i + 1][k])
-                    bm.faces.new(f if not top else f[::-1])
-            bmesh.ops.recalc_face_normals(bm, faces=bm.faces)
-            me = bpy.data.meshes.new("l")
-            bm.to_mesh(me)
-            bm.free()
-            ob = bpy.data.objects.new("l", me)
-            bpy.context.scene.collection.objects.link(ob)
-            sd = ob.modifiers.new("so", "SOLIDIFY")
-            sd.thickness = 0.0016
-            sd.offset = 1.0
-            apply_mods(ob)
-            obs.append(ob)
-    ob = join("Lids", obs)
-    set_mats(ob, ["Skin"])
-
-    def col(x, y, z):
-        t = smoothstep(1.670, 1.690, y)
-        edge = gauss((y - EYE[1] - 0.0052) ** 2, 0.0030) if z > EYE[2] + 0.010 else 0
-        return (0.92 - 0.62 * edge, 0.85 - 0.62 * edge, 0.83 - 0.62 * edge)
-    vcol(ob, col)
-
-    def blink(x, y, z):
-        s = 1 if x > 0 else -1
-        dy, dz = y - EYE[1], z - EYE[2]
-        el = math.atan2(dy, dz)
-        rr = math.hypot(dy, dz)
-        e0, e1 = (100, 17) if el > -0.05 else (-95, -31)
-        f = (math.degrees(el) - e0) / (e1 - e0)
-        f = max(0.0, min(1.0, f))
-        tgt = -12.0
-        el2 = math.radians(e0 + (tgt - e0) * f)
-        return x, EYE[1] + rr * math.sin(el2), EYE[2] + rr * math.cos(el2)
-    shape(ob, "Blink", blink)
-
-    def narrow(x, y, z):
-        b = blink(x, y, z)
-        return tuple(a + (c - a) * 0.35 for a, c in zip((x, y, z), b))
-    shape(ob, "Squint", narrow)
+        for upper in (True, False):
+            el0 = LID_TOP if upper else LID_BOT
+            sg = -1.0 if upper else 1.0
+            r_in, t_top, t_edge = LID_UP if upper else LID_LO
+            n = 8
+            prof = [("o", i / n, t_top + (t_edge - t_top) * (i / n) ** 2) for i in range(n + 1)]
+            prof.append(("m", 1.0, 0.0))
+            prof += [("i", i / n, 0.0) for i in range(n, -1, -1)]
+            grid = []
+            for az in azs:
+                edge = lid_edge(az, upper)
+                tgt = (lid_meet(az) - 0.6) if upper else (lid_meet(az) + 2.0)
+                tgt_s = edge + (tgt - edge) * (0.24 if upper else 0.45)
+                col = []
+                for kind, u, t in prof:
+                    el = el0 + (edge - el0) * u
+                    rad = r_in + t
+                    if kind == "m":
+                        el, rad = edge + sg * 0.8, r_in + t_edge * 0.55
+                    elif kind == "i":
+                        rad = r_in
+                    pb = lid_pt(s, az, el, rad)
+                    if kind == "m":
+                        e1, e2 = tgt + sg * 0.8, tgt_s + sg * 0.8
+                    else:
+                        e1, e2 = lid_map(el, edge, el0, tgt), lid_map(el, edge, el0, tgt_s)
+                    sh = 0.95 if kind == "o" and u < 0.9 else 0.86
+                    col.append(add(pb, lid_pt(s, az, e1, rad), lid_pt(s, az, e2, rad), pb, (sh, sh * 0.92, sh * 0.91)))
+                grid.append(col)
+            for k in range(len(azs) - 1):
+                for i in range(len(prof) - 1):
+                    faces.append((grid[k][i], grid[k + 1][i], grid[k + 1][i + 1], grid[k][i + 1]))
+                    mats.append(0)
+        # Wimpernkranz am oberen Rand der Öffnung (steht beim Blinzeln still, das Lid schließt darunter):
+        # dünner dunkler Keil, zur Außenseite länger und leicht nach außen geschwungen
+        n_l = 19
+        dxs = [-EYE_A * 0.93 + EYE_A * 1.94 * k / (n_l - 1) for k in range(n_l)]
+        bx = np.array([s * (EYE[0] + dx) for dx in dxs])
+        by = np.array([EYE[1] + eye_open_y(dx, True) + 0.0005 for dx in dxs])
+        sp = surf_z(f, bx, by)
+        nr = normal(f, sp)
+        lash = []
+        for k, dx in enumerate(dxs):
+            out = smoothstep(-0.4 * EYE_A, EYE_A * 0.95, dx)
+            ln = 0.0010 + 0.0012 * out
+            b0 = V(tuple(sp[k]))
+            n0 = V(tuple(nr[k]))
+            dirv = (n0 * 0.75 + V((0.0, 0.62, 0.0)) + V((s * 0.45 * out, 0.0, 0.0))).normalized()
+            pts = [b0 - n0 * 0.0004 + V((0.0, 0.0009, 0.0)), b0 + dirv * ln, b0 - n0 * 0.0003 - V((0.0, 0.0008, 0.0))]
+            row = []
+            for j, pp in enumerate(pts):
+                pb = tuple(pp)
+                pf = tuple(b0 + dirv * ln * 1.7) if j == 1 else pb
+                row.append(add(pb, pb, pb, pf, (1.0, 1.0, 1.0)))
+            lash.append(row)
+        for k in range(len(lash) - 1):
+            for i in range(3):
+                j = (i + 1) % 3
+                faces.append((lash[k][i], lash[k + 1][i], lash[k + 1][j], lash[k][j]))
+                mats.append(1)
+    me = bpy.data.meshes.new("Lids")
+    me.from_pydata([g(*p) for p in base], [], faces)
+    me.update()
+    ob = bpy.data.objects.new("Lids", me)
+    bpy.context.scene.collection.objects.link(ob)
+    ob.data.materials.append(mat("Skin"))
+    ob.data.materials.append(mat("Dark"))
+    for p, mi in zip(me.polygons, mats):
+        p.material_index = mi
+        p.use_smooth = True
+    edit(ob, lambda bm: bmesh.ops.recalc_face_normals(bm, faces=bm.faces))
+    ca = me.color_attributes.new(name="Col", type="BYTE_COLOR", domain="CORNER")
+    for lp in me.loops:
+        c = cols[lp.vertex_index]
+        ca.data[lp.index].color_srgb = (c[0], c[1], c[2], 1.0)
+    key_from(ob, "Blink", blink)
+    key_from(ob, "Squint", squint)
+    key_from(ob, "Body_Fem", fem)
     return ob
 
 
-def brows():
+# --- Lippen, Mundhöhle, Brauen
+
+LIP_ROWS = [(1.0, 0.0, 0.0006, -0.0007), (1.0, 0.0, 0.0, 0.0001), (0.80, 0.46, 0.0, 0.0), (0.57, 0.85, 0.0, 0.0), (0.33, 1.0, 0.0, 0.0),
+            (0.15, 0.88, 0.0, 0.0), (0.05, 0.55, 0.0, 0.0), (0.0, 0.18, 0.0, 0.0), (0.0, 0.0, 0.0007, -0.0016)]
+
+
+def lip_pts(f, hs=1.0, ts=1.0):
+    """Punkte beider Lippen (Reihenfolge fest): Spalten quer, Reihen von der Hautkante zur Mundlinie."""
+    gap = -0.0003      # Ober- und Unterlippe greifen ineinander (kein heller Spalt)
+    cols = 20
+    us = [math.copysign(abs(-1 + 2 * k / cols) ** 0.8, -1 + 2 * k / cols) for k in range(cols + 1)]
+    xs, ys, dzs = [], [], []
+    for upper in (True, False):
+        sg = 1.0 if upper else -1.0
+        for u in us:
+            x = MOUTH_W * 0.995 * u
+            q = max(0.0, 1 - u * u)
+            if upper:
+                h = 0.0056 * q ** 0.6 * (1 - 0.14 * gauss(x * x, 0.0035) + 0.07 * gauss((abs(x) - 0.0062) ** 2, 0.0035))
+                t = 0.0024 * q ** 0.8 + 0.00015
+            else:
+                h = 0.0066 * q ** 0.55
+                t = 0.0031 * q ** 0.7 + 0.00015
+            h *= hs
+            t *= ts
+            for fy, fz, ay, az in LIP_ROWS:
+                xs.append(x)
+                ys.append(MOUTH_Y + sg * (gap + fy * h + ay))
+                dzs.append(fz * t + az)
+    xs, ys, dzs = np.array(xs), np.array(ys), np.array(dzs)
+    sp = surf_z(f, xs, ys)
+    return sp + normal(f, sp) * dzs[:, None], cols
+
+
+def lips(f):
+    p, cols = lip_pts(f)
+    nr = len(LIP_ROWS)
+    faces = []
+    for half in range(2):
+        o = half * (cols + 1) * nr
+        for k in range(cols):
+            for i in range(nr - 1):
+                a = o + k * nr + i
+                q = (a, a + nr, a + nr + 1, a + 1)
+                faces.append(q if half == 0 else q[::-1])
+    me = bpy.data.meshes.new("Lips")
+    me.from_pydata([tuple(v) for v in _bl(p)], [], faces)
+    me.update()
+    ob = bpy.data.objects.new("Lips", me)
+    bpy.context.scene.collection.objects.link(ob)
+    for pl in me.polygons:
+        pl.use_smooth = True
+    set_mats(ob, ["Lip"])
+    # Mund auf: die Unterlippe folgt dem Kiefer, die Oberlippe bleibt (beide reichen über die Mundlinie)
+    half = len(p) // 2
+    mo = []
+    for i, (x, y, z) in enumerate(p):
+        yw = max(y, MOUTH_Y + 0.0003) if i < half else min(y, MOUTH_Y - 0.0003)
+        w = jaw_w(x, yw, z)
+        mo.append((x * (1 - 0.05 * w), y - 0.013 * w, z - 0.004 * w))
+    key_from(ob, "Mouth_Open", mo)
+    shape(ob, "Smile", smile)
+    shape(ob, "Frown", frown)
+    for k, fn in FACE_FN.items():
+        if k == "Face_Lips":
+            # volle Lippen: höher und dicker, dazu die Haut darunter wie im Gesicht
+            p2, _ = lip_pts(f, 1.30, 1.65)
+            key_from(ob, k, np.array([fn(*q) for q in p2]))
+        else:
+            shape(ob, k, fn)
+    p3, _ = lip_pts(f, 1.08, 1.30)
+    key_from(ob, "Body_Fem", np.array([fem_face(*q) for q in p3]))
+    return ob
+
+
+def mouth_in(f):
+    """Mundhöhle als dunkler Sack hinter dem Spalt, dazu obere Zahnreihe (bleibt beim Öffnen stehen)."""
+    cols = 16
+    xs = np.linspace(-MOUTH_W * 0.93, MOUTH_W * 0.93, cols + 1)
+    prof = [(1.0, 0.0010), (0.75, 0.0060), (0.35, 0.0150), (0.0, 0.0190), (-0.35, 0.0150), (-0.75, 0.0060), (-1.0, 0.0010)]
+    qx, qy, qd = [], [], []
+    for x in xs:
+        a = 0.0042 * math.sqrt(max(0.0, 1 - (x / MOUTH_W) ** 2)) + 0.0010
+        for fy, dep in prof:
+            qx.append(x)
+            qy.append(MOUTH_Y + fy * a)
+            qd.append(dep + 0.0006)
+    sz = surf_z(f, qx, qy)[:, 2]
+    pts = [(x, y, z - d) for x, y, z, d in zip(qx, qy, sz, qd)]
+    nr = len(prof)
+    faces = []
+    for k in range(cols):
+        for i in range(nr - 1):
+            a = k * nr + i
+            faces.append((a, a + 1, a + nr + 1, a + nr))
+    for k in (0, cols):
+        c = len(pts)
+        pts.append(tuple(np.mean([pts[k * nr + i] for i in range(nr)], 0)))
+        for i in range(nr - 1):
+            faces.append((k * nr + i, k * nr + i + 1, c) if k else (k * nr + i + 1, k * nr + i, c))
+    me = bpy.data.meshes.new("c")
+    me.from_pydata([g(*q) for q in pts], [], faces)
+    me.update()
+    sack = bpy.data.objects.new("c", me)
+    bpy.context.scene.collection.objects.link(sack)
+    set_mats(sack, ["Mouth"])
+    shape(sack, "Mouth_Open", mouth_open)
+    # Zähne: gebogenes Band hinter der Oberlippe
+    bm = bmesh.new()
+    rows = []
+    tx = [-0.0150 + 0.0300 * j / 12.0 for j in range(13)]
+    tz = surf_z(f, tx, [MOUTH_Y] * 13)[:, 2] - 0.0042
+    for x, z0 in zip(tx, tz):
+        rows.append([bm.verts.new(g(x, y, z0 - d)) for y, d in ((MOUTH_Y + 0.0032, 0.0), (MOUTH_Y - 0.0020, 0.0), (MOUTH_Y - 0.0020, 0.0016), (MOUTH_Y + 0.0032, 0.0016))])
+    for j in range(12):
+        for i in range(4):
+            bm.faces.new((rows[j][i], rows[j + 1][i], rows[j + 1][(i + 1) % 4], rows[j][(i + 1) % 4]))
+    bmesh.ops.recalc_face_normals(bm, faces=bm.faces)
+    me = bpy.data.meshes.new("t")
+    bm.to_mesh(me)
+    bm.free()
+    th = bpy.data.objects.new("t", me)
+    bpy.context.scene.collection.objects.link(th)
+    for p in me.polygons:
+        p.use_smooth = True
+    set_mats(th, ["Teeth"])
+    ob = join("MouthIn", [sack, th])
+    for k, fn in FACE_FN.items():
+        shape(ob, k, fn)
+    return ob
+
+
+def skin_strip(f, name, path, half_h, bulge, n_v=6):
+    """Polster auf der Haut entlang path [(x, y)]: Höhe 2*half_h[i] quer, Wölbung bulge[i] nach außen."""
+    nt = len(path)
+    xs, ys, ds = [], [], []
+    for (x, y), h, b in zip(path, half_h, bulge):
+        for j in range(n_v + 1):
+            v = -1 + 2 * j / n_v
+            xs.append(x)
+            ys.append(y + v * h)
+            ds.append(0.00025 + b * math.sqrt(max(0.0, 1 - v * v)))
+        for j in range(n_v - 1, 0, -1):
+            v = -1 + 2 * j / n_v
+            xs.append(x)
+            ys.append(y + v * h)
+            ds.append(-0.0008)
+    xs, ys, ds = np.array(xs), np.array(ys), np.array(ds)
+    sp = surf_z(f, xs, ys)
+    p = sp + normal(f, sp) * ds[:, None]
+    ring = 2 * n_v
+    faces = []
+    for i in range(nt - 1):
+        for j in range(ring):
+            a, b2 = i * ring + j, i * ring + (j + 1) % ring
+            faces.append((a, b2, b2 + ring, a + ring))
+    faces.append(tuple(range(ring))[::-1])
+    faces.append(tuple((nt - 1) * ring + j for j in range(ring)))
+    me = bpy.data.meshes.new(name)
+    me.from_pydata([tuple(v) for v in _bl(p)], [], faces)
+    me.update()
+    ob = bpy.data.objects.new(name, me)
+    bpy.context.scene.collection.objects.link(ob)
+    for pl in me.polygons:
+        pl.use_smooth = True
+    return ob
+
+
+def brows(f):
+    """Weiche Brauen auf der Stirn: innen rund, außen spitz zulaufend."""
     out = []
-    for name, th, arch, ang in (("Brows_A", 0.0042, 0.004, 0.0), ("Brows_B", 0.0058, 0.002, -0.002), ("Brows_C", 0.0032, 0.006, 0.001)):
+    for name, th, arch, ang in (("Brows_A", 0.0031, 0.0030, 0.0), ("Brows_B", 0.0040, 0.0018, -0.0012), ("Brows_C", 0.0023, 0.0040, 0.0006)):
         obs = []
         for s in (-1, 1):
-            pts = []
-            for i in range(9):
-                t = i / 8.0
-                x = 0.013 + 0.034 * t
-                y = 1.6985 + arch * math.sin(t * math.pi * 0.85) - 0.004 * t * t + ang * (1 - t) * 2
-                z = 0.0915 - 0.017 * t * t - 0.002 * t
-                pts.append((s * x, y, z))
-            b = Blob()
-            for i, p in enumerate(pts):
-                t = i / 8.0
-                r = th * (0.75 + 0.45 * math.sin(min(1.0, t * 1.6) * math.pi * 0.5)) * (1.0 - 0.75 * t ** 3)
-                b.ell(p, (0.0062, max(0.0020, r * 0.8), 0.0028), (0, -s * 26 * t, s * -14 * t))
-            obs.append(b.mesh("b", 0.0016, 2, 0.4, 500))
+            path, hh, bl = [], [], []
+            for i in range(15):
+                t = i / 14.0
+                x = 0.0120 + 0.0360 * t
+                y = 1.6962 + arch * math.sin(t * math.pi * 0.92) - 0.0034 * t * t + ang * (1 - t) * 2
+                h = th * (0.82 + 0.30 * math.sin(min(1.0, t * 1.6) * math.pi * 0.5)) * (1.0 - 0.80 * t ** 2.4)
+                h *= math.sqrt(smoothstep(-0.03, 0.16, t))
+                path.append((s * x, y))
+                hh.append(max(0.0002, h))
+                bl.append(0.0013 * h / th)
+            obs.append(skin_strip(f, "b", path, hh, bl))
         ob = join(name, obs)
         set_mats(ob, ["Hair"])
-        shape(ob, "Brow_Up", lambda x, y, z: (x, y + 0.0065, z - 0.0005))
-        shape(ob, "Brow_Angry", lambda x, y, z: (x, y - 0.0060 * (1 - smoothstep(0.012, 0.045, abs(x))) + 0.001, z))
+        up = np.array([back(v.co) for v in ob.data.vertices])
+
+        def on_skin(p, p0):
+            # Neue Höhe, aber im gleichen Abstand zur Haut wie vorher
+            d0 = f(p0)
+            sp = surf_z(f, p[:, 0], p[:, 1])
+            return sp + normal(f, sp) * d0[:, None]
+        raise_y = up + np.array([0.0, 0.0055, 0.0])
+        key_from(ob, "Brow_Up", on_skin(raise_y, up))
+        ang_y = up.copy()
+        ang_y[:, 1] += -0.0055 * (1 - np.clip((np.abs(up[:, 0]) - 0.012) / 0.033, 0, 1)) + 0.0008
+        key_from(ob, "Brow_Angry", on_skin(ang_y, up))
+        shape(ob, "Face_Brow", FACE_FN["Face_Brow"])
         out.append(ob)
     return out
 
@@ -869,6 +1525,26 @@ def hairline(x, y, z, front=1.742, side=1.672, rear=1.600):
     return y > lim
 
 
+def taper(ob, kf, width=0.007, lift=0.0004):
+    """Ränder weich auslaufen lassen: nahe der Schnittkante (kf klein) zur Haut ziehen."""
+    f = sdf(HEAD, ("eye", "lid"))
+    p = _verts(ob)
+    t = 1.0 - np.clip(np.array([kf(*q) for q in p]) / width, 0.0, 1.0)
+    t = t * t * (3.0 - 2.0 * t)
+    d = np.maximum(f(p) - lift, 0.0)
+    _set_verts(ob, p - normal(f, p) * (d * t)[:, None])
+    return ob
+
+
+def hairline_d(x, y, z, front=1.742, side=1.672, rear=1.600):
+    """Wie hairline, aber stetig (> 0 im Haar) für cut_iso: vorn hoch, vor dem Ohr Koteletten, hinten tief."""
+    a = front - 0.010 * (abs(x) / 0.06) ** 2
+    lim = a + (side - a) * smoothstep(0.030, -0.004, z)
+    lim += (rear - side) * smoothstep(-0.004, -0.064, z)
+    lim += max(0.0, 1.700 - lim) * smoothstep(0.068, 0.076, abs(x)) * smoothstep(-0.040, -0.028, z)
+    return y - lim
+
+
 def strands(ob, freq, amp, dirn=(0, 0, 1)):
     def fn(x, y, z, n):
         p = V((x, y, z))
@@ -876,6 +1552,12 @@ def strands(ob, freq, amp, dirn=(0, 0, 1)):
         t = math.sin(ang * freq + noise.noise(p * 9.0) * 2.2) * 0.6 + noise.noise(V((x * 60, y * 14, z * 14))) * 0.6
         return x + n[0] * t * amp, y + n[1] * t * amp, z + n[2] * t * amp
     return move(ob, fn)
+
+
+def _long_keep(x, y, z, rear):
+    """Lange Haare: vorn der Haaransatz, seitlich und hinten alles; vor dem Gesicht frei."""
+    near = max(0.066 - abs(x), min(z - 0.02, y - 1.70))
+    return min(max(hairline_d(x, y, z, 1.742, 1.672, rear), -near), max(0.052 - z, y - 1.735))
 
 
 def hairs():
@@ -890,27 +1572,26 @@ def hairs():
 
     # Kurz
     b = Blob(); hair_cap(b)
-    for i in range(16):
-        a = i / 15.0 * math.pi
-        b.ell((0.058 * math.cos(a), 1.770 + 0.012 * math.sin(a * 3), 0.062 - 0.008 * abs(math.cos(a))), (0.018, 0.014, 0.022), (-30, 20 * math.cos(a), 0))
-    ob = cut(b.mesh("h", 0.0046, 2, 0.4, 3200), lambda x, y, z: hairline(x, y, z))
+    b.ell((0.004, 1.776, 0.024), (0.0700, 0.0300, 0.0680), (-12, 0, 5))
+    b.ell((-0.014, 1.772, 0.058), (0.0480, 0.0190, 0.0320), (-26, 14, 0))
+    ob = taper(cut_iso(b.mesh("h", 0.0046, 3, 0.4, 3200), lambda x, y, z: hairline_d(x, y, z)), lambda x, y, z: hairline_d(x, y, z), 0.008)
     done("Hair_Short", solidify(strands(ob, 26, 0.0022), 0.004))
     # Raspel
     b = Blob(); b.ell((0, 1.718, -0.015), (0.0795, 0.0975, 0.0980)); b.ell((0, 1.690, -0.046), (0.0735, 0.080, 0.071))
-    done("Hair_Buzz", solidify(cut(b.mesh("h", 0.005, 3, 0.5, 2200), lambda x, y, z: hairline(x, y, z, 1.745)), 0.002))
+    done("Hair_Buzz", solidify(cut_iso(b.mesh("h", 0.005, 3, 0.5, 2200), lambda x, y, z: hairline_d(x, y, z, 1.745)), 0.002))
     shape(out[-1], "Under_Hat", lambda x, y, z: (x * (1 - 0.06 * smoothstep(1.715, 1.75, y)), y - (y - 1.72) * 0.16 * smoothstep(1.715, 1.75, y), z * (1 - 0.06 * smoothstep(1.715, 1.75, y))))
     # Undercut: oben lang
     b = Blob(); b.ell((0, 1.755, 0.000), (0.064, 0.066, 0.092)); b.ell((0, 1.788, 0.040), (0.050, 0.034, 0.060), (-18, 0, 0)); b.ell((0.012, 1.800, 0.066), (0.042, 0.022, 0.034), (-30, 0, 10))
-    top = cut(b.mesh("h", 0.0046, 3, 0.4, 2600), lambda x, y, z: y > 1.742 and (z < 0.066 or y > 1.760))
+    top = cut_iso(b.mesh("h", 0.0046, 3, 0.4, 2600), lambda x, y, z: min(y - 1.742, max(0.066 - z, y - 1.760)))
     b = Blob(); b.ell((0, 1.716, -0.015), (0.0790, 0.0965, 0.0975)); b.ell((0, 1.690, -0.046), (0.073, 0.079, 0.0705))
-    side = cut(b.mesh("h", 0.006, 3, 0.5, 1400), lambda x, y, z: hairline(x, y, z, 1.745))
+    side = cut_iso(b.mesh("h", 0.006, 3, 0.5, 1400), lambda x, y, z: hairline_d(x, y, z, 1.745))
     done("Hair_Undercut", join("h", [solidify(strands(top, 30, 0.003), 0.004), solidify(side, 0.0018)]))
     # Seitenscheitel
     b = Blob(); hair_cap(b, 1.0)
     for i in range(12):
         t = i / 11.0
         b.ell((-0.052 + 0.100 * t, 1.786 - 0.020 * abs(t - 0.35), 0.056 + 0.012 * math.sin(t * 3)), (0.022, 0.018, 0.030), (-26, 34 * (t - 0.3), -24))
-    ob = cut(b.mesh("h", 0.0046, 2, 0.4, 3200), lambda x, y, z: hairline(x, y, z, 1.738, 1.676))
+    ob = taper(cut_iso(b.mesh("h", 0.0046, 2, 0.4, 3200), lambda x, y, z: hairline_d(x, y, z, 1.738, 1.676)), lambda x, y, z: hairline_d(x, y, z, 1.738, 1.676), 0.008)
     done("Hair_Side", solidify(strands(ob, 34, 0.0026), 0.004))
     # Locken
     b = Blob()
@@ -919,7 +1600,7 @@ def hairs():
         a = random.uniform(0, 2 * math.pi)
         e = math.acos(random.uniform(-0.45, 1.0))
         x, y, z = 0.082 * math.sin(e) * math.cos(a), 1.722 + 0.100 * math.cos(e), -0.016 + 0.098 * math.sin(e) * math.sin(a)
-        if hairline(x, y, z, 1.748, 1.676, 1.625):
+        if hairline(x, y - 0.010, z, 1.748, 1.676, 1.625):
             b.sph((x, y, z), random.uniform(0.013, 0.019))
     done("Hair_Curly", b.mesh("h", 0.0048, 2, 0.4, 5200))
     # Afro
@@ -941,7 +1622,7 @@ def hairs():
     for i in range(7):
         x = -0.060 + 0.020 * i
         b.chain([((x, 1.720, -0.092), 0.022), ((x * 1.1, 1.640, -0.102), 0.021), ((x * 1.08, 1.560, -0.092), 0.014)])
-    ob = cut(b.mesh("h", 0.005, 2, 0.4, 4600), lambda x, y, z: (hairline(x, y, z, 1.742, 1.672, 1.50) if abs(x) < 0.066 or z > 0.02 and y > 1.70 else True) and not (z > 0.052 and y < 1.735))
+    ob = taper(cut_iso(b.mesh("h", 0.005, 2, 0.4, 4600), lambda x, y, z: _long_keep(x, y, z, 1.50)), lambda x, y, z: _long_keep(x, y, z, 1.50), 0.006)
     done("Hair_Bob", solidify(strands(ob, 40, 0.0026), 0.003))
     # Lang
     b = Blob(); hair_cap(b, 1.02)
@@ -953,11 +1634,11 @@ def hairs():
     for i in range(8):
         x = -0.066 + 0.0188 * i
         b.chain([((x, 1.720, -0.092), 0.022), ((x * 1.12, 1.620, -0.108), 0.022), ((x * 1.22, 1.480, -0.122), 0.021), ((x * 1.20, 1.340, -0.128), 0.010)])
-    ob = cut(b.mesh("h", 0.0055, 2, 0.4, 5600), lambda x, y, z: (hairline(x, y, z, 1.742, 1.672, 1.30) if abs(x) < 0.066 or z > 0.02 and y > 1.70 else True) and not (z > 0.052 and y < 1.735))
+    ob = taper(cut_iso(b.mesh("h", 0.0055, 2, 0.4, 5600), lambda x, y, z: _long_keep(x, y, z, 1.30)), lambda x, y, z: _long_keep(x, y, z, 1.30), 0.006)
     done("Hair_Long", solidify(strands(ob, 44, 0.0028), 0.003))
     # Pferdeschwanz
     b = Blob(); b.ell((0, 1.720, -0.016), (0.0808, 0.0985, 0.0995)); b.ell((0, 1.690, -0.046), (0.0745, 0.081, 0.0735))
-    cap = cut(b.mesh("h", 0.005, 2, 0.4, 2400), lambda x, y, z: hairline(x, y, z, 1.744, 1.678, 1.612))
+    cap = cut_iso(b.mesh("h", 0.005, 2, 0.4, 2400), lambda x, y, z: hairline_d(x, y, z, 1.744, 1.678, 1.612))
     b = Blob(); b.chain([((0, 1.752, -0.104), 0.020), ((0, 1.752, -0.140), 0.026), ((0.004, 1.690, -0.168), 0.032), ((0.0, 1.600, -0.160), 0.028), ((-0.004, 1.520, -0.146), 0.012)])
     tail = b.mesh("h", 0.005, 2, 0.4, 1500)
     band = tube("h", [(0, 1.756, -0.112), (0, 1.754, -0.122)], 0.0235, "Acc_A", 18)
@@ -965,7 +1646,7 @@ def hairs():
     done("Hair_Pony", ob)
     # Dutt
     b = Blob(); b.ell((0, 1.720, -0.016), (0.0808, 0.0985, 0.0995)); b.ell((0, 1.690, -0.046), (0.0745, 0.081, 0.0735))
-    cap = cut(b.mesh("h", 0.005, 2, 0.4, 2400), lambda x, y, z: hairline(x, y, z, 1.744, 1.678, 1.612))
+    cap = cut_iso(b.mesh("h", 0.005, 2, 0.4, 2400), lambda x, y, z: hairline_d(x, y, z, 1.744, 1.678, 1.612))
     b = Blob(); b.ell((0, 1.808, -0.066), (0.038, 0.030, 0.038)); b.ell((0, 1.800, -0.064), (0.030, 0.034, 0.030))
     done("Hair_Bun", join("h", [solidify(strands(cap, 40, 0.0020), 0.003), strands(b.mesh("h", 0.004, 2, 0.4, 900), 40, 0.0030)]))
     # Iro
@@ -975,43 +1656,60 @@ def hairs():
         a = math.radians(-18 + 150 * t)
         y, z = 1.716 + 0.104 * math.sin(a), -0.014 + 0.104 * math.cos(a)
         b.cap((0, y, z), 0.014, (0, y + 0.036 * math.sin(a), z + 0.036 * math.cos(a)), 0.006)
-    b2 = Blob(); b2.ell((0, 1.716, -0.015), (0.0785, 0.0965, 0.0972)); b2.ell((0, 1.690, -0.046), (0.073, 0.079, 0.0702))
-    s2 = cut(b2.mesh("h", 0.006, 3, 0.5, 1400), lambda x, y, z: hairline(x, y, z, 1.748))
-    done("Hair_Mohawk", join("h", [cut(b.mesh("h", 0.0046, 2, 0.4, 2000), lambda x, y, z: y > 1.735 or z < -0.04), solidify(s2, 0.0016)]))
+    b2 = Blob(); b2.ell((0, 1.716, -0.015), (0.0795, 0.0978, 0.0985)); b2.ell((0, 1.690, -0.046), (0.0740, 0.080, 0.0712))
+    s2 = cut_iso(b2.mesh("h", 0.006, 3, 0.5, 1400), lambda x, y, z: hairline_d(x, y, z, 1.748))
+    done("Hair_Mohawk", join("h", [cut_iso(b.mesh("h", 0.0046, 2, 0.4, 2000), lambda x, y, z: max(y - 1.735, -0.04 - z)), solidify(s2, 0.0016)]))
     return out
 
 
-def beards():
+def beards(f):
+    """Bärte als Schale über demselben Feld wie das Gesicht (ohne Nase, Ohren, Augen), um grow nach außen."""
     out = []
+    base = [o for o in HEAD if o[0] in ("skull", "face", "neck")]
 
     def shell(name, grow, keep, faces=1500, st=0.0):
-        b = Blob()
-        b.ell((0, 1.662, 0.026), (0.0640 + grow * 0.4, 0.0860, 0.0620 + grow * 0.3))
-        b.ell((0, 1.606, 0.030), (0.0490 + grow, 0.0380 + grow, 0.0520 + grow))
-        b.ell((0, 1.586, 0.060), (0.0235 + grow, 0.0205 + grow, 0.0220 + grow))
-        for s in (-1, 1):
-            b.ell((s * 0.0520, 1.612, 0.008), (0.0150 + grow * 0.8, 0.0280 + grow * 0.5, 0.0280 + grow * 0.5))
-            b.ell((s * 0.0400, 1.640, 0.050), (0.0260, 0.0250, 0.0230))
+        ops = list(base)
         if st > 0:
-            b.ell((0, 1.556 - st * 0.4, 0.052), (0.036, 0.036 + st, 0.030))
-        ob = cut(b.mesh("b", 0.0042, 4, 0.5, faces), keep)
+            ops.append(("face", 1, "ell", ((0, 1.556 - st * 0.4, 0.050), (0.036, 0.036 + st, 0.030), None), 0.020))
+        ob, _f = sdf_mesh("b", ops, 0.0040, faces * 3, grow=grow)
+        ob = taper(cut_iso(ob, keep), keep, 0.006, 0.0003)
         strands(ob, 30, 0.0014)
         ob = solidify(ob, 0.002)
         ob.name = name
+        ob.data.name = name
         set_mats(ob, ["Hair"])
-        shape(ob, "Mouth_Open", lambda x, y, z: (x, y - 0.020 * smoothstep(1.6065, 1.600, y), z - 0.006 * smoothstep(1.6065, 1.600, y)))
+        shape(ob, "Mouth_Open", mouth_open)
+        for k, fn in FACE_FN.items():
+            shape(ob, k, fn)
         out.append(ob)
 
     def mouth(x, y, z):
-        return z > 0.062 and abs(x) < 0.027 and 1.5935 < y < 1.6165
+        """> 0 in der Mundöffnung (Ellipse um die Lippen)."""
+        return min(z - 0.060, 0.010 * (1.0 - (x / 0.0280) ** 2 - ((y - 1.6068) / 0.0120) ** 2))
 
-    shell("Beard_Short", 0.0030, lambda x, y, z: y < 1.628 - 0.2 * max(0.0, z - 0.02) + 0.35 * max(0.0, abs(x) - 0.048) and z > -0.004 and y > 1.556 and not mouth(x, y, z) and not (z > 0.07 and abs(x) < 0.006 and y > 1.612 and y < 1.622))
-    shell("Beard_Full", 0.0085, lambda x, y, z: y < 1.632 - 0.2 * max(0.0, z - 0.02) + 0.4 * max(0.0, abs(x) - 0.046) and z > -0.006 and y > 1.500 and not mouth(x, y, z), 2000, 0.020)
-    shell("Beard_Goatee", 0.0050, lambda x, y, z: abs(x) < 0.028 and z > 0.045 and y < 1.624 and y > 1.556 and not mouth(x, y, z), 900)
-    b = Blob()
-    for s in (-1, 1):
-        b.chain([((s * 0.003, 1.6205, 0.0905), 0.0046), ((s * 0.016, 1.6190, 0.0870), 0.0050), ((s * 0.029, 1.6120, 0.0790), 0.0024)])
-    ob = b.mesh("Beard_Mustache", 0.0018, 2, 0.4, 700)
+    def short(x, y, z):
+        top = 1.628 - 0.2 * max(0.0, z - 0.02) + 0.35 * max(0.0, abs(x) - 0.048)
+        phil = min(z - 0.07, 0.006 - abs(x), y - 1.613, 1.623 - y)
+        return min(top - y, z + 0.004, y - 1.556, -mouth(x, y, z), -phil)
+
+    def full(x, y, z):
+        top = 1.632 - 0.2 * max(0.0, z - 0.02) + 0.4 * max(0.0, abs(x) - 0.046)
+        return min(top - y, z + 0.006, y - 1.500, -mouth(x, y, z))
+
+    shell("Beard_Short", 0.0030, short)
+    shell("Beard_Full", 0.0085, full, 2000, 0.020)
+    shell("Beard_Goatee", 0.0050, lambda x, y, z: min(0.028 - abs(x), z - 0.045, 1.624 - y, y - 1.556, -mouth(x, y, z)), 900)
+    path, hh, bl = [], [], []
+    for i in range(17):
+        t = -1 + 2 * i / 16.0
+        x = 0.0265 * t
+        path.append((x, 1.6215 - 0.0070 * t * t))
+        hh.append(0.0040 * (1 - 0.55 * t ** 4) * (0.6 + 0.4 * (1 - abs(t))))
+        bl.append(0.0024 * (1 - 0.7 * t ** 4))
+    ob = skin_strip(f, "Beard_Mustache", path, hh, bl)
+    strands(ob, 40, 0.0008)
+    ob.name = "Beard_Mustache"
+    ob.data.name = "Beard_Mustache"
     set_mats(ob, ["Hair"])
     out.append(ob)
     return out
@@ -1435,7 +2133,12 @@ def lathe(name, prof, kx, kz, zc, seg=40):
     return ob
 
 
-def hats():
+def head_x(f, y, z):
+    """Kopfbreite (halb) an der Stelle (y, z), von außen gemessen."""
+    return float(surf(f, [(0.15, y, z)], (-1.0, 0.0, 0.0), 0.15)[0][0])
+
+
+def hats(f):
     out = []
     b = Blob(); b.ell((0, 1.728, -0.012), (0.0880, 0.0930, 0.1060))
     c = cut(bis(b.mesh("h", 0.006, 3, 0.5, 1600), ypl(1.728)), lambda x, y, z: y > 1.728)
@@ -1465,21 +2168,29 @@ def hats():
     c = join("h", [c] + rb)
     st = [tube("s", [(s * 0.094, 1.740, 0.010), (s * 0.078, 1.640, 0.016), (s * 0.046, 1.575, 0.028), (0, 1.558, 0.036)], 0.0032, "Dark", 8) for s in (-1, 1)]
     out.append(join("Hat_Helmet", [c] + st))
-    parts = [tube("s", [(s0 * 0.0, 1.0, 0) for s0 in ()] or [(-0.096, 1.690, -0.006), (-0.088, 1.770, -0.010), (-0.050, 1.822, -0.012), (0, 1.838, -0.012), (0.050, 1.822, -0.012), (0.088, 1.770, -0.010), (0.096, 1.690, -0.006)], 0.0062, "Acc_B", 10)]
+    # Ohrmuscheln knapp außen an den Ohren, Mikrofon vor dem Mundwinkel
+    ear = max(head_x(f, y, z) for y in (1.650, 1.664, 1.678) for z in (-0.024, -0.012, 0.0))
+    cx = ear + 0.0105
+    parts = [tube("s", [(-(cx - 0.002), 1.690, -0.006), (-0.088, 1.770, -0.010), (-0.050, 1.822, -0.012), (0, 1.838, -0.012), (0.050, 1.822, -0.012), (0.088, 1.770, -0.010), (cx - 0.002, 1.690, -0.006)], 0.0062, "Acc_B", 10)]
     for s in (-1, 1):
-        b = Blob(); b.ell((s * 0.098, 1.668, -0.008), (0.016, 0.036, 0.030))
+        b = Blob(); b.ell((s * cx, 1.666, -0.009), (0.016, 0.037, 0.031))
         e = b.mesh("e", 0.005, 2, 0.4, 500)
         set_mats(e, ["Acc_B"])
         parts.append(e)
-        parts.append(box("k", [((s * 0.113, 1.668, -0.008), (0.006, 0.040, 0.032))], "Acc_A", 0.003))
-    parts.append(tube("m", [(0.104, 1.650, 0.010), (0.092, 1.612, 0.060), (0.050, 1.598, 0.096)], 0.0030, "Acc_B", 8))
-    b = Blob(); b.ell((0.044, 1.597, 0.099), (0.011, 0.008, 0.008)); mi = b.mesh("m", 0.003, 1, 0.3, 200); set_mats(mi, ["Dark"]); parts.append(mi)
+        parts.append(box("k", [((s * (cx + 0.015), 1.666, -0.009), (0.006, 0.040, 0.032))], "Acc_A", 0.003))
+    mz = float(surf_z(f, MOUTH_W + 0.022, MOUTH_Y + 0.002)[0][2])
+    parts.append(tube("m", [(cx + 0.006, 1.650, 0.010), (cx - 0.008, 1.614, 0.058), (MOUTH_W + 0.022, MOUTH_Y - 0.006, mz + 0.010)], 0.0030, "Acc_B", 8))
+    b = Blob(); b.ell((MOUTH_W + 0.020, MOUTH_Y - 0.007, mz + 0.012), (0.011, 0.008, 0.008)); mi = b.mesh("m", 0.003, 1, 0.3, 200); set_mats(mi, ["Dark"]); parts.append(mi)
     out.append(join("Hat_Headset", parts))
     return out
 
 
-def glasses():
+def glasses(f):
+    """Brillen: Gläser vor Augen und Wimpern, Steg auf der Nase, Bügel knapp am Kopf zu den Ohren."""
     out = []
+    nose = float(surf_z(f, 0.0, 1.681)[0][2])
+    x1 = head_x(f, 1.678, 0.040) + 0.0045
+    x2 = head_x(f, 1.678, -0.008) + 0.0035
     for name, w, h, rr, th, lens in (("Glasses_Round", 0.026, 0.024, 1.0, 0.0022, "Glass"), ("Glasses_Square", 0.030, 0.020, 0.35, 0.0030, "Glass"), ("Glasses_Safety", 0.040, 0.026, 0.6, 0.0026, "Glass")):
         parts = []
         for s in (-1, 1):
@@ -1503,8 +2214,8 @@ def glasses():
             bpy.context.scene.collection.objects.link(lo)
             set_mats(lo, [lens])
             parts.append(lo)
-            parts.append(tube("b", [(s * (abs(cx) + w), 1.676, 0.0865 if name != "Glasses_Safety" else 0.080), (s * 0.078, 1.678, 0.040), (s * 0.084, 1.676, -0.010), (s * 0.084, 1.662, -0.030)], th * 0.9, "Acc_B", 8))
-        parts.append(tube("n", [(-0.0075, 1.675, 0.1020), (0, 1.679, 0.1055), (0.0075, 1.675, 0.1020)], th, "Acc_B", 8))
+            parts.append(tube("b", [(s * (abs(cx) + w), 1.676, 0.0865 if name != "Glasses_Safety" else 0.080), (s * x1, 1.678, 0.040), (s * x2, 1.677, -0.008), (s * (x2 - 0.001), 1.664, -0.030)], th * 0.9, "Acc_B", 8))
+        parts.append(tube("n", [(-0.0080, 1.676, 0.0990), (-0.0035, 1.6805, nose + 0.0042), (0.0035, 1.6805, nose + 0.0042), (0.0080, 1.676, 0.0990)], th, "Acc_B", 8))
         out.append(join(name, parts))
     return out
 
@@ -1581,18 +2292,14 @@ def main():
         n += len(ob.data.polygons)
         print("FIGUR %s %d Flaechen" % (ob.name, len(ob.data.polygons)))
 
-    hd = head_base()
+    hd, f = head_base()
+    expr_keys(hd)
     face_keys(hd)
     lower(hd)
-    for v in ():
-        pass
-    weights(hd, rig, GROUPS["head"], lambda x, y, z: "Head" if y > 1.575 else ("Neck" if y > 1.50 else "Spine2"))
-    # Hals weich mischen
-    hd.vertex_groups.clear()
-    hd.modifiers.clear()
+    # Hals weich mischen (Werte nach dem Absenken, siehe head_xf)
     for vv in hd.data.vertices:
         x, y, z = back(vv.co)
-        wh = smoothstep(1.522, 1.578, y) if z < 0.03 else smoothstep(1.528, 1.553, y)
+        wh = smoothstep(1.516, 1.572, y) if z < 0.03 else smoothstep(1.522, 1.547, y)
         wn = (1 - wh) * smoothstep(1.445, 1.500, y)
         ws = max(0.0, 1 - wh - wn)
         for nme, w in (("Head", wh), ("Neck", wn), ("Spine2", ws)):
@@ -1605,10 +2312,10 @@ def main():
     print("FIGUR Head %d" % len(hd.data.polygons))
     e = eyes()
     reg(e, "head", False, "Head")
-    reg(lids(), "head", False, "Head")
-    for o in mouth():
+    reg(lids(f), "head", False, "Head")
+    for o in (lips(f), mouth_in(f)):
         reg(o, "head", False, "Head")
-    for o in brows() + hairs() + beards() + hats() + glasses():
+    for o in brows(f) + hairs() + beards(f) + hats(f) + glasses(f):
         reg(o, "head", False, (lambda x, y, z: "Head" if y > 1.52 else ("Neck" if y > 1.46 else "Spine2")) if o.name in ("Hair_Long",) else "Head")
     reg(arms_skin(), "arms")
     reg(hands(), "hands", False)
@@ -1623,6 +2330,11 @@ def main():
     for ob, bone in accessories():
         reg(ob, "", False, bone)
     GROUPS["coat"] = GROUPS["top"]
+    # Formschlüssel stehen in Blender auf 1, das Spiel setzt sie selbst. Exportiert wird überall 0.
+    for ob in bpy.data.objects:
+        if ob.type == "MESH" and ob.data.shape_keys:
+            for kb in ob.data.shape_keys.key_blocks:
+                kb.value = 0.0
     bpy.ops.object.select_all(action="SELECT")
     bpy.ops.export_scene.gltf(filepath=OUT, export_format="GLB", use_selection=True, export_yup=True, export_apply=False, export_skins=True, export_morph=True,
                               export_morph_normal=False, export_animations=False, export_vertex_color="ACTIVE", export_all_vertex_colors=True, export_rest_position_armature=True)

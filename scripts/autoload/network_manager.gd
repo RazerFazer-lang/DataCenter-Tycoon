@@ -58,15 +58,18 @@ const NO_UDP_PORTS_TEXT := "Windows hat keinen freien UDP-Port mehr. Meist hält
 ## (tests/stability_check.gd prüft, dass die Liste vollständig ist).
 const RPC_SCRIPTS: Array[String] = [
 	"res://scripts/autoload/admin_manager.gd",
+	"res://scripts/autoload/cyber_manager.gd",
 	"res://scripts/autoload/decor_manager.gd",
 	"res://scripts/autoload/finance_manager.gd",
 	"res://scripts/autoload/game_state.gd",
 	"res://scripts/autoload/mail_manager.gd",
 	"res://scripts/autoload/market_manager.gd",
 	"res://scripts/autoload/network_manager.gd",
+	"res://scripts/autoload/operations_manager.gd",
 	"res://scripts/autoload/outdoor_manager.gd",
 	"res://scripts/autoload/pc_screen_state.gd",
 	"res://scripts/autoload/session_keeper.gd",
+	"res://scripts/autoload/staff_manager.gd",
 	"res://scripts/autoload/technician_manager.gd",
 	"res://scripts/world/world_controller.gd",
 ]
@@ -85,7 +88,7 @@ var is_dedicated: bool = false
 var players: Dictionary = {}
 var is_in_session: bool = false
 
-const UPNP_DESCRIPTION := "DataCenter Tycoon Co-op"
+const UPNP_DESCRIPTION := "DataCenter Together"
 ## Öffentliche IP des Hosts (leer, solange UPnP nicht geklappt hat).
 var public_ip: String = ""
 var hosted_port: int = 0
@@ -298,7 +301,7 @@ func _start_host_internal(player_name: String, port: int, loaded_state: Dictiona
 	}
 	if not dedicated:
 		players[1] = host_info
-	DisplayServer.window_set_title("DataCenter Tycoon Co-op [%s - %s]" % ["SERVER" if dedicated else "HOST", local_player_name])
+	DisplayServer.window_set_title("DataCenter Together [%s - %s]" % ["SERVER" if dedicated else "HOST", local_player_name])
 	if use_upnp:
 		_start_port_forward(port)
 
@@ -353,7 +356,7 @@ func join_game(ip: String, player_name: String, port: int = DEFAULT_PORT, passwo
 		host_pkt.set_timeout(32, SessionKeeper.PEER_TIMEOUT_MIN_MS, SessionKeeper.PEER_TIMEOUT_MAX_MS)
 	_joining = true
 	multiplayer.multiplayer_peer = peer
-	DisplayServer.window_set_title("DataCenter Tycoon Co-op [CLIENT - %s]" % local_player_name)
+	DisplayServer.window_set_title("DataCenter Together [CLIENT - %s]" % local_player_name)
 	return OK
 
 
@@ -433,7 +436,7 @@ func leave_session() -> void:
 	_kicking.clear()
 	GameState.clear_local_state()
 	SessionKeeper.on_session_left()
-	DisplayServer.window_set_title("DataCenter Tycoon Co-op")
+	DisplayServer.window_set_title("DataCenter Together")
 
 
 func _exit_tree() -> void:

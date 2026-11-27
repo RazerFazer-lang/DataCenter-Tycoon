@@ -1,5 +1,5 @@
 """
-Verion-Digital — Blender 5.2 High-Poly 2K-ORM-PBR Generator
+Vexom Studio — Blender 5.2 High-Poly 2K-ORM-PBR Generator
 Builds two freely placeable distribution strips for DataCenter Tycoon Co-op:
   1. assets/models/power_strip.glb  — 6-fach Industrie-Stromleiste (Alu-Profil, Schuko-Buchsen, beleuchteter Schalter)
   2. assets/models/lan_strip.glb    — 8-Port Industrie-LAN-Verteilerleiste (Stahlblech, RJ45-Ports, Link-LEDs)

@@ -1322,7 +1322,7 @@ public static class UpdateService
                 File.WriteAllText(Path.Combine(workDir, "launcher_config.json"), CrashReport.ScrubForCurrentUser(configText), new UTF8Encoding(false));
 
             var sysInfo = new StringBuilder();
-            sysInfo.AppendLine("DataCenter Tycoon Co-op — Diagnose-Bericht");
+            sysInfo.AppendLine("DataCenter Together — Diagnose-Bericht");
             sysInfo.AppendLine($"Zeitstempel:      {DateTime.Now:yyyy-MM-dd HH:mm:ss}");
             sysInfo.AppendLine($"Launcher-Version: v{LauncherConfig.CurrentLauncherVersion}");
             sysInfo.AppendLine($"Spiel-Version:    v{config.InstalledGameVersion}");

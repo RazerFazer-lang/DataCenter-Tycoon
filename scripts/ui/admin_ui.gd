@@ -219,6 +219,12 @@ func _build_world() -> void:
 	var r3 := _row(tr("Tempo der Uhr"))
 	for s in AdminManager.TIME_SCALES:
 		r3.add_child(_cmd_btn(tr("Anhalten") if s == 0.0 else "×%d" % int(s), "time_scale", {"v": s}))
+	var r4 := _row(tr("Schwierigkeit"))
+	for lv in Difficulty.ORDER:
+		var b := _cmd_btn(tr(Difficulty.display_name(lv)), "difficulty", {"v": lv})
+		b.disabled = GameState.difficulty == lv
+		b.tooltip_text = tr(str(Difficulty.LEVELS[lv]["desc"]))
+		r4.add_child(b)
 
 
 func _build_events() -> void:

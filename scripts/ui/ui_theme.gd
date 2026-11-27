@@ -133,6 +133,10 @@ static func animate_popup_close(root_overlay: Control, card: Control = null) -> 
 
 
 ## Versionsnummer aus den Projekteinstellungen (application/config/version), sonst 1.0.0.
+## Sichtbarer Spielname. Der interne Projektname "DataCenter Tycoon Co-op" bleibt, weil er den Spielstand-Ordner bestimmt.
+const GAME_TITLE := "DataCenter Together"
+
+
 static func game_version() -> String:
 	var ver := str(ProjectSettings.get_setting("application/config/version", "")).strip_edges()
 	return ver if not ver.is_empty() else "1.0.0"

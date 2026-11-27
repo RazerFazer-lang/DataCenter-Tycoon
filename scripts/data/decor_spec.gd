@@ -17,6 +17,7 @@ const SIZES := {
 	"prop_tool_cart": Vector3(0.78, 1.04, 0.50),
 	"prop_dehumidifier": Vector3(0.62, 1.02, 0.56),
 	"prop_logo_sign": Vector3(1.80, 0.46, 0.12),
+	"prop_diesel_gen": Vector3(1.92, 1.88, 1.02),
 }
 const MODELS := {
 	"prop_shelf_small": "shelf_small", "prop_storage_shelf": "shelf_heavy", "prop_pallet_rack": "shelf_pallet",
@@ -24,6 +25,7 @@ const MODELS := {
 	"prop_cold_aisle_gate": "decor_cold_aisle_gate", "prop_vending_lounge": "decor_vending_lounge",
 	"prop_cctv_monitor": "decor_cctv_monitor", "prop_sofa": "decor_sofa", "prop_water": "decor_water",
 	"prop_tool_cart": "decor_tool_cart", "prop_dehumidifier": "decor_dehumidifier", "prop_logo_sign": "decor_logo_sign",
+	"prop_diesel_gen": "decor_diesel_gen",
 }
 ## Diese Stücke rasten mit dem Rücken an der Wand ein.
 const WALL_SNAP: Array[String] = [

@@ -1,6 +1,6 @@
 ﻿<#
 .SYNOPSIS
-  Veröffentlicht DataCenter Tycoon Co-op mit einem Befehl (REL-03).
+  Veröffentlicht DataCenter Together mit einem Befehl (REL-03).
 
 .DESCRIPTION
   Version setzen, testen, bauen, signieren (falls eingerichtet), Probelauf, packen,
@@ -49,6 +49,8 @@ $Started = Get-Date
 
 function Step([string]$Text) {
   $script:StepNo++
+  # Leere Ordner unter %TEMP% räumt Windows manchmal mitten im Lauf weg (Speicheroptimierung). Darum vor jedem Schritt neu anlegen.
+  if ($script:StepNo -gt 1) { New-Item -ItemType Directory -Force "$Work\game", "$Work\launcher", "$Work\logs", $Iso, "$Iso\l" -ErrorAction SilentlyContinue | Out-Null }
   Write-Host ""
   Write-Host ("[{0,2}] {1}" -f $script:StepNo, $Text) -ForegroundColor Cyan
 }
@@ -241,7 +243,7 @@ if (-not (Test-Path $notesMd)) {
 }
 $up = @()
 foreach ($a in $Assets) { $up += $a; $up += "$a.sha256" }
-gh release create $Tag --repo $Repo --target main --draft --title "DataCenter Tycoon Co-op $Tag — $($NotesData.title)" --notes-file $notesMd @up
+gh release create $Tag --repo $Repo --target main --draft --title "DataCenter Together $Tag — $($NotesData.title)" --notes-file $notesMd @up
 if ($LASTEXITCODE -ne 0) { Fail "Release-Entwurf fehlgeschlagen." }
 
 if (-not $Publish) {

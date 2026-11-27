@@ -11,7 +11,7 @@ extends Node
 signal finance_changed
 signal action_result(ok: bool, message: String)
 
-const MAX_EMPLOYEES := 6
+const MAX_EMPLOYEES := 9
 const MAX_ACTIVE_LOANS := 3
 const STATEMENT_MAX := 60
 const PAID_HISTORY_MAX := 30
@@ -56,6 +56,21 @@ const ROLES := {
 		"title": "Buchhalter",
 		"desc": "Bezahlt Rechnungen automatisch vor der Fälligkeit, wenn genug Geld da ist.",
 		"icon": "invoice",
+	},
+	"netadmin": {
+		"title": "Netzwerk-Admin",
+		"desc": "Wehrt Cyberangriffe an der Firewall ab, bevor Kunden es merken. Erfahrene Admins blocken schneller und treffen genauer.",
+		"icon": "net",
+	},
+	"security": {
+		"title": "Sicherheitsdienst",
+		"desc": "Läuft nachts Streife vor der Garage, schreckt Diebe ab und stellt sie.",
+		"icon": "warn",
+	},
+	"cleaning": {
+		"title": "Reinigung",
+		"desc": "Entstaubt tagsüber die Racks in der Garage. Weniger Staub heißt kühlere und zuverlässigere Server.",
+		"icon": "drop",
 	},
 	"technician": {
 		"title": "Techniker",
@@ -115,7 +130,44 @@ const CANDIDATE_POOL := [
 	{"name": "Kim Vogt", "role": "technician", "skill": 2, "wage": 150},
 	{"name": "Robin Krause", "role": "technician", "skill": 3, "wage": 205},
 	{"name": "Alex Brandt", "role": "technician", "skill": 5, "wage": 340},
+	# GAME-07
+	{"name": "Deniz Arslan", "role": "netadmin", "skill": 3, "wage": 220},
+	{"name": "Sven Lorenz", "role": "netadmin", "skill": 5, "wage": 330},
+	{"name": "Paul Wagner", "role": "security", "skill": 2, "wage": 130},
+	{"name": "Olga Sommer", "role": "security", "skill": 4, "wage": 190},
+	{"name": "Ines Krüger", "role": "cleaning", "skill": 2, "wage": 95},
+	{"name": "Murat Yilmaz", "role": "cleaning", "skill": 4, "wage": 140},
 ]
+
+# ---------------------------------------------------------------- GAME-04 Investoren & Monatsbilanz
+
+## Ein Monat in der Bilanz (Spieltage).
+const MONTH_DAYS := 30
+## So viele Tage bleibt das Kassenbuch.
+const LEDGER_DAYS := 95
+## Kategorien der Bilanz: Schlüssel -> Name. Einnahmen stehen in INCOME_CATS.
+const LEDGER_CATS := {
+	"contracts": "Verträge", "rentals": "Mieten", "heat": "Fernwärme", "loans_in": "Kredite (Auszahlung)", "invest_in": "Investoren (Einlage)",
+	"wages": "Löhne & Personal", "bills": "Rechnungen", "loans": "Kreditraten", "penalties": "Vertragsstrafen",
+	"investors": "Gewinnanteil Investoren", "fuel": "Diesel", "other": "Einkäufe & Sonstiges",
+}
+const INCOME_CATS: Array[String] = ["contracts", "rentals", "heat", "loans_in", "invest_in"]
+## Investoren: Einlage gegen einen Anteil an allen Einnahmen aus Verträgen und Mieten, befristet.
+const INVESTOR_OFFERS := [
+	{"id": "angel", "title": "Business Angel", "amount": 15000, "share": 0.10, "days": 20, "min_level": 2},
+	{"id": "vc", "title": "Wagniskapital-Fonds", "amount": 60000, "share": 0.15, "days": 30, "min_level": 3},
+	{"id": "fund", "title": "Infrastruktur-Fonds", "amount": 200000, "share": 0.20, "days": 40, "min_level": 5},
+]
+const MAX_INVESTORS := 2
+## Rückkauf: Anteil der Einlage, gewichtet mit der Restlaufzeit.
+const BUYOUT_FACTOR := 0.4
+
+## Laufende Beteiligungen: id -> {id, offer, title, amount, share, days_left, days_total, paid, day}
+var investors: Dictionary = {}
+## Kassenbuch: "Tag" -> {Kategorie: Betrag}. Einnahmen positiv, Ausgaben negativ.
+var ledger: Dictionary = {}
+## Kontostand zu Tagesbeginn (nur Host), damit der Rest des Tages als „Sonstiges“ stimmt.
+var _day_money: Dictionary = {}
 
 var employees: Dictionary = {}
 var loans: Dictionary = {}
@@ -166,6 +218,9 @@ func _process(delta: float) -> void:
 
 
 func reset() -> void:
+	investors.clear()
+	ledger.clear()
+	_day_money.clear()
 	employees.clear()
 	loans.clear()
 	bills.clear()
@@ -201,6 +256,9 @@ func export_data() -> Dictionary:
 		"next_loan_num": _next_loan_num,
 		"next_emp_num": _next_emp_num,
 		"next_weekly_day": _next_weekly_day,
+		"investors": investors.duplicate(true),
+		"ledger": ledger.duplicate(true),
+		"day_money": _day_money.duplicate(),
 	}
 
 
@@ -218,6 +276,9 @@ func import_data(d: Dictionary) -> void:
 	_next_loan_num = int(d.get("next_loan_num", 1))
 	_next_emp_num = int(d.get("next_emp_num", 1))
 	_next_weekly_day = int(d.get("next_weekly_day", -1))
+	investors = _as_dict(d.get("investors", {})).duplicate(true)
+	ledger = _as_dict(d.get("ledger", {})).duplicate(true)
+	_day_money = _as_dict(d.get("day_money", {})).duplicate()
 	_last_day = GameState.day_number if GameState.is_active else -1
 	_work_accum.clear()
 	finance_changed.emit()
@@ -491,6 +552,7 @@ func debit_public(amount: float, text: String, args: Array = []) -> void:
 func credit_public(amount: float, text: String, args: Array = []) -> void:
 	GameState.money += amount
 	_add_statement(GameState.day_number, text, amount, args)
+	book("other", amount)
 	_broadcast()
 
 
@@ -678,6 +740,7 @@ func _do_take_loan(offer_id: String, peer: int) -> void:
 	}
 	GameState.money += amount
 	_add_statement(day, "Auszahlung %s %s", amount, [str(offer["title"]), lid])
+	book("loans_in", amount)
 	GameState.post_event_f("%s hat einen %s über %s aufgenommen (Rate %s pro Tag).", [
 		NetworkManager.get_player_name(peer), str(offer["title"]), format_money(amount), format_money(float(get_offer_daily(offer)))
 	], "info")
@@ -742,6 +805,8 @@ func _do_pay_all(peer: int) -> void:
 # ---------------------------------------------------------------- Host-Logik: Tagesabschluss
 
 func _run_day(day: int) -> void:
+	_close_ledger_day(day)
+	_tick_investors(day)
 	_pay_wages(day)
 	_collect_loan_rates(day)
 	_issue_power_bill(day)
@@ -790,11 +855,12 @@ func _issue_power_bill(day: int) -> void:
 	if amount <= 0.0:
 		return
 	var rate := float(GameState.last_bill_rate)
-	var kwh := amount / rate if rate > 0.0 else 0.0
+	var peak_cost := float(GameState.last_peak_kw) * PowerTariff.PEAK_CHARGE_PER_KW
+	var energy := float(GameState.last_energy_cost)
 	_issue_bill("power", amount, day, [
 		_detail("Abrechnungszeitraum: Tag %d", [day - 1]),
-		_detail("Verbrauch: %.1f kWh", [kwh]),
-		_detail("Arbeitspreis: $%.2f pro kWh", [rate]),
+		_detail("Arbeitspreis nach Tageszeit: $%d (Grundpreis $%.2f pro kWh, Nacht ×0,7, Abendspitze ×1,4)", [int(roundf(energy)), rate]),
+		_detail("Leistungspreis: $%d für %.1f kW Spitzenlast", [int(roundf(peak_cost)), float(GameState.last_peak_kw)]),
 	])
 
 
@@ -843,6 +909,10 @@ func _issue_weekly_bills(day: int) -> void:
 
 
 func _issue_bill(kind: String, amount: float, day: int, details: Array) -> void:
+	# GAME-10: Kosten je nach Schwierigkeit, in der Sandbox gar keine Rechnungen.
+	amount *= GameState.diff("costs")
+	if amount <= 0.0:
+		return
 	var k: Dictionary = BILL_KINDS[kind]
 	var bid := "RE-%d" % _next_bill_num
 	_next_bill_num += 1
@@ -1001,6 +1071,205 @@ func _debit(amount: float, text: String, day: int, args: Array = []) -> void:
 		return
 	GameState.money -= amount
 	_add_statement(day, text, -amount, args)
+	book(_cat_for(text), -amount)
+
+
+## Kategorie einer Buchung aus ihrem Text (alles andere ist „Einkäufe & Sonstiges“).
+func _cat_for(text: String) -> String:
+	if text.begins_with("Löhne") or text.begins_with("Startprämie") or text.begins_with("Abfindung"):
+		return "wages"
+	if text.begins_with("Kreditrate") or text.begins_with("Sondertilgung"):
+		return "loans"
+	if text.begins_with("Rechnung") or text.begins_with("Inkasso"):
+		return "bills"
+	return "other"
+
+
+## Nur Host: Betrag ins Kassenbuch des laufenden Tags (Einnahmen positiv, Ausgaben negativ).
+func book(cat: String, amount: float) -> void:
+	if absf(amount) < 0.005:
+		return
+	var key := str(GameState.day_number)
+	if not ledger.has(key):
+		ledger[key] = {}
+	var row: Dictionary = ledger[key]
+	row[cat] = float(row.get(cat, 0.0)) + amount
+
+
+## Tagesabschluss: Was sich am Kontostand des Vortags sonst noch getan hat, wird „Einkäufe & Sonstiges“.
+func _close_ledger_day(day: int) -> void:
+	var prev := str(day - 1)
+	if _day_money.has(prev):
+		var booked := 0.0
+		for v in (ledger.get(prev, {}) as Dictionary).values():
+			booked += float(v)
+		var rest := GameState.money - float(_day_money[prev]) - booked
+		if absf(rest) >= 0.5:
+			if not ledger.has(prev):
+				ledger[prev] = {}
+			ledger[prev]["other"] = float((ledger[prev] as Dictionary).get("other", 0.0)) + rest
+	_day_money[str(day)] = GameState.money
+	for k in ledger.keys():
+		if int(k) < day - LEDGER_DAYS:
+			ledger.erase(k)
+	for k in _day_money.keys():
+		if int(k) < day - 2:
+			_day_money.erase(k)
+
+
+func month_of(day: int) -> int:
+	return (maxi(day, 1) - 1) / MONTH_DAYS + 1
+
+
+## Bilanz eines Monats: {"from", "to", "cats": {Kategorie: Summe}, "income", "expense", "net"}.
+func month_summary(month: int) -> Dictionary:
+	var from := (month - 1) * MONTH_DAYS + 1
+	var to := month * MONTH_DAYS
+	var cats := {}
+	var income := 0.0
+	var expense := 0.0
+	for k in ledger.keys():
+		var d := int(k)
+		if d < from or d > to:
+			continue
+		for cat in (ledger[k] as Dictionary).keys():
+			var v := float(ledger[k][cat])
+			cats[cat] = float(cats.get(cat, 0.0)) + v
+			if v >= 0.0:
+				income += v
+			else:
+				expense -= v
+	return {"from": from, "to": to, "cats": cats, "income": income, "expense": expense, "net": income - expense}
+
+
+## Ergebnis je Tag der letzten n Tage (ältester zuerst).
+func daily_net(n: int) -> Array:
+	var out: Array = []
+	for i in range(n - 1, -1, -1):
+		var d := GameState.day_number - i
+		var s := 0.0
+		for v in (ledger.get(str(d), {}) as Dictionary).values():
+			s += float(v)
+		out.append([d, s])
+	return out
+
+
+# ---------------------------------------------------------------- Investoren
+
+func investor_share_total() -> float:
+	var s := 0.0
+	for inv in investors.values():
+		s += float(inv["share"])
+	return minf(s, 0.5)
+
+
+## Nur Host, aus dem Zahlungstakt: Anteil der Investoren an diesen Einnahmen. Gibt den Betrag zurück.
+func investor_cut(revenue: float) -> float:
+	if revenue <= 0.0 or investors.is_empty():
+		return 0.0
+	var cut := 0.0
+	for id in investors.keys():
+		var inv: Dictionary = investors[id]
+		var part := revenue * float(inv["share"])
+		inv["paid"] = float(inv.get("paid", 0.0)) + part
+		cut += part
+	return minf(cut, revenue * 0.5)
+
+
+func get_investor_block_reason(offer: Dictionary) -> String:
+	for inv in investors.values():
+		if str(inv["offer"]) == str(offer["id"]):
+			return "Läuft schon."
+	if investors.size() >= MAX_INVESTORS:
+		return "Höchstens %d Investoren gleichzeitig." % MAX_INVESTORS
+	if GameState.get_company_level() < int(offer["min_level"]):
+		return "Ab Firmenstufe %d." % int(offer["min_level"])
+	return ""
+
+
+func get_buyout_cost(inv: Dictionary) -> int:
+	return int(roundf(float(inv["amount"]) * BUYOUT_FACTOR * float(inv["days_left"]) / maxf(1.0, float(inv["days_total"]))))
+
+
+func request_accept_investor(offer_id: String) -> void:
+	if _is_host():
+		_do_accept_investor(offer_id, _me())
+	else:
+		_rpc_req_accept_investor.rpc_id(1, offer_id)
+
+
+func request_buyout_investor(inv_id: String) -> void:
+	if _is_host():
+		_do_buyout_investor(inv_id, _me())
+	else:
+		_rpc_req_buyout_investor.rpc_id(1, inv_id)
+
+
+@rpc("any_peer", "call_remote", "reliable")
+func _rpc_req_accept_investor(offer_id: String) -> void:
+	if multiplayer.is_server():
+		_do_accept_investor(offer_id, multiplayer.get_remote_sender_id())
+
+
+@rpc("any_peer", "call_remote", "reliable")
+func _rpc_req_buyout_investor(inv_id: String) -> void:
+	if multiplayer.is_server():
+		_do_buyout_investor(inv_id, multiplayer.get_remote_sender_id())
+
+
+func _do_accept_investor(offer_id: String, peer: int) -> void:
+	if GameState._deny_build(peer, "business"):
+		return
+	var offer: Dictionary = {}
+	for o in INVESTOR_OFFERS:
+		if str(o["id"]) == offer_id:
+			offer = o
+	if offer.is_empty():
+		return
+	var why := get_investor_block_reason(offer)
+	if why != "":
+		_feedback(peer, false, why)
+		return
+	var id := "I-%s-%d" % [offer_id, GameState.day_number]
+	investors[id] = {
+		"id": id, "offer": offer_id, "title": str(offer["title"]), "amount": float(offer["amount"]), "share": float(offer["share"]),
+		"days_left": int(offer["days"]), "days_total": int(offer["days"]), "paid": 0.0, "day": GameState.day_number,
+	}
+	GameState.money += float(offer["amount"])
+	_add_statement(GameState.day_number, "Einlage %s", float(offer["amount"]), [str(offer["title"])])
+	book("invest_in", float(offer["amount"]))
+	GameState.post_event_f("💼 %s holt %s an Bord: %s gegen %d %% der Einnahmen für %d Tage.", [
+		NetworkManager.get_player_name(peer), str(offer["title"]), format_money(float(offer["amount"])), int(float(offer["share"]) * 100.0), int(offer["days"])], "info")
+	_feedback(peer, true, "%s eingezahlt: +%s", [str(offer["title"]), format_money(float(offer["amount"]))])
+	GameState._broadcast_sim_tick()
+	_broadcast()
+
+
+func _do_buyout_investor(inv_id: String, peer: int) -> void:
+	if GameState._deny_build(peer, "business") or not investors.has(inv_id):
+		return
+	var inv: Dictionary = investors[inv_id]
+	var cost := float(get_buyout_cost(inv))
+	if GameState.money < cost:
+		_feedback(peer, false, "Für den Rückkauf fehlen %s.", [format_money(cost - GameState.money)])
+		return
+	GameState.money -= cost
+	_add_statement(GameState.day_number, "Rückkauf %s", -cost, [str(inv["title"])])
+	book("investors", -cost)
+	investors.erase(inv_id)
+	GameState.post_event_f("💼 %s hat die Anteile von %s zurückgekauft (%s).", [NetworkManager.get_player_name(peer), str(inv["title"]), format_money(cost)], "info")
+	_feedback(peer, true, "Anteile zurückgekauft.")
+	GameState._broadcast_sim_tick()
+	_broadcast()
+
+
+func _tick_investors(_day: int) -> void:
+	for id in investors.keys():
+		var inv: Dictionary = investors[id]
+		inv["days_left"] = int(inv["days_left"]) - 1
+		if int(inv["days_left"]) <= 0:
+			investors.erase(id)
+			GameState.post_event_f("💼 Die Beteiligung von %s ist ausgelaufen. Ausgezahlt wurden %s.", [str(inv["title"]), format_money(float(inv.get("paid", 0.0)))], "good")
 
 
 func _add_statement(day: int, text: String, amount: float, args: Array = []) -> void:

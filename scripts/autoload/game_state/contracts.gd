@@ -74,6 +74,31 @@ static func get_contract_display_order() -> Array[String]:
 
 
 ## Erzeugt ein befristetes Angebot, abgeleitet von einer Vorlage, die zum aktuellen Ausbau passt.
+## GAME-05: Kurztext einer Bewertung je Sterne (übersetzt in der Sprache des Hosts).
+static func tr_review(stars: int) -> String:
+	match clampi(stars, 1, 5):
+		5:
+			return TranslationServer.translate("Läuft absolut zuverlässig, gerne wieder.")
+		4:
+			return TranslationServer.translate("Fast immer erreichbar, kleine Aussetzer.")
+		3:
+			return TranslationServer.translate("Geht so, öfter mal langsam.")
+		2:
+			return TranslationServer.translate("Zu viele Ausfälle für unser Geld.")
+	return TranslationServer.translate("Nie wieder, ständig offline.")
+
+
+## GAME-05: Mieter bewerten ab und zu, je nach Zufriedenheit. Einmal am Tag, nur Host.
+static func _daily_rental_reviews() -> void:
+	for rid in GameState.racks.keys():
+		var r := RackData.of(GameState.racks[rid])
+		if r.services.is_empty() or randf() > 0.2:
+			continue
+		var sat := r.satisfaction
+		var st := 5 if sat >= 92.0 else (4 if sat >= 80.0 else (3 if sat >= 60.0 else (2 if sat >= 40.0 else 1)))
+		GameState.add_review(r.rental_customer if not r.rental_customer.is_empty() else "Mieter", st, tr_review(st))
+
+
 static func _make_random_contract() -> Dictionary:
 	var ram_cap := maxi(int(GameState.total_ram_gb), 4) * GameState.RANDOM_CONTRACT_RAM_REACH
 	var bases: Array[Dictionary] = []
@@ -97,7 +122,8 @@ static func _make_random_contract() -> Dictionary:
 		"required_compute": maxi(1, int(roundf(float(base["required_compute"]) * scale))),
 		"req_ram_gb": maxi(2, int(roundf(float(base["req_ram_gb"]) * scale))),
 		"req_mbps": snappedf(maxf(5.0, float(base["req_mbps"]) * scale), 0.5),
-		"payout_per_cycle": maxi(1, int(roundf(float(base["payout_per_cycle"]) * scale * premium))),
+		# GAME-05: Gute Bewertungen bringen besser bezahlte Anfragen (bei 3,5 Sternen wie bisher).
+		"payout_per_cycle": maxi(1, int(roundf(float(base["payout_per_cycle"]) * scale * premium * (0.825 + 0.05 * GameState.rating_avg())))),
 		"penalty_per_cycle": maxi(1, int(roundf(float(base["penalty_per_cycle"]) * scale * GameState.RANDOM_CONTRACT_PENALTY_MULT))),
 		"random": true,
 		"duration_days": randi_range(GameState.RANDOM_CONTRACT_DURATION_MIN, GameState.RANDOM_CONTRACT_DURATION_MAX),
@@ -116,7 +142,10 @@ static func _fill_random_contract_offers() -> int:
 		if bool(c.get("random", false)) and not bool(c.get("active", false)):
 			offers += 1
 	var added := 0
-	while offers < GameState.RANDOM_CONTRACT_MAX_OFFERS:
+	# GAME-05: Mit sehr guten Bewertungen kommt eine Anfrage mehr, mit schlechten eine weniger.
+	var avg := GameState.rating_avg()
+	var max_offers := GameState.RANDOM_CONTRACT_MAX_OFFERS + (1 if avg >= 4.5 else 0) - (1 if avg < 2.5 else 0)
+	while offers < max_offers:
 		var entry := _make_random_contract()
 		GameState.contracts[str(entry["id"])] = entry
 		MailManager.on_new_contract(entry)
@@ -136,6 +165,8 @@ static func _advance_random_contracts() -> void:
 			if int(c["days_left"]) <= 0:
 				GameState.contracts.erase(key)
 				GameState.post_event_f("✅ Befristeter Vertrag '%s' (%s) ist erfüllt und ausgelaufen.", [str(c["title"]), str(c["client"])], "good")
+				var st := Sla.stars_for(c)
+				GameState.add_review(str(c["client"]), st, tr_review(st))
 		else:
 			c["offer_days_left"] = int(c.get("offer_days_left", 1)) - 1
 			if int(c["offer_days_left"]) <= 0:
@@ -148,6 +179,8 @@ static func _process_contract_payouts() -> void:
 	var avail_ram := 0 if GameState.ddos_active else GameState.total_ram_gb
 	var avail_mbps := 0.0 if GameState.ddos_active else GameState.max_bandwidth_mbps
 	var net_delta := 0.0
+	var contract_income := 0.0
+	var penalties := 0.0
 	var had_sla_breach := false
 
 	for cid in GameState.contracts.keys():
@@ -157,15 +190,29 @@ static func _process_contract_payouts() -> void:
 			continue
 		var req_ram := int(c.get("req_ram_gb", 4))
 		var req_mbps := float(c.get("req_mbps", 15.0))
+		var tier := Sla.tier(c)
 		if avail_ram >= req_ram and avail_mbps >= req_mbps:
 			avail_ram -= req_ram
 			avail_mbps -= req_mbps
 			c["status"] = "ok"
-			net_delta += float(c["payout_per_cycle"]) * GameState.revenue_bonus_mult
+			var pay := float(c["payout_per_cycle"]) * GameState.revenue_bonus_mult * float(tier["pay"]) * Cyber.income_mult() * Operations.cert_mult()
+			net_delta += pay
+			contract_income += pay
+			Sla.record(c, true)
 		else:
 			c["status"] = "underpowered"
-			net_delta -= float(c["penalty_per_cycle"])
+			var pen := float(c["penalty_per_cycle"]) * float(tier["penalty"])
+			net_delta -= pen
+			penalties += pen
 			had_sla_breach = true
+			Sla.record(c, false)
+		# GAME-05: Fällt die Verfügbarkeit unter das Versprechen, meldet sich der Kunde (einmal, bis es besser ist).
+		if Sla.is_breached(c) and not bool(c.get("sla_warned", false)):
+			c["sla_warned"] = true
+			GameState.post_event_f("📉 SLA %s verletzt bei %s: Verfügbarkeit %.1f %% statt %.1f %%.", [
+				str(tier["name"]), str(c.get("client", "")), Sla.availability(c) * 100.0, float(tier["target"]) * 100.0], "warn")
+		elif not Sla.is_breached(c) and bool(c.get("sla_warned", false)):
+			c["sla_warned"] = false
 
 	# Add Rented Rack customer payouts (scaled by live active users & satisfaction!)
 	var rental_payout := 0.0
@@ -175,6 +222,13 @@ static func _process_contract_payouts() -> void:
 			if str(rk.get("rental_type", "none")) != "none" and bool(rk.get("powered", false)) and bool(rk.get("networked", false)):
 				rental_payout += float(rk.get("rental_income", 0.0))
 	net_delta += rental_payout
+	# GAME-04: Investoren bekommen ihren Anteil an den Einnahmen. Alles landet im Kassenbuch.
+	var cut := FinanceManager.investor_cut(contract_income + rental_payout)
+	net_delta -= cut
+	FinanceManager.book("contracts", contract_income)
+	FinanceManager.book("rentals", rental_payout)
+	FinanceManager.book("penalties", -penalties)
+	FinanceManager.book("investors", -cut)
 
 	GameState.money = maxf(0.0, GameState.money + net_delta)
 	if had_sla_breach:
@@ -227,7 +281,8 @@ static func _update_rack_rentals_and_support(dt: float) -> void:
 		var rtype := str((services[0] as Dictionary)["type"])
 		var prof: Dictionary = HardwareCatalog.RENTAL_PROFILES[rtype]
 		var hw := GameState.get_rack_hardware_summary(rid)
-		var powered := bool(r.get("powered", false))
+		# GAME-06: Ein verschlüsseltes Rack (Erpressungstrojaner) läuft nicht, bis es wiederhergestellt ist.
+		var powered := bool(r.get("powered", false)) and not Cyber.is_encrypted(str(rid))
 		var networked := bool(r.get("networked", false))
 		var active_servers := int(hw["active_servers"])
 		var rtemp := float(r.get("temp", 22.0))
@@ -280,6 +335,15 @@ static func _update_rack_rentals_and_support(dt: float) -> void:
 		var net_pct := (net_need_mbps / maxf(1.0, GameState.max_bandwidth_mbps)) * 100.0
 		if GameState.used_bandwidth_mbps > GameState.max_bandwidth_mbps:
 			net_pct = maxf(net_pct, (GameState.used_bandwidth_mbps / maxf(1.0, GameState.max_bandwidth_mbps)) * 100.0)
+		# GAME-03: Eine überlastete LAN-Kette bremst alle ihre Racks im gleichen Verhältnis.
+		var chain_ratio := 1.0
+		var chain_root := str(GameState.lan_chain_of.get(rid, ""))
+		if chain_root != "":
+			var chain_load := float(GameState.lan_chain_mbps.get(chain_root, 0.0))
+			var chain_cap := GameState.lan_chain_cap()
+			if chain_load > chain_cap:
+				chain_ratio = chain_cap / chain_load
+				net_pct = maxf(net_pct, chain_load / chain_cap * 100.0)
 
 		var bottleneck := "ok"
 		var peak_load := maxf(maxf(ram_pct, cpu_pct), maxf(maxf(gpu_pct, sto_pct), net_pct))
@@ -316,6 +380,7 @@ static func _update_rack_rentals_and_support(dt: float) -> void:
 			"net_pct": net_pct,
 			"bottleneck": bottleneck,
 			"cluster_borrowed": cluster_borrowed,
+			"lan_throttle": chain_ratio,
 		}
 
 		# Satisfaction dynamics
@@ -329,7 +394,7 @@ static func _update_rack_rentals_and_support(dt: float) -> void:
 		var income := 0.0
 		if powered and networked and active_servers > 0 and not GameState.ddos_active:
 			var sat_mult := clampf(sat / 100.0, 0.25, 1.15)
-			income = float(users_int) * float(prof["pay_per_user"]) * sat_mult * GameState.revenue_bonus_mult
+			income = float(users_int) * float(prof["pay_per_user"]) * sat_mult * GameState.revenue_bonus_mult * chain_ratio * Cyber.income_mult() * Operations.cert_mult()
 		r["rental_income"] = income
 		total_rent += income
 		# Zufriedene Kunden empfehlen dich weiter, unzufriedene schaden dem Ruf.
@@ -351,6 +416,7 @@ static func _update_rack_rentals_and_support(dt: float) -> void:
 		# If customer satisfaction collapses completely, customer cancels rental!
 		if sat <= 5.0:
 			var cname := str(r.get("rental_customer", "Kunde"))
+			GameState.add_review(cname, 1, tr_review(1))
 			r["rental_type"] = "none"
 			r["rental_customer"] = ""
 			r["active_users"] = 0
@@ -844,15 +910,15 @@ static func _rpc_req_resolve_call(choice: String) -> void:
 	GameState._broadcast_sim_tick()
 
 
-static func _rpc_req_toggle_contract(contract_id: String) -> void:
+static func _rpc_req_toggle_contract(contract_id: String, sla: String = "bronze") -> void:
 	if not GameState.multiplayer.is_server():
 		return
 	if GameState._deny_build(GameState._get_sender_id(), "business"):
 		return
-	do_toggle_contract(contract_id, GameState._get_sender_id())
+	do_toggle_contract(contract_id, GameState._get_sender_id(), sla)
 
 
-static func do_toggle_contract(contract_id: String, peer_id: int) -> void:
+static func do_toggle_contract(contract_id: String, peer_id: int, sla: String = "bronze") -> void:
 	if not GameState.contracts.has(contract_id):
 		return
 	var c: Dictionary = GameState.contracts[contract_id]
@@ -860,6 +926,22 @@ static func do_toggle_contract(contract_id: String, peer_id: int) -> void:
 	if now_active and (get_active_contract_count() >= get_max_contracts_limit() or MarketManager.is_contract_taken(c)):
 		GameState._rpc_play_sfx.rpc_id(peer_id, "error")
 		return
+	# GAME-05: SLA-Stufe beim Annehmen. Silber und Gold gibt es erst mit guten Bewertungen.
+	if now_active:
+		var tier := sla if Sla.TIERS.has(sla) else "bronze"
+		var need := float(Sla.TIERS[tier]["min_stars"])
+		if GameState.rating_avg() < need:
+			GameState.tell_peer(peer_id, "SLA %s gibt es erst ab %s Sternen im Schnitt.", [str(Sla.TIERS[tier]["name"]), String.num(need, 1)], "warn")
+			GameState._rpc_play_sfx.rpc_id(peer_id, "error")
+			return
+		c["sla"] = tier
+		c["sla_ok"] = 0.0
+		c["sla_n"] = 0.0
+		c["sla_warned"] = false
+	elif float(c.get("sla_n", 0.0)) >= 3.0:
+		# Vorzeitig gekündigt: Der Kunde ist höchstens mäßig zufrieden.
+		GameState.add_review(str(c.get("client", "Kunde")), mini(Sla.stars_for(c), 3) if bool(c.get("random", false)) else mini(Sla.stars_for(c), 4),
+			tr_review(2 if bool(c.get("random", false)) else 3))
 	if now_active and str(c.get("bid_rival", "")) != "":
 		# Gegengebot: Der Kunde bleibt, zahlt aber etwas weniger.
 		c["payout_orig"] = int(c["payout_per_cycle"])

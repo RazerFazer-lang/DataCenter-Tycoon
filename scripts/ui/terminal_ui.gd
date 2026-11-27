@@ -19,6 +19,8 @@ var _mouse_down := false
 var _idle_accum := 0.0
 var _mail_state: Dictionary = {"folder": "all", "mail": "", "msg": "", "ok": true}
 var _market_state: Dictionary = {"tab": "overview", "msg": "", "ok": true}
+var _ops_state: Dictionary = {"tab": "power", "msg": "", "ok": true}
+var _fw_state: Dictionary = {"msg": "", "ok": true}
 var _cams_state: Dictionary = {"big": "", "page": 0}
 
 var _active_app: String = "" # "" | "shop" | "support" | "upgrades" | "monitor"
@@ -57,10 +59,10 @@ const OPEN_FADE_TIME := 0.25
 # Zeitpunkt, an dem der laufende Startvorgang begann (-1 = PC lief schon oder kein Start).
 var _boot_started_msec: int = -1
 
-const FINANCE_APPS: Array[String] = ["staff", "bank", "bills"]
-const APP_ORDER: Array[String] = ["mail", "shop", "support", "market", "upgrades", "monitor", "cams", "staff", "bank", "bills"]
+const FINANCE_APPS: Array[String] = ["staff", "bank", "balance", "bills"]
+const APP_ORDER: Array[String] = ["mail", "shop", "support", "market", "upgrades", "ops", "firewall", "monitor", "cams", "staff", "bank", "balance", "bills"]
 ## Diese Apps zeigen laufende Werte und werden im Spieltakt neu gezeichnet.
-const LIVE_APPS: Array[String] = ["support", "upgrades", "monitor"]
+const LIVE_APPS: Array[String] = ["support", "upgrades", "monitor", "ops", "firewall"]
 const REFRESH_ACTIVE := 0.2
 const REFRESH_IDLE := 1.5
 const HISTORY_CHART := preload("res://scripts/ui/history_chart.gd")
@@ -70,10 +72,13 @@ const APP_META := {
 	"shop": {"icon": "cart", "name": "Shop", "title": "CloudParts.de — Hardware-Shop, Warenkorb & Teile-Lager"},
 	"support": {"icon": "headset", "name": "Support", "title": "ServiceDesk & Kunden-Hub — Tickets, Verträge & AI"},
 	"upgrades": {"icon": "building", "name": "Gebäude", "title": "Gebäude & Anschlüsse — Router, Strom und Hallen-Ausbau"},
+	"ops": {"icon": "power", "name": "Betrieb", "title": "Betrieb — Strompreis, Notstrom, Fernwärme & Zertifikate"},
+	"firewall": {"icon": "net", "name": "Firewall", "title": "Verion Firewall — Regeln und Abwehr von Angriffen"},
 	"monitor": {"icon": "chart", "name": "Monitor", "title": "Verion OS Systemmonitor — Live Rechenzentrum-Monitor"},
 	"cams": {"icon": "camera", "name": "Kameras", "title": "Verion SecureView — Live-Bilder der Überwachungsstelen"},
 	"staff": {"icon": "people", "name": "Personal", "title": "Personalverwaltung — Team, Löhne & Bewerbungen"},
 	"bank": {"icon": "bank", "name": "Bank", "title": "Hanse Direktbank — Geschäftskonto, Kredite & Kontoauszug"},
+	"balance": {"icon": "chart", "name": "Bilanz", "title": "Monatsbilanz — Einnahmen, Ausgaben und Ergebnis"},
 	"bills": {"icon": "invoice", "name": "Rechnungen", "title": "Rechnungen — Strom, Garagenmiete, Internet & Versicherung"},
 }
 
@@ -98,6 +103,10 @@ func _ready() -> void:
 	MailManager.action_result.connect(_on_app_result.bind("mail"))
 	MarketManager.market_changed.connect(_mark_dirty.bind(["market", "mail"]))
 	MarketManager.action_result.connect(_on_app_result.bind("market"))
+	Operations.operations_changed.connect(_mark_dirty.bind(["ops"]))
+	Operations.action_result.connect(_on_app_result.bind("ops"))
+	Cyber.cyber_changed.connect(_mark_dirty.bind(["firewall", "support"]))
+	Cyber.action_result.connect(_on_app_result.bind("firewall"))
 	GameState.call_changed.connect(_refresh_call_popup)
 	FinanceManager.finance_changed.connect(_on_finance_changed)
 	# „Gerade: …“ und liegengebliebene Aufträge im Personal-Fenster aktuell halten.
@@ -255,7 +264,7 @@ func _on_mail_added(m: Dictionary) -> void:
 
 
 func _on_app_result(ok: bool, message: String, app: String) -> void:
-	var st := _mail_state if app == "mail" else _market_state
+	var st := _mail_state if app == "mail" else (_ops_state if app == "ops" else (_fw_state if app == "firewall" else _market_state))
 	st["msg"] = message
 	st["ok"] = ok
 	if not ok:
@@ -516,6 +525,10 @@ func _render_window(app: String) -> void:
 			MailApp.render(w.body, _mail_state, _mark_dirty.bind(["mail"]), _open_app)
 		"market":
 			MarketApp.render(w.body, _market_state, _mark_dirty.bind(["market"]))
+		"ops":
+			OperationsApp.render(w.body, _ops_state, _mark_dirty.bind(["ops"]))
+		"firewall":
+			FirewallApp.render(w.body, _fw_state, _mark_dirty.bind(["firewall"]))
 		"shop":
 			_render_shop_app()
 		"support":
@@ -530,6 +543,8 @@ func _render_window(app: String) -> void:
 			FinanceApps.render_staff(w.body, _fin_msg, _fin_msg_ok)
 		"bank":
 			FinanceApps.render_bank(w.body, _fin_msg, _fin_msg_ok)
+		"balance":
+			FinanceApps.render_balance(w.body, _fin_msg, _fin_msg_ok)
 		"bills":
 			FinanceApps.render_bills(w.body, _fin_msg, _fin_msg_ok)
 	VerionTheme.apply(w.body)
@@ -1573,7 +1588,7 @@ func _render_support_hub_app() -> void:
 		{"id": "tickets", "label": tr("Tickets & Vermietung (%d)") % GameState.get_open_ticket_count()},
 		{"id": "contracts", "label": tr("Großkunden-Verträge (%d/%d)") % [GameState.get_active_contract_count(), GameState.get_max_contracts_limit()]},
 		{"id": "career", "label": tr("Karriere & Team (%d/%d)") % [GameState.career_completed.size(), GameState.CAREER_MILESTONES.size()]},
-		{"id": "ai", "label": tr("AI-Cluster & Firewall") + (" (DDoS!)" if GameState.ddos_active else "")},
+		{"id": "ai", "label": tr("AI-Cluster & Firewall") + (" (" + tr("Angriff!") + ")" if not Cyber.attack.is_empty() else "")},
 	]
 	for t in stabs:
 		var td: Dictionary = t
@@ -1870,6 +1885,29 @@ func _render_contracts_subtab(content: VBoxContainer) -> void:
 	hl.modulate = Color(0.14, 0.22, 0.32)
 	b.add_child(hl)
 
+	# GAME-05: Bewertungen der Kunden
+	var rv := _make_light_card(Color(1.0, 0.98, 0.92), Color(0.90, 0.78, 0.40), 6, 12, 8)
+	content.add_child(rv)
+	var avg := GameState.rating_avg()
+	var rh := Label.new()
+	rh.text = tr("Bewertungen: %s  %.1f von 5  (%d)") % [Sla.stars_text(avg), avg, GameState.reviews.size()]
+	rh.add_theme_font_size_override("font_size", 13)
+	rh.modulate = Color(0.45, 0.30, 0.04)
+	rv.add_child(rh)
+	var rn := Label.new()
+	rn.text = tr("Gute Bewertungen bringen mehr und besser bezahlte Anfragen. SLA Silber gibt es ab 3, Gold ab 4 Sternen im Schnitt.")
+	rn.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	rn.add_theme_font_size_override("font_size", 11.5)
+	rn.modulate = Color(0.34, 0.38, 0.44)
+	rv.add_child(rn)
+	for i in range(GameState.reviews.size() - 1, maxi(-1, GameState.reviews.size() - 4), -1):
+		var r: Dictionary = GameState.reviews[i]
+		var rl2 := Label.new()
+		rl2.text = "%s  %s, Tag %d: „%s“" % [Sla.stars_text(float(r["stars"])), str(r["client"]), int(r["day"]), str(r["text"])]
+		rl2.add_theme_font_size_override("font_size", 11.5)
+		rl2.modulate = Color(0.22, 0.26, 0.32)
+		rv.add_child(rl2)
+
 	for cid_v in GameState.get_contract_display_order():
 		var cid := str(cid_v)
 		if not GameState.contracts.has(cid):
@@ -1911,6 +1949,10 @@ func _render_contracts_subtab(content: VBoxContainer) -> void:
 				sl.text += "\n" + tr("Befristet  •  Laufzeit: %d Tag(e)  •  Angebot gilt noch %d Tag(e)") % [
 					int(c.get("duration_days", 1)), int(c.get("offer_days_left", 1))
 				]
+		if active:
+			var tier := Sla.tier(c)
+			sl.text += "\n" + tr("SLA %s  •  Verfügbarkeit %.1f %% (Ziel %.1f %%)  •  zahlt ×%.2f, Strafe ×%.1f") % [
+				tr(str(tier["name"])), Sla.availability(c) * 100.0, float(tier["target"]) * 100.0, float(tier["pay"]), float(tier["penalty"])]
 		sl.add_theme_font_size_override("font_size", 11.5)
 		sl.modulate = Color(0.34, 0.38, 0.44)
 		iv.add_child(sl)
@@ -1927,20 +1969,33 @@ func _render_contracts_subtab(content: VBoxContainer) -> void:
 			rl.modulate = Color(0.72, 0.34, 0.06)
 			iv.add_child(rl)
 
-		var btn := Button.new()
-		btn.text = tr("Kündigen") if active else tr("Annehmen")
-		btn.custom_minimum_size = Vector2(130, 34)
-		var taken := MarketManager.is_contract_taken(c)
-		btn.disabled = (not active) and (taken or GameState.get_active_contract_count() >= GameState.get_max_contracts_limit())
-		_style_win_btn(
-			btn,
-			Color(0.80, 0.22, 0.20) if active else (Color(0.10, 0.48, 0.84) if not btn.disabled else Color(0.84, 0.86, 0.89)),
-			Color(0.64, 0.14, 0.12) if active else Color(0.08, 0.38, 0.70),
-			Color.WHITE if not btn.disabled else Color(0.45, 0.48, 0.52)
-		)
 		var cap_id := cid
-		btn.pressed.connect(func(): GameState.request_toggle_contract(cap_id))
-		hb.add_child(btn)
+		if active:
+			var btn := Button.new()
+			btn.text = tr("Kündigen")
+			btn.custom_minimum_size = Vector2(130, 34)
+			_style_win_btn(btn, Color(0.80, 0.22, 0.20), Color(0.64, 0.14, 0.12), Color.WHITE)
+			btn.pressed.connect(func(): GameState.request_toggle_contract(cap_id))
+			hb.add_child(btn)
+		else:
+			# GAME-05: Annehmen mit SLA-Stufe
+			var taken := MarketManager.is_contract_taken(c)
+			var full := GameState.get_active_contract_count() >= GameState.get_max_contracts_limit()
+			var col := VBoxContainer.new()
+			col.add_theme_constant_override("separation", 3)
+			hb.add_child(col)
+			for t_id in Sla.ORDER:
+				var tier: Dictionary = Sla.TIERS[t_id]
+				var b2 := Button.new()
+				b2.text = tr("%s  ×%.2f") % [tr(str(tier["name"])), float(tier["pay"])]
+				b2.tooltip_text = tr("Verspricht %.1f %% Verfügbarkeit. Zahlt ×%.2f, Strafe ×%.1f.") % [float(tier["target"]) * 100.0, float(tier["pay"]), float(tier["penalty"])]
+				b2.custom_minimum_size = Vector2(130, 26)
+				b2.disabled = taken or full or avg < float(tier["min_stars"])
+				var tcol := Color(0.62, 0.42, 0.20) if t_id == "bronze" else (Color(0.48, 0.52, 0.58) if t_id == "silver" else Color(0.80, 0.62, 0.10))
+				_style_win_btn(b2, tcol if not b2.disabled else Color(0.84, 0.86, 0.89), tcol.darkened(0.2), Color.WHITE if not b2.disabled else Color(0.45, 0.48, 0.52))
+				var cap_tier := t_id
+				b2.pressed.connect(func(): GameState.request_toggle_contract(cap_id, cap_tier))
+				col.add_child(b2)
 
 
 func _render_ai_firewall_subtab(content: VBoxContainer) -> void:
@@ -1963,17 +2018,18 @@ func _render_ai_firewall_subtab(content: VBoxContainer) -> void:
 	dt.modulate = Color(0.10, 0.12, 0.16)
 	di.add_child(dt)
 	var dd := Label.new()
-	dd.text = tr("ALARM: Aktiver DDoS-Angriff blockiert alle Einnahmen!") if GameState.ddos_active else tr("Geschützt — Netzwerkverkehr und Kunden laufen störungsfrei.")
+	var cyber_on := not Cyber.attack.is_empty()
+	dd.text = (tr("ALARM: %s läuft! In der Firewall-App die Angreifer blocken.") % tr(str(Cyber.KINDS[str(Cyber.attack["kind"])]["name"]))) if cyber_on else tr("Geschützt — Netzwerkverkehr und Kunden laufen störungsfrei.")
 	dd.add_theme_font_size_override("font_size", 12)
-	dd.modulate = Color(0.76, 0.14, 0.12) if GameState.ddos_active else Color(0.14, 0.48, 0.24)
+	dd.modulate = Color(0.76, 0.14, 0.12) if cyber_on else Color(0.14, 0.48, 0.24)
 	di.add_child(dd)
 
 	var dbtn := Button.new()
-	dbtn.text = tr("DDoS abwehren!") if GameState.ddos_active else tr("Kein Angriff")
+	dbtn.text = tr("Zur Firewall") if cyber_on else tr("Kein Angriff")
 	dbtn.custom_minimum_size = Vector2(158, 36)
-	dbtn.disabled = not GameState.ddos_active
-	_style_win_btn(dbtn, Color(0.82, 0.18, 0.16) if GameState.ddos_active else Color(0.86, 0.88, 0.90), Color(0.66, 0.12, 0.10), Color.WHITE if GameState.ddos_active else Color(0.45, 0.48, 0.52))
-	dbtn.pressed.connect(func(): GameState.request_mitigate_ddos())
+	dbtn.disabled = not cyber_on
+	_style_win_btn(dbtn, Color(0.82, 0.18, 0.16) if cyber_on else Color(0.86, 0.88, 0.90), Color(0.66, 0.12, 0.10), Color.WHITE if cyber_on else Color(0.45, 0.48, 0.52))
+	dbtn.pressed.connect(func(): _open_app("firewall"))
 	dh.add_child(dbtn)
 
 	var cur_lvl := GameState.ai_platform_level

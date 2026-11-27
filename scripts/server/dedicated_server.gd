@@ -47,6 +47,8 @@ func _ready() -> void:
 	if world_name.is_empty():
 		world_name = DEFAULT_WORLD
 	var use_upnp := bool(cfg.get_value(SECTION, "upnp", true))
+	# GAME-10: Schwierigkeit einer neuen Welt (easy, normal, hard, sandbox).
+	GameState.pending_difficulty = Difficulty.valid(str(cfg.get_value(SECTION, "difficulty", Difficulty.DEFAULT)))
 	AdminManager.server_password = str(cfg.get_value(SECTION, "admin_password", "")).strip_edges().left(64)
 	if AdminManager.server_password != "" and AdminManager.server_password.length() < MIN_ADMIN_PW:
 		_log("admin_password ist zu kurz (mindestens %d Zeichen) und wird ignoriert." % MIN_ADMIN_PW)
@@ -111,6 +113,7 @@ func _load_config(path: String) -> ConfigFile:
 		cfg.set_value(SECTION, "admin_password", Crypto.new().generate_random_bytes(6).hex_encode())
 		cfg.set_value(SECTION, "world", DEFAULT_WORLD)
 		cfg.set_value(SECTION, "upnp", true)
+		cfg.set_value(SECTION, "difficulty", Difficulty.DEFAULT)
 		var save_err := cfg.save(path)
 		if save_err != OK:
 			_log("server.cfg konnte nicht angelegt werden (Fehler %d), nutze Standardwerte." % save_err)
@@ -192,6 +195,11 @@ func _handle_command(line: String) -> void:
 			_time(arg)
 		"weather":
 			_weather(arg)
+		"difficulty":
+			if Difficulty.LEVELS.has(arg.to_lower()):
+				_admin("difficulty", {"v": arg.to_lower()})
+			else:
+				_log("Schwierigkeit jetzt: %s. Aufruf: difficulty <%s>" % [GameState.difficulty, "|".join(Difficulty.ORDER)])
 		"speed":
 			_speed(arg)
 		"build":
@@ -390,6 +398,7 @@ const HELP := [
 	"time [hh:mm]            Uhrzeit zeigen oder stellen",
 	"weather [Art]           Wetter zeigen oder setzen (clear, cloudy, rain, storm, heatwave)",
 	"speed <0|1|3|10>        Uhr anhalten oder schneller laufen lassen",
+	"difficulty [Stufe]      Schwierigkeit zeigen oder setzen (easy, normal, hard, sandbox)",
 	"save | save-as <Name>   speichern, auch unter neuem Namen",
 	"admin | unadmin <ID|Name>",
 	"build <ID|Name> on|off  Baurecht in Welten ohne Passwort",
