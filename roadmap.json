@@ -42,6 +42,12 @@
       "items": [
         {
           "tag": "neu",
+          "version": "v3.6.3",
+          "title": "Kaffee, Katze und Licht",
+          "desc": "Kaffeevollautomat zum Benutzen, Katze streicheln, Außenbeleuchtung als Ausbau, echte Geräusche, aufgeräumte Garage."
+        },
+        {
+          "tag": "neu",
           "version": "v3.6.2",
           "title": "Changelog im Hauptmenü",
           "desc": "Changelog als eigener Reiter im Hauptmenü, echte Aufnahmen für das Schreiben mit dem Stift."

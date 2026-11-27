@@ -1,9 +1,23 @@
 {
-  "version": "3.6.2",
-  "launcher_version": "3.6.2",
-  "codename": "v3.6.2 Changelog im Hauptmenü",
+  "version": "3.6.3",
+  "launcher_version": "3.6.3",
+  "codename": "v3.6.3 Kaffee, Katze und Licht",
   "release_date": "2026-11-27",
   "changelog": [
+    {
+      "version": "v3.6.3",
+      "date": "2026-11-27",
+      "title": "Update 3.6.3: Kaffee, Katze und Licht",
+      "items": [
+        "[NEU] Der Kaffeevollautomat neben dem PC funktioniert: [E] brüht kostenlos einen Kaffee mit echtem Ton, Dampf und Kaffeestrahl. Danach läufst und arbeitest du 3 Minuten schneller.",
+        "[NEU] Die Katze lässt sich streicheln: Sie bleibt stehen, schaut dich an, miaut und schnurrt.",
+        "[NEU] Gebäude-Ausbau Außenbeleuchtung: Wandstrahler an Tor und Fassade, Wegleuchten vor den Hallen. Nachts hell, Diebe kommen seltener.",
+        "[AUDIO] Katze, Getränkeautomat und Kaffeevollautomat klingen jetzt nach echten Aufnahmen.",
+        "[GRAFIK] Aufgeräumt: Die Mülltonne am Tor, die doppelten Poller am Tor und die Rückkühler vor Halle B/C sind weg.",
+        "[FIX] Im Shop springt die Liste nach dem Hinzufügen zum Warenkorb nicht mehr nach oben.",
+        "[CO-OP] Alle Mitspieler brauchen v3.6.3."
+      ]
+    },
     {
       "version": "v3.6.2",
       "date": "2026-11-27",

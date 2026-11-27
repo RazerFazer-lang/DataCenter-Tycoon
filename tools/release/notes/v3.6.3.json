@@ -1,0 +1,13 @@
+{
+  "title": "Kaffee, Katze und Licht",
+  "items": [
+    "[NEU] Der Kaffeevollautomat neben dem PC funktioniert: [E] brüht kostenlos einen Kaffee mit echtem Ton, Dampf und Kaffeestrahl. Danach läufst und arbeitest du 3 Minuten schneller.",
+    "[NEU] Die Katze lässt sich streicheln: Sie bleibt stehen, schaut dich an, miaut und schnurrt.",
+    "[NEU] Gebäude-Ausbau Außenbeleuchtung: Wandstrahler an Tor und Fassade, Wegleuchten vor den Hallen. Nachts hell, Diebe kommen seltener.",
+    "[AUDIO] Katze, Getränkeautomat und Kaffeevollautomat klingen jetzt nach echten Aufnahmen.",
+    "[GRAFIK] Aufgeräumt: Die Mülltonne am Tor, die doppelten Poller am Tor und die Rückkühler vor Halle B/C sind weg.",
+    "[FIX] Im Shop springt die Liste nach dem Hinzufügen zum Warenkorb nicht mehr nach oben.",
+    "[CO-OP] Alle Mitspieler brauchen v3.6.3."
+  ],
+  "roadmap": "Kaffeevollautomat zum Benutzen, Katze streicheln, Außenbeleuchtung als Ausbau, echte Geräusche, aufgeräumte Garage."
+}

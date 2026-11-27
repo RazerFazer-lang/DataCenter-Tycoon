@@ -19,7 +19,7 @@ public sealed class LauncherConfig
         get
         {
             var v = Assembly.GetExecutingAssembly().GetName().Version;
-            return v != null ? $"{v.Major}.{v.Minor}.{Math.Max(v.Build, 0)}" : "3.6.2";
+            return v != null ? $"{v.Major}.{v.Minor}.{Math.Max(v.Build, 0)}" : "3.6.3";
         }
     }
     /// <summary>
