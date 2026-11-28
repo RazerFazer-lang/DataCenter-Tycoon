@@ -67,14 +67,28 @@ func _shape_state() -> Array:
 	return [on, off]
 
 
+## Boden von Halle Nord trägt (Strahl von oben trifft auf Höhe 0).
+func _floor_on() -> bool:
+	var o: Vector3 = gs.HALLE_NORD_ORIGIN
+	var q := PhysicsRayQueryParameters3D.create(o + Vector3(-6.0, 3.0, 0.0), o + Vector3(-6.0, -2.0, 0.0))
+	q.collision_mask = 1
+	var hit: Dictionary = (world.local_player as Node3D).get_world_3d().direct_space_state.intersect_ray(q)
+	return not hit.is_empty() and absf((hit["position"] as Vector3).y) < 0.05
+
+
 func _teleport() -> void:
 	print("--- Teleport")
 	var lp: Node3D = world.local_player
 	chk("Halle Nord anfangs ohne Kollision", _shape_state()[0] == 0, _shape_state())
 	gs.company_level = 3
+	gs.money = maxf(gs.money, 20000.0)
 	gs.request_buy_halle_nord()
 	await wait(3)
-	chk("Host kauft: Boden aktiv", gs.halle_nord_owned and _shape_state()[1] == 0 and _shape_state()[0] > 0, _shape_state())
+	# Seit v3.8 baut erst ein Bautrupp die Halle
+	gs._tick_constructions(999.0)
+	await wait(3)
+	# Gesperrte Abschnitte (Verteiler, Kaltgang) und nicht gebaute Ausbauten bleiben bewusst ohne Kollision.
+	chk("Host kauft: Boden aktiv", gs.halle_nord_owned and _floor_on() and _shape_state()[0] > 0, _shape_state())
 	lp.teleport_between_sites()
 	for i in 90:
 		await physics_frame
@@ -94,7 +108,7 @@ func _teleport() -> void:
 	gs.load_from_save_data(data, "p1", "p1")
 	gs.is_active = true
 	await wait(3)
-	chk("nach dem Laden Boden aktiv", gs.halle_nord_owned and _shape_state()[1] == 0, _shape_state())
+	chk("nach dem Laden Boden aktiv", gs.halle_nord_owned and _floor_on(), _shape_state())
 
 
 func _rack(pos: Vector3) -> String:

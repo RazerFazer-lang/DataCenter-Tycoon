@@ -349,10 +349,10 @@ func _refresh_stats() -> void:
 	_set_bar_color(_power_bar, p_col)
 	_set_icon(_power_icon, "power", UIStyle.COL_GOLD_TEXT if p_col == UIStyle.COL_GREEN else p_col)
 
-	_temp_lbl.text = "%.0f °C" % GameState.room_temp
-	_temp_bar.value = clampf((GameState.room_temp - 15.0) / 75.0 * 100.0, 0.0, 100.0)
-	var hot := GameState.room_temp >= 56.0
-	var t_col := UIStyle.COL_TEXT_MAIN if not hot else (UIStyle.COL_AMBER if GameState.room_temp < 72.0 else UIStyle.COL_RED)
+	_temp_lbl.text = "%.0f °C" % GameState.local_site_temp()
+	_temp_bar.value = clampf((GameState.local_site_temp() - 15.0) / 75.0 * 100.0, 0.0, 100.0)
+	var hot := GameState.local_site_temp() >= 56.0
+	var t_col := UIStyle.COL_TEXT_MAIN if not hot else (UIStyle.COL_AMBER if GameState.local_site_temp() < 72.0 else UIStyle.COL_RED)
 	_set_font_col(_temp_lbl, t_col)
 	_set_bar_color(_temp_bar, UIStyle.COL_BLUE if not hot else t_col)
 	_set_icon(_temp_icon, "temp", UIStyle.COL_BLUE if not hot else t_col)

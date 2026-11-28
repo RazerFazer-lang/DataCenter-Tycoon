@@ -65,7 +65,7 @@ func _sync_constructions() -> void:
 
 
 func _get_site_position(uid: String, site_str: String) -> Vector3:
-	if site_str == "garage" and not GameState.halle_nord_owned:
+	if site_str == "garage":
 		if uid == "upg_pv_solar":
 			return Vector3(7.5, 0.0, 7.2)
 		if uid == "upg_district_heat":
@@ -75,23 +75,21 @@ func _get_site_position(uid: String, site_str: String) -> Vector3:
 		return Vector3(-5.0, 0.0, 7.2)
 	var o := GameState.HALLE_NORD_ORIGIN
 	match uid:
-		"upg_district_heat":
-			return Vector3(-5.4, 0.0, 7.9)
-		"upg_exterior_lights":
-			return Vector3(6.0, 0.0, 8.6)
-		"upg_pv_solar":
-			return o + Vector3(19.0, 0.0, 3.0)
 		"upg_diesel_gen":
 			return o + Vector3(-16.2, 0.0, 4.0)
 		"upg_security_gate":
-			return o + Vector3(0.0, 0.0, 15.8)
+			return o + Vector3(HalleNordCampus.GATE_X1 + 1.3, 0.0, 13.8)
 		"upg_noc_suite":
-			return o + Vector3(6.8, 0.0, -3.8)
-		"upg_roof_chillers":
-			return o + Vector3(-6.5, 0.0, 8.2)
+			return o + Vector3(-8.4, 0.0, 2.6)
 		"upg_cold_aisle_pro":
-			return o + Vector3(-1.5, 0.0, 0.2)
-	return o + Vector3(0.0, 0.0, 9.0)
+			return o + Vector3(-6.0, 0.0, -3.0)
+		"upg_nord_section_2":
+			return o + Vector3(-5.6, 0.0, 0.0)
+		"upg_nord_section_3":
+			return o + Vector3(2.4, 0.0, 0.0)
+		"upg_nord_hall":
+			return o + Vector3(4.0, 0.0, 10.0)
+	return o + Vector3(4.0, 0.0, 10.0)
 
 
 func _spawn_construction_site(uid: String, pos: Vector3) -> void:
@@ -99,7 +97,7 @@ func _spawn_construction_site(uid: String, pos: Vector3) -> void:
 	root.position = pos
 	add_child(root)
 
-	var is_indoor := (uid == "upg_noc_suite" or uid == "upg_cold_aisle_pro")
+	var is_indoor := uid in ["upg_noc_suite", "upg_cold_aisle_pro", "upg_nord_section_2", "upg_nord_section_3"]
 	var orange := _mat(Color(0.96, 0.44, 0.06), 0.42, 0.08)
 	var white := _mat(Color(0.95, 0.95, 0.96), 0.50, 0.02)
 	var yellow := _mat(Color(0.96, 0.78, 0.08), 0.38, 0.12)

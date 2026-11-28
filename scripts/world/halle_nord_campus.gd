@@ -1,14 +1,10 @@
 class_name HalleNordCampus
 extends Node3D
-## Außenwelt für den Großstandort 'Halle Nord' — Tier-4 Enterprise Rechenzentrums-Campus:
-## - 360°-Landschaft mit variiertem Wiesen-Shader, bewaldeter Hügelkette, 4 drehenden Windrädern
-##   und 3 Hochspannungsmasten + durchhängenden Leitungen bis zum eigenen 20-kV-Umspannwerk.
-## - Komplette 'Rechenzentrums-Allee 1' mit Querstraßen, Gehwegen, Bordsteinen, Laternen,
-##   Hydranten, Gullys & fließendem KI-Verkehr.
-## - Vollständig eingezäuntes Hochsicherheits-Gelände mit Pförtnerhaus, Schranke & Campus-Pylon.
-## - Technik-Hof West: 2-MVA Notstrom-Dieselgenerator mit Kabelbrücke, 20-kV-Umspannwerk & Container.
-## - Empfang & Parkplatz Ost: 3 wehende Firmen-Fahnenmasten, Solar-Carport mit PV-Modulen,
-##   gestrichelte Parkbuchten mit Flottenfahrzeugen sowie moderne Nachbar-Campusgebäude gegenüber.
+## Außengelände von Halle Nord (seit v3.8 aufgeräumt):
+## - Wiese, bewaldete Hügelkette, Straße mit Gehwegen, Laternen und Verkehr.
+## - Eingezäunter Hof mit Einfahrt vor dem Rolltor; Pförtnerhaus mit Schranke als Ausbau.
+## - Technik-Hof West mit Notstrom-Diesel (Ausbau), Parkplatz Ost mit Solar-Carport (PV-Ausbau).
+## Keine Windräder, Strommasten, Fahnen, Pylon oder herumliegenden Paletten mehr.
 
 const ROAD_Z := 22.0
 const CAMPUS_TRAFFIC_MIN := -78.0
@@ -24,12 +20,16 @@ var _evening_window_mats: Array[StandardMaterial3D] = []
 var _aviation_beacon_mats: Array[StandardMaterial3D] = []
 var _turbine_rotors: Array[Dictionary] = []
 var _traffic_cars: Array[Dictionary] = []
-var _pylon_sign_lbl: Label3D
 var _diesel_audio: AudioStreamPlayer3D
 var _anim_t: float = 0.0
 var _upg_security_node: Node3D
 var _upg_diesel_node: Node3D
 var _upg_pv_node: Node3D
+## Drehpunkt des Schrankenbaums (HalleNordBuilder bewegt ihn).
+var barrier_pivot: Node3D
+## Einfahrt durch den Zaun (x von, x bis) direkt vor dem Rolltor.
+const GATE_X0 := -11.0
+const GATE_X1 := -2.6
 
 
 func _ready() -> void:
@@ -40,7 +40,6 @@ func _ready() -> void:
 	_build_west_tech_yard()
 	_build_east_parking_and_solar_carport()
 	_build_south_campus_neighbors()
-	_build_living_horizon_and_powerlines()
 	_build_campus_traffic()
 	GameState.building_upgrades_changed.connect(sync_building_upgrades)
 	sync_building_upgrades()
@@ -64,11 +63,6 @@ func _process(delta: float) -> void:
 	_update_turbines(delta)
 	_update_traffic(delta)
 	_update_diesel_audio()
-
-
-func update_company_name(cname: String) -> void:
-	if _pylon_sign_lbl != null:
-		_pylon_sign_lbl.text = "%s\nTIER-4 CAMPUS\nHALLE NORD" % cname.to_upper()
 
 
 # ---------------------------------------------------------------- Shader (Wind, Laub & Fahnen)
@@ -282,17 +276,18 @@ func _build_roads_and_yard() -> void:
 	_add_box_static(Vector3(-17.2, -0.11, -1.5), Vector3(14.6, 0.20, 21.5), dark_asp) # Technik-Hof West
 	_add_box_static(Vector3( 18.2, -0.11, -1.5), Vector3(16.6, 0.20, 21.5), dark_asp) # Parkplatz Ost
 	_add_box_static(Vector3(  0.0, -0.11, -9.5), Vector3(51.0, 0.20, 6.2), dark_asp)  # Feuerwehr-Umfahrt Nord
-	_add_box_static(Vector3(  0.0, -0.11, 17.6), Vector3(10.8, 0.20, 4.6), dark_asp)  # Einfahrts-Trichter
+	var gx := (GATE_X0 + GATE_X1) * 0.5
+	_add_box_static(Vector3(gx, -0.11, 17.6), Vector3(GATE_X1 - GATE_X0 + 2.0, 0.20, 4.6), dark_asp)  # Einfahrts-Trichter vor dem Rolltor
 
-	# Beton-Gehweg direkt vor dem Glas-Empfangserker rechts (X=+5.4..+11.2, Z=+6.2..+8.4)
-	_add_box(Vector3(8.2, -0.02, 7.6), Vector3(5.8, 0.12, 2.2), walk_mat, false)
+	# Beton-Gehweg vor der Fassade rechts vom Tor
+	_add_box(Vector3(6.0, -0.02, 8.3), Vector3(10.0, 0.12, 2.0), walk_mat, false)
 
-	# Weiße Fahrbahn-Leitlinien durch die Einfahrt & Ladehof
+	# Weiße Fahrbahn-Leitlinien durch die Einfahrt bis zur Lieferzone
 	for lz in [11.5, 13.5, 15.5, 17.5]:
-		_add_box(Vector3(0.0, -0.005, float(lz)), Vector3(0.14, 0.008, 1.05), stripe_mat, false)
-	# Rand-Bordsteine rund um die Einfahrt & den Campus-Hof
-	_add_box(Vector3(-5.5, 0.01, 17.5), Vector3(0.18, 0.12, 3.2), curb_mat, false)
-	_add_box(Vector3( 5.5, 0.01, 17.5), Vector3(0.18, 0.12, 3.2), curb_mat, false)
+		_add_box(Vector3(gx, -0.005, float(lz)), Vector3(0.14, 0.008, 1.05), stripe_mat, false)
+	# Rand-Bordsteine an der Einfahrt
+	_add_box(Vector3(GATE_X0 - 1.0, 0.01, 17.5), Vector3(0.18, 0.12, 3.2), curb_mat, false)
+	_add_box(Vector3(GATE_X1 + 1.0, 0.01, 17.5), Vector3(0.18, 0.12, 3.2), curb_mat, false)
 
 	# 2. Breite 2-spurige Hauptstraße 'RECHENZENTRUMS-ALLEE' bei Z = +22.0
 	_add_box(Vector3(0.0, -0.12, ROAD_Z), Vector3(180.0, 0.20, 7.8), asp_mat, false)
@@ -301,11 +296,13 @@ func _build_roads_and_yard() -> void:
 	for lz in [ROAD_Z - 3.55, ROAD_Z + 3.55]:
 		_add_box(Vector3(0.0, -0.014, float(lz)), Vector3(180.0, 0.01, 0.12), stripe_mat, false)
 	# Bordsteine + Gehwege (nördlich unterbrochen an der Einfahrt, südlich durchgehend)
-	_add_box(Vector3(-47.7, 0.0, ROAD_Z - 3.98), Vector3(84.4, 0.12, 0.18), curb_mat, false)
-	_add_box(Vector3( 47.7, 0.0, ROAD_Z - 3.98), Vector3(84.4, 0.12, 0.18), curb_mat, false)
-	_add_box(Vector3(  0.0, -0.03, ROAD_Z - 3.98), Vector3(11.0, 0.06, 0.18), curb_mat, false)
-	_add_box(Vector3(-47.7, -0.05, ROAD_Z - 4.95), Vector3(84.4, 0.20, 1.8), walk_mat, false)
-	_add_box(Vector3( 47.7, -0.05, ROAD_Z - 4.95), Vector3(84.4, 0.20, 1.8), walk_mat, false)
+	var cl0 := GATE_X0 - 1.1
+	var cl1 := GATE_X1 + 1.1
+	_add_box(Vector3((-90.0 + cl0) * 0.5, 0.0, ROAD_Z - 3.98), Vector3(cl0 + 90.0, 0.12, 0.18), curb_mat, false)
+	_add_box(Vector3((cl1 + 90.0) * 0.5, 0.0, ROAD_Z - 3.98), Vector3(90.0 - cl1, 0.12, 0.18), curb_mat, false)
+	_add_box(Vector3((cl0 + cl1) * 0.5, -0.03, ROAD_Z - 3.98), Vector3(cl1 - cl0, 0.06, 0.18), curb_mat, false)
+	_add_box(Vector3((-90.0 + cl0) * 0.5, -0.05, ROAD_Z - 4.95), Vector3(cl0 + 90.0, 0.20, 1.8), walk_mat, false)
+	_add_box(Vector3((cl1 + 90.0) * 0.5, -0.05, ROAD_Z - 4.95), Vector3(90.0 - cl1, 0.20, 1.8), walk_mat, false)
 	_add_box(Vector3(  0.0, 0.0, ROAD_Z + 3.98), Vector3(180.0, 0.12, 0.18), curb_mat, false)
 	_add_box(Vector3(  0.0, -0.05, ROAD_Z + 4.95), Vector3(180.0, 0.20, 1.8), walk_mat, false)
 	for jx in range(-36, 40, 2):
@@ -324,7 +321,7 @@ func _build_roads_and_yard() -> void:
 	# 3. 8 deutsche Peitschen-Straßenlaternen (mit warmen Nacht-SpotLights an den Schlüssellampen!)
 	var lamp_specs := [
 		[Vector3(-34.0, 0.0, ROAD_Z - 4.35), 0.0, false],
-		[Vector3(-12.0, 0.0, ROAD_Z - 4.35), 0.0, true],
+		[Vector3(-15.0, 0.0, ROAD_Z - 4.35), 0.0, true],
 		[Vector3( 12.0, 0.0, ROAD_Z - 4.35), 0.0, true],
 		[Vector3( 34.0, 0.0, ROAD_Z - 4.35), 0.0, false],
 		[Vector3(-24.0, 0.0, ROAD_Z + 4.35), 180.0, false],
@@ -356,7 +353,7 @@ func _build_roads_and_yard() -> void:
 	# 4. Straßendetails: Gullys, Hydrant, Stromkasten & blaues Straßenschild 'RECHENZENTRUMS-ALLEE 1'
 	for mx in [-18.0, -7.0, 7.5, 21.0]:
 		_spawn_model("ext_manhole", Vector3(float(mx), 0.0, ROAD_Z - 3.25), 0.0)
-	_spawn_model("ext_hydrant", Vector3(-9.5, 0.0, ROAD_Z - 4.85), 0.0)
+	_spawn_model("ext_hydrant", Vector3(-17.5, 0.0, ROAD_Z - 4.85), 0.0)
 	_spawn_model("ext_utility_box", Vector3(9.6, 0.0, ROAD_Z - 4.95), 0.0)
 
 	# Straßenschild rechts an der Einfahrt
@@ -376,57 +373,43 @@ func _build_roads_and_yard() -> void:
 # ---------------------------------------------------------------- C. Hochsicherheits-Zaun + Pförtnerhaus + Pylon
 
 func _build_perimeter_fence_and_gatehouse() -> void:
-	# Vorne (Z = +16.2): links X=-25.0..-6.4 und rechts X=+5.6..+26.6 (Einfahrt + Pförtnerhaus dazwischen!)
-	_build_fence_line(Vector3(-25.0, 0.0, 16.2), Vector3(-6.4, 0.0, 16.2))
-	_build_fence_line(Vector3(  5.6, 0.0, 16.2), Vector3( 26.6, 0.0, 16.2))
-	# Hinten (Z = -12.6) + Westseite (X = -25.0) + Ostseite (X = +26.6)
+	# Vorne (Z = +16.2) mit Einfahrt direkt vor dem Rolltor, dazu hinten und an den Seiten
+	_build_fence_line(Vector3(-25.0, 0.0, 16.2), Vector3(GATE_X0, 0.0, 16.2))
+	_build_fence_line(Vector3(GATE_X1 + 3.0, 0.0, 16.2), Vector3(26.6, 0.0, 16.2))
 	_build_fence_line(Vector3(-25.0, 0.0, -12.6), Vector3(26.6, 0.0, -12.6))
 	_build_fence_line(Vector3(-25.0, 0.0, -12.6), Vector3(-25.0, 0.0, 16.2))
 	_build_fence_line(Vector3( 26.6, 0.0, -12.6), Vector3( 26.6, 0.0, 16.2))
+	var post_mat := MatLib.make_brushed_metal(Color(0.30, 0.33, 0.36), 0.4, 0.7)
+	for px in [GATE_X0, GATE_X1]:
+		_add_box(Vector3(float(px), 1.0, 16.2), Vector3(0.16, 2.0, 0.16), post_mat, true)
 
-	# Blender-Pförtnerhaus + hochgeklappte Sicherheits-Schranke + Campus-Pylon (Gebäude-Upgrade 'upg_security_gate'!)
+	# Pförtnerhaus mit Schranke (Gebäude-Ausbau 'upg_security_gate')
 	_upg_security_node = Node3D.new()
 	add_child(_upg_security_node)
-	var gh := ModelLoader.instantiate_custom_model("halle_nord_gatehouse")
-	if gh != null:
-		gh.position = Vector3(0.0, 0.0, 16.2)
-		_upg_security_node.add_child(gh)
-		var glow_m := _clone_material_by_name(gh, "GH_IntGlow")
-		if glow_m != null:
-			_evening_window_mats.append(glow_m)
-
-	# Firmenname auf dem beleuchteten Campus-Pylon (X = +4.65, Z = 16.5)
-	_pylon_sign_lbl = Label3D.new()
-	_pylon_sign_lbl.text = "MEIN DATACENTER\nTIER-4 CAMPUS\nHALLE NORD"
-	_pylon_sign_lbl.font_size = 22
-	_pylon_sign_lbl.pixel_size = 0.0024
-	_pylon_sign_lbl.outline_size = 0
-	_pylon_sign_lbl.modulate = Color(0.92, 0.98, 1.0)
-	_pylon_sign_lbl.position = Vector3(4.65, 3.55, 16.72)
-	_upg_security_node.add_child(_pylon_sign_lbl)
+	_build_gatehouse(_upg_security_node)
 
 	# Mikrodetails an der Einfahrt: 30-km/h-Verkehrsschild, Paketbox/Briefkasten & Beton-Blumenkübel!
 	var p_mat := MatLib.make_brushed_metal(Color(0.24, 0.27, 0.30), 0.42, 0.68)
-	_add_cyl(Vector3(-6.8, 1.35, ROAD_Z - 4.8), 0.032, 2.7, p_mat)
-	_add_box(Vector3(-6.8, 2.48, ROAD_Z - 4.78), Vector3(0.56, 0.56, 0.03), _mat(Color(0.86, 0.14, 0.12), 0.40, 0.10), false)
-	_add_box(Vector3(-6.8, 2.48, ROAD_Z - 4.76), Vector3(0.42, 0.42, 0.02), _mat(Color(0.95, 0.96, 0.96), 0.45, 0.02), false)
+	_add_cyl(Vector3(-13.6, 1.35, ROAD_Z - 4.8), 0.032, 2.7, p_mat)
+	_add_box(Vector3(-13.6, 2.48, ROAD_Z - 4.78), Vector3(0.56, 0.56, 0.03), _mat(Color(0.86, 0.14, 0.12), 0.40, 0.10), false)
+	_add_box(Vector3(-13.6, 2.48, ROAD_Z - 4.76), Vector3(0.42, 0.42, 0.02), _mat(Color(0.95, 0.96, 0.96), 0.45, 0.02), false)
 	var spd_lbl := Label3D.new()
 	spd_lbl.text = "30"
 	spd_lbl.font_size = 38
 	spd_lbl.pixel_size = 0.0042
 	spd_lbl.outline_size = 0
 	spd_lbl.modulate = Color(0.08, 0.08, 0.10)
-	spd_lbl.position = Vector3(-6.8, 2.48, ROAD_Z - 4.73)
+	spd_lbl.position = Vector3(-13.6, 2.48, ROAD_Z - 4.73)
 	add_child(spd_lbl)
 	# Briefkasten / Paketstation rechts am Gehweg
 	_add_box(Vector3(7.8, 0.65, 16.8), Vector3(0.72, 1.30, 0.46), _mat(Color(0.92, 0.72, 0.10), 0.42, 0.15), false)
-	# 2 bepflanzte Beton-Blumenkübel vor dem Empfangserker
-	for bx in [5.9, 10.1]:
-		_add_box(Vector3(float(bx), 0.26, 8.35), Vector3(0.68, 0.52, 0.68), _mat(Color(0.52, 0.54, 0.56), 0.86, 0.0), false)
-		_spawn_model("ext_grass_tuft", Vector3(float(bx), 0.52, 8.35), float(bx) * 19.0, Vector3(0.85, 0.9, 0.85))
+	# 2 bepflanzte Beton-Blumenkübel auf dem Gehweg vor der Fassade
+	for bx in [4.0, 9.0]:
+		_add_box(Vector3(float(bx), 0.26, 8.7), Vector3(0.68, 0.52, 0.68), _mat(Color(0.52, 0.54, 0.56), 0.86, 0.0), false)
+		_spawn_model("ext_grass_tuft", Vector3(float(bx), 0.52, 8.7), float(bx) * 19.0, Vector3(0.85, 0.9, 0.85))
 
-	# Zier-Hecken & Bäume entlang des Sicherheitszauns (weiches, edles Campus-Bild!)
-	for hx in [-21.5, -15.5, -10.0, 10.2, 16.2, 22.4]:
+	# Zier-Hecken & Bäume entlang des Zauns (nicht vor der Einfahrt)
+	for hx in [-21.5, -15.5, 4.0, 10.2, 16.2, 22.4]:
 		var hedge := _spawn_model("ext_hedge_bush", Vector3(float(hx), 0.0, 16.85), 0.0, Vector3(1.9, 1.0, 0.95))
 		_apply_wind_to_canopy(hedge, 0.10, 0.96)
 	for tp in [
@@ -440,6 +423,60 @@ func _build_perimeter_fence_and_gatehouse() -> void:
 		[Vector3(  8.5, 0.0, -17.0), false, 1.22, 115.0],
 	]:
 		_spawn_tree(tp[0] as Vector3, bool(tp[1]), float(tp[2]), float(tp[3]), false)
+
+
+## Verglastes Pförtnerhaus rechts an der Einfahrt mit Schrankenbaum über die ganze Einfahrt.
+func _build_gatehouse(parent: Node3D) -> void:
+	var c := Vector3(GATE_X1 + 1.3, 0.0, 16.2)
+	var wall := _mat(Color(0.86, 0.87, 0.88), 0.5, 0.2)
+	var dark := _mat(Color(0.20, 0.21, 0.23), 0.6, 0.3)
+	var glass := StandardMaterial3D.new()
+	glass.albedo_color = Color(0.70, 0.84, 0.92, 0.35)
+	glass.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	glass.roughness = 0.05
+	glass.cull_mode = BaseMaterial3D.CULL_DISABLED
+	# Sockel, Brüstung, Glasband, Dach mit Überstand
+	_add_box_to(parent, c + Vector3(0.0, 0.06, 0.0), Vector3(2.3, 0.12, 2.0), dark, false)
+	_add_box_to(parent, c + Vector3(0.0, 0.55, 0.0), Vector3(2.2, 0.9, 1.9), wall, true)
+	_add_box_to(parent, c + Vector3(0.0, 1.6, 0.0), Vector3(2.2, 1.2, 1.9), glass, false)
+	for k in [Vector2(-1.08, -0.93), Vector2(1.08, -0.93), Vector2(-1.08, 0.93), Vector2(1.08, 0.93)]:
+		_add_box_to(parent, c + Vector3(k.x, 1.3, k.y), Vector3(0.08, 2.6, 0.08), dark, false)
+	_add_box_to(parent, c + Vector3(0.0, 2.66, 0.0), Vector3(2.8, 0.14, 2.5), dark, true)
+	var glow := _mat(Color(1.0, 0.92, 0.75), 0.6, 0.0)
+	glow.emission_enabled = true
+	glow.emission = Color(1.0, 0.90, 0.70)
+	glow.emission_energy_multiplier = 0.0
+	_add_box_to(parent, c + Vector3(0.0, 2.57, 0.0), Vector3(1.2, 0.03, 0.6), glow, false)
+	_evening_window_mats.append(glow)
+	var body := StaticBody3D.new()
+	body.collision_layer = 1
+	body.collision_mask = 0
+	parent.add_child(body)
+	var cs := CollisionShape3D.new()
+	var bs := BoxShape3D.new()
+	bs.size = Vector3(2.2, 2.6, 1.9)
+	cs.shape = bs
+	cs.position = c + Vector3(0.0, 1.3, 0.0)
+	body.add_child(cs)
+	var lbl := Label3D.new()
+	lbl.text = "PFORTE"
+	lbl.font_size = 30
+	lbl.pixel_size = 0.0035
+	lbl.outline_size = 0
+	lbl.modulate = Color(0.92, 0.95, 1.0)
+	lbl.position = c + Vector3(0.0, 2.66, 1.26)
+	parent.add_child(lbl)
+	# Schranke: Säule und Baum (Drehpunkt an der Säule, Baum zeigt nach Westen über die Einfahrt)
+	var red := _mat(Color(0.86, 0.12, 0.10), 0.45, 0.1)
+	var white := _mat(Color(0.95, 0.95, 0.95), 0.45, 0.05)
+	_add_box_to(parent, Vector3(GATE_X1 - 0.05, 0.55, 15.7), Vector3(0.36, 1.1, 0.36), _mat(Color(0.95, 0.74, 0.12), 0.5, 0.2), true)
+	barrier_pivot = Node3D.new()
+	barrier_pivot.position = Vector3(GATE_X1 - 0.05, 1.0, 15.7)
+	parent.add_child(barrier_pivot)
+	var arm_len := GATE_X1 - GATE_X0 - 0.3
+	var seg := arm_len / 7.0
+	for i in range(7):
+		_add_box_to(barrier_pivot, Vector3(-seg * (float(i) + 0.5), 0.0, 0.0), Vector3(seg, 0.09, 0.07), red if i % 2 == 0 else white, false)
 
 
 # ---------------------------------------------------------------- D. Technik-Hof West (Diesel-Generator + 20-kV-Umspannwerk)
@@ -458,11 +495,8 @@ func _build_west_tech_yard() -> void:
 	# Realistische Diesel-Abgas-Schwaden aus beiden Chrom-Auspuffrohren auf dem Dach!
 	_upg_diesel_node.add_child(RealisticVfx.create_diesel_exhaust(Vector3(-17.55, 4.35, 3.38)))
 	_upg_diesel_node.add_child(RealisticVfx.create_diesel_exhaust(Vector3(-17.55, 4.35, 4.22)))
-	# Feiner Kondens-Dunst über dem Dach-Rückkühlwerk der Halle Nord
-	add_child(RealisticVfx.create_chiller_mist(Vector3(-3.2, 7.15, -0.55)))
-	add_child(RealisticVfx.create_chiller_mist(Vector3( 3.2, 7.15, -0.55)))
-	# Verzinkte Hochstrom-Kabelbrücke direkt vom Generator-Container in die Westwand der Halle Nord!
-	_add_box_to(_upg_diesel_node, Vector3(-12.0, 2.55, 3.8), Vector3(4.0, 0.22, 0.65), galv, false)
+	# Verzinkte Kabelbrücke vom Generator-Container in die Westwand der Halle
+	_add_box_to(_upg_diesel_node, Vector3(-13.2, 2.55, 3.8), Vector3(2.1, 0.22, 0.65), galv, false)
 	_add_box_to(_upg_diesel_node, Vector3(-13.6, 1.32, 3.8), Vector3(0.16, 2.52, 0.56), steel_dark, false)
 	# Sattes tiefes 2-MVA Dieselgenerator-Brummen am Technik-Hof
 	var sub_stream := SfxManager.get_loop_stream("diesel_gen_idle")
@@ -477,18 +511,9 @@ func _build_west_tech_yard() -> void:
 		_diesel_audio.volume_db = -80.0
 		_upg_diesel_node.add_child(_diesel_audio)
 
-	# 2. Eigenes 20-kV-Umspannwerk (Blender ext_substation_20kv.glb) im Nordwest-Technikhof!
-	_spawn_model("ext_substation_20kv", Vector3(-18.2, 0.0, -5.8), 90.0)
-	# Zweite Kabelbrücke vom Umspannwerk zur Halle Nord
-	_add_box(Vector3(-12.8, 2.75, -5.0), Vector3(5.6, 0.20, 0.55), galv, false)
-	_add_box(Vector3(-15.2, 1.40, -5.0), Vector3(0.14, 2.72, 0.45), steel_dark, false)
-
-	# 3. Lager-Container, Palettenstapel & Mülltonnen im hinteren Wirtschaftshof West
-	_spawn_model("ext_shipping_container", Vector3(-20.4, 0.0, 11.4), 0.0)
-	_spawn_model("ext_pallet_stack", Vector3(-14.6, 0.0, 11.8), 12.0)
-	_spawn_model("ext_pallet_stack", Vector3(-12.8, 0.0, 12.2), -8.0)
-	_spawn_model("ext_trash_bin", Vector3(-10.8, 0.0, 7.6), 90.0)
-	_spawn_model("ext_trash_bin", Vector3(-10.8, 0.0, 8.6), 90.0)
+	# Zwei Mülltonnen ordentlich an der Westwand (nicht vor dem Tor)
+	_spawn_model("ext_trash_bin", Vector3(-13.0, 0.0, 6.2), 90.0)
+	_spawn_model("ext_trash_bin", Vector3(-13.0, 0.0, 7.2), 90.0)
 
 
 # ---------------------------------------------------------------- E. Empfang Ost: 3 Fahnenmasten, Solar-Carport & Parkplatz
@@ -509,10 +534,6 @@ func _build_east_parking_and_solar_carport() -> void:
 	green_charge.emission = Color(0.14, 0.92, 0.44)
 	green_charge.emission_energy_multiplier = 1.6
 
-	# 1. 3 repräsentative wehende Firmen-Fahnenmasten direkt vor dem Glas-NOC-Erker!
-	_spawn_flagpole(Vector3(11.4, 0.0, 10.6), 15.0, Color(0.08, 0.22, 0.44), Color(0.14, 0.72, 0.98))
-	_spawn_flagpole(Vector3(13.2, 0.0, 10.6), 15.0, Color(0.12, 0.15, 0.20), Color(0.96, 0.74, 0.14))
-	_spawn_flagpole(Vector3(15.0, 0.0, 10.6), 15.0, Color(0.08, 0.22, 0.44), Color(0.14, 0.72, 0.98))
 
 	# 2. Moderner Solar-Carport + Wallboxen (Gebäude-Upgrade 'upg_pv_solar'!)
 	_upg_pv_node = Node3D.new()
@@ -553,7 +574,7 @@ func _build_east_parking_and_solar_carport() -> void:
 	tire_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
 	tire_mat.roughness = 0.92
 	for tx in [-0.92, 0.92]:
-		_add_box(Vector3(float(tx), 0.004, 14.2), Vector3(0.42, 0.004, 11.2), tire_mat, false)
+		_add_box(Vector3(HalleNordLayout.DOOR_X + float(tx), 0.004, 14.6), Vector3(0.42, 0.004, 4.8), tire_mat, false)
 	for cz in [-2.75, 0.15, 3.05, 5.95]:
 		_add_box_to(_upg_pv_node, Vector3(cp_x + 2.95, 0.72, float(cz)), Vector3(0.22, 1.42, 0.28), steel, false)
 		_add_box_to(_upg_pv_node, Vector3(cp_x + 2.83, 1.12, float(cz)), Vector3(0.03, 0.24, 0.14), green_charge, false)
@@ -573,12 +594,6 @@ func _build_east_parking_and_solar_carport() -> void:
 			if cpm != null:
 				cpm.albedo_color = pv_car[3] as Color
 
-	# Dekorative Zier-Grasbüschel & Heckeninsel zwischen Einfahrt und Fahnenmasten
-	_add_box(Vector3(13.2, -0.02, 10.6), Vector3(6.6, 0.14, 2.1), _mat(Color(0.54, 0.56, 0.58), 0.88, 0.0), false)
-	_add_box(Vector3(13.2, 0.055, 10.6), Vector3(6.2, 0.04, 1.7), _mat(Color(0.20, 0.34, 0.18), 0.94, 0.0), false)
-	for gx in [10.6, 12.2, 14.0, 15.6]:
-		_spawn_model("ext_grass_tuft", Vector3(float(gx), 0.06, 10.6), float(gx) * 23.0, Vector3(1.1, 1.0, 1.1))
-
 
 # ---------------------------------------------------------------- F. Gegenüberliegende Campus-Nachbarn (0 % Ödnis!)
 
@@ -595,7 +610,6 @@ func _build_south_campus_neighbors() -> void:
 	_spawn_parked_vehicle("ext_car_sedan", Vector3(-14.5, 0.0, 30.8), 90.0, Color(0.84, 0.86, 0.88))
 	for px in [-26.8, -23.1, -19.4, -12.6]:
 		_add_box(Vector3(float(px), -0.015, 30.8), Vector3(0.10, 0.008, 4.6), stripe_mat, false)
-	_spawn_flagpole(Vector3(-9.5, 0.0, 31.2), 180.0, Color(0.12, 0.32, 0.62), Color(0.92, 0.70, 0.16))
 
 	# 2. Rechts gegenüber (Z = +39): Große Nachbar-Datacenter-/Logistikhalle 'NORDCLOUD DATA HUB'
 	_add_box(Vector3(19.5, -0.10, 34.0), Vector3(28.0, 0.16, 15.0), asp_mat, false)
@@ -615,47 +629,6 @@ func _build_south_campus_neighbors() -> void:
 	for hx in [-31.0, -10.5, 2.0, 31.5]:
 		var hb := _spawn_model("ext_hedge_bush", Vector3(float(hx), 0.0, 27.6), 0.0, Vector3(2.2, 1.0, 1.0))
 		_apply_wind_to_canopy(hb, 0.10, 0.94)
-
-
-# ---------------------------------------------------------------- G. Lebendiger Horizont: 4 Windräder + Hochspannungsmasten
-
-func _build_living_horizon_and_powerlines() -> void:
-	# 4 drehende Windräder auf den umliegenden Hügeln
-	var turbine_specs := [
-		[Vector3(-76.0, 0.0, -58.0), 145.0, 1.15, 0.85, 0.2],
-		[Vector3( 78.0, 0.0, -52.0), -135.0, 1.22, 0.78, 1.9],
-		[Vector3(-82.0, 0.0,  62.0), 32.0,  1.18, 0.92, 3.6],
-		[Vector3( 84.0, 0.0,  64.0), -36.0, 1.25, 0.82, 5.1],
-	]
-	for ts in turbine_specs:
-		var wt := _spawn_model("ext_wind_turbine", ts[0] as Vector3, float(ts[1]), Vector3.ONE * float(ts[2]))
-		if wt != null:
-			var rotor := wt.find_child("Rotor", true, false) as Node3D
-			if rotor != null:
-				_turbine_rotors.append({"node": rotor, "speed": float(ts[3]), "phase": float(ts[4])})
-			var bm := _clone_material_by_name(wt, "WT_BeaconMat")
-			if bm != null:
-				_aviation_beacon_mats.append(bm)
-
-	# 3 Hochspannungs-Gittermasten von Nordwest direkt bis zum eigenen 20-kV-Umspannwerk (-18.2, -5.8)!
-	var pylon_positions: Array[Vector3] = [
-		Vector3(-92.0, 0.0, -32.0),
-		Vector3(-56.0, 0.0, -20.0),
-		Vector3(-30.0, 0.0, -10.5),
-	]
-	for pp in pylon_positions:
-		_spawn_model("ext_power_pylon", pp, 18.0, Vector3.ONE * 0.95)
-
-	var cable_mat := _mat(Color(0.08, 0.09, 0.11), 0.60, 0.50)
-	for i in range(pylon_positions.size() - 1):
-		var a := pylon_positions[i]
-		var b := pylon_positions[i + 1]
-		for off in [Vector3(0.0, 17.4, -3.4), Vector3(0.0, 17.4, 3.4), Vector3(0.0, 13.6, 0.0)]:
-			_add_sagging_cable(a + off, b + off, 1.85, 0.045, cable_mat)
-	# Zuleitung vom letzten Mast direkt herunter aufs 20-kV-Umspannwerk!
-	var last_p := pylon_positions[pylon_positions.size() - 1]
-	for off in [Vector3(0.0, 13.6, -2.0), Vector3(0.0, 13.6, 2.0)]:
-		_add_sagging_cable(last_p + off, Vector3(-19.5, 4.4, -6.2) + Vector3(0.0, 0.0, off.z * 0.4), 0.95, 0.04, cable_mat)
 
 
 # ---------------------------------------------------------------- H. Lebendiger KI-Verkehr auf der Rechenzentrums-Allee
@@ -805,20 +778,6 @@ func _spawn_tree(pos: Vector3, is_pine: bool, scale_val: float, yaw_deg: float, 
 	add_child(Nature.tree(Nature.species_for(pos, is_pine), pos, scale_val, yaw_deg, true, cast_sh))
 
 
-func _spawn_flagpole(pos: Vector3, yaw_deg: float, flag_col: Color, stripe_col: Color) -> void:
-	var fp := _spawn_model("ext_flagpole", pos, yaw_deg)
-	if fp == null or _flag_shader == null:
-		return
-	var flag_mi := fp.find_child("Flag", true, false) as MeshInstance3D
-	if flag_mi != null:
-		var sm := ShaderMaterial.new()
-		sm.shader = _flag_shader
-		sm.set_shader_parameter("flag_color", flag_col)
-		sm.set_shader_parameter("stripe_color", stripe_col)
-		flag_mi.material_override = sm
-		_flag_materials.append(sm)
-
-
 func _spawn_parked_vehicle(model_id: String, pos: Vector3, yaw_deg: float, paint_col: Color) -> void:
 	var car := _spawn_model(model_id, pos, yaw_deg)
 	if car == null:
@@ -840,32 +799,6 @@ func _build_fence_line(a: Vector3, b: Vector3) -> void:
 	for i in range(count):
 		var p := a + dir * ((float(i) + 0.5) * step)
 		_spawn_model("ext_fence_panel", p, yaw, Vector3(step / 2.50, 1.0, 1.0))
-
-
-func _add_sagging_cable(a: Vector3, b: Vector3, sag: float, radius: float, mat: Material) -> void:
-	var segs := 8
-	var prev := a
-	for i in range(1, segs + 1):
-		var t := float(i) / float(segs)
-		var pt := a.lerp(b, t)
-		pt.y -= sin(t * PI) * sag
-		var d := pt - prev
-		var l := d.length()
-		if l > 0.01:
-			var mi := MeshInstance3D.new()
-			var cm := CylinderMesh.new()
-			cm.top_radius = radius
-			cm.bottom_radius = radius
-			cm.height = l
-			cm.radial_segments = 6
-			mi.mesh = cm
-			mi.material_override = mat
-			mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-			var dir := d / l
-			var q: Quaternion = Quaternion(Vector3.UP, dir) if dir.dot(Vector3.UP) > -0.9999 else Quaternion(Vector3.RIGHT, PI)
-			mi.transform = Transform3D(Basis(q), (prev + pt) * 0.5)
-			add_child(mi)
-		prev = pt
 
 
 func _apply_wind_to_canopy(root_node: Node3D, height_start: float, tint_shift: float) -> void:

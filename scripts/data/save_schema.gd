@@ -13,7 +13,7 @@ extends RefCounted
 ##   4. Einen Test in tests/save_schema_check.gd ergänzen.
 
 const KEY := "schema"
-const CURRENT := 6
+const CURRENT := 7
 
 ## Nummer -> [Spielversion, Zeitpunkt, was passiert].
 ## Zeitpunkt "data": vor dem Einlesen, die Migration ändert nur die gelesenen Daten.
@@ -25,6 +25,7 @@ const STEPS := {
 	4: ["v2.9", "world", "Festes Regal und 4er-Regale auf das neue Regalsystem"],
 	5: ["v3.1", "world", "Kabel an Leisten auf Eingang und Ausgang umstecken"],
 	6: ["v3.6", "world", "Das Halle-Nord-Aggregat bekommt einen echten Tank, gekaufte Aggregate starten voll"],
+	7: ["v3.8", "world", "Neue Halle Nord: gekaufte Halle bekommt alle 3 Abschnitte, Geräte rücken auf freie Plätze"],
 }
 
 

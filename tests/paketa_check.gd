@@ -250,7 +250,7 @@ func _strips() -> void:
 			wall_n += 1
 	chk("neu an die Wand setzen", wall_n == 1)
 	gs.halle_nord_owned = true
-	chk("Wand in Halle Nord", not gs.get_strip_wall_spot(Vector3(-9.8, 1.0, gs.HALLE_NORD_ORIGIN.z + 1.0), Vector3(1, 0, 0)).is_empty())
+	chk("Wand in Halle Nord", not gs.get_strip_wall_spot(Vector3(-11.8, 1.0, gs.HALLE_NORD_ORIGIN.z + 1.0), Vector3(1, 0, 0)).is_empty())
 	gs.halle_nord_owned = false
 
 

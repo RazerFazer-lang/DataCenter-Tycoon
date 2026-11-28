@@ -111,8 +111,8 @@ func _build_pedestrians() -> void:
 func _build_gatehouse_guard() -> void:
 	_guard_node = Node3D.new()
 	_guard_node.add_child(HumanModel.create(HumanModel.job_look("guard", 7)))
-	_guard_node.position = GameState.HALLE_NORD_ORIGIN + Vector3(-4.55, 0.18, 16.25)
-	_guard_node.rotation_degrees.y = 160.0
+	_guard_node.position = GameState.HALLE_NORD_ORIGIN + Vector3(HalleNordCampus.GATE_X1 + 1.3, 0.18, 16.2)
+	_guard_node.rotation_degrees.y = 90.0
 	add_child(_guard_node)
 
 

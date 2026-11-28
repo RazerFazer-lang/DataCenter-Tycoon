@@ -528,8 +528,8 @@ func refresh_tray() -> void:
 	var pc := VerionTheme.BAD if over or blocked else VerionTheme.TEXT
 	_lbl_power.add_theme_color_override("font_color", pc)
 	_ic_power.modulate = pc if over or blocked else VerionTheme.WARN
-	_lbl_temp.text = "%.0f °C" % GameState.room_temp
-	var hot := GameState.room_temp >= 68.0
+	_lbl_temp.text = "%.0f °C" % GameState.local_site_temp()
+	var hot := GameState.local_site_temp() >= 68.0
 	_lbl_temp.add_theme_color_override("font_color", VerionTheme.BAD if hot else VerionTheme.TEXT)
 	_ic_temp.modulate = VerionTheme.BAD if hot else VerionTheme.MUTED
 	var limit := GameState.used_bandwidth_mbps > GameState.max_bandwidth_mbps
@@ -675,8 +675,8 @@ static func draw_status_card(ci: CanvasItem, r: Rect2) -> void:
 	y += 18.0 * k
 	var wp := clampf(float(GameState.total_watts) / maxf(1.0, float(GameState.max_watts)), 0.0, 1.0)
 	y = _gauge(ci, f, x, y, w, k, _s("Strom"), "%d / %d W" % [GameState.total_watts, GameState.max_watts], wp, VerionTheme.BAD if wp > 0.9 else VerionTheme.WARN)
-	var tp := clampf((GameState.room_temp - 18.0) / 60.0, 0.0, 1.0)
-	y = _gauge(ci, f, x, y, w, k, _s("Raumtemperatur"), "%.1f °C" % GameState.room_temp, tp, VerionTheme.BAD if GameState.room_temp >= 60.0 else Color(0.20, 0.75, 0.85))
+	var tp := clampf((GameState.local_site_temp() - 18.0) / 60.0, 0.0, 1.0)
+	y = _gauge(ci, f, x, y, w, k, _s("Raumtemperatur"), "%.1f °C" % GameState.local_site_temp(), tp, VerionTheme.BAD if GameState.local_site_temp() >= 60.0 else Color(0.20, 0.75, 0.85))
 	var np := clampf(GameState.used_bandwidth_mbps / maxf(1.0, GameState.max_bandwidth_mbps), 0.0, 1.0)
 	y = _gauge(ci, f, x, y, w, k, _s("Internet"), "%s / %s" % [HardwareCatalog.format_speed_mbps(GameState.used_bandwidth_mbps), HardwareCatalog.format_speed_mbps(GameState.max_bandwidth_mbps)], np, VerionTheme.BAD if np >= 0.95 else VerionTheme.ACCENT)
 	var users := 0

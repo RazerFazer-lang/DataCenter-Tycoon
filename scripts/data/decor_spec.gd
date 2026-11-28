@@ -47,7 +47,8 @@ const GARAGE_BLOCKS := [
 	[0.0, 3.60, 2.25, 0.95], [15.5, -3.9, 2.0, 0.65], [-5.28, 0.25, 0.62, 1.05], [-5.0, 3.65, 0.75, 0.55],
 ]
 const GARAGE_COLUMNS_X := [-5.28, -2.05, 1.85, 5.50, 9.00, 12.50, 17.85, 21.28]
-const NORD_BLOCKS := [[7.1, -4.1, 2.8, 1.85], [-6.9, -5.2, 3.2, 0.75], [3.2, -5.1, 0.9, 0.85], [0.0, 5.0, 2.35, 1.0]]
+## Halle Nord: feste Einbauten und Wege aus HalleNordLayout.
+static var NORD_BLOCKS: Array = HalleNordLayout.SOLID + HalleNordLayout.KEEP_FREE
 
 
 static func footprint(item_type: String) -> Vector2:
@@ -85,8 +86,8 @@ static func walls(nord: bool) -> Array:
 	if nord:
 		var oz: float = GameState.HALLE_NORD_ORIGIN.z
 		return [
-			{"n": Vector2(0, 1), "at": oz - 5.86}, {"n": Vector2(0, -1), "at": oz + 5.86},
-			{"n": Vector2(1, 0), "at": -9.86}, {"n": Vector2(-1, 0), "at": 9.86},
+			{"n": Vector2(0, 1), "at": oz - HalleNordLayout.WALL_Z}, {"n": Vector2(0, -1), "at": oz + HalleNordLayout.WALL_Z},
+			{"n": Vector2(1, 0), "at": -HalleNordLayout.WALL_X}, {"n": Vector2(-1, 0), "at": HalleNordLayout.open_max_x()},
 		]
 	return [
 		{"n": Vector2(0, 1), "at": GameState.WALL_FACE_NORTH_Z}, {"n": Vector2(0, -1), "at": GameState.WALL_FACE_SOUTH_Z},
@@ -155,8 +156,8 @@ static func can_place(item_type: String, pos: Vector3, rot: float, ignore_id: St
 	var c := Vector2(pos.x, pos.z)
 	var half := fp * 0.5
 	var oz: float = GameState.HALLE_NORD_ORIGIN.z if nord else 0.0
-	var lo := Vector2(-9.86, oz - 5.86) if nord else Vector2(GameState.WALL_FACE_WEST_X, GameState.WALL_FACE_NORTH_Z)
-	var hi := Vector2(9.86, oz + 5.86) if nord else Vector2(GameState._interior_max_x(), GameState.WALL_FACE_SOUTH_Z)
+	var lo := Vector2(-HalleNordLayout.WALL_X, oz - HalleNordLayout.WALL_Z) if nord else Vector2(GameState.WALL_FACE_WEST_X, GameState.WALL_FACE_NORTH_Z)
+	var hi := Vector2(HalleNordLayout.open_max_x(), oz + HalleNordLayout.WALL_Z) if nord else Vector2(GameState._interior_max_x(), GameState.WALL_FACE_SOUTH_Z)
 	for k in corners(pos, rot, fp):
 		if k.x < lo.x - 0.004 or k.x > hi.x + 0.004 or k.y < lo.y - 0.004 or k.y > hi.y + 0.004:
 			return false
@@ -244,19 +245,24 @@ static func can_place_sign(pos: Vector3, rot: float, ignore_id: String = "") -> 
 	var lz: float = pos.z - (GameState.HALLE_NORD_ORIGIN.z if nord else 0.0)
 	var along := pos.x if absf(n.z) > 0.5 else lz
 	if absf(n.z) > 0.5:
-		var lo := -9.0 if nord else -4.6
-		var hi: float = 9.0 if nord else GameState._interior_max_x() - 0.95
+		var lo := -HalleNordLayout.WALL_X + 0.9 if nord else -4.6
+		var hi: float = HalleNordLayout.open_max_x() - 0.9 if nord else GameState._interior_max_x() - 0.95
 		if along < lo or along > hi:
 			return false
 		# Über den Toren und beim Firmenschild über dem PC bleibt frei
-		if n.z < 0.0 and absf(pos.x) < 3.2:
+		if n.z < 0.0 and absf(pos.x - (HalleNordLayout.DOOR_X if nord else 0.0)) < 3.2:
+			return false
+		# Halle Nord: Technikecke und Büro haben eigene Wände
+		if nord and pos.x < HalleNordLayout.TECH_MAX.x + 0.4:
 			return false
 		if not nord and n.z > 0.0 and absf(pos.x - 3.0) < 2.2 and pos.y > 2.3:
 			return false
 		for k in GameState.STRIP_WALL_KEEPOUT:
 			if not nord and absf(pos.z - float(k[0])) < 0.3 and absf(pos.x - float(k[1])) < float(k[3]) + 0.92 and absf(pos.y - float(k[2])) < float(k[4]) + 0.25:
 				return false
-	elif absf(along) > (4.9 if nord else 3.4):
+	elif absf(along) > (HalleNordLayout.WALL_Z - 0.9 if nord else 3.4):
+		return false
+	elif nord and n.x > 0.0 and (lz < HalleNordLayout.TECH_MAX.y + 0.4 or lz > HalleNordLayout.OFFICE_MIN.y - 0.4):
 		return false
 	for did in GameState.decor_items.keys():
 		var d: Dictionary = GameState.decor_items[did]

@@ -115,8 +115,9 @@ static func get_max_ports(cable_type: String, endpoint_id: String) -> int:
 			return GameState.BREAKER_BASE_SOCKETS
 		if endpoint_id == GameState.HALL_C_BREAKER_ID:
 			return 6 + GameState.power_tier * 2
-		if endpoint_id == GameState.HALL_NORD_BREAKER_ID:
-			return 16
+		var nb := GameState.HALL_NORD_BREAKER_IDS.find(endpoint_id)
+		if nb >= 0:
+			return HalleNordLayout.breaker_ports(nb)
 		if GameState.is_power_strip_decor(endpoint_id):
 			return StripRules.POWER_TOP + 2
 		if GameState.racks.has(endpoint_id):
@@ -133,7 +134,7 @@ static func get_max_ports(cable_type: String, endpoint_id: String) -> int:
 		if endpoint_id == GameState.HALL_C_ROUTER_ID:
 			return 4
 		if endpoint_id == GameState.HALL_NORD_ROUTER_ID:
-			return 16
+			return HalleNordLayout.core_ports(maxi(1, HalleNordLayout.sections()))
 		if is_lan_strip_decor(endpoint_id):
 			return StripRules.LAN_TOP + 2
 		if GameState.racks.has(endpoint_id):
@@ -194,8 +195,7 @@ static func _recalculate_networks_and_metrics() -> void:
 	if GameState.multiplayer.is_server():
 		GameState._refresh_slot_power()
 	GameState.max_watts = int(GameState.POWER_TIERS[GameState.power_tier]["watts"])
-	if GameState.halle_nord_owned:
-		GameState.max_watts += GameState.HALLE_NORD_EXTRA_WATTS
+	GameState.max_watts += HalleNordLayout.WATTS_PER_SECTION * HalleNordLayout.sections()
 	if FinanceManager.is_power_blocked():
 		GameState.max_watts = maxi(FinanceManager.BLOCK_POWER_MIN, int(float(GameState.max_watts) * FinanceManager.BLOCK_POWER_FACTOR))
 
@@ -219,8 +219,8 @@ static func _recalculate_networks_and_metrics() -> void:
 	var bus_sources: Array[String] = [GameState.WALL_BREAKER_ID]
 	if GameState.room_level >= 2:
 		bus_sources.append(GameState.HALL_C_BREAKER_ID)
-	if GameState.halle_nord_owned:
-		bus_sources.append(GameState.HALL_NORD_BREAKER_ID)
+	for si in range(HalleNordLayout.sections()):
+		bus_sources.append(GameState.HALL_NORD_BREAKER_IDS[si])
 
 	var bus_visited: Dictionary = {}
 	var bus_queue: Array = []
@@ -615,8 +615,9 @@ static func _is_valid_cable_endpoint(cable_type: String, endpoint_id: String) ->
 			return true
 		if endpoint_id == GameState.HALL_C_BREAKER_ID and GameState.room_level >= 2:
 			return true
-		if endpoint_id == GameState.HALL_NORD_BREAKER_ID and GameState.halle_nord_owned:
-			return true
+		var nb := GameState.HALL_NORD_BREAKER_IDS.find(endpoint_id)
+		if nb >= 0:
+			return nb < HalleNordLayout.sections()
 		# Das Goldis Innengerät hat keine Strombuchse.
 		return GameState.racks.has(endpoint_id) or (GameState.coolers.has(endpoint_id) and not GameState.is_indoor_unit(endpoint_id)) or GameState.ups_units.has(endpoint_id) or GameState.is_power_strip_decor(endpoint_id)
 	else:
@@ -714,8 +715,9 @@ static func _approx_endpoint_pos(eid: String) -> Vector3:
 		return Vector3(21.0, 1.5, -4.3)
 	if eid == GameState.HALL_C_ROUTER_ID:
 		return Vector3(21.0, 1.8, -2.5)
-	if eid == GameState.HALL_NORD_BREAKER_ID:
-		return GameState.HALLE_NORD_ORIGIN + Vector3(-8.2, 1.5, -5.7)
+	var nb := GameState.HALL_NORD_BREAKER_IDS.find(eid)
+	if nb >= 0:
+		return GameState.HALLE_NORD_ORIGIN + (HalleNordLayout.BREAKER_POS[nb] as Vector3) + Vector3(0.0, 1.1, 0.25)
 	if eid == GameState.HALL_NORD_ROUTER_ID:
-		return GameState.HALLE_NORD_ORIGIN + Vector3(-4.6, 1.8, -5.7)
+		return GameState.HALLE_NORD_ORIGIN + HalleNordLayout.CORE_POS + Vector3(0.0, 1.5, 0.5)
 	return Vector3.ZERO

@@ -326,7 +326,14 @@ func enter_pc_seat() -> void:
 	if not is_local:
 		return
 	if not is_seated_at_pc:
-		_pre_seat_pos = Vector3(clampf(position.x, 1.6, 4.2), 0.0, maxf(position.z, -2.15))
+		# Garage und Halle Nord haben je einen PC-Tisch: der nächste ist der, an dem man sitzt.
+		_seat_desk = _nearest_pc_desk()
+		if _seat_desk != null:
+			var lp := _seat_desk.to_local(position)
+			_pre_seat_pos = _seat_desk.to_global(Vector3(clampf(lp.x, -1.4, 1.2), 0.0, maxf(lp.z, 1.57)))
+			_pre_seat_pos.y = 0.0
+		else:
+			_pre_seat_pos = Vector3(clampf(position.x, 1.6, 4.2), 0.0, maxf(position.z, -2.15))
 		_pre_seat_yaw = rotation.y
 	is_seated_at_pc = true
 	is_typing_at_pc = false
@@ -728,9 +735,31 @@ func get_pc_focus_duration() -> float:
 
 
 func _get_pc_screen() -> MeshInstance3D:
+	if _seat_desk != null and is_instance_valid(_seat_desk):
+		var q := _seat_desk.get_node_or_null("PcScreenQuad") as MeshInstance3D
+		if q != null:
+			return q
 	if _pc_screen == null or not is_instance_valid(_pc_screen):
 		_pc_screen = get_tree().get_first_node_in_group("pc_screen") as MeshInstance3D
 	return _pc_screen
+
+
+## PC-Tisch, an dem der Spieler sitzt (Garage oder Halle Nord).
+var _seat_desk: Node3D = null
+
+
+func _nearest_pc_desk() -> Node3D:
+	var best: Node3D = null
+	var best_d := INF
+	for n in get_tree().get_nodes_in_group("pc_desk"):
+		var d3 := n as Node3D
+		if d3 == null or not d3.is_visible_in_tree():
+			continue
+		var dist := d3.global_position.distance_squared_to(global_position)
+		if dist < best_d:
+			best_d = dist
+			best = d3
+	return best
 
 
 func _process(delta: float) -> void:
@@ -802,8 +831,13 @@ func _physics_process(delta: float) -> void:
 		if is_crouching:
 			_apply_crouch(false)
 		var seat_target := Vector3(2.78, 0.0, -2.84)
+		var seat_yaw := -0.06
+		if _seat_desk != null and is_instance_valid(_seat_desk):
+			seat_target = _seat_desk.to_global(Vector3(-0.22, 0.0, 0.88))
+			seat_target.y = 0.0
+			seat_yaw = _seat_desk.global_rotation.y - 0.06
 		position = position.lerp(seat_target, clampf(delta * 9.0, 0.0, 1.0))
-		rotation.y = lerp_angle(rotation.y, -0.06, clampf(delta * 9.0, 0.0, 1.0))
+		rotation.y = lerp_angle(rotation.y, seat_yaw, clampf(delta * 9.0, 0.0, 1.0))
 		_head_pivot.position.y = lerpf(_head_pivot.position.y, 1.22, clampf(delta * 9.0, 0.0, 1.0))
 		_head_pivot.rotation.x = lerpf(_head_pivot.rotation.x, -0.04, clampf(delta * 9.0, 0.0, 1.0))
 		velocity = Vector3.ZERO
@@ -813,6 +847,8 @@ func _physics_process(delta: float) -> void:
 		_process_bench(delta)
 	elif on_ladder:
 		pass
+	elif _shuttle_riding:
+		velocity = Vector3.ZERO
 	elif _stand_blend_timer > 0.0:
 		_stand_blend_timer = maxf(0.0, _stand_blend_timer - delta)
 		position = position.lerp(_pre_seat_pos, clampf(delta * 10.0, 0.0, 1.0))
@@ -877,8 +913,7 @@ func _physics_process(delta: float) -> void:
 				var surf := "concrete"
 				var is_wet := (GameState.weather_state == "rain" or GameState.weather_state == "storm")
 				if position.z < -80.0:
-					var lz := position.z - GameState.HALLE_NORD_ORIGIN.z
-					if absf(position.x) < 10.0 and absf(lz) < 6.0:
+					if HalleNordLayout.in_building(position):
 						surf = "raised_floor"
 					elif is_wet:
 						surf = "wet"
@@ -1733,7 +1768,7 @@ func _resolve_aimed_cable_endpoint(cable_type: String) -> String:
 		if itype == "wall_breaker":
 			return eid
 		if itype == "power_port" or itype == "rack_slot" or itype == "cooler_unit" or itype == "ups_unit":
-			if eid == GameState.WALL_BREAKER_ID or eid == GameState.HALL_C_BREAKER_ID or eid == GameState.HALL_NORD_BREAKER_ID or GameState.racks.has(eid) or (GameState.coolers.has(eid) and not GameState.is_indoor_unit(eid)) or GameState.ups_units.has(eid) or GameState.is_power_strip_decor(eid):
+			if eid == GameState.WALL_BREAKER_ID or eid == GameState.HALL_C_BREAKER_ID or GameState.HALL_NORD_BREAKER_IDS.has(eid) or GameState.racks.has(eid) or (GameState.coolers.has(eid) and not GameState.is_indoor_unit(eid)) or GameState.ups_units.has(eid) or GameState.is_power_strip_decor(eid):
 				return eid
 	elif cable_type == "cluster":
 		if (itype == "cluster_port" or itype == "rack_slot") and GameState.racks.has(eid):
@@ -2305,11 +2340,11 @@ func _fill_context_prompt() -> void:
 			current_prompt = tr("[E] Garagentor schließen (dämpft Straßenlärm)") if door_open else tr("[E] Garagentor öffnen")
 		"shuttle_teleport":
 			if not GameState.halle_nord_owned:
-				current_prompt = tr("Shuttle-Terminal: Großstandort Halle Nord ab Level 3 im PC kaufbar ($8.500)")
+				current_prompt = tr("Shuttle-Terminal: Halle Nord ab Firmenstufe 3 in der App Gebäude kaufbar ($%d)") % GameState.HALLE_NORD_COST
 			elif position.z < -80.0:
-				current_prompt = tr("[E] Zurück zur Start-Garage teleportieren (oder Taste [T])")
+				current_prompt = tr("[E] Mit dem Shuttle zur Garage fahren (oder Taste [T])")
 			else:
-				current_prompt = tr("[E] Nach HALLE NORD (240 m²) teleportieren (oder Taste [T])")
+				current_prompt = tr("[E] Mit dem Shuttle zur Halle Nord fahren (oder Taste [T])")
 		"decor_shelf_slot":
 			var s_idx := int(target.get_meta("slot_idx", 0))
 			var sd: Dictionary = GameState.decor_items.get(eid, {})
@@ -2927,18 +2962,57 @@ func admin_teleport(pos: Vector3, yaw: float) -> void:
 func _rescue_from_fall() -> void:
 	velocity = Vector3.ZERO
 	if position.z < -80.0 and GameState.halle_nord_owned:
-		position = GameState.HALLE_NORD_ORIGIN + Vector3(3.2, 0.12, -4.2)
+		position = GameState.HALLE_NORD_ORIGIN + HalleNordLayout.ARRIVAL
 	else:
 		position = Vector3(-4.1, 0.12, -3.5)
 
 
+## Shuttle zwischen Garage und Halle Nord: kurze Fahrt mit Abblende statt hartem Sprung.
+var _shuttle_riding: bool = false
+
+
 func teleport_between_sites() -> void:
-	if not GameState.is_active:
+	if not GameState.is_active or _shuttle_riding:
 		return
 	if not GameState.halle_nord_owned:
 		SfxManager.play("error", -10.0)
-		GameState.post_event("Großstandort Halle Nord ist noch nicht gekauft (ab Firmenstufe 3 unter Upgrades & Standorte).", "warn")
+		if GameState.is_construction_active("upg_nord_hall"):
+			GameState.post_event("Halle Nord ist noch im Bau. Der Bautrupp meldet sich, wenn sie fertig ist.", "warn")
+		else:
+			GameState.post_event("Halle Nord ist noch nicht gekauft (ab Firmenstufe 3 in der App Gebäude).", "warn")
 		return
+	var to_nord := position.z > -80.0
+	_shuttle_riding = true
+	var layer := CanvasLayer.new()
+	layer.layer = 90
+	add_child(layer)
+	var fade := ColorRect.new()
+	fade.color = Color(0.02, 0.03, 0.04, 0.0)
+	fade.set_anchors_preset(Control.PRESET_FULL_RECT)
+	fade.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	layer.add_child(fade)
+	var lbl := Label.new()
+	lbl.text = tr("🚐 Shuttle fährt zur Halle Nord …") if to_nord else tr("🚐 Shuttle fährt zur Garage …")
+	lbl.set_anchors_preset(Control.PRESET_FULL_RECT)
+	lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	lbl.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	lbl.add_theme_font_size_override("font_size", 28)
+	lbl.modulate = Color(1, 1, 1, 0)
+	layer.add_child(lbl)
+	SfxManager.play("van_door", -12.0, 1.0)
+	var tw := create_tween()
+	tw.tween_property(fade, "color:a", 1.0, 0.35)
+	tw.parallel().tween_property(lbl, "modulate:a", 1.0, 0.35)
+	tw.tween_callback(_switch_site)
+	tw.tween_interval(0.75)
+	tw.tween_property(fade, "color:a", 0.0, 0.5)
+	tw.parallel().tween_property(lbl, "modulate:a", 0.0, 0.3)
+	tw.tween_callback(func() -> void:
+		_shuttle_riding = false
+		layer.queue_free())
+
+
+func _switch_site() -> void:
 	# Falls der Teleport vom PC-Sitz aus gestartet wurde: Sitzmodus & Aufsteh-Blend sofort beenden,
 	# damit die Kamera weder am Monitor klebt noch zur Start-Garage zurückblendet!
 	is_seated_at_pc = false
@@ -2958,12 +3032,12 @@ func teleport_between_sites() -> void:
 		rotation.y = -PI * 0.5
 		GameState.post_event("📍 Standortwechsel: Start-Garage.", "info")
 	else:
-		position = GameState.HALLE_NORD_ORIGIN + Vector3(3.2, 0.12, -4.2)
-		rotation.y = 0.0
-		GameState.post_event("📍 Standortwechsel: Großstandort HALLE NORD (240 m²).", "good")
+		position = GameState.HALLE_NORD_ORIGIN + HalleNordLayout.ARRIVAL
+		rotation.y = HalleNordLayout.ARRIVAL_YAW
+		GameState.post_event("📍 Standortwechsel: Halle Nord.", "good")
 	velocity = Vector3.ZERO
 	_head_pivot.rotation.x = 0.0
-	SfxManager.play("save", -7.0, 1.08)
+	SfxManager.play("van_door", -12.0, 0.92)
 	if _world != null and _world.has_method("send_local_pose"):
 		_world.send_local_pose(position, rotation.y, _head_pivot.rotation.x, 0, false)
 

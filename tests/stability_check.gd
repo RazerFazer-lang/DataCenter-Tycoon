@@ -189,7 +189,8 @@ func _check_technician_nord() -> void:
 	chk("Techniker im Dienst", not tm.view.is_empty())
 	gs.halle_nord_owned = true
 	var nid: String = gs._alloc_id("rack")
-	gs.racks[nid] = gs._make_rack_data(nid, "rack", Vector3(-3.0, 0.0, -318.5), PI)
+	# Abschnitt 1 der neuen Halle Nord (v3.8): Abschnitt 2 ist ohne Ausbau zu
+	gs.racks[nid] = gs._make_rack_data(nid, "rack", Vector3(-6.0, 0.0, -318.5), PI)
 	gs.racks[nid]["slots"][0].merge({"item_type": "web_server", "state": "crashed", "faulty_part": "cooling", "components": _comps(1)}, true)
 	var kid: String = gs._alloc_id("crate")
 	gs.crates[kid] = {"id": kid, "item_type": "kit_cooling", "pos": Vector3(0.5, 0.0, 7.0), "held_by": 0}
@@ -211,7 +212,7 @@ func _check_technician_nord() -> void:
 			var all_nord := not path.is_empty()
 			var len := 0.0
 			for i in path.size():
-				all_nord = all_nord and (path[i] as Vector3).z < -300.0 and absf((path[i] as Vector3).x) < 9.8
+				all_nord = all_nord and (path[i] as Vector3).z < -300.0 and absf((path[i] as Vector3).x) < 11.9
 				if i > 0:
 					len += (path[i] as Vector3).distance_to(path[i - 1])
 			if all_nord and len > 1.0:
@@ -241,7 +242,7 @@ func _check_technician_nord() -> void:
 	var way: Array = tm.find_path(tm._nord_stop(), Vector3(-8.0, 0.0, oz + 3.5))
 	var inside := way.size() > 2
 	for p in way:
-		inside = inside and absf((p as Vector3).x) < 9.8 and absf((p as Vector3).z - oz) < 5.8
+		inside = inside and absf((p as Vector3).x) < 11.9 and absf((p as Vector3).z - oz) < 6.9
 	chk("Weg in Halle Nord bleibt in der Halle", inside, way.size())
 	chk("zwischen den Standorten gibt es keinen Fußweg", tm.find_path(tm.HOME, front).is_empty())
 	gs.racks.erase(nid)

@@ -11,24 +11,15 @@ var breaker_port_pos: Vector3 = Vector3(-4.2, 1.18, -4.16)
 var router_port_pos: Vector3 = Vector3(-1.0, 1.48, -4.16)
 var hall_c_breaker_port_pos: Vector3 = Vector3(14.6, 1.18, -4.16)
 var hall_c_router_port_pos: Vector3 = Vector3(16.6, 1.48, -4.16)
-var hall_nord_breaker_port_pos: Vector3 = Vector3(-7.8, 1.37, -190.68)
-var hall_nord_router_port_pos: Vector3 = Vector3(-4.2, 1.48, -190.68)
 var _halle_nord_root: Node3D
-var _halle_nord_breaker_lbl: Label3D
-var _halle_nord_router_lbl: Label3D
-var _halle_nord_sign_lbl: Label3D
+## Halle Nord (Bau, Anzeigen, Abschnitte).
+var _nord: HalleNordBuilder
 var _garage_shuttle_lbl: Label3D
-var _nord_shuttle_lbl: Label3D
-var _halle_nord_campus: HalleNordCampus
-var _halle_nord_noc_lbl: Label3D
-var _hn_upg_noc_node: Node3D
-var _hn_upg_cold_aisle_node: Node3D
 var _garage_upg_pv_node: Node3D
 var _garage_upg_heat_node: Node3D
 ## Außenbeleuchtung (Gebäude-Ausbau): Knoten und Lampen [Licht, Leucht-Material, Stärke]
 var _garage_upg_lights_node: Node3D
 var _garage_lights: Array = []
-var _hn_aisle_temp_lbls: Array[Label3D] = []
 
 var _partition_b: StaticBody3D
 var _partition_c: StaticBody3D
@@ -248,9 +239,8 @@ func apply_graphics_quality(quality: int) -> void:
 		_ceiling_lights[i].distance_fade_shadow = 18.0
 		_ceiling_lights[i].distance_fade_length = 5.0
 	for i in range(_hn_ceiling_lights.size()):
-		# 4 versetzt verteilte Haupt-SpotLights in Halle Nord werfen weiche Kontaktschatten auf den 2K-Epoxidboden!
-		var is_primary := (i % 2 == (i / 4) % 2)
-		_hn_ceiling_lights[i].shadow_enabled = (quality >= 3 and (is_primary or i == 1 or i == 6)) or (quality >= 2 and is_primary) or (quality == 1 and (i == 1 or i == 6))
+		# Halle Nord: je Abschnitt zwei Strahler; Schatten nur bei einem je Abschnitt (Qualität 3), sonst weniger.
+		_hn_ceiling_lights[i].shadow_enabled = (quality >= 3 and i % 2 == 0) or (quality == 2 and (i == 0 or i == 2)) or (quality == 1 and i == 0)
 		_hn_ceiling_lights[i].shadow_blur = 1.65
 		_hn_ceiling_lights[i].shadow_bias = 0.035
 		_hn_ceiling_lights[i].distance_fade_enabled = true
@@ -509,16 +499,10 @@ func _update_dynamic_visuals() -> void:
 		var max_cn := GameState.get_max_ports("network", GameState.HALL_C_ROUTER_ID)
 		_hall_c_router_label.text = tr("HALLE-C 10G FIBER\nPorts: %d / %d") % [used_cn, max_cn]
 
-	if _halle_nord_breaker_lbl != null and GameState.halle_nord_owned:
-		var used_np := GameState.count_cables_on("power", GameState.HALL_NORD_BREAKER_ID)
-		var max_np := GameState.get_max_ports("power", GameState.HALL_NORD_BREAKER_ID)
-		_halle_nord_breaker_lbl.text = tr("HALLE NORD STROMBUS\n8.500 W Schwerlast\nSteckdosen: %d / %d") % [used_np, max_np]
-	if _halle_nord_router_lbl != null and GameState.halle_nord_owned:
-		var used_nn := GameState.count_cables_on("network", GameState.HALL_NORD_ROUTER_ID)
-		var max_nn := GameState.get_max_ports("network", GameState.HALL_NORD_ROUTER_ID)
-		_halle_nord_router_lbl.text = tr("HALLE NORD 10G CORE\nPorts: %d / %d") % [used_nn, max_nn]
+	if _nord != null:
+		_nord.refresh_labels()
 	if _garage_shuttle_lbl != null:
-		_garage_shuttle_lbl.text = tr("SHUTTLE-TERMINAL\n[E] → Halle Nord\n(oder Taste [T])") if GameState.halle_nord_owned else tr("SHUTTLE-TERMINAL\nHalle Nord ab Level 3\nim PC kaufbar ($8.500)")
+		_garage_shuttle_lbl.text = tr("SHUTTLE-TERMINAL\n[E] → Halle Nord\n(oder Taste [T])") if GameState.halle_nord_owned else tr("SHUTTLE-TERMINAL\nHalle Nord ab Firmenstufe 3\nin der App Gebäude kaufbar")
 
 	if _router_led_mat != null:
 		if not power_alive:
@@ -2070,6 +2054,7 @@ func _build_terminal_desk() -> void:
 	var root := Node3D.new()
 	root.position = Vector3(3.0, 0.0, -3.72)
 	add_child(root)
+	root.add_to_group("pc_desk")
 
 	# Blender-Modell (assets/models/terminal_desk.glb) ersetzt die prozeduralen Tischteile, falls vorhanden.
 	var desk_model := ModelLoader.instantiate_custom_model("terminal_desk")
@@ -2271,25 +2256,8 @@ func _refresh_company_decor() -> void:
 		_company_sign_lbl.text = cname.left(24)
 	if _exterior_sign_lbl != null:
 		_exterior_sign_lbl.text = cname.left(24)
-	if _halle_nord_sign_lbl != null:
-		_halle_nord_sign_lbl.text = (cname.left(18) + " — HALLE NORD")
-	if _halle_nord_campus != null:
-		_halle_nord_campus.update_company_name(cname.left(20))
-	if _halle_nord_noc_lbl != null and GameState.is_active and GameState.halle_nord_owned:
-		var nord_racks := 0
-		for rid in GameState.racks.keys():
-			var rp: Vector3 = GameState.racks[rid]["pos"]
-			if rp.z < -100.0:
-				nord_racks += 1
-		var load_pct := int(roundf(100.0 * float(GameState.total_watts) / float(maxi(GameState.max_watts, 1))))
-		var warn_n := GameState.get_maintenance_warnings().size()
-		_halle_nord_noc_lbl.text = "NOC LIVE  •  HALLE NORD\n\nRacks vor Ort:   %d\nNetzlast:        %d %%\nTemperatur:      %.1f °C\nWartungshinweise: %d\nStatus:          %s" % [
-			nord_racks, load_pct, GameState.room_temp, warn_n,
-			"ALLE SYSTEME OK" if GameState.breaker_on else "STROMAUSFALL!",
-		]
-	for tl in _hn_aisle_temp_lbls:
-		if is_instance_valid(tl):
-			tl.text = "KALT-GANG  •  %.1f °C  •  AIRFLOW +%d%%" % [GameState.room_temp, int(roundf(GameState.airflow_bonus * 100.0))]
+	if _nord != null:
+		_nord.refresh_company(cname)
 
 
 func _build_workshop_props() -> void:
@@ -2442,13 +2410,13 @@ func get_hall_c_socket_positions() -> Array[Vector3]:
 ## Buchsen der fest eingebauten Verteiler in Halle C und Halle Nord.
 func get_fixed_socket_positions(cable_type: String, endpoint_id: String) -> Array[Vector3]:
 	var out: Array[Vector3] = []
-	if cable_type == "power" and endpoint_id == GameState.HALL_NORD_BREAKER_ID:
-		for i in range(16):
-			out.append(GameState.HALLE_NORD_ORIGIN + Vector3(-7.6 - 1.05 + float(i) * 0.14, 1.10, -5.60 + 0.437))
+	var nb := GameState.HALL_NORD_BREAKER_IDS.find(endpoint_id)
+	if cable_type == "power" and nb >= 0:
+		for i in range(HalleNordLayout.breaker_ports(nb)):
+			out.append(HalleNordLayout.breaker_socket(nb, i))
 	elif cable_type == "network" and endpoint_id == GameState.HALL_NORD_ROUTER_ID:
-		for r in range(3):
-			for c in [1, 3, 4, 5, 6, 8]:
-				out.append(GameState.HALLE_NORD_ORIGIN + Vector3(-4.75 - 0.245 + float(c) * 0.054, 1.025 + float(r) * 0.27, -5.50 + 0.309))
+		for i in range(HalleNordLayout.core_ports()):
+			out.append(HalleNordLayout.core_socket(i))
 	elif cable_type == "network" and endpoint_id == GameState.HALL_C_ROUTER_ID:
 		for i in range(8):
 			out.append(Vector3(16.6 - 0.22 + float(i) * 0.063, 1.52, -4.38 + 0.159))
@@ -2582,7 +2550,7 @@ func _mat(col: Color, rough: float, metal: float) -> StandardMaterial3D:
 	return m
 
 
-# ---------------------------------------------------------------- Großstandort Halle Nord (240 m²) + Shuttle-Terminals
+# ---------------------------------------------------------------- Halle Nord + Shuttle-Terminals
 
 func _sync_halle_nord_visibility() -> void:
 	if _halle_nord_root == null:
@@ -2590,6 +2558,8 @@ func _sync_halle_nord_visibility() -> void:
 	var owned := GameState.halle_nord_owned
 	_halle_nord_root.visible = owned
 	_set_collisions_enabled_recursive(_halle_nord_root, owned)
+	if _nord != null:
+		_nord.sync_upgrades()
 
 
 func _set_collisions_enabled_recursive(node: Node, enabled: bool) -> void:
@@ -2619,16 +2589,14 @@ func _build_shuttle_terminal(parent: Node3D, pos: Vector3, yaw_deg: float, is_no
 		_add_box_visual(st, Vector3(0.0, 0.06, 0.045), Vector3(0.56, 0.54, 0.02), scr_mat)
 
 	var lbl := Label3D.new()
-	lbl.text = tr("SHUTTLE-TERMINAL\n[E] → Start-Garage\n(oder Taste [T])") if is_nord else tr("SHUTTLE-TERMINAL\nHalle Nord ab Level 3")
+	lbl.text = tr("SHUTTLE-TERMINAL\n[E] → Start-Garage\n(oder Taste [T])") if is_nord else tr("SHUTTLE-TERMINAL\nHalle Nord ab Firmenstufe 3")
 	lbl.font_size = 24
 	lbl.pixel_size = 0.0024
 	lbl.outline_size = 0
 	lbl.position = Vector3(0.0, 0.06, 0.056)
 	lbl.modulate = Color(0.92, 0.98, 1.0)
 	st.add_child(lbl)
-	if is_nord:
-		_nord_shuttle_lbl = lbl
-	else:
+	if not is_nord:
 		_garage_shuttle_lbl = lbl
 
 	var area := _make_interact_area(Vector3(0.75, 1.10, 0.55), {
@@ -2644,332 +2612,14 @@ func _build_halle_nord_site() -> void:
 	_halle_nord_root.name = "HalleNordSite"
 	_halle_nord_root.position = GameState.HALLE_NORD_ORIGIN
 	add_child(_halle_nord_root)
-	var hn := _halle_nord_root
-	for sp in DeliveryPlan.SMALL_PALLETS:
-		var pal_n := ModelLoader.instantiate_custom_model("euro_pallet")
-		if pal_n != null:
-			pal_n.position = DeliveryPlan.NORD_OFFSET - GameState.HALLE_NORD_ORIGIN + Vector3(sp.x, 0.0, sp.y)
-			hn.add_child(pal_n)
+	# Halle Nord seit v3.8: eigener Bau in HalleNordBuilder (Maße in HalleNordLayout).
+	_nord = HalleNordBuilder.new()
+	_nord.name = "HalleNord"
+	_halle_nord_root.add_child(_nord)
+	_nord.build(self)
+	_hn_ceiling_lights = _nord.ceiling_lights
+	_hn_daylight_fills = _nord.daylight_fills
 
-	# ---------------------------------------------------------------- MATERIALIEN (dunkel, edel, Tier-4)
-	# Anthrazit-Doppelboden statt blendend weißer Fliesen
-	var floor_mat := (MatLib.get_mat("enterprise_floor").duplicate() as StandardMaterial3D)
-	floor_mat.albedo_color = Color(0.36, 0.39, 0.44)
-	floor_mat.roughness = 0.46
-	floor_mat.clearcoat = 0.30
-	# Wände: helles Grau-Blau oben, dunkles Anthrazit unten
-	var wall_mat := (MatLib.get_mat("garage_wall").duplicate() as StandardMaterial3D)
-	wall_mat.albedo_color = Color(0.70, 0.74, 0.80)
-	var wainscot_mat := _mat(Color(0.13, 0.15, 0.18), 0.55, 0.30)
-	var ceiling_mat := (MatLib.get_mat("corrugated_metal").duplicate() as StandardMaterial3D)
-	ceiling_mat.albedo_color = Color(0.30, 0.33, 0.37)
-	var beam_mat := MatLib.make_brushed_metal(Color(0.12, 0.14, 0.17), 0.40, 0.75)
-	var galv_mat := MatLib.make_brushed_metal(Color(0.62, 0.66, 0.70), 0.32, 0.85)
-	var tray_yellow := _mat(Color(0.92, 0.70, 0.10), 0.45, 0.35)
-	var tray_blue := _mat(Color(0.10, 0.40, 0.76), 0.40, 0.45)
-	var hazard_mat := MatLib.get_mat("hazard_stripes")
-	var yellow_mat := _mat(Color(0.95, 0.74, 0.12), 0.55, 0.05)
-	var red_mat := _mat(Color(0.80, 0.12, 0.10), 0.40, 0.20)
-	var aisle_glow := StandardMaterial3D.new()
-	aisle_glow.albedo_color = Color(0.10, 0.50, 0.90)
-	aisle_glow.emission_enabled = true
-	aisle_glow.emission = Color(0.12, 0.58, 1.0)
-	aisle_glow.emission_energy_multiplier = 1.25
-	var led_bar := StandardMaterial3D.new()
-	led_bar.albedo_color = Color(0.96, 0.97, 1.0)
-	led_bar.emission_enabled = true
-	led_bar.emission = Color(0.92, 0.95, 1.0)
-	led_bar.emission_energy_multiplier = 2.2
-	var exit_green := StandardMaterial3D.new()
-	exit_green.albedo_color = Color(0.10, 0.70, 0.30)
-	exit_green.emission_enabled = true
-	exit_green.emission = Color(0.12, 0.90, 0.38)
-	exit_green.emission_energy_multiplier = 1.6
-
-	# ---------------------------------------------------------------- 1. KOMPLETTE BLENDER-5.2-INNENARCHITEKTUR (halle_nord_interior.glb)
-	var hn_int := ModelLoader.instantiate_custom_model("halle_nord_interior")
-	if hn_int != null:
-		hn.add_child(hn_int)
-	# Saubere unsichtbare Kollisionshuelle fuer Boden, Decke & Waende (4.5 m Rolltor bleibt frei!)
-	_add_collider_box(hn, Vector3(0.0, -0.1, 0.0), Vector3(20.0, 0.2, 12.0))
-	_add_collider_box(hn, Vector3(0.0, 4.78, 0.0), Vector3(20.4, 0.2, 12.4))
-	_add_collider_box(hn, Vector3(0.0, 2.38, -6.1), Vector3(20.4, 4.76, 0.25))
-	_add_collider_box(hn, Vector3(-10.1, 2.38, 0.0), Vector3(0.25, 4.76, 12.4))
-	_add_collider_box(hn, Vector3( 10.1, 2.38, 0.0), Vector3(0.25, 4.76, 12.4))
-	_add_collider_box(hn, Vector3(-6.1, 2.38, 6.1), Vector3(7.9, 4.76, 0.25))
-	_add_collider_box(hn, Vector3( 6.1, 2.38, 6.1), Vector3(7.9, 4.76, 0.25))
-	_add_collider_box(hn, Vector3( 0.0, 3.98, 6.1), Vector3(4.5, 1.48, 0.25))
-	# Verdecker für die geschlossenen Wandteile und das Dach: Drinnen fällt die Außenwelt weg, draußen
-	# das Halleninnere. Die Oberlichter (Y 3.58..4.34 in Nord-, West- und Ostwand) und das Rolltor bleiben frei.
-	for o in [
-		[Vector3(0.0, 1.77, -6.02), Vector3(20.0, 3.54, 0.1)],
-		[Vector3(-10.02, 1.77, 0.0), Vector3(0.1, 3.54, 12.0)],
-		[Vector3(10.02, 1.77, 0.0), Vector3(0.1, 3.54, 12.0)],
-		[Vector3(-6.15, 2.40, 6.02), Vector3(7.7, 4.78, 0.1)],
-		[Vector3(6.15, 2.40, 6.02), Vector3(7.7, 4.78, 0.1)],
-		[Vector3(0.0, 4.05, 6.02), Vector3(4.5, 1.5, 0.1)],
-		[Vector3(0.0, 4.76, 0.0), Vector3(20.0, 0.08, 12.0)],
-	]:
-		var hocc := OccluderInstance3D.new()
-		var hbox := BoxOccluder3D.new()
-		hbox.size = o[1]
-		hocc.occluder = hbox
-		hocc.position = o[0]
-		hn.add_child(hocc)
-
-	# ---------------------------------------------------------------- 2. LICHT, WEICHE SCHATTEN & BOX-REFLEXIONEN (echte Raumtiefe!)
-	_hn_ceiling_lights.clear()
-	for lx in [-6.0, -2.0, 2.0, 6.0]:
-		for lz in [-3.4, 0.9]:
-			var lspot := SpotLight3D.new()
-			lspot.position = Vector3(float(lx), 3.64, float(lz))
-			lspot.rotation_degrees.x = -90.0
-			lspot.light_color = Color(1.0, 0.97, 0.92)
-			lspot.light_energy = 2.25
-			lspot.spot_range = 9.6
-			lspot.spot_angle = 73.0
-			lspot.spot_attenuation = 1.12
-			lspot.shadow_enabled = false
-			hn.add_child(lspot)
-			_hn_ceiling_lights.append(lspot)
-	# Tageslicht-Streulicht entlang der durchgebrochenen Echtglas-Oberlichter (skaliert mit Sonnenstand!)
-	_hn_daylight_fills.clear()
-	for dpos in [Vector3(-5.0, 3.85, -4.8), Vector3(4.5, 3.85, -4.8), Vector3(-8.8, 3.85, 0.5), Vector3(8.8, 3.85, 0.5)]:
-		var dfill := OmniLight3D.new()
-		dfill.position = dpos
-		dfill.light_color = Color(0.93, 0.96, 1.0)
-		dfill.light_energy = 0.58
-		dfill.omni_range = 10.5
-		hn.add_child(dfill)
-		_hn_daylight_fills.append(dfill)
-	# Dezentes indirektes Boden-Bounce-Licht (verhindert pechschwarze Unterseiten bei eingeschalteten Schatten)
-	var fill := OmniLight3D.new()
-	fill.position = Vector3(0.0, 2.8, 0.2)
-	fill.light_color = Color(0.98, 0.96, 0.93)
-	fill.light_energy = 0.34
-	fill.omni_range = 18.0
-	hn.add_child(fill)
-	var hn_rp := ReflectionProbe.new()
-	hn_rp.position = Vector3(0.0, 2.4, 0.0)
-	hn_rp.size = Vector3(20.4, 5.0, 12.4)
-	hn_rp.box_projection = true
-	hn_rp.interior = true
-	hn_rp.intensity = 0.84
-	hn_rp.ambient_mode = ReflectionProbe.AMBIENT_DISABLED
-	hn_rp.update_mode = ReflectionProbe.UPDATE_ONCE
-	hn.add_child(hn_rp)
-	_reflection_probes.append(hn_rp)
-
-	# ---------------------------------------------------------------- 3. KALTGANG-UPGRADE ('upg_cold_aisle_pro') — echte matte Hallen-Markierungen & Industrie-Tafeln!
-	_hn_upg_cold_aisle_node = Node3D.new()
-	hn.add_child(_hn_upg_cold_aisle_node)
-	_hn_aisle_temp_lbls.clear()
-	var paint_aisle := _mat(Color(0.88, 0.68, 0.12), 0.78, 0.0)
-	var aisle_specs := [[-1.6, "REIHE A  •  KALT-GANG"], [2.0, "REIHE B  •  KALT-GANG"]]
-	for asp in aisle_specs:
-		var az := float(asp[0])
-		for off in [-0.66, 0.66]:
-			_add_box_visual(_hn_upg_cold_aisle_node, Vector3(-0.4, 0.005, az + float(off)), Vector3(15.6, 0.004, 0.055), paint_aisle)
-		var fl := Label3D.new()
-		fl.text = str(asp[1])
-		fl.font_size = 56
-		fl.pixel_size = 0.0054
-		fl.outline_size = 0
-		fl.modulate = Color(0.92, 0.78, 0.22, 0.88)
-		fl.rotation_degrees = Vector3(-90.0, 0.0, 0.0)
-		fl.position = Vector3(-6.2, 0.010, az)
-		fl.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-		_hn_upg_cold_aisle_node.add_child(fl)
-		# Klassische Industrie-Anzeigetafel über dem Gang (dunkelgraues Gehäuse, gut lesbare bernsteinfarbene LED-Ziffern!)
-		_add_box_visual(_hn_upg_cold_aisle_node, Vector3(-1.2, 3.08, az), Vector3(1.85, 0.30, 0.08), beam_mat)
-		var t_lbl := _add_small_label(_hn_upg_cold_aisle_node, Vector3(-1.2, 3.08, az + 0.05), "KALT-GANG  •  22.0 °C", 24, 0.0024, Color(0.98, 0.80, 0.32))
-		_hn_aisle_temp_lbls.append(t_lbl)
-	_add_small_label(hn, Vector3(-6.05, 2.52, -5.88), "⚡ HOCHSPANNUNG 400V", 24, 0.0025, Color(0.96, 0.74, 0.12))
-	_add_small_label(hn, Vector3(-9.88, 2.05, 0.0), "GEHÖRSCHUTZ & ESD-ZONE", 22, 0.0024, Color(0.18, 0.36, 0.64)).rotation_degrees.y = 90.0
-	# Gelb-schwarze Warnschraffur vor dem Rolltor (Rammschutzpoller & 6kg-Feuerlöscher sind bereits High-Poly in halle_nord_interior.glb!)
-	_add_box_visual(hn, Vector3(0.0, 0.006, 5.55), Vector3(4.6, 0.008, 0.55), hazard_mat)
-
-	# NOTAUSGANG-Leuchte über dem Rolltor
-	_add_box_visual(hn, Vector3(0.0, 3.68, 5.93), Vector3(0.62, 0.22, 0.05), exit_green)
-	var exit_lbl := _add_small_label(hn, Vector3(0.0, 3.68, 5.90), "NOTAUSGANG", 22, 0.0024, Color(1, 1, 1))
-	exit_lbl.rotation_degrees.y = 180.0
-
-	_build_extinguisher_station(hn, "nord", Vector3(-3.45, 1.22, 5.80), 180.0)
-	_build_paper_bin(hn, "nord", Vector3(-3.35, 0.0, 6.95), 90.0)
-
-	# ---------------------------------------------------------------- 4. SCHALTANLAGE 400V (16 Steckdosen) + 42U CORE-RACK (16 Ports)
-	var p_root := Node3D.new()
-	p_root.position = Vector3(-7.6, 0.0, -5.60)
-	hn.add_child(p_root)
-	var sg_m := ModelLoader.instantiate_custom_model("halle_nord_switchgear")
-	if sg_m != null:
-		p_root.add_child(sg_m)
-	else:
-		_add_box_visual(p_root, Vector3(0.0, 1.15, 0.0), Vector3(2.46, 2.26, 0.66), beam_mat)
-	hall_nord_breaker_port_pos = GameState.HALLE_NORD_ORIGIN + Vector3(-7.6, 1.10, -5.20)
-	_halle_nord_breaker_lbl = _add_small_label(p_root, Vector3(0.0, 0.80, 0.37), "HALLE NORD STROMBUS\nSteckdosen: 0 / 16", 22, 0.0024, Color(0.98, 0.86, 0.40))
-	var p_area := _make_interact_area(Vector3(2.5, 2.2, 0.6), {
-		"interact_type": "power_port",
-		"entity_id": GameState.HALL_NORD_BREAKER_ID,
-	})
-	p_area.position = Vector3(0.0, 1.15, 0.42)
-	p_root.add_child(p_area)
-	_add_collider_box(p_root, Vector3(0.0, 1.15, 0.0), Vector3(2.46, 2.30, 0.66))
-
-	var n_root := Node3D.new()
-	n_root.position = Vector3(-4.75, 0.0, -5.50)
-	hn.add_child(n_root)
-	var cr_m := ModelLoader.instantiate_custom_model("halle_nord_core_rack")
-	if cr_m != null:
-		n_root.add_child(cr_m)
-	else:
-		_add_box_visual(n_root, Vector3(0.0, 1.13, 0.0), Vector3(0.94, 2.26, 0.78), beam_mat)
-	hall_nord_router_port_pos = GameState.HALLE_NORD_ORIGIN + Vector3(-4.75, 1.20, -5.08)
-	_halle_nord_router_lbl = _add_small_label(n_root, Vector3(0.0, 2.42, 0.40), "HALLE NORD 10G CORE\nPorts: 0 / 16", 22, 0.0024, Color(0.62, 0.88, 1.0))
-	var n_area := _make_interact_area(Vector3(1.0, 2.2, 0.6), {
-		"interact_type": "net_port",
-		"entity_id": GameState.HALL_NORD_ROUTER_ID,
-	})
-	n_area.position = Vector3(0.0, 1.15, 0.45)
-	n_root.add_child(n_area)
-	_add_collider_box(n_root, Vector3(0.0, 1.13, 0.0), Vector3(0.94, 2.26, 0.78))
-
-	# 2K-ORM-PBR Lager-Regale + ESD-Werkbank an der West-/Suedwand inkl. sauberer Kollision
-	var shelf := BuildingPropFactory.build_heavy_workshop_shelf()
-	shelf.position = Vector3(-9.55, 0.0, 1.0)
-	hn.add_child(shelf)
-	_add_collider_box(hn, Vector3(-9.55, 1.07, 1.0), Vector3(0.56, 2.14, 1.56))
-	var shelf2 := BuildingPropFactory.build_heavy_workshop_shelf()
-	shelf2.position = Vector3(-9.55, 0.0, 2.7)
-	hn.add_child(shelf2)
-	_add_collider_box(hn, Vector3(-9.55, 1.07, 2.7), Vector3(0.56, 2.14, 1.56))
-	var bench := BuildingPropFactory.build_hardware_workbench()
-	bench.position = Vector3(-6.9, 0.0, 5.45)
-	bench.rotation_degrees.y = 180.0
-	hn.add_child(bench)
-	_add_collider_box(hn, Vector3(-6.9, 0.65, 5.45), Vector3(1.56, 1.30, 0.82))
-
-	# ---------------------------------------------------------------- 5. VERGLASTER NOC-LEITSTAND (Upgrade 'upg_noc_suite' — Basis-PC steht immer!)
-	_hn_upg_noc_node = Node3D.new()
-	hn.add_child(_hn_upg_noc_node)
-	var noc_m := ModelLoader.instantiate_custom_model("halle_nord_noc_wall")
-	if noc_m != null:
-		_hn_upg_noc_node.add_child(noc_m)
-	# Kollision der Glaswände (nur aktiv wenn NOC-Upgrade gebaut!)
-	_add_collider_box(_hn_upg_noc_node, Vector3(8.20, 1.38, -2.65), Vector3(3.50, 2.76, 0.10))
-	_add_collider_box(_hn_upg_noc_node, Vector3(4.76, 1.38, -4.91), Vector3(0.10, 2.76, 2.06))
-	_add_collider_box(_hn_upg_noc_node, Vector3(9.28, 0.45, -5.12), Vector3(1.12, 0.90, 0.64))
-
-	_halle_nord_noc_lbl = _add_small_label(_hn_upg_noc_node, Vector3(7.35, 2.48, -5.79), "NOC LIVE  •  HALLE NORD", 22, 0.0022, Color(0.70, 0.92, 1.0))
-	var noc_light := OmniLight3D.new()
-	noc_light.position = Vector3(7.35, 2.4, -4.2)
-	noc_light.light_color = Color(1.0, 0.90, 0.76)
-	noc_light.light_energy = 0.75
-	noc_light.omni_range = 4.5
-	_hn_upg_noc_node.add_child(noc_light)
-
-	var coffee := ModelLoader.instantiate_custom_model("prop_coffee_machine")
-	if coffee != null:
-		coffee.position = Vector3(9.40, 0.905, -5.15)
-		_hn_upg_noc_node.add_child(coffee)
-		coffee.add_child(CoffeeMachineFx.make("nord"))
-
-	var pc_desk := Node3D.new()
-	pc_desk.position = Vector3(7.25, 0.0, -4.55)
-	hn.add_child(pc_desk)
-	var desk_m := ModelLoader.instantiate_custom_model("terminal_desk")
-	if desk_m != null:
-		pc_desk.add_child(desk_m)
-		_dress_desk(desk_m)
-		var nord_quad := MeshInstance3D.new()
-		var nqm := QuadMesh.new()
-		nqm.size = Vector2(0.82, 0.44)
-		nord_quad.mesh = nqm
-		nord_quad.material_override = _pc_main_mat
-		nord_quad.position = Vector3(-0.10, 1.24, -0.1595)
-		pc_desk.add_child(nord_quad)
-		_add_status_quad(pc_desk)
-		_add_desk_collider(pc_desk)
-	else:
-		_build_desk_procedural(pc_desk)
-	var t_area := _make_interact_area(Vector3(1.85, 1.25, 1.05), {
-		"interact_type": "terminal",
-		"entity_id": "terminal_nord",
-	})
-	t_area.position = Vector3(0.0, 1.15, 0.0)
-	pc_desk.add_child(t_area)
-
-	# ---------------------------------------------------------------- 6. SHUTTLE-/BIOMETRIE-KIOSK (freistehend, [E] / [T])
-	var kiosk := Node3D.new()
-	kiosk.position = Vector3(3.2, 0.0, -5.35)
-	hn.add_child(kiosk)
-	var k_m := ModelLoader.instantiate_custom_model("halle_nord_shuttle_kiosk")
-	if k_m != null:
-		kiosk.add_child(k_m)
-		_nord_shuttle_lbl = _add_small_label(kiosk, Vector3(0.0, 1.37, 0.135), "SHUTTLE\n[E] → Start-Garage\n(oder Taste [T])", 20, 0.0019, Color(0.92, 0.98, 1.0))
-		_nord_shuttle_lbl.rotation_degrees.x = -12.0
-		var k_area := _make_interact_area(Vector3(0.8, 1.7, 0.7), {
-			"interact_type": "shuttle_teleport",
-			"entity_id": "shuttle_nord",
-		})
-		k_area.position = Vector3(0.0, 0.9, 0.2)
-		kiosk.add_child(k_area)
-		_add_collider_box(kiosk, Vector3(0.0, 0.8, -0.04), Vector3(0.62, 1.6, 0.30))
-	else:
-		_build_shuttle_terminal(hn, Vector3(3.2, 1.45, -5.92), 0.0, true)
-
-	# ---------------------------------------------------------------- 7. AUSSEN: Blender-Fassade, Firmenschild, Lieferzone, Campus
-	var hn_ext := ModelLoader.instantiate_custom_model("halle_nord_exterior")
-	if hn_ext != null:
-		hn.add_child(hn_ext)
-	_halle_nord_sign_lbl = Label3D.new()
-	_halle_nord_sign_lbl.text = "MEIN DATACENTER — HALLE NORD"
-	_halle_nord_sign_lbl.font_size = 40
-	_halle_nord_sign_lbl.pixel_size = 0.0048
-	_halle_nord_sign_lbl.outline_size = 0
-	_halle_nord_sign_lbl.position = Vector3(0.0, 4.30, 6.36)
-	_halle_nord_sign_lbl.modulate = Color(0.94, 0.97, 1.0)
-	hn.add_child(_halle_nord_sign_lbl)
-
-	# Gelbe Lieferzone vor dem Rolltor (lokal Z = +7.6..+10.4)
-	_add_box_visual(hn, Vector3(0.0, 0.012, 7.6), Vector3(4.2, 0.015, 0.10), yellow_mat)
-	_add_box_visual(hn, Vector3(0.0, 0.012, 10.4), Vector3(4.2, 0.015, 0.10), yellow_mat)
-	_add_box_visual(hn, Vector3(-2.05, 0.012, 9.0), Vector3(0.10, 0.015, 2.9), yellow_mat)
-	_add_box_visual(hn, Vector3( 2.05, 0.012, 9.0), Vector3(0.10, 0.015, 2.9), yellow_mat)
-	var dz_lbl := _add_small_label(hn, Vector3(0.0, 0.02, 9.0), "LIEFERZONE", 48, 0.0055, Color(0.98, 0.82, 0.26, 0.9))
-	dz_lbl.rotation_degrees = Vector3(-90.0, 0.0, 0.0)
-
-	# Kompletter Tier-4 Enterprise-Campus drumherum
-	_halle_nord_campus = HalleNordCampus.new()
-	_halle_nord_campus.name = "HalleNordCampus"
-	hn.add_child(_halle_nord_campus)
-
-	# Außenlicht über dem Rolltor
-	var door_light := OmniLight3D.new()
-	door_light.position = Vector3(0.0, 3.2, 7.4)
-	door_light.light_color = Color(1.0, 0.92, 0.80)
-	door_light.light_energy = 0.9
-	door_light.omni_range = 9.0
-	hn.add_child(door_light)
-
-	# ---------------------------------------------------------------- 8. UNSICHTBARE GELÄNDE-GRENZE (Sicherheitszaun + Torhaus)
-	var wall_body := StaticBody3D.new()
-	wall_body.collision_layer = 1
-	wall_body.collision_mask = 0
-	hn.add_child(wall_body)
-	for spec in [
-		[Vector3(0.8, 2.0, 16.4), Vector3(52.0, 4.0, 0.4)],
-		[Vector3(0.8, 2.0, -12.8), Vector3(52.0, 4.0, 0.4)],
-		[Vector3(-25.2, 2.0, 1.8), Vector3(0.4, 4.0, 29.4)],
-		[Vector3(26.8, 2.0, 1.8), Vector3(0.4, 4.0, 29.4)],
-		[Vector3(-16.2, 1.4, 3.8), Vector3(5.8, 2.8, 2.6)],
-	]:
-		var cs := CollisionShape3D.new()
-		var bs := BoxShape3D.new()
-		bs.size = spec[1] as Vector3
-		cs.shape = bs
-		cs.position = spec[0] as Vector3
-		wall_body.add_child(cs)
 
 ## Unsichtbarer Kollisionskoerper (z. B. fuer Glaswaende und Blender-Modelle).
 func _add_collider_box(parent: Node3D, pos: Vector3, size: Vector3) -> void:
@@ -3137,11 +2787,5 @@ func _sync_building_upgrades_visuals() -> void:
 		var heat_on := GameState.has_building_upgrade("upg_district_heat")
 		_garage_upg_heat_node.visible = heat_on
 		_set_collisions_enabled_recursive(_garage_upg_heat_node, heat_on)
-	if _hn_upg_noc_node != null:
-		var noc_on := GameState.has_building_upgrade("upg_noc_suite")
-		_hn_upg_noc_node.visible = noc_on
-		_set_collisions_enabled_recursive(_hn_upg_noc_node, noc_on and GameState.halle_nord_owned)
-	if _hn_upg_cold_aisle_node != null:
-		_hn_upg_cold_aisle_node.visible = GameState.has_building_upgrade("upg_cold_aisle_pro")
-	if _halle_nord_campus != null:
-		_halle_nord_campus.sync_building_upgrades()
+	if _nord != null:
+		_nord.sync_upgrades()

@@ -415,8 +415,7 @@ func _update_day_night_atmosphere() -> void:
 	if local_player != null and is_instance_valid(local_player):
 		var lp: Vector3 = local_player.position
 		if lp.z < -80.0:
-			var lz := lp.z - GameState.HALLE_NORD_ORIGIN.z
-			var in_hn := (absf(lp.x) < 10.1 and absf(lz) < 6.1)
+			var in_hn := HalleNordLayout.in_building(lp)
 			SfxManager.set_listener_outdoor(not in_hn, in_hn)
 		else:
 			SfxManager.set_listener_outdoor(OutdoorWorld.is_outside(lp), false)
@@ -471,8 +470,7 @@ func _update_day_night_atmosphere() -> void:
 		# Drinnen sieht man nur wenig Himmel: dort ist volle Auflösung billiger als der Zwischendurchgang.
 		var half := out_on
 		if out_cam != null and out_cam.global_position.z < -100.0:
-			var hp := out_cam.global_position - GameState.HALLE_NORD_ORIGIN
-			half = absf(hp.x) > 10.1 or absf(hp.z) > 6.1
+			half = not HalleNordLayout.in_building(out_cam.global_position)
 		elif out_cam != null and GameState.garage_door_open and out_cam.global_position.z > 3.0:
 			half = true
 		if half != _sky_half_sent or not _sky_half_set:
@@ -649,10 +647,11 @@ func get_port_world_pos(cable_type: String, endpoint_id: String) -> Variant:
 		return _garage.hall_c_breaker_port_pos
 	if endpoint_id == GameState.HALL_C_ROUTER_ID:
 		return _garage.hall_c_router_port_pos
-	if endpoint_id == GameState.HALL_NORD_BREAKER_ID:
-		return _garage.hall_nord_breaker_port_pos
+	var nb := GameState.HALL_NORD_BREAKER_IDS.find(endpoint_id)
+	if nb >= 0:
+		return GameState.HALLE_NORD_ORIGIN + (HalleNordLayout.BREAKER_POS[nb] as Vector3) + Vector3(0.0, 1.0, HalleNordLayout.BREAKER_D * 0.5)
 	if endpoint_id == GameState.HALL_NORD_ROUTER_ID:
-		return _garage.hall_nord_router_port_pos
+		return GameState.HALLE_NORD_ORIGIN + HalleNordLayout.CORE_POS + Vector3(0.0, 1.4, 0.5)
 	if _rack_nodes.has(endpoint_id):
 		var rp: RackProp = _rack_nodes[endpoint_id]
 		if cable_type == "cluster":
@@ -983,7 +982,7 @@ func get_socket_world_pos(cable_type: String, endpoint_id: String, idx: int) -> 
 func get_port_world_dir(_cable_type: String, endpoint_id: String) -> Variant:
 	# Wandkästen hängen an der Rückwand und zeigen in den Raum (+Z)
 	if endpoint_id == GameState.WALL_BREAKER_ID or endpoint_id == GameState.HALL_C_BREAKER_ID \
-			or endpoint_id == GameState.HALL_NORD_BREAKER_ID \
+			or GameState.HALL_NORD_BREAKER_IDS.has(endpoint_id) \
 			or endpoint_id == GameState.WALL_ROUTER_ID or endpoint_id == GameState.HALL_C_ROUTER_ID \
 			or endpoint_id == GameState.HALL_NORD_ROUTER_ID:
 		return Vector3.BACK

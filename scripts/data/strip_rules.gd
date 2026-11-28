@@ -45,7 +45,7 @@ static func is_strip(ctype: String, eid: String) -> bool:
 ## Rolle eines Anschlusses für eine Kabelart: source, strip, ups, hub, device oder "".
 static func role(ctype: String, eid: String) -> String:
 	if ctype == "power":
-		if eid == _gs().WALL_BREAKER_ID or eid == _gs().HALL_C_BREAKER_ID or eid == _gs().HALL_NORD_BREAKER_ID:
+		if eid == _gs().WALL_BREAKER_ID or eid == _gs().HALL_C_BREAKER_ID or _gs().HALL_NORD_BREAKER_IDS.has(eid):
 			return "source"
 		if is_strip(ctype, eid):
 			return "strip"

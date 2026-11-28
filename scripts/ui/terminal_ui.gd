@@ -2116,235 +2116,39 @@ func _render_upgrades_app() -> void:
 	content.add_theme_constant_override("separation", 10)
 	scroll.add_child(content)
 
-	# 1. Internet Router Upgrade (Real Mbit/s & Gbit/s!)
-	var rt_idx := clampi(GameState.router_tier, 0, GameState.ROUTER_TIERS.size() - 1)
-	var cur_rt: Dictionary = GameState.ROUTER_TIERS[rt_idx]
-	var rt_lim := GameState.used_bandwidth_mbps > GameState.max_bandwidth_mbps
-	var rt_c := _make_light_card(Color(1.0, 0.95, 0.90) if rt_lim else Color.WHITE, Color(0.86, 0.48, 0.14) if rt_lim else Color(0.80, 0.84, 0.89), 7, 14, 12)
-	content.add_child(rt_c)
-	var rth := HBoxContainer.new()
-	rth.add_theme_constant_override("separation", 12)
-	rt_c.add_child(rth)
+	var at_nord := _pc_at_nord()
+	# Garagen-PC: Anschlüsse und Garagen-Ausbau. PC in Halle Nord: nur die Halle und ihre Ausbauten.
+	if not at_nord:
+		_render_garage_connection_cards(content)
+	_render_halle_nord_card(content, at_nord)
 
-	var rti := VBoxContainer.new()
-	rti.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	rth.add_child(rti)
-	var rtt := Label.new()
-	rtt.text = tr("Internet-Router (Stufe %d/%d): %s") % [rt_idx + 1, GameState.ROUTER_TIERS.size(), tr(str(cur_rt["label"]))]
-	rtt.add_theme_font_size_override("font_size", 15)
-	rtt.modulate = Color(0.68, 0.28, 0.06) if rt_lim else Color(0.10, 0.12, 0.16)
-	rti.add_child(rtt)
-	var rtd := Label.new()
-	var used_ports := GameState.count_cables_on("network", GameState.WALL_ROUTER_ID)
-	rtd.text = tr("Auslastung: %s / %s  •  LAN-Ports: %d/%d  •  DDoS-Schutz: +%.0f%%") % [
-		HardwareCatalog.format_speed_mbps(GameState.used_bandwidth_mbps), str(cur_rt["speed"]),
-		used_ports, int(cur_rt["ports"]), (float(cur_rt["ddos_mult"]) - 1.0) * 100.0
-	]
-	rtd.add_theme_font_size_override("font_size", 12)
-	rtd.modulate = Color(0.66, 0.24, 0.06) if rt_lim else Color(0.36, 0.40, 0.46)
-	rti.add_child(rtd)
-
-	var rtbtn := Button.new()
-	rtbtn.custom_minimum_size = Vector2(210, 38)
-	if rt_idx + 1 < GameState.ROUTER_TIERS.size():
-		var nxt: Dictionary = GameState.ROUTER_TIERS[rt_idx + 1]
-		rtbtn.text = "$%d" % int(nxt["cost"])
-		rtbtn.disabled = GameState.money < float(nxt["cost"])
-		_style_win_btn(rtbtn, Color(0.10, 0.48, 0.84) if not rtbtn.disabled else Color(0.84, 0.86, 0.89), Color(0.08, 0.38, 0.70), Color.WHITE if not rtbtn.disabled else Color(0.45, 0.48, 0.52))
-		rtbtn.pressed.connect(_open_router_overlay)
-	else:
-		rtbtn.text = "100 Gbit/s Max"
-		rtbtn.disabled = true
-		_style_win_btn(rtbtn, Color(0.88, 0.90, 0.93), Color(0.76, 0.79, 0.82), Color(0.32, 0.36, 0.42))
-	rth.add_child(rtbtn)
-
-	# 2. Power Tier
-	var pc := _make_light_card(Color.WHITE, Color(0.80, 0.84, 0.89), 7, 14, 12)
-	content.add_child(pc)
-	var ph := HBoxContainer.new()
-	ph.add_theme_constant_override("separation", 12)
-	pc.add_child(ph)
-	var pi := VBoxContainer.new()
-	pi.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	ph.add_child(pi)
-	var cur_p: Dictionary = GameState.POWER_TIERS[GameState.power_tier]
-	var pt := Label.new()
-	pt.text = tr("Sicherungskasten & Transformator: %s") % tr(str(cur_p["label"]))
-	pt.add_theme_font_size_override("font_size", 15)
-	pt.modulate = Color(0.10, 0.12, 0.16)
-	pi.add_child(pt)
-	var pd := Label.new()
-	pd.text = tr("Erhöht das Watt-Limit vor Sicherungs-Blackouts & gibt +2 Steckdosen (Verlängerungskabel) am Sicherungskasten.")
-	pd.add_theme_font_size_override("font_size", 12)
-	pd.modulate = Color(0.36, 0.40, 0.46)
-	pi.add_child(pd)
-	var pbtn := Button.new()
-	pbtn.custom_minimum_size = Vector2(210, 38)
-	if GameState.power_fuse_stock > 0:
-		pbtn.text = tr("Im Lager: am Kasten in F2 einsetzen")
-		pbtn.disabled = true
-		_style_win_btn(pbtn, Color(0.88, 0.90, 0.93), Color(0.76, 0.79, 0.82), Color(0.32, 0.36, 0.42))
-	elif GameState.is_power_fuse_on_way():
-		pbtn.text = tr("Unterwegs mit dem Lieferwagen")
-		pbtn.disabled = true
-		_style_win_btn(pbtn, Color(0.88, 0.90, 0.93), Color(0.76, 0.79, 0.82), Color(0.32, 0.36, 0.42))
-	elif GameState.power_tier + 1 < GameState.POWER_TIERS.size():
-		var np: Dictionary = GameState.POWER_TIERS[GameState.power_tier + 1]
-		var can_afford := GameState.money >= float(np["cost"])
-		pbtn.text = "$%d" % int(np["cost"])
-		_style_win_btn(pbtn, Color(0.12, 0.56, 0.32) if can_afford else Color(0.84, 0.86, 0.89), Color(0.08, 0.44, 0.24), Color.WHITE if can_afford else Color(0.45, 0.48, 0.52))
-		pbtn.pressed.connect(_open_power_overlay)
-	else:
-		pbtn.text = tr("Max. Strom-Stufe")
-		pbtn.disabled = true
-		_style_win_btn(pbtn, Color(0.88, 0.90, 0.93), Color(0.76, 0.79, 0.82), Color(0.32, 0.36, 0.42))
-	ph.add_child(pbtn)
-
-	# 3. Hall B & C
-	var rc := _make_light_card(Color.WHITE, Color(0.80, 0.84, 0.89), 7, 14, 12)
-	content.add_child(rc)
-	var rh := HBoxContainer.new()
-	rh.add_theme_constant_override("separation", 12)
-	rc.add_child(rh)
-	var ri := VBoxContainer.new()
-	ri.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	rh.add_child(ri)
-	var htitle := tr("Gebäude-Ausbau: Garage (Stufe 1/3)")
-	var hdesc := tr("Öffnet HALLE B (+63 m² Doppelboden-Serverraum).")
-	if GameState.room_level == 1:
-		htitle = tr("Gebäude-Ausbau: Garage + Halle B (Stufe 2/3)")
-		hdesc = tr("Öffnet HALLE C — ENTERPRISE RECHENZENTRUM (+81 m²) mit eigenem Strom- & Glasfaserbus!")
-	elif GameState.room_level >= 2:
-		htitle = tr("Gebäude-Ausbau: Vollausbau (3/3 Hallen)")
-		hdesc = tr("Alle Rechenzentrums-Hallen sind vollständig freigeschaltet!") + "\n" + GameState.get_company_goal_text()
-	var rt_l := Label.new()
-	rt_l.text = htitle
-	rt_l.add_theme_font_size_override("font_size", 15)
-	rt_l.modulate = Color(0.10, 0.12, 0.16)
-	ri.add_child(rt_l)
-	var rd_l := Label.new()
-	rd_l.text = hdesc
-	rd_l.add_theme_font_size_override("font_size", 12)
-	rd_l.modulate = Color(0.36, 0.40, 0.46)
-	ri.add_child(rd_l)
-	var rbtn := Button.new()
-	rbtn.custom_minimum_size = Vector2(210, 38)
-	if GameState.room_level < 2:
-		var rcost := GameState.HALL_B_COST if GameState.room_level == 0 else GameState.HALL_C_COST
-		rbtn.text = (tr("Halle B ($%d)") if GameState.room_level == 0 else tr("Halle C ($%d)")) % rcost
-		rbtn.disabled = GameState.money < float(rcost)
-		_style_win_btn(rbtn, Color(0.10, 0.48, 0.84) if not rbtn.disabled else Color(0.84, 0.86, 0.89), Color(0.08, 0.38, 0.70), Color.WHITE if not rbtn.disabled else Color(0.45, 0.48, 0.52))
-		rbtn.pressed.connect(_open_hall_overlay)
-	else:
-		rbtn.text = "Alle Hallen offen"
-		rbtn.disabled = true
-		_style_win_btn(rbtn, Color(0.88, 0.90, 0.93), Color(0.76, 0.79, 0.82), Color(0.32, 0.36, 0.42))
-	rh.add_child(rbtn)
-
-	# 3b. Neuer Großstandort HALLE NORD (240 m² / 20 x 12 m) — ab Firmenstufe 3 kaufbar + Teleport & Lieferziel!
-	var hn_owned := GameState.halle_nord_owned
-	var hn_lvl_ok := GameState.get_company_level() >= GameState.HALLE_NORD_REQ_LEVEL
-	var hn_c := _make_light_card(
-		Color(0.93, 0.98, 0.94) if hn_owned else Color(0.97, 0.98, 1.0),
-		Color(0.26, 0.68, 0.40) if hn_owned else Color(0.42, 0.62, 0.88),
-		7, 14, 12
-	)
-	content.add_child(hn_c)
-	var hnv := VBoxContainer.new()
-	hnv.add_theme_constant_override("separation", 8)
-	hn_c.add_child(hnv)
-	var hnh := HBoxContainer.new()
-	hnh.add_theme_constant_override("separation", 12)
-	hnv.add_child(hnh)
-	var hni := VBoxContainer.new()
-	hni.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	hnh.add_child(hni)
-	var hnt := Label.new()
-	hnt.text = tr("Standort 2: Großstandort HALLE NORD (20 × 12 m = 240 m²)") + (tr("  •  AKTIV") if hn_owned else "")
-	hnt.add_theme_font_size_override("font_size", 15)
-	hnt.modulate = Color(0.10, 0.42, 0.22) if hn_owned else Color(0.10, 0.14, 0.22)
-	hni.add_child(hnt)
-	var hnd := Label.new()
-	hnd.text = tr("Platz für 16+ Racks, eigener 8.500 W Schwerlast-Strombus (16 Dosen), 10G-Fiber-Switch (16 Ports), eigene Lieferzone & 2. Management-PC. Hin & her teleportieren jederzeit mit [T] oder am Shuttle-Terminal [E]!")
-	hnd.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	hnd.add_theme_font_size_override("font_size", 12)
-	hnd.modulate = Color(0.32, 0.36, 0.44)
-	hni.add_child(hnd)
-
-	var hn_btn := Button.new()
-	hn_btn.custom_minimum_size = Vector2(210, 38)
-	if hn_owned:
-		hn_btn.text = tr("⚡ Jetzt teleportieren [T]")
-		_style_win_btn(hn_btn, Color(0.12, 0.54, 0.34), Color(0.08, 0.42, 0.26), Color.WHITE)
-		hn_btn.pressed.connect(func():
-			SfxManager.play("click", -10.0)
-			close_requested.emit()
-			var lp := get_tree().get_first_node_in_group("local_player")
-			if lp != null and lp.has_method("teleport_between_sites"):
-				lp.call("teleport_between_sites")
-		)
-	elif not hn_lvl_ok:
-		hn_btn.text = tr("🔒 Ab Firmenstufe %d") % GameState.HALLE_NORD_REQ_LEVEL
-		hn_btn.disabled = true
-		_style_win_btn(hn_btn, Color(0.84, 0.86, 0.89), Color(0.74, 0.76, 0.80), Color(0.45, 0.48, 0.52))
-	else:
-		hn_btn.text = tr("Kaufen ($%d)") % GameState.HALLE_NORD_COST
-		hn_btn.disabled = GameState.money < float(GameState.HALLE_NORD_COST)
-		_style_win_btn(hn_btn, Color(0.10, 0.48, 0.84) if not hn_btn.disabled else Color(0.84, 0.86, 0.89), Color(0.08, 0.38, 0.70), Color.WHITE if not hn_btn.disabled else Color(0.45, 0.48, 0.52))
-		hn_btn.pressed.connect(func():
-			SfxManager.play("click", -10.0)
-			GameState.request_buy_halle_nord()
-			_refresh_all()
-		)
-	hnh.add_child(hn_btn)
-
-	if hn_owned:
-		var del_row := HBoxContainer.new()
-		del_row.add_theme_constant_override("separation", 8)
-		hnv.add_child(del_row)
-		var del_lbl := Label.new()
-		del_lbl.text = tr("Aktuelles Lieferziel für Shop-Bestellungen:")
-		del_lbl.add_theme_font_size_override("font_size", 12)
-		del_lbl.modulate = Color(0.20, 0.28, 0.36)
-		del_row.add_child(del_lbl)
-		for site_spec in [["garage", "Start-Garage"], ["halle_nord", "Halle Nord (240 m²)"]]:
-			var sid := str(site_spec[0])
-			var slbl := str(site_spec[1])
-			var sb := Button.new()
-			sb.text = slbl
-			sb.custom_minimum_size = Vector2(150, 28)
-			var is_sel := (GameState.delivery_target_site == sid)
-			_style_win_btn(sb, Color(0.10, 0.46, 0.82) if is_sel else Color(0.90, 0.92, 0.95), Color(0.08, 0.36, 0.68), Color.WHITE if is_sel else Color(0.18, 0.22, 0.28))
-			sb.pressed.connect(func():
-				SfxManager.play("click", -12.0)
-				GameState.request_set_delivery_site(sid)
-				_refresh_all()
-			)
-			del_row.add_child(sb)
-
-	# 3d. Sichtbarer Gebäude-Ausbau mit Live-Bautrupp (PV, Diesel, Pförtnerhaus, NOC, Chiller, Kaltgang)
+	# 3d. Sichtbarer Gebäude-Ausbau mit Bautrupp, je PC nur die Ausbauten dieses Standorts
+	var site := "halle_nord" if at_nord else "garage"
 	var bupg_card := _make_light_card(Color(0.95, 0.98, 1.0), Color(0.24, 0.54, 0.82), 7, 14, 12)
+	if at_nord and not GameState.halle_nord_owned:
+		bupg_card.visible = false
 	content.add_child(bupg_card)
 	var buv := VBoxContainer.new()
 	buv.add_theme_constant_override("separation", 8)
 	bupg_card.add_child(buv)
 	var bu_t := Label.new()
-	bu_t.text = tr("🚧 Gebäude-Ausbau & Live-Bautrupp (Sichtbare Erweiterungen)")
+	bu_t.text = tr("🚧 Ausbau Halle Nord") if at_nord else tr("🚧 Ausbau Garage")
 	bu_t.add_theme_font_size_override("font_size", 15)
 	bu_t.modulate = Color(0.08, 0.28, 0.54)
 	buv.add_child(bu_t)
 	var bu_sub := Label.new()
-	bu_sub.text = tr("Nach dem Kauf rückt ein echter Bautrupp mit Transporter, Warnwesten & Gerüst an und errichtet das Upgrade live in 45–65 Sek.")
+	bu_sub.text = tr("Nach dem Kauf rückt ein Bautrupp an und baut den Ausbau sichtbar in etwa einer Minute.") + ("" if at_nord else "  " + tr("Ausbauten für Halle Nord gibt es am PC in Halle Nord."))
 	bu_sub.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	bu_sub.add_theme_font_size_override("font_size", 11.5)
 	bu_sub.modulate = Color(0.24, 0.30, 0.38)
 	buv.add_child(bu_sub)
 	for uid in GameState.BUILDING_UPGRADE_ORDER:
+		if GameState.upgrade_site(uid) != site:
+			continue
 		var um: Dictionary = GameState.BUILDING_UPGRADE_CATALOG[uid]
 		var built := GameState.has_building_upgrade(uid)
 		var building := GameState.is_construction_active(uid)
-		var req_nord := bool(um.get("req_nord", false))
-		var locked_nord := req_nord and not GameState.halle_nord_owned
+		var block := GameState.upgrade_block_reason(uid)
 		var price := int(um.get("price", 0))
 		var row := HBoxContainer.new()
 		row.add_theme_constant_override("separation", 10)
@@ -2374,8 +2178,8 @@ func _render_upgrades_app() -> void:
 			btn.text = tr("🚧 Bautrupp (%d s)") % rem
 			btn.disabled = true
 			_style_win_btn(btn, Color(0.98, 0.92, 0.76), Color(0.82, 0.56, 0.12), Color(0.48, 0.30, 0.04))
-		elif locked_nord:
-			btn.text = tr("🔒 Benötigt Halle Nord")
+		elif block != "":
+			btn.text = "🔒 " + block
 			btn.disabled = true
 			_style_win_btn(btn, Color(0.90, 0.91, 0.93), Color(0.70, 0.72, 0.76), Color(0.42, 0.44, 0.48))
 		else:
@@ -3235,3 +3039,229 @@ func _style_win_btn(btn: Button, bg: Color, border: Color, txt_col: Color) -> vo
 func _clear_children(node: Node) -> void:
 	for c in node.get_children():
 		c.queue_free()
+
+
+
+## Router, Netzanschluss und Halle B/C (nur am Garagen-PC).
+func _render_garage_connection_cards(content: VBoxContainer) -> void:
+	# 1. Internet Router Upgrade (Real Mbit/s & Gbit/s!)
+	var rt_idx := clampi(GameState.router_tier, 0, GameState.ROUTER_TIERS.size() - 1)
+	var cur_rt: Dictionary = GameState.ROUTER_TIERS[rt_idx]
+	var rt_lim := GameState.used_bandwidth_mbps > GameState.max_bandwidth_mbps
+	var rt_c := _make_light_card(Color(1.0, 0.95, 0.90) if rt_lim else Color.WHITE, Color(0.86, 0.48, 0.14) if rt_lim else Color(0.80, 0.84, 0.89), 7, 14, 12)
+	content.add_child(rt_c)
+	var rth := HBoxContainer.new()
+	rth.add_theme_constant_override("separation", 12)
+	rt_c.add_child(rth)
+
+	var rti := VBoxContainer.new()
+	rti.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	rth.add_child(rti)
+	var rtt := Label.new()
+	rtt.text = tr("Internet-Router (Stufe %d/%d): %s") % [rt_idx + 1, GameState.ROUTER_TIERS.size(), tr(str(cur_rt["label"]))]
+	rtt.add_theme_font_size_override("font_size", 15)
+	rtt.modulate = Color(0.68, 0.28, 0.06) if rt_lim else Color(0.10, 0.12, 0.16)
+	rti.add_child(rtt)
+	var rtd := Label.new()
+	var used_ports := GameState.count_cables_on("network", GameState.WALL_ROUTER_ID)
+	rtd.text = tr("Auslastung: %s / %s  •  LAN-Ports: %d/%d  •  DDoS-Schutz: +%.0f%%") % [
+		HardwareCatalog.format_speed_mbps(GameState.used_bandwidth_mbps), str(cur_rt["speed"]),
+		used_ports, int(cur_rt["ports"]), (float(cur_rt["ddos_mult"]) - 1.0) * 100.0
+	]
+	rtd.add_theme_font_size_override("font_size", 12)
+	rtd.modulate = Color(0.66, 0.24, 0.06) if rt_lim else Color(0.36, 0.40, 0.46)
+	rti.add_child(rtd)
+
+	var rtbtn := Button.new()
+	rtbtn.custom_minimum_size = Vector2(210, 38)
+	if rt_idx + 1 < GameState.ROUTER_TIERS.size():
+		var nxt: Dictionary = GameState.ROUTER_TIERS[rt_idx + 1]
+		rtbtn.text = "$%d" % int(nxt["cost"])
+		rtbtn.disabled = GameState.money < float(nxt["cost"])
+		_style_win_btn(rtbtn, Color(0.10, 0.48, 0.84) if not rtbtn.disabled else Color(0.84, 0.86, 0.89), Color(0.08, 0.38, 0.70), Color.WHITE if not rtbtn.disabled else Color(0.45, 0.48, 0.52))
+		rtbtn.pressed.connect(_open_router_overlay)
+	else:
+		rtbtn.text = "100 Gbit/s Max"
+		rtbtn.disabled = true
+		_style_win_btn(rtbtn, Color(0.88, 0.90, 0.93), Color(0.76, 0.79, 0.82), Color(0.32, 0.36, 0.42))
+	rth.add_child(rtbtn)
+
+	# 2. Power Tier
+	var pc := _make_light_card(Color.WHITE, Color(0.80, 0.84, 0.89), 7, 14, 12)
+	content.add_child(pc)
+	var ph := HBoxContainer.new()
+	ph.add_theme_constant_override("separation", 12)
+	pc.add_child(ph)
+	var pi := VBoxContainer.new()
+	pi.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	ph.add_child(pi)
+	var cur_p: Dictionary = GameState.POWER_TIERS[GameState.power_tier]
+	var pt := Label.new()
+	pt.text = tr("Sicherungskasten & Transformator: %s") % tr(str(cur_p["label"]))
+	pt.add_theme_font_size_override("font_size", 15)
+	pt.modulate = Color(0.10, 0.12, 0.16)
+	pi.add_child(pt)
+	var pd := Label.new()
+	pd.text = tr("Erhöht das Watt-Limit vor Sicherungs-Blackouts & gibt +2 Steckdosen (Verlängerungskabel) am Sicherungskasten.")
+	pd.add_theme_font_size_override("font_size", 12)
+	pd.modulate = Color(0.36, 0.40, 0.46)
+	pi.add_child(pd)
+	var pbtn := Button.new()
+	pbtn.custom_minimum_size = Vector2(210, 38)
+	if GameState.power_fuse_stock > 0:
+		pbtn.text = tr("Im Lager: am Kasten in F2 einsetzen")
+		pbtn.disabled = true
+		_style_win_btn(pbtn, Color(0.88, 0.90, 0.93), Color(0.76, 0.79, 0.82), Color(0.32, 0.36, 0.42))
+	elif GameState.is_power_fuse_on_way():
+		pbtn.text = tr("Unterwegs mit dem Lieferwagen")
+		pbtn.disabled = true
+		_style_win_btn(pbtn, Color(0.88, 0.90, 0.93), Color(0.76, 0.79, 0.82), Color(0.32, 0.36, 0.42))
+	elif GameState.power_tier + 1 < GameState.POWER_TIERS.size():
+		var np: Dictionary = GameState.POWER_TIERS[GameState.power_tier + 1]
+		var can_afford := GameState.money >= float(np["cost"])
+		pbtn.text = "$%d" % int(np["cost"])
+		_style_win_btn(pbtn, Color(0.12, 0.56, 0.32) if can_afford else Color(0.84, 0.86, 0.89), Color(0.08, 0.44, 0.24), Color.WHITE if can_afford else Color(0.45, 0.48, 0.52))
+		pbtn.pressed.connect(_open_power_overlay)
+	else:
+		pbtn.text = tr("Max. Strom-Stufe")
+		pbtn.disabled = true
+		_style_win_btn(pbtn, Color(0.88, 0.90, 0.93), Color(0.76, 0.79, 0.82), Color(0.32, 0.36, 0.42))
+	ph.add_child(pbtn)
+
+	# 3. Hall B & C
+	var rc := _make_light_card(Color.WHITE, Color(0.80, 0.84, 0.89), 7, 14, 12)
+	content.add_child(rc)
+	var rh := HBoxContainer.new()
+	rh.add_theme_constant_override("separation", 12)
+	rc.add_child(rh)
+	var ri := VBoxContainer.new()
+	ri.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	rh.add_child(ri)
+	var htitle := tr("Gebäude-Ausbau: Garage (Stufe 1/3)")
+	var hdesc := tr("Öffnet HALLE B (+63 m² Doppelboden-Serverraum).")
+	if GameState.room_level == 1:
+		htitle = tr("Gebäude-Ausbau: Garage + Halle B (Stufe 2/3)")
+		hdesc = tr("Öffnet HALLE C — ENTERPRISE RECHENZENTRUM (+81 m²) mit eigenem Strom- & Glasfaserbus!")
+	elif GameState.room_level >= 2:
+		htitle = tr("Gebäude-Ausbau: Vollausbau (3/3 Hallen)")
+		hdesc = tr("Alle Rechenzentrums-Hallen sind vollständig freigeschaltet!") + "\n" + GameState.get_company_goal_text()
+	var rt_l := Label.new()
+	rt_l.text = htitle
+	rt_l.add_theme_font_size_override("font_size", 15)
+	rt_l.modulate = Color(0.10, 0.12, 0.16)
+	ri.add_child(rt_l)
+	var rd_l := Label.new()
+	rd_l.text = hdesc
+	rd_l.add_theme_font_size_override("font_size", 12)
+	rd_l.modulate = Color(0.36, 0.40, 0.46)
+	ri.add_child(rd_l)
+	var rbtn := Button.new()
+	rbtn.custom_minimum_size = Vector2(210, 38)
+	if GameState.room_level < 2:
+		var rcost := GameState.HALL_B_COST if GameState.room_level == 0 else GameState.HALL_C_COST
+		rbtn.text = (tr("Halle B ($%d)") if GameState.room_level == 0 else tr("Halle C ($%d)")) % rcost
+		rbtn.disabled = GameState.money < float(rcost)
+		_style_win_btn(rbtn, Color(0.10, 0.48, 0.84) if not rbtn.disabled else Color(0.84, 0.86, 0.89), Color(0.08, 0.38, 0.70), Color.WHITE if not rbtn.disabled else Color(0.45, 0.48, 0.52))
+		rbtn.pressed.connect(_open_hall_overlay)
+	else:
+		rbtn.text = "Alle Hallen offen"
+		rbtn.disabled = true
+		_style_win_btn(rbtn, Color(0.88, 0.90, 0.93), Color(0.76, 0.79, 0.82), Color(0.32, 0.36, 0.42))
+	rh.add_child(rbtn)
+
+
+## Steht der eigene Spieler in Halle Nord (dann ist das der PC dort)?
+func _pc_at_nord() -> bool:
+	var lp := get_tree().get_first_node_in_group("local_player") as Node3D
+	return lp != null and HalleNordLayout.is_nord(lp.global_position)
+
+
+## Karte für Halle Nord: am Garagen-PC Kauf und Bau, am PC in Halle Nord der Zustand der Halle.
+func _render_halle_nord_card(content: VBoxContainer, at_nord: bool) -> void:
+	var owned := GameState.halle_nord_owned
+	var building := GameState.is_construction_active("upg_nord_hall")
+	var lvl_ok := GameState.get_company_level() >= GameState.HALLE_NORD_REQ_LEVEL
+	var card := _make_light_card(
+		Color(0.93, 0.98, 0.94) if owned else Color(0.97, 0.98, 1.0),
+		Color(0.26, 0.68, 0.40) if owned else Color(0.42, 0.62, 0.88), 7, 14, 12)
+	content.add_child(card)
+	var v := VBoxContainer.new()
+	v.add_theme_constant_override("separation", 8)
+	card.add_child(v)
+	var h := HBoxContainer.new()
+	h.add_theme_constant_override("separation", 12)
+	v.add_child(h)
+	var info := VBoxContainer.new()
+	info.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	h.add_child(info)
+	var n := HalleNordLayout.sections()
+	var title := Label.new()
+	var desc := Label.new()
+	if at_nord:
+		title.text = tr("Halle Nord  •  Abschnitt %d / 3 offen  •  %.1f °C") % [n, GameState.nord_room_temp]
+		desc.text = tr("Strom: %d W über %d Verteiler  •  Core-Switch: %d Ports  •  Eigene Raumtemperatur: Reihenkühler und Flüssigkühlung kühlen hier, der Kaltgang-Ausbau hilft zusätzlich.") % [
+			HalleNordLayout.WATTS_PER_SECTION * n, n, HalleNordLayout.core_ports(n)]
+	else:
+		title.text = tr("Standort 2: Halle Nord (24 × 14 m, 3 Abschnitte)") + (tr("  •  AKTIV") if owned else "")
+		desc.text = tr("Helle Rechenzentrumshalle mit Technikecke, Büro und eigenem PC. Abschnitt 1 ist dabei (%d W, 16 Steckdosen, 16 Ports), Abschnitt 2 und 3 baust du am PC in Halle Nord aus. Hin und zurück mit dem Shuttle [T].") % HalleNordLayout.WATTS_PER_SECTION
+	title.add_theme_font_size_override("font_size", 15)
+	title.modulate = Color(0.10, 0.42, 0.22) if owned else Color(0.10, 0.14, 0.22)
+	info.add_child(title)
+	desc.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	desc.add_theme_font_size_override("font_size", 12)
+	desc.modulate = Color(0.32, 0.36, 0.44)
+	info.add_child(desc)
+	var btn := Button.new()
+	btn.custom_minimum_size = Vector2(220, 38)
+	if owned:
+		btn.text = tr("🚐 Shuttle zur Garage [T]") if at_nord else tr("🚐 Shuttle nach Halle Nord [T]")
+		_style_win_btn(btn, Color(0.12, 0.54, 0.34), Color(0.08, 0.42, 0.26), Color.WHITE)
+		btn.pressed.connect(func():
+			SfxManager.play("click", -10.0)
+			close_requested.emit()
+			var lp := get_tree().get_first_node_in_group("local_player")
+			if lp != null and lp.has_method("teleport_between_sites"):
+				lp.call("teleport_between_sites")
+		)
+	elif building:
+		var rem := int(ceilf(float((GameState.active_constructions["upg_nord_hall"] as Dictionary).get("remaining", 0.0))))
+		btn.text = tr("🚧 Bautrupp baut (%d s)") % rem
+		btn.disabled = true
+		_style_win_btn(btn, Color(0.98, 0.92, 0.76), Color(0.82, 0.56, 0.12), Color(0.48, 0.30, 0.04))
+	elif not lvl_ok:
+		btn.text = tr("🔒 Ab Firmenstufe %d") % GameState.HALLE_NORD_REQ_LEVEL
+		btn.disabled = true
+		_style_win_btn(btn, Color(0.84, 0.86, 0.89), Color(0.74, 0.76, 0.80), Color(0.45, 0.48, 0.52))
+	else:
+		btn.text = tr("Kaufen ($%d)") % GameState.HALLE_NORD_COST
+		btn.disabled = GameState.money < float(GameState.HALLE_NORD_COST)
+		_style_win_btn(btn, Color(0.10, 0.48, 0.84) if not btn.disabled else Color(0.84, 0.86, 0.89), Color(0.08, 0.38, 0.70), Color.WHITE if not btn.disabled else Color(0.45, 0.48, 0.52))
+		btn.pressed.connect(func():
+			SfxManager.play("click", -10.0)
+			GameState.request_buy_halle_nord()
+			_refresh_all()
+		)
+	h.add_child(btn)
+	if not owned:
+		return
+	var del_row := HBoxContainer.new()
+	del_row.add_theme_constant_override("separation", 8)
+	v.add_child(del_row)
+	var del_lbl := Label.new()
+	del_lbl.text = tr("Lieferziel für Shop-Bestellungen:")
+	del_lbl.add_theme_font_size_override("font_size", 12)
+	del_lbl.modulate = Color(0.20, 0.28, 0.36)
+	del_row.add_child(del_lbl)
+	for site_spec in [["garage", tr("Garage")], ["halle_nord", tr("Halle Nord")]]:
+		var sid := str(site_spec[0])
+		var sb := Button.new()
+		sb.text = str(site_spec[1])
+		sb.custom_minimum_size = Vector2(150, 28)
+		var is_sel := (GameState.delivery_target_site == sid)
+		_style_win_btn(sb, Color(0.10, 0.46, 0.82) if is_sel else Color(0.90, 0.92, 0.95), Color(0.08, 0.36, 0.68), Color.WHITE if is_sel else Color(0.18, 0.22, 0.28))
+		sb.pressed.connect(func():
+			SfxManager.play("click", -12.0)
+			GameState.request_set_delivery_site(sid)
+			_refresh_all()
+		)
+		del_row.add_child(sb)

@@ -224,11 +224,12 @@ const HALL_C_BREAKER_ID := "hall_c_breaker"
 const HALL_C_ROUTER_ID := "hall_c_router"
 const HALL_NORD_BREAKER_ID := "hall_nord_breaker"
 const HALL_NORD_ROUTER_ID := "hall_nord_router"
+## Ein Stromverteiler je Abschnitt von Halle Nord (Abschnitt 1, 2, 3).
+const HALL_NORD_BREAKER_IDS: Array[String] = [HALL_NORD_BREAKER_ID, "hall_nord_breaker_2", "hall_nord_breaker_3"]
 
-const HALLE_NORD_COST := 8500
+const HALLE_NORD_COST := 12000
 const HALLE_NORD_REQ_LEVEL := 3
 const HALLE_NORD_ORIGIN := Vector3(0.0, 0.0, -320.0)
-const HALLE_NORD_EXTRA_WATTS := 8500
 const HALLE_NORD_EXTRA_MBPS := 10000.0
 
 const ITEM_CATALOG := {
@@ -1008,7 +1009,7 @@ const COMPANY_LEVEL_BENEFITS := {
 	},
 	3: {
 		"rev_mult": 1.14, "discount": 0.10, "fail_mult": 0.80, "delivery_bonus": 8, "max_contracts": 8,
-		"summary": "Pro-Rack (6U) & Großstandort Halle Nord (240 m²) freigeschaltet • +14% Einnahmen • -10% Kosten • 18t-LKW & 24 Plätze",
+		"summary": "Pro-Rack (6U) & Halle Nord (24 × 14 m) freigeschaltet • +14% Einnahmen • -10% Kosten • 18t-LKW & 24 Plätze",
 	},
 	4: {
 		"rev_mult": 1.20, "discount": 0.13, "fail_mult": 0.76, "delivery_bonus": 10, "max_contracts": 10,
@@ -1131,22 +1132,22 @@ const BUILDING_UPGRADE_CATALOG := {
 		"desc": "Schwerlast-Dieselaggregat im Schallschutz-Container inkl. Kabelbrücke zur Halle.",
 	},
 	"upg_security_gate": {
-		"name": "Sicherheits-Pförtnerhaus, Schranke & Pylon",
+		"name": "Pförtnerhaus & Schranke",
 		"price": 2400,
 		"duration": 45.0,
 		"req_nord": true,
 		"icon": "🛡",
 		"effect": "+12 % Firmen-Ruf & 24/7-Zugangskontrolle mit Pförtner-NPC",
-		"desc": "Verglastes Torhaus mit automatischer Schranke, Ausweis-Stele & Firmen-Pylon.",
+		"desc": "Verglastes Pförtnerhaus an der Einfahrt mit automatischer Schranke.",
 	},
 	"upg_noc_suite": {
-		"name": "Verglaster NOC-Leitstand & 3-Screen-Videowall",
+		"name": "NOC-Leitstand im Büro",
 		"price": 3400,
 		"duration": 55.0,
 		"req_nord": true,
 		"icon": "🖥",
 		"effect": "+15 % Support-Einnahmen & automatische Wartungs-Frühwarnung",
-		"desc": "Stahl-Glas-Leitstand mit 3-Monitor-Telemetrie-Wand & Kaffeebar in Halle Nord.",
+		"desc": "3-Monitor-Telemetrie-Wand über dem PC und Kaffeebar im Büro von Halle Nord.",
 	},
 	"upg_roof_chillers": {
 		"name": "Dach-Rückkühlwerk & Außen-Chiller-Farm",
@@ -1163,13 +1164,46 @@ const BUILDING_UPGRADE_CATALOG := {
 		"duration": 45.0,
 		"req_nord": true,
 		"icon": "💨",
-		"effect": "+22 % zusätzliche Kühleffizienz & digitale Gang-Temperaturanzeigen",
-		"desc": "Leuchtende Kaltgang-Führung, Glas-Einhausungsportale & hängende Temp-Displays.",
+		"effect": "+22 % Kühlleistung der Kühler in Halle Nord & Gang-Temperaturanzeigen",
+		"desc": "LED-Bodenführung in den Kaltgängen und Temperaturanzeigen an der Rückwand.",
+	},
+	# ---- Halle Nord selbst: Bau nach dem Kauf und die Abschnitte 2 und 3 (nur am PC in Halle Nord)
+	"upg_nord_hall": {
+		"name": "Halle Nord (Abschnitt 1)",
+		"price": 12000,
+		"duration": 75.0,
+		"req_nord": true,
+		"hidden": true,
+		"icon": "🏭",
+		"effect": "Halle mit Technikecke, Büro und PC",
+		"desc": "Bautrupp errichtet Halle Nord.",
+	},
+	"upg_nord_section_2": {
+		"name": "Halle Nord: Abschnitt 2",
+		"price": 9000,
+		"duration": 55.0,
+		"req_nord": true,
+		"req_level": 4,
+		"icon": "🧱",
+		"effect": "+112 m² Stellfläche, eigener Verteiler (12 Steckdosen, +4.500 W), +12 Ports am Core-Switch",
+		"desc": "Bautrupp nimmt die Trennwand raus und richtet den mittleren Abschnitt ein.",
+	},
+	"upg_nord_section_3": {
+		"name": "Halle Nord: Abschnitt 3",
+		"price": 9000,
+		"duration": 55.0,
+		"req_nord": true,
+		"req_level": 6,
+		"requires": "upg_nord_section_2",
+		"icon": "🧱",
+		"effect": "+112 m² Stellfläche, eigener Verteiler (12 Steckdosen, +4.500 W), +12 Ports am Core-Switch",
+		"desc": "Bautrupp nimmt die letzte Trennwand raus und richtet den östlichen Abschnitt ein.",
 	},
 }
 const BUILDING_UPGRADE_ORDER: Array[String] = [
-	"upg_pv_solar", "upg_roof_chillers", "upg_security_gate",
-	"upg_noc_suite", "upg_cold_aisle_pro", "upg_diesel_gen", "upg_district_heat", "upg_exterior_lights",
+	"upg_pv_solar", "upg_roof_chillers", "upg_district_heat", "upg_exterior_lights",
+	"upg_nord_section_2", "upg_nord_section_3",
+	"upg_noc_suite", "upg_cold_aisle_pro", "upg_diesel_gen", "upg_security_gate",
 ]
 ## Anteil der Defekte ohne sichtbare Spuren; die findet man nur mit POST-Code und Messgerät.
 const FAULT_HIDDEN_CHANCE := 0.5
@@ -1220,6 +1254,8 @@ var electricity_rate: float = ELECTRICITY_RATE_PER_KWH
 var last_bill_rate: float = ELECTRICITY_RATE_PER_KWH
 
 var room_temp: float = 22.0
+## Eigene Raumtemperatur von Halle Nord.
+var nord_room_temp: float = 22.0
 ## Countdown bis zum nächsten Wasserschaden (nur auf dem Host, wird nicht gespeichert).
 var water_leak_cooldown: float = randf_range(WATER_LEAK_MIN_S, WATER_LEAK_MAX_S)
 var total_watts: int = 0
@@ -1506,6 +1542,7 @@ func initialize_new_world(save_id: String = "mein_datacenter", save_name: String
 	company_milestones_reached = 0
 	company_level = 1
 	room_temp = 22.0
+	nord_room_temp = 22.0
 	max_watts = int(POWER_TIERS[0]["watts"])
 	max_bandwidth_cu = int(ROUTER_TIERS[0]["max_cu"])
 	raw_compute = 0
@@ -1827,6 +1864,7 @@ func build_snapshot() -> Dictionary:
 		"electricity_rate": electricity_rate,
 		"last_bill_rate": last_bill_rate,
 		"room_temp": room_temp,
+		"nord_room_temp": nord_room_temp,
 		"total_watts": total_watts,
 		"max_watts": max_watts,
 		"total_compute": total_compute,
@@ -1956,6 +1994,7 @@ func _apply_snapshot(snap: Dictionary) -> void:
 	electricity_rate = clampf(float(snap.get("electricity_rate", ELECTRICITY_RATE_PER_KWH)), ELECTRICITY_RATE_MIN, ELECTRICITY_RATE_MAX)
 	last_bill_rate = clampf(float(snap.get("last_bill_rate", ELECTRICITY_RATE_PER_KWH)), ELECTRICITY_RATE_MIN, ELECTRICITY_RATE_MAX)
 	room_temp = float(snap.get("room_temp", 22.0))
+	nord_room_temp = float(snap.get("nord_room_temp", room_temp))
 	total_watts = int(snap.get("total_watts", 0))
 	max_watts = int(snap.get("max_watts", 2400))
 	total_compute = int(snap.get("total_compute", 0))
@@ -2718,18 +2757,12 @@ func can_place_wall_unit_at(pos: Vector3, rot_y: float) -> bool:
 
 
 func can_place_at(pos: Vector3, ignore_rack_id: String = "") -> bool:
-	if halle_nord_owned and pos.z < -100.0:
-		var lz := pos.z - HALLE_NORD_ORIGIN.z
-		if pos.x < -9.3 or pos.x > 9.3 or lz < -5.2 or lz > 5.2:
+	if pos.z < -100.0:
+		if not halle_nord_owned:
 			return false
-		# Verglaster NOC-Leitstand, Schaltanlage/Core-Rack, Shuttle-Kiosk & Rolltor freihalten
-		if lz < -2.3 and pos.x > 4.3:
-			return false
-		if lz < -4.5 and pos.x < -3.7:
-			return false
-		if lz < -4.3 and absf(pos.x - 3.2) < 0.9:
-			return false
-		if lz > 4.0 and absf(pos.x) < 2.3:
+		var l := HalleNordLayout.local(pos)
+		# Technikecke, Büro, Kiosk, Verteiler und Wege vor Tor und Türen bleiben frei
+		if not HalleNordLayout.can_stand(Vector2(l.x, l.z), Vector2(0.42, 0.42)):
 			return false
 	else:
 		var max_x := 4.8 if room_level == 0 else (11.7 if room_level == 1 else 20.6)
@@ -2817,6 +2850,12 @@ func get_company_value() -> int:
 		upgrades += float(HALL_B_COST)
 	if room_level >= 2:
 		upgrades += float(HALL_C_COST)
+	# Halle Nord und ihre Abschnitte zählen wie Halle B/C zum Firmenwert (auch während des Baus).
+	if halle_nord_owned or active_constructions.has("upg_nord_hall"):
+		upgrades += float(HALLE_NORD_COST)
+	for sec_uid in ["upg_nord_section_2", "upg_nord_section_3"]:
+		if building_upgrades.has(sec_uid) or active_constructions.has(sec_uid):
+			upgrades += float((BUILDING_UPGRADE_CATALOG[sec_uid] as Dictionary)["price"])
 
 	return int(roundf(money + hardware * COMPANY_HARDWARE_VALUE_FACTOR + upgrades))
 
@@ -3110,13 +3149,19 @@ func _run_simulation_step(dt: float) -> void:
 		overload_timer = maxf(0.0, overload_timer - dt * 1.5)
 
 	# 3. Room & Rack Temperature + Cooling
+	# Garage (mit Halle B/C) und Halle Nord haben je eine eigene Raumtemperatur.
 	var total_heat_gen := 0.0
 	var total_cooling := 0.0
+	var nord_heat_gen := 0.0
+	var nord_cooling := 0.0
 	# Ladende und speisende Batterien geben Wärme ab
 	for uid in ups_units.keys():
 		var uh: Dictionary = ups_units[uid]
 		if bool(uh.get("discharging", false)) or (breaker_on and bool(uh.get("connected", false)) and float(uh["charge"]) < 99.5):
-			total_heat_gen += float(get_ups_spec(uh)["heat"])
+			if HalleNordLayout.is_nord(uh.get("pos", Vector3.ZERO) as Vector3):
+				nord_heat_gen += float(get_ups_spec(uh)["heat"])
+			else:
+				total_heat_gen += float(get_ups_spec(uh)["heat"])
 
 	for rid in racks.keys():
 		var rack: Dictionary = racks[rid]
@@ -3136,11 +3181,27 @@ func _run_simulation_step(dt: float) -> void:
 				rack_heat += float(stats["heat"])
 				active_modules += 1
 		var effective_rack_heat := maxf(0.0, rack_heat - rack_passive_cool)
-		total_heat_gen += effective_rack_heat
+		var rack_nord := HalleNordLayout.is_nord(rack["pos"] as Vector3)
+		if rack_nord:
+			nord_heat_gen += effective_rack_heat
+		else:
+			total_heat_gen += effective_rack_heat
 		var local_hot_spot := float(maxi(0, active_modules - 1)) * 2.2 - rack_passive_cool * 0.6 - _get_floor_cooler_relief(rack["pos"]) - DecorManager.aisle_relief(rack["pos"])
-		var target_rack_temp := clampf(room_temp + local_hot_spot + (14.0 if _rack_has_fire(rack) else 0.0), 16.0, 105.0)
+		var target_rack_temp := clampf((nord_room_temp if rack_nord else room_temp) + local_hot_spot + (14.0 if _rack_has_fire(rack) else 0.0), 16.0, 105.0)
 		rack["temp"] = move_toward(float(rack["temp"]), target_rack_temp, dt * 3.0)
 
+	# Kaltgang-Portale (Einrichtung) helfen dort, wo sie stehen.
+	var gates_garage := 0
+	var gates_nord := 0
+	for did in decor_items.keys():
+		var gd: Dictionary = decor_items[did]
+		if str(gd.get("item_type", "")) == "prop_cold_aisle_gate":
+			if HalleNordLayout.is_nord(gd.get("pos", Vector3.ZERO) as Vector3):
+				gates_nord += 1
+			else:
+				gates_garage += 1
+	# Kaltgang-Ausbau von Halle Nord wirkt nur in Halle Nord.
+	var nord_bonus := 1.0 + airflow_bonus + minf(0.18, float(gates_nord) * 0.06) + (0.22 if has_building_upgrade("upg_cold_aisle_pro") else 0.0)
 	var heat_pump_capacity := 0.0
 	var indoor_units := 0
 	for cid in coolers.keys():
@@ -3151,19 +3212,16 @@ func _run_simulation_step(dt: float) -> void:
 		elif is_floor_cooler_type(ctype):
 			# Reihenkühler und Flüssigkühlung wirken direkt, ohne Innengerät.
 			if bool(cooler["powered"]):
-				total_cooling += absf(float(ITEM_CATALOG[ctype]["heat"])) * (1.0 + airflow_bonus)
+				if HalleNordLayout.is_nord(cooler["pos"] as Vector3):
+					nord_cooling += absf(float(ITEM_CATALOG[ctype]["heat"])) * nord_bonus
+				else:
+					total_cooling += absf(float(ITEM_CATALOG[ctype]["heat"])) * (1.0 + airflow_bonus)
 		elif bool(cooler["powered"]):
 			heat_pump_capacity += absf(float(ITEM_CATALOG[ctype]["heat"])) * OutdoorManager.unit_factor(str(cid))
-	# Die Kälte der Außengeräte kommt nur über ein Goldis Innengerät in den Raum.
+	# Die Kälte der Außengeräte kommt nur über ein Goldis Innengerät in den Raum (nur Garage).
 	# Kaltgang/Warmgang-Airflow steigert die reale Kühlleistung um bis zu +30 %!
 	if indoor_units > 0:
-		var extra_cool_bonus := 0.22 if has_building_upgrade("upg_cold_aisle_pro") else 0.0
-		var gate_count := 0
-		for did in decor_items.keys():
-			if str((decor_items[did] as Dictionary).get("item_type", "")) == "prop_cold_aisle_gate":
-				gate_count += 1
-		extra_cool_bonus += minf(0.18, float(gate_count) * 0.06)
-		total_cooling += heat_pump_capacity * (1.0 + airflow_bonus + extra_cool_bonus)
+		total_cooling += heat_pump_capacity * (1.0 + airflow_bonus + minf(0.18, float(gates_garage) * 0.06))
 
 	# Slight natural night cooling (-3°C at night) + dynamisches Wetter + Dach-Rückkühlwerk (-4.5°C)!
 	var night_bonus := -3.0 if (time_of_day < 0.22 or time_of_day > 0.80) else 0.0
@@ -3172,6 +3230,9 @@ func _run_simulation_step(dt: float) -> void:
 	weather_temp_delta += OutdoorManager.season_temp()
 	var target_room := clampf(22.0 + night_bonus + chiller_farm_bonus + weather_temp_delta + total_heat_gen - total_cooling, 15.0, 96.0)
 	room_temp = move_toward(room_temp, target_room, dt * 2.0)
+	# Halle Nord ist größer: dieselbe Abwärme heizt sie etwas weniger auf.
+	var target_nord := clampf(22.0 + night_bonus + chiller_farm_bonus + weather_temp_delta + (nord_heat_gen - nord_cooling) * 0.85, 15.0, 96.0)
+	nord_room_temp = move_toward(nord_room_temp, target_nord, dt * 2.0)
 
 	# 4. Hardware Faults & Fires — DRASTISCH seltener (~80 % weniger Ausfälle!) + Staub/Wartungs-Simulation!
 	var racks_dirty := false
@@ -3881,6 +3942,11 @@ func _turn_room(pos: Vector3, half: Vector2, rot: float) -> bool:
 		for k in DecorSpec.corners(pos, rot, half * 2.0):
 			if k.x < WALL_FACE_WEST_X or k.x > _interior_max_x() or k.y < WALL_FACE_NORTH_Z or k.y > WALL_FACE_SOUTH_Z:
 				return false
+	else:
+		var oz := HALLE_NORD_ORIGIN.z
+		for k in DecorSpec.corners(pos, rot, half * 2.0):
+			if k.x < -HalleNordLayout.WALL_X or k.x > HalleNordLayout.open_max_x() or k.y < oz - HalleNordLayout.WALL_Z or k.y > oz + HalleNordLayout.WALL_Z:
+				return false
 	for did in decor_items.keys():
 		var d: Dictionary = decor_items[did]
 		var dt := str(d.get("item_type", ""))
@@ -3902,10 +3968,14 @@ func _clamp_drop_pos(drop_pos: Vector3) -> Vector3:
 	if drop_pos.z > -60.0 and OutdoorWorld.PLOT.grow(-0.5).has_point(Vector2(drop_pos.x, drop_pos.z)) and not OutdoorWorld.HALL.grow(0.25).has_point(Vector2(drop_pos.x, drop_pos.z)):
 		return Vector3(drop_pos.x, 0.0, drop_pos.z)
 	if halle_nord_owned and drop_pos.z < -100.0:
-		min_x = -9.5
-		max_x = 9.5
-		min_z = HALLE_NORD_ORIGIN.z - 5.5
+		min_x = -HalleNordLayout.WALL_X + 0.3
+		max_x = HalleNordLayout.open_max_x() - 0.3
+		min_z = HALLE_NORD_ORIGIN.z - HalleNordLayout.WALL_Z + 0.3
 		max_z = HALLE_NORD_ORIGIN.z + 12.5
+		# Vor der Halle nur im Hof vor dem Rolltor, nicht neben die Halle
+		if drop_pos.z > HALLE_NORD_ORIGIN.z + HalleNordLayout.SHELL_Z:
+			min_x = HalleNordLayout.DOOR_X - 4.0
+			max_x = HalleNordLayout.DOOR_X + 4.0
 	var clamped := Vector3(clampf(drop_pos.x, min_x, max_x), 0.0, clampf(drop_pos.z, min_z, max_z))
 	# Verhindert, dass abgelegte Items in einem Server-Rack oder Gerät verschwinden!
 	return _push_drop_outside_obstacles(clamped, min_x, max_x, min_z, max_z)
@@ -4491,7 +4561,10 @@ func _rpc_req_release_cart(pos: Vector3, rot_y: float) -> void:
 		return
 	var cid := str(cart["id"])
 	if halle_nord_owned and pos.z < -100.0:
-		carts[cid]["pos"] = Vector3(clampf(pos.x, -9.4, 9.4), 0.0, clampf(pos.z, HALLE_NORD_ORIGIN.z - 5.2, HALLE_NORD_ORIGIN.z + 12.0))
+		var in_hall := pos.z < HALLE_NORD_ORIGIN.z + HalleNordLayout.SHELL_Z
+		var lo_x := -HalleNordLayout.WALL_X + 0.4 if in_hall else HalleNordLayout.DOOR_X - 4.0
+		var hi_x := HalleNordLayout.open_max_x() - 0.4 if in_hall else HalleNordLayout.DOOR_X + 4.0
+		carts[cid]["pos"] = Vector3(clampf(pos.x, lo_x, hi_x), 0.0, clampf(pos.z, HALLE_NORD_ORIGIN.z - HalleNordLayout.WALL_Z + 0.4, HALLE_NORD_ORIGIN.z + 12.0))
 	else:
 		var max_x := 4.9 if room_level == 0 else (11.8 if room_level == 1 else 20.8)
 		carts[cid]["pos"] = Vector3(clampf(pos.x, -4.9, max_x), 0.0, clampf(pos.z, -3.9, 9.2))
@@ -4852,6 +4925,7 @@ func _broadcast_sim_tick() -> void:
 		"electricity_rate": electricity_rate,
 		"last_bill_rate": last_bill_rate,
 		"room_temp": room_temp,
+		"nord_room_temp": nord_room_temp,
 		"total_watts": total_watts,
 		"max_watts": max_watts,
 		"total_compute": total_compute,
@@ -4943,6 +5017,7 @@ func _rpc_sync_sim_tick(packet: Dictionary) -> void:
 		last_bill_rate = float(packet.get("last_bill_rate", ELECTRICITY_RATE_PER_KWH))
 		last_daily_bill = int(packet["last_daily_bill"])
 		room_temp = float(packet["room_temp"])
+		nord_room_temp = float(packet.get("nord_room_temp", nord_room_temp))
 		total_watts = int(packet["total_watts"])
 		max_watts = int(packet["max_watts"])
 		total_compute = int(packet["total_compute"])
@@ -6317,7 +6392,7 @@ func _rpc_broadcast_player_emote(peer_id: int, emote_id: String) -> void:
 	player_emote_received.emit(peer_id, emote_id)
 
 
-# --- Großstandort Halle Nord (240 m², ab Firmen-Level 3, eigene Strom-/Fiber-/Lieferzone) ---
+# --- Halle Nord (24 × 14 m, ab Firmenstufe 3, Kauf + Bautrupp, 3 Abschnitte) ---
 
 func get_discounted_price(base_price: float) -> int:
 	return maxi(1, int(roundf(base_price * get_level_discount_mult())))
@@ -6334,19 +6409,20 @@ func _rpc_req_buy_halle_nord() -> void:
 	var peer_id := _get_sender_id()
 	if _deny_build(peer_id, "expand"):
 		return
-	if halle_nord_owned:
+	if halle_nord_owned or is_construction_active("upg_nord_hall"):
 		return
 	if get_company_level() < HALLE_NORD_REQ_LEVEL or money < float(HALLE_NORD_COST):
 		_rpc_play_sfx.rpc_id(peer_id, "error")
 		return
 	money -= float(HALLE_NORD_COST)
-	halle_nord_owned = true
-	_recalculate_networks_and_metrics()
-	_rpc_sync_halle_nord.rpc(true, delivery_target_site)
+	# Erst baut der Bautrupp, die Schlüsselübergabe kommt in _tick_constructions().
+	var dur := float((BUILDING_UPGRADE_CATALOG["upg_nord_hall"] as Dictionary)["duration"])
+	active_constructions["upg_nord_hall"] = {"remaining": dur, "duration": dur, "site": "halle_nord"}
+	_broadcast_building_upgrades()
 	_broadcast_sim_tick()
 	_rpc_play_sfx.rpc("upgrade")
-	post_event_f("🏭 %s hat Großstandort HALLE NORD (240 m²) gekauft! Drücke [T] oder nutze das Shuttle-Terminal zum Teleportieren.", [
-		NetworkManager.get_player_name(peer_id)
+	post_event_f("🏗 %s hat HALLE NORD gekauft! Der Bautrupp baut jetzt (ca. %d s), danach gibt es die Schlüssel.", [
+		NetworkManager.get_player_name(peer_id), int(roundf(dur))
 	], "good")
 
 
@@ -6376,6 +6452,42 @@ func has_building_upgrade(uid: String) -> bool:
 	return bool(building_upgrades.get(uid, false))
 
 
+## Standort eines Gebäude-Ausbaus: "halle_nord" oder "garage".
+func upgrade_site(uid: String) -> String:
+	return "halle_nord" if bool((BUILDING_UPGRADE_CATALOG.get(uid, {}) as Dictionary).get("req_nord", false)) else "garage"
+
+
+## Warum ein Ausbau gerade nicht geht ("" = geht). Geld prüft der Aufrufer selbst.
+func upgrade_block_reason(uid: String) -> String:
+	var meta: Dictionary = BUILDING_UPGRADE_CATALOG.get(uid, {})
+	if meta.is_empty() or bool(meta.get("hidden", false)):
+		return "unbekannt"
+	if bool(meta.get("req_nord", false)) and not halle_nord_owned:
+		return tr("Benötigt Halle Nord")
+	var lvl := int(meta.get("req_level", 0))
+	if get_company_level() < lvl:
+		return tr("Ab Firmenstufe %d") % lvl
+	var req := str(meta.get("requires", ""))
+	if req != "" and not has_building_upgrade(req):
+		return tr("Erst %s") % tr(str((BUILDING_UPGRADE_CATALOG.get(req, {}) as Dictionary).get("name", req)))
+	return ""
+
+
+func can_build_upgrade(uid: String) -> bool:
+	return upgrade_block_reason(uid) == ""
+
+
+## Raumtemperatur am Standort einer Weltposition.
+func site_temp(pos: Vector3) -> float:
+	return nord_room_temp if HalleNordLayout.is_nord(pos) else room_temp
+
+
+## Raumtemperatur dort, wo der eigene Spieler gerade ist (HUD, PC).
+func local_site_temp() -> float:
+	var lp := get_tree().get_first_node_in_group("local_player") as Node3D if is_inside_tree() else null
+	return site_temp(lp.global_position) if lp != null else room_temp
+
+
 func is_construction_active(uid: String) -> bool:
 	return active_constructions.has(uid)
 
@@ -6397,7 +6509,7 @@ func _rpc_req_buy_building_upgrade(uid: String) -> void:
 		_rpc_play_sfx.rpc_id(peer_id, "error")
 		return
 	var meta: Dictionary = BUILDING_UPGRADE_CATALOG[uid]
-	if bool(meta.get("req_nord", false)) and not halle_nord_owned:
+	if not can_build_upgrade(uid):
 		_rpc_play_sfx.rpc_id(peer_id, "error")
 		return
 	var price := float(meta.get("price", 0))
@@ -6409,7 +6521,7 @@ func _rpc_req_buy_building_upgrade(uid: String) -> void:
 	active_constructions[uid] = {
 		"remaining": dur,
 		"duration": dur,
-		"site": "halle_nord" if bool(meta.get("req_nord", false)) else ("halle_nord" if halle_nord_owned else "garage"),
+		"site": upgrade_site(uid),
 	}
 	_broadcast_building_upgrades()
 	_broadcast_sim_tick()
@@ -6435,6 +6547,11 @@ func _tick_constructions(dt: float) -> void:
 			var meta: Dictionary = BUILDING_UPGRADE_CATALOG.get(uid, {})
 			if uid == "upg_security_gate":
 				reputation = minf(100.0, reputation + 8.0)
+			if uid == "upg_nord_hall":
+				halle_nord_owned = true
+				_rpc_sync_halle_nord.rpc(true, delivery_target_site)
+				post_event("🔑 Schlüsselübergabe: HALLE NORD ist fertig! Mit [T] oder am Shuttle-Terminal hinfahren.", "good")
+				continue
 			post_event_f("✅ Bauarbeiten abgeschlossen: %s ist jetzt einsatzbereit!", [str(meta.get("name", uid))], "good")
 		_recalculate_networks_and_metrics()
 		_broadcast_building_upgrades()

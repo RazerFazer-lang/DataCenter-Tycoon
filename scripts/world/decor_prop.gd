@@ -148,7 +148,7 @@ func _process(delta: float) -> void:
 		return
 	var power := DecorManager.has_power()
 	if _temp_lbl != null:
-		_temp_lbl.text = "%.1f °C" % GameState.room_temp if power else ""
+		_temp_lbl.text = "%.1f °C" % GameState.site_temp(global_position) if power else ""
 	if _glow != null and item_type != "prop_logo_sign":
 		_glow.visible = power
 	for k in _live_mats.keys():

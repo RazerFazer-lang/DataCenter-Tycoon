@@ -343,7 +343,7 @@ func _run_player(sender: int, cmd: String, args: Dictionary) -> String:
 			if not SITES.has(site) or (site == "halle_nord" and not GameState.halle_nord_owned):
 				return ""
 			if site == "halle_nord":
-				_teleport(pid, GameState.HALLE_NORD_ORIGIN + Vector3(3.2, 0.12, -4.2), 0.0)
+				_teleport(pid, GameState.HALLE_NORD_ORIGIN + HalleNordLayout.ARRIVAL, HalleNordLayout.ARRIVAL_YAW)
 				return "%s nach Halle Nord geschickt" % pname
 			_teleport(pid, Vector3(-4.1, 0.12, -3.5), -PI * 0.5)
 			return "%s in die Start-Garage geschickt" % pname

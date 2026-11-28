@@ -4,7 +4,7 @@ extends RefCounted
 ## Der Host baut den Plan einmal, alle Mitspieler spielen ihn nach der Uhr ab (reine Funktionen der Zeit).
 ## Alle Orte stehen in Koordinaten der Garage. Für Halle Nord kommt nur der Versatz NORD_OFFSET dazu.
 
-const NORD_OFFSET := Vector3(0.0, 0.0, -317.5)
+const NORD_OFFSET := Vector3(-7.0, 0.0, -317.5)
 const LANE_GARAGE := 16.35
 const LANE_NORD := 21.4
 const START_X := -58.0

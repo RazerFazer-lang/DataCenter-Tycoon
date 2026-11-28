@@ -11,7 +11,7 @@ const HOME := Vector3(-3.35, 0.0, 3.35)
 const BENCH_STAND := Vector3(-4.05, 0.0, 2.25)
 const SHUTTLE := Vector3(-4.6, 0.0, -3.4)
 ## Haltestelle in Halle Nord (vor dem Shuttle-Kiosk), relativ zu GameState.HALLE_NORD_ORIGIN.
-const NORD_STOP := Vector3(3.2, 0.0, -3.9)
+const NORD_STOP := Vector3(-5.4, 0.0, 5.4)
 const SHUTTLE_TIME := 12.0
 ## Wie lange ein Auftrag liegen bleibt, wenn der Techniker nicht hinkommt.
 const BLOCKED_MS := 60000
@@ -522,21 +522,19 @@ func _block(grid: AStarGrid2D, c: Vector2, half: Vector2, rot: float) -> void:
 				grid.set_point_solid(id, true)
 
 
-## Feste Einbauten in Halle Nord (lokal, Mitte und halbe Größe): Leitstand, Stromverteiler mit Router,
-## Shuttle-Kiosk, Lagerregale an der Westwand, ESD-Werkbank.
-const NORD_SOLID := [[7.1, -4.1, 2.8, 1.85], [-6.9, -5.2, 3.2, 0.75], [3.2, -5.1, 0.9, 0.85], [-9.55, 1.85, 0.28, 1.63], [-6.9, 5.45, 0.78, 0.41]]
+## Feste Einbauten in Halle Nord (lokal, Mitte und halbe Größe) stehen in HalleNordLayout.SOLID.
 
 ## Raster für Halle Nord: nur der Innenraum, Wände sind der Rand.
 func _build_nord_grid(with_things: bool) -> AStarGrid2D:
 	var oz := GameState.HALLE_NORD_ORIGIN.z
 	var grid := AStarGrid2D.new()
-	var lo := Vector2i(int(ceilf(-9.6 / CELL)), int(ceilf((oz - 5.6) / CELL)))
-	var hi := Vector2i(int(floorf(9.6 / CELL)), int(floorf((oz + 5.6) / CELL)))
+	var lo := Vector2i(int(ceilf((-HalleNordLayout.WALL_X + 0.3) / CELL)), int(ceilf((oz - HalleNordLayout.WALL_Z + 0.3) / CELL)))
+	var hi := Vector2i(int(floorf((HalleNordLayout.open_max_x() - 0.3) / CELL)), int(floorf((oz + HalleNordLayout.WALL_Z - 0.3) / CELL)))
 	grid.region = Rect2i(lo, hi - lo + Vector2i.ONE)
 	grid.cell_size = Vector2(CELL, CELL)
 	grid.diagonal_mode = AStarGrid2D.DIAGONAL_MODE_ONLY_IF_NO_OBSTACLES
 	grid.update()
-	for b in NORD_SOLID:
+	for b in HalleNordLayout.SOLID:
 		_block(grid, Vector2(float(b[0]), float(b[1]) + oz), Vector2(float(b[2]), float(b[3])), 0.0)
 	if with_things:
 		_block_things(grid)

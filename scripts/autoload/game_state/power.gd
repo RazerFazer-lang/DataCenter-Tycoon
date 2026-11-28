@@ -297,10 +297,13 @@ static func _strip_walls() -> Array:
 		out.append({"n": Vector3(-1, 0, 0), "at": GameState.WALL_FACE_EAST_X, "lo": -4.0, "hi": 4.0})
 	if GameState.halle_nord_owned:
 		var o := GameState.HALLE_NORD_ORIGIN
-		out.append({"n": Vector3(0, 0, 1), "at": o.z - 5.86, "lo": -9.3, "hi": 9.3})
-		out.append({"n": Vector3(0, 0, -1), "at": o.z + 5.86, "lo": -9.3, "hi": 9.3})
-		out.append({"n": Vector3(1, 0, 0), "at": -9.86, "lo": o.z - 5.3, "hi": o.z + 5.3})
-		out.append({"n": Vector3(-1, 0, 0), "at": 9.86, "lo": o.z - 5.3, "hi": o.z + 5.3})
+		var hx := HalleNordLayout.open_max_x()
+		var wz := HalleNordLayout.WALL_Z
+		# Rückwand ab der Technikecke, Vorderwand ab dem Büro, Westwand zwischen Technikecke und Büro
+		out.append({"n": Vector3(0, 0, 1), "at": o.z - wz, "lo": HalleNordLayout.TECH_MAX.x + 0.4, "hi": hx - 0.5})
+		out.append({"n": Vector3(0, 0, -1), "at": o.z + wz, "lo": HalleNordLayout.OFFICE_MAX.x + 0.4, "hi": hx - 0.5})
+		out.append({"n": Vector3(1, 0, 0), "at": -HalleNordLayout.WALL_X, "lo": o.z + HalleNordLayout.TECH_MAX.y + 0.4, "hi": o.z + HalleNordLayout.OFFICE_MIN.y - 0.4})
+		out.append({"n": Vector3(-1, 0, 0), "at": hx, "lo": o.z - wz + 0.5, "hi": o.z + wz - 0.5})
 	return out
 
 
@@ -320,7 +323,8 @@ static func can_place_strip_on_wall(pos: Vector3, rot_y: float, ignore_id: Strin
 	if absf(n.z) > 0.5:
 		var local_z := pos.z - GameState.HALLE_NORD_ORIGIN.z if pos.z < -100.0 else pos.z
 		# Tore frei lassen
-		if n.z < 0.0 and local_z > 4.0 and absf(pos.x) < 2.75:
+		var door_x := HalleNordLayout.DOOR_X if pos.z < -100.0 else 0.0
+		if n.z < 0.0 and local_z > 4.0 and absf(pos.x - door_x) < 2.75:
 			return false
 		if pos.z > -100.0:
 			for k in GameState.STRIP_WALL_KEEPOUT:
@@ -341,13 +345,11 @@ static func can_place_strip_on_wall(pos: Vector3, rot_y: float, ignore_id: Strin
 
 static func can_place_strip_at(pos: Vector3, ignore_id: String = "") -> bool:
 	if GameState.halle_nord_owned and pos.z < -100.0:
-		var lz := pos.z - GameState.HALLE_NORD_ORIGIN.z
-		if pos.x < -9.3 or pos.x > 9.3 or lz < -5.0 or lz > 5.2:
+		var l := HalleNordLayout.local(pos)
+		if not HalleNordLayout.can_stand(Vector2(l.x, l.z), Vector2(0.2, 0.2)):
 			return false
-		if lz < -2.3 and pos.x > 4.3:
-			return false
-		if lz > 4.0 and absf(pos.x) < 2.3:
-			return false
+	elif pos.z < -100.0:
+		return false
 	else:
 		var max_x := 4.8 if GameState.room_level == 0 else (11.7 if GameState.room_level == 1 else 20.6)
 		if pos.x < -4.8 or pos.x > max_x or pos.z < -4.0 or pos.z > 3.9:

@@ -169,7 +169,8 @@ func _initialize() -> void:
 	# --- Halle Nord mit dem Shuttle
 	gs.halle_nord_owned = true
 	var nid: String = gs._alloc_id("rack")
-	gs.racks[nid] = gs._make_rack_data(nid, "rack", Vector3(2.0, 0.0, -320.0), 0.0)
+	# Abschnitt 1 der neuen Halle Nord (v3.8)
+	gs.racks[nid] = gs._make_rack_data(nid, "rack", Vector3(-6.0, 0.0, -320.0), 0.0)
 	gs.racks[nid]["slots"][0].merge({"item_type": "web_server", "state": "crashed", "faulty_part": "cooling", "components": _comps(1)}, true)
 	_kit("kit_cooling")
 	t = _run(func(): return str(gs.racks[nid]["slots"][0]["item_type"]) != "" and str(gs.racks[nid]["slots"][0]["state"]) == "ok", 600.0)

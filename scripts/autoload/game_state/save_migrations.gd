@@ -24,6 +24,8 @@ static func run(data: Dictionary, from_version: int, stage: String) -> Array[int
 				_migrate_strip_ports()
 			6:
 				_v6_nord_diesel()
+			7:
+				_v7_halle_nord_neu()
 			_:
 				push_error("Spielstand: %s hat keine Funktion in save_migrations.gd." % SaveSchema.describe(v))
 				continue
@@ -35,6 +37,60 @@ static func run(data: Dictionary, from_version: int, stage: String) -> Array[int
 static func _v6_nord_diesel() -> void:
 	if GameState.has_building_upgrade("upg_diesel_gen"):
 		Operations.init_nord_tank(true)
+
+
+## 7 (v3.8): Halle Nord ist neu gebaut (24 × 14 m, drei Abschnitte, Technikecke und Büro).
+## Wer sie schon hatte, behält alles: alle Abschnitte offen, Geräte in Technikecke, Büro oder
+## vor dem Tor rücken auf den nächsten freien Platz.
+static func _v7_halle_nord_neu() -> Array:
+	if not GameState.halle_nord_owned:
+		return [0]
+	for uid in ["upg_nord_hall", "upg_nord_section_2", "upg_nord_section_3"]:
+		GameState.building_upgrades[uid] = true
+		GameState.active_constructions.erase(uid)
+	var moved := 0
+	for kind in ["racks", "coolers", "ups_units", "decor_items"]:
+		var dict: Dictionary = GameState.get(kind)
+		for id in dict.keys():
+			var d: Dictionary = dict[id]
+			var pos: Vector3 = d.get("pos", Vector3.ZERO)
+			if not HalleNordLayout.is_nord(pos) or _v7_fits(kind, str(id), d, pos):
+				continue
+			var best := _v7_free_spot(kind, str(id), d, pos)
+			if best != pos:
+				d["pos"] = best
+				moved += 1
+	if moved > 0:
+		GameState.post_event_f("🏭 Halle Nord ist neu gebaut (24 × 14 m, alle 3 Abschnitte offen). %d Geräte sind auf freie Plätze gerückt.", [moved], "info")
+	return [moved]
+
+
+static func _v7_fits(kind: String, id: String, d: Dictionary, pos: Vector3) -> bool:
+	if kind == "racks":
+		return GameState.can_place_at(pos, id)
+	if kind == "decor_items":
+		var it := str(d.get("item_type", ""))
+		if DecorSpec.is_wall_sign(it) or GameState.is_strip_type(it):
+			return true
+		if DecorSpec.SIZES.has(it):
+			return DecorSpec.can_place(it, pos, float(d.get("rot_y", 0.0)), id)
+	var l := HalleNordLayout.local(pos)
+	return HalleNordLayout.can_stand(Vector2(l.x, l.z), Vector2(0.4, 0.4))
+
+
+static func _v7_free_spot(kind: String, id: String, d: Dictionary, pos: Vector3) -> Vector3:
+	for ring in range(1, 40):
+		var r := float(ring) * 0.35
+		for k in range(16):
+			var a := TAU * float(k) / 16.0
+			var cand := Vector3(pos.x + cos(a) * r, pos.y, pos.z + sin(a) * r)
+			var keep: Vector3 = d["pos"]
+			d["pos"] = cand
+			var ok := _v7_fits(kind, id, d, cand)
+			d["pos"] = keep
+			if ok:
+				return cand
+	return pos
 
 
 ## 1 (v0.3): Früher gab es nur room_expanded (an/aus), seitdem die Raumstufe 0 bis 2.
@@ -141,7 +197,7 @@ static func _migrate_strip_ports() -> Array:
 static func _cable_depths(ctype: String) -> Dictionary:
 	var depth := {}
 	var queue: Array = []
-	for src in ([GameState.WALL_BREAKER_ID, GameState.HALL_C_BREAKER_ID, GameState.HALL_NORD_BREAKER_ID] if ctype == "power" else [GameState.WALL_ROUTER_ID, GameState.HALL_C_ROUTER_ID, GameState.HALL_NORD_ROUTER_ID]):
+	for src in ([GameState.WALL_BREAKER_ID, GameState.HALL_C_BREAKER_ID] + GameState.HALL_NORD_BREAKER_IDS if ctype == "power" else [GameState.WALL_ROUTER_ID, GameState.HALL_C_ROUTER_ID, GameState.HALL_NORD_ROUTER_ID]):
 		depth[src] = 0
 		queue.append(src)
 	while not queue.is_empty():
