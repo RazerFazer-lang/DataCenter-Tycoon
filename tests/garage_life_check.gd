@@ -58,6 +58,12 @@ func _check_sounds() -> void:
 			meows += 1
 	chk("Katze: echte Miau-Aufnahmen", meows >= 5, meows)
 	chk("Getränkeautomat: echte Kaffee-Aufnahme", sounds.get("coffee") is AudioStreamOggVorbis)
+	var birds_ok := true
+	for b in ["bird_sparrow", "bird_crow", "bird_swallow", "bird_wings"]:
+		birds_ok = birds_ok and sounds.get(b) is AudioStreamOggVorbis
+	chk("Vögel: echte Aufnahmen", birds_ok)
+	chk("Tauben ohne erzeugtes Gurren", not sounds.has("bird_pigeon"))
+	chk("Rolltor: echter Motor und Anschlag", sounds.get("garage_door_stop") is AudioStreamOggVorbis and root.get_node("SfxManager").call("get_loop_stream", "garage_door_motor") is AudioStreamOggVorbis)
 
 
 func _check_coffee() -> void:

@@ -173,6 +173,8 @@ const SPRAY_HOLD_TIME := 0.22
 
 var _footstep_count := FOOTSTEP_VARIANTS
 var _meow_count := 0
+## Name -> Anzahl echter Varianten (name_1 .. name_n), eine davon zufällig.
+var _variants: Dictionary = {}
 var _last_footstep := -1
 var _spray_player: AudioStreamPlayer
 var _spray_hold := 0.0
@@ -204,6 +206,30 @@ func _load_external_audio_samples() -> void:
 		_meow_count = i
 	if _meow_count > 0:
 		_sounds["meow"] = _sounds["meow_1"]
+	# Vögel und Rolltor: echte Aufnahmen (CC0). Für Tauben gibt es kein echtes Gurren, sie bleiben still.
+	for base in ["bird_sparrow", "bird_crow", "bird_swallow"]:
+		var n := 0
+		for i in range(1, 9):
+			var s := _load_audio_file("%s_%d" % [base, i])
+			if s == null:
+				break
+			_sounds["%s_%d" % [base, i]] = s
+			n = i
+		if n > 0:
+			_sounds[base] = _sounds[base + "_1"]
+			_variants[base] = n
+	if _variants.has("bird_sparrow"):
+		_sounds.erase("bird_pigeon")
+	var wings := _load_audio_file("bird_wings")
+	if wings != null:
+		_sounds["bird_wings"] = wings
+	var door_stop := _load_audio_file("garage_door_stop")
+	if door_stop != null:
+		_sounds["garage_door_stop"] = door_stop
+	var door_motor := _load_audio_file("garage_door_motor")
+	if door_motor is AudioStreamOggVorbis:
+		(door_motor as AudioStreamOggVorbis).loop = true
+		_loops["garage_door_motor"] = door_motor
 	var dispense := _load_audio_file("coffee_dispense")
 	if dispense != null:
 		_sounds["coffee"] = dispense
@@ -536,6 +562,8 @@ func _update_overload_hum(delta: float) -> void:
 func _variant(sfx_name: String) -> String:
 	if sfx_name == "meow" and _meow_count > 1:
 		return "meow_%d" % (randi() % _meow_count + 1)
+	if _variants.has(sfx_name):
+		return "%s_%d" % [sfx_name, randi() % int(_variants[sfx_name]) + 1]
 	return sfx_name
 
 
@@ -632,9 +660,10 @@ func _update_extinguisher_spray(delta: float) -> void:
 	_spray_player.volume_db = linear_to_db(gain * _spray_level) - 6.5
 
 
-func get_loop_stream(loop_name: String) -> AudioStreamWAV:
+## Schleife als WAV (erzeugt) oder OGG (echte Aufnahme, z. B. Rolltor-Motor).
+func get_loop_stream(loop_name: String) -> AudioStream:
 	if _loops.has(loop_name):
-		return _loops[loop_name] as AudioStreamWAV
+		return _loops[loop_name] as AudioStream
 	return null
 
 
