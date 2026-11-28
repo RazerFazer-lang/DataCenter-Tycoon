@@ -354,7 +354,7 @@ def move(ob, fn):
     return ob
 
 
-def wrinkle(ob, spots, amp=0.004):
+def wrinkle(ob, spots, amp=0.004, base=0.35):
     """Falten an Gelenken: spots = [(Punkt, Achse, Radius, Staerke)]."""
     def fn(x, y, z, n):
         p = V((x, y, z))
@@ -365,8 +365,24 @@ def wrinkle(ob, spots, amp=0.004):
             if q < 1.0:
                 t = d.dot(V(ax).normalized()) / r
                 off += s * (1 - q * q) * math.sin(t * 11.0 + noise.noise(p * 22.0) * 3.0)
-        off += 0.35 * noise.noise(p * 14.0)
+        off += base * noise.noise(p * 14.0)
         return (x + n[0] * off * amp, y + n[1] * off * amp, z + n[2] * off * amp)
+    return move(ob, fn)
+
+
+def seams(ob, sleeve, depth=0.0014, width=0.0026):
+    """Naehte als feine Rillen: Armloch (bei Aermeln) und Schulternaht oben."""
+    def fn(x, y, z, n):
+        s = 1 if x >= 0 else -1
+        dd = 1.0
+        if sleeve > 0.0 and abs(x) > 0.12:
+            d = V((math.cos(A), -math.sin(A), 0))
+            p0 = V((SH[0], SH[1], 0)) + d * 0.030
+            dd = min(dd, abs((V((abs(x), y, z)) - p0).dot(d)))
+        if y > 1.40 and 0.075 < abs(x) < SH[0] + 0.02 and n[1] > 0.3:
+            dd = min(dd, abs(z - (-0.014)))
+        k = math.exp(-(dd / width) ** 2)
+        return (x - n[0] * depth * k, y - n[1] * depth * k, z - n[2] * depth * k)
     return move(ob, fn)
 
 
@@ -639,7 +655,7 @@ EYE_SKIN = 0.0022               # Lidhaut über dem Augapfel
 MOUTH_Y = 1.6075                # Mundlinie (Spalt im Gesicht)
 MOUTH_W = 0.0225                # halbe Mundbreite
 HEAD_DY = 0.030                 # Kopf näher an die Schultern (kürzerer Hals)
-HEAD_S = 1.04                   # Kopf etwas größer (stilisiert)
+HEAD_S = 1.10                   # Kopf größer (stilisiert, Kopf zu Körper etwa 1:6,5)
 HEAD_PIVOT = (1.585, 0.0)       # (y, z), um diesen Punkt wird vergrößert
 
 
@@ -1554,6 +1570,74 @@ def strands(ob, freq, amp, dirn=(0, 0, 1)):
     return move(ob, fn)
 
 
+HC = (0.0, 1.722, -0.016)          # Kopfmitte fuer die Haare (vor dem Vergroessern)
+HR = (0.0830, 0.0985, 0.1010)
+
+
+def scalp_pt(th, az, lift):
+    """Punkt ueber der Kopfhaut: th = Winkel vom Scheitel (0 = oben), az = Richtung (0 = vorn, + = links)."""
+    dx, dy, dz = math.sin(th) * math.sin(az), math.cos(th), math.sin(th) * math.cos(az)
+    k = 1.0 + lift
+    return (HC[0] + HR[0] * dx * k, HC[1] + HR[1] * dy * k, HC[2] + HR[2] * dz * k)
+
+
+def hair_clumps(b, n, th0, th_end, r0, r1, lift0, lift1, sweep=0.0, az0=0.0, seed=1, steps=5, jitter=0.12):
+    """Straehnen-Kloetze: n Buendel vom Scheitel zum Rand, je eine sich verjuengende Kette knapp ueber der Kopfhaut.
+    th_end(az) gibt das Ende je Richtung, sweep dreht die Buendel zur Seite (Kaemmrichtung)."""
+    rnd = random.Random(seed)
+    for i in range(n):
+        az = az0 + 2 * math.pi * i / n + rnd.uniform(-jitter, jitter)
+        te = th_end(az) + rnd.uniform(-0.05, 0.05)
+        pts = []
+        for j in range(steps):
+            u = j / (steps - 1)
+            th = th0 + (te - th0) * u
+            a = az + sweep * u * math.cos(az) ** 2
+            lift = lift0 + (lift1 - lift0) * u
+            r = (r0 + (r1 - r0) * u ** 1.3) * rnd.uniform(0.92, 1.08)
+            pts.append((scalp_pt(th, a, lift), r))
+        b.chain(pts)
+
+
+def shell_fit(ob, tmin=0.0045, side=0.50, top=0.85, y0=None):
+    """Haarschicht an die echte Kopfform legen: Abstand zur Haut an Seiten und Hinterkopf stauchen (Relief bleibt),
+    oben mehr Volumen lassen, und nirgends unter tmin (sonst schaut die Haut durch)."""
+    f = sdf(HEAD, ("eye", "lid"))
+    p = _verts(ob)
+    d = f(p)
+    nrm = normal(f, p)
+    s = side + (top - side) * np.clip((p[:, 1] - 1.745) / 0.05, 0.0, 1.0)
+    dn = tmin + np.maximum(d - tmin, 0.0) * s
+    if y0 is not None:
+        w = np.clip((p[:, 1] - y0) / 0.06, 0.0, 1.0)          # darunter (lange Haare) unveraendert
+        dn = d + (dn - d) * w
+    _set_verts(ob, p + nrm * (dn - d)[:, None])
+    return ob
+
+
+def hair_shine(x, y, z):
+    """Glanzverlauf: dunklere Ansaetze, ein heller Streifen im oberen Drittel, leicht unruhig je Straehne."""
+    base = 0.66 + 0.16 * smoothstep(1.64, 1.80, y)
+    wob = 0.004 * noise.noise(V((x * 30, 0.0, z * 30)))
+    band = math.exp(-((y - 1.772 - wob) / 0.013) ** 2) * (0.75 + 0.25 * noise.noise(V((x * 90, y * 10, z * 90))))
+    v = min(1.0, base + 0.30 * band + 0.04 * noise.noise(V((x * 70, y * 20, z * 70))))
+    return (v, v, v)
+
+
+def _short_end(az):
+    """Ende der Buendel beim Kurzhaar: vorn bis zur Stirn, seitlich bis ueber das Ohr, hinten in den Nacken."""
+    c = math.cos(az)
+    return 1.50 + 0.85 * max(0.0, -c) ** 1.5 + 0.28 * (1 - c * c)     # bis ueber den Haaransatz, dort wird geschnitten
+
+
+def _short_line(x, y, z):
+    """Haaransatz Kurzhaar: vorn und an den Schlaefen in Straehnenspitzen aufgeloest statt gerader Kante."""
+    fw = smoothstep(-0.02, 0.03, z)
+    ang = math.atan2(x, max(z, 0.02))
+    tips = 0.0060 * (0.5 + 0.5 * math.cos(ang * 9.0 + 0.7)) ** 2.5 + 0.002 * noise.noise(V((x * 50, 0.0, z * 50)))
+    return hairline_d(x, y, z) + tips * fw
+
+
 def _long_keep(x, y, z, rear):
     """Lange Haare: vorn der Haaransatz, seitlich und hinten alles; vor dem Gesicht frei."""
     near = max(0.066 - abs(x), min(z - 0.02, y - 1.70))
@@ -1567,15 +1651,19 @@ def hairs():
         ob.name = name
         ob.data.name = name
         set_mats(ob, ["Hair"])
-        vcol(ob, lambda x, y, z: tuple([0.72 + 0.28 * smoothstep(1.62, 1.80, y) + 0.06 * noise.noise(V((x * 70, y * 20, z * 20)))] * 3))
+        vcol(ob, hair_shine)
         out.append(ob)
 
-    # Kurz
-    b = Blob(); hair_cap(b)
-    b.ell((0.004, 1.776, 0.024), (0.0700, 0.0300, 0.0680), (-12, 0, 5))
-    b.ell((-0.014, 1.772, 0.058), (0.0480, 0.0190, 0.0320), (-26, 14, 0))
-    ob = taper(cut_iso(b.mesh("h", 0.0046, 3, 0.4, 3200), lambda x, y, z: hairline_d(x, y, z)), lambda x, y, z: hairline_d(x, y, z), 0.008)
-    done("Hair_Short", solidify(strands(ob, 26, 0.0022), 0.004))
+    # Kurz: schlicht, eng anliegend, dezente Straehnen; vorn fallen ein paar Straehnen locker in die Stirn
+    b = Blob(); hair_cap(b, 0.985)
+    hair_clumps(b, 18, 0.10, _short_end, 0.0140, 0.0070, 0.035, 0.005, sweep=0.25, seed=3)
+    ob = taper(cut_iso(shell_fit(b.mesh("h", 0.0036, 2, 0.35, 4600), side=0.42, top=0.60), _short_line), _short_line, 0.020)
+    fb = Blob()
+    for a, ln, r in ((-0.40, 1.66, 0.0100), (-0.18, 1.76, 0.0115), (0.04, 1.72, 0.0110), (0.24, 1.60, 0.0095)):
+        fb.chain([(scalp_pt(0.80, a, 0.02), r), (scalp_pt(1.20, a + 0.08, 0.01), r * 0.92), (scalp_pt(0.5 * (1.20 + ln), a + 0.18, 0.0), r * 0.70),
+                  (scalp_pt(ln, a + 0.30, -0.005), r * 0.28)])
+    fringe = shell_fit(fb.mesh("f", 0.0030, 2, 0.35, 900), tmin=0.0035, side=0.35, top=0.35)
+    done("Hair_Short", join("h", [solidify(strands(ob, 26, 0.0008), 0.004), strands(fringe, 20, 0.0006)]))
     # Raspel
     b = Blob(); b.ell((0, 1.718, -0.015), (0.0795, 0.0975, 0.0980)); b.ell((0, 1.690, -0.046), (0.0735, 0.080, 0.071))
     done("Hair_Buzz", solidify(cut_iso(b.mesh("h", 0.005, 3, 0.5, 2200), lambda x, y, z: hairline_d(x, y, z, 1.745)), 0.002))
@@ -1588,11 +1676,12 @@ def hairs():
     done("Hair_Undercut", join("h", [solidify(strands(top, 30, 0.003), 0.004), solidify(side, 0.0018)]))
     # Seitenscheitel
     b = Blob(); hair_cap(b, 1.0)
-    for i in range(12):
-        t = i / 11.0
-        b.ell((-0.052 + 0.100 * t, 1.786 - 0.020 * abs(t - 0.35), 0.056 + 0.012 * math.sin(t * 3)), (0.022, 0.018, 0.030), (-26, 34 * (t - 0.3), -24))
-    ob = taper(cut_iso(b.mesh("h", 0.0046, 2, 0.4, 3200), lambda x, y, z: hairline_d(x, y, z, 1.738, 1.676)), lambda x, y, z: hairline_d(x, y, z, 1.738, 1.676), 0.008)
-    done("Hair_Side", solidify(strands(ob, 34, 0.0026), 0.004))
+    for i in range(6):
+        a = -0.55 + 0.16 * i
+        b.chain([(scalp_pt(0.72, a, 0.05), 0.0150), (scalp_pt(0.50, a + 0.55, 0.085), 0.0170), (scalp_pt(0.62, a + 1.15, 0.060), 0.0130), (scalp_pt(0.95, a + 1.55, 0.020), 0.0070)])
+    hair_clumps(b, 18, 0.10, _short_end, 0.0140, 0.0070, 0.035, 0.005, sweep=0.80, seed=5)
+    ob = taper(cut_iso(shell_fit(b.mesh("h", 0.0038, 2, 0.35, 4600), side=0.45, top=0.75), lambda x, y, z: hairline_d(x, y, z, 1.738, 1.676)), lambda x, y, z: hairline_d(x, y, z, 1.738, 1.676), 0.016)
+    done("Hair_Side", solidify(strands(ob, 34, 0.0012), 0.004))
     # Locken
     b = Blob()
     random.seed(4)
@@ -1602,7 +1691,9 @@ def hairs():
         x, y, z = 0.082 * math.sin(e) * math.cos(a), 1.722 + 0.100 * math.cos(e), -0.016 + 0.098 * math.sin(e) * math.sin(a)
         if hairline(x, y - 0.010, z, 1.748, 1.676, 1.625):
             b.sph((x, y, z), random.uniform(0.013, 0.019))
-    done("Hair_Curly", b.mesh("h", 0.0048, 2, 0.4, 5200))
+    under = Blob(); hair_cap(under, 0.985)
+    under = cut_iso(shell_fit(under.mesh("u", 0.005, 2, 0.4, 2400), tmin=0.0035, side=0.45, top=0.55), lambda x, y, z: hairline_d(x, y - 0.006, z, 1.748, 1.676, 1.625))
+    done("Hair_Curly", join("h", [b.mesh("h", 0.0048, 2, 0.4, 5200), under]))
     # Afro
     b = Blob()
     for i in range(230):
@@ -1611,6 +1702,7 @@ def hairs():
         x, y, z = 0.104 * math.sin(e) * math.cos(a), 1.742 + 0.112 * math.cos(e), -0.022 + 0.112 * math.sin(e) * math.sin(a)
         if hairline(x * 0.8, y - 0.012, z * 0.86, 1.752, 1.684, 1.640):
             b.sph((x, y, z), random.uniform(0.018, 0.026))
+    b.ell((0, 1.760, -0.020), (0.092, 0.090, 0.098))          # Fuellung, damit oben kein Loch bleibt
     done("Hair_Afro", b.mesh("h", 0.0065, 2, 0.4, 4800))
     # Mittellang
     b = Blob(); hair_cap(b, 1.02)
@@ -1622,7 +1714,7 @@ def hairs():
     for i in range(7):
         x = -0.060 + 0.020 * i
         b.chain([((x, 1.720, -0.092), 0.022), ((x * 1.1, 1.640, -0.102), 0.021), ((x * 1.08, 1.560, -0.092), 0.014)])
-    ob = taper(cut_iso(b.mesh("h", 0.005, 2, 0.4, 4600), lambda x, y, z: _long_keep(x, y, z, 1.50)), lambda x, y, z: _long_keep(x, y, z, 1.50), 0.006)
+    ob = taper(cut_iso(shell_fit(b.mesh("h", 0.005, 2, 0.4, 4600), side=0.55, top=0.75, y0=1.66), lambda x, y, z: _long_keep(x, y, z, 1.50)), lambda x, y, z: _long_keep(x, y, z, 1.50), 0.006)
     done("Hair_Bob", solidify(strands(ob, 40, 0.0026), 0.003))
     # Lang
     b = Blob(); hair_cap(b, 1.02)
@@ -1634,11 +1726,11 @@ def hairs():
     for i in range(8):
         x = -0.066 + 0.0188 * i
         b.chain([((x, 1.720, -0.092), 0.022), ((x * 1.12, 1.620, -0.108), 0.022), ((x * 1.22, 1.480, -0.122), 0.021), ((x * 1.20, 1.340, -0.128), 0.010)])
-    ob = taper(cut_iso(b.mesh("h", 0.0055, 2, 0.4, 5600), lambda x, y, z: _long_keep(x, y, z, 1.30)), lambda x, y, z: _long_keep(x, y, z, 1.30), 0.006)
+    ob = taper(cut_iso(shell_fit(b.mesh("h", 0.0055, 2, 0.4, 5600), side=0.55, top=0.75, y0=1.66), lambda x, y, z: _long_keep(x, y, z, 1.30)), lambda x, y, z: _long_keep(x, y, z, 1.30), 0.006)
     done("Hair_Long", solidify(strands(ob, 44, 0.0028), 0.003))
     # Pferdeschwanz
     b = Blob(); b.ell((0, 1.720, -0.016), (0.0808, 0.0985, 0.0995)); b.ell((0, 1.690, -0.046), (0.0745, 0.081, 0.0735))
-    cap = cut_iso(b.mesh("h", 0.005, 2, 0.4, 2400), lambda x, y, z: hairline_d(x, y, z, 1.744, 1.678, 1.612))
+    cap = cut_iso(shell_fit(b.mesh("h", 0.005, 2, 0.4, 2400), tmin=0.0035, side=0.40, top=0.55), lambda x, y, z: hairline_d(x, y, z, 1.744, 1.678, 1.612))
     b = Blob(); b.chain([((0, 1.752, -0.104), 0.020), ((0, 1.752, -0.140), 0.026), ((0.004, 1.690, -0.168), 0.032), ((0.0, 1.600, -0.160), 0.028), ((-0.004, 1.520, -0.146), 0.012)])
     tail = b.mesh("h", 0.005, 2, 0.4, 1500)
     band = tube("h", [(0, 1.756, -0.112), (0, 1.754, -0.122)], 0.0235, "Acc_A", 18)
@@ -1646,7 +1738,7 @@ def hairs():
     done("Hair_Pony", ob)
     # Dutt
     b = Blob(); b.ell((0, 1.720, -0.016), (0.0808, 0.0985, 0.0995)); b.ell((0, 1.690, -0.046), (0.0745, 0.081, 0.0735))
-    cap = cut_iso(b.mesh("h", 0.005, 2, 0.4, 2400), lambda x, y, z: hairline_d(x, y, z, 1.744, 1.678, 1.612))
+    cap = cut_iso(shell_fit(b.mesh("h", 0.005, 2, 0.4, 2400), tmin=0.0035, side=0.40, top=0.55), lambda x, y, z: hairline_d(x, y, z, 1.744, 1.678, 1.612))
     b = Blob(); b.ell((0, 1.808, -0.066), (0.038, 0.030, 0.038)); b.ell((0, 1.800, -0.064), (0.030, 0.034, 0.030))
     done("Hair_Bun", join("h", [solidify(strands(cap, 40, 0.0020), 0.003), strands(b.mesh("h", 0.004, 2, 0.4, 900), 40, 0.0030)]))
     # Iro
@@ -1738,7 +1830,7 @@ def arms_skin():
     for s in (-1, 1):
         b = Blob()
         b.chain(mirror_pts(arm_chain(), s))
-        b.cap((WR[0] * s, WR[1], WR[2]), 0.0262, ((WR[0] + 0.02) * s, WR[1] - 0.02, WR[2]), 0.0260)
+        b.cap((WR[0] * s, WR[1], WR[2]), 0.0258, ((WR[0] + 0.009) * s, WR[1] - 0.009, WR[2]), 0.0222)   # Stummel liegt ganz in der Hand
         obs.append(b.mesh("a", 0.0075, 4, 0.5, 1500))
     ob = join("Arms", obs)
     set_mats(ob, ["Skin"])
@@ -1746,34 +1838,108 @@ def arms_skin():
     return ob
 
 
+HAND_S = 1.10                    # Hand etwas groesser (stilisiert), Handgelenk bleibt passend zum Arm
+NAIL_SPOTS = []                  # Fingernagel-Mitten (Spielkoordinaten, beide Seiten), fuer die Punktfarben
+
+
 def hand(s):
-    b = Blob()
+    """Hand aus getrennten Teilen: Handflaeche mit Knoecheln, vier Finger mit drei Gliedern, Daumen.
+    Jedes Teil bekommt ein eigenes feines Netz, damit die Finger nicht zusammenwachsen.
+    Lockere Haltung: die Finger kruemmen sich vom Zeige- zum kleinen Finger zunehmend."""
     d = V((math.cos(A), -math.sin(A), 0.0))        # laengs
     up = V((math.sin(A), math.cos(A), 0.0))        # Handruecken (nach oben aussen)
     f = V((0, 0, 1))                                # Daumenseite vorn
     w = V(WR)
+    k = HAND_S
 
     def pt(l, side, h):
-        p = w + d * l + f * side + up * h
+        # Ab dem Handgelenk vergroessert, dahinter (im Unterarm) unveraendert
+        sc = k if l > 0.0 else 1.0
+        p = w + d * (l * sc) + f * (side * sc) + up * (h * sc)
         return (p.x * s, p.y, p.z)
-    b.cap(pt(-0.012, 0.0, 0.0), 0.0262, pt(0.012, 0.002, 0.0), 0.0250)
-    for i, (sd, l0) in enumerate(((0.030, 0.088), (0.011, 0.092), (-0.009, 0.088), (-0.027, 0.079))):
-        b.cap(pt(0.020, sd * 0.62, 0.001), 0.0165, pt(l0, sd, 0.002), 0.0112)
-        ln = (0.036, 0.041, 0.038, 0.030)[i]
-        r = (0.0094, 0.0096, 0.0092, 0.0082)[i]
-        b.cap(pt(l0, sd, 0.002), r * 1.10, pt(l0 + ln, sd * 1.06, -0.004), r * 0.96)
-        b.cap(pt(l0 + ln, sd * 1.06, -0.004), r * 0.96, pt(l0 + ln * 1.95, sd * 1.10, -0.016), r * 0.80)
-    b.cap(pt(0.022, 0.020, -0.006), 0.0185, pt(0.046, 0.040, -0.012), 0.0135)
-    b.cap(pt(0.046, 0.040, -0.012), 0.0128, pt(0.074, 0.052, -0.016), 0.0105)
-    b.cap(pt(0.074, 0.052, -0.016), 0.0103, pt(0.098, 0.057, -0.020), 0.0085)
-    b.ell(pt(0.050, -0.004, -0.008), (0.030, 0.030, 0.028))
-    return b.mesh("h", 0.0032, 3, 0.45, 2000)
+
+    def oell(bl, l, side, h, along, thick, wide, tilt=0.0):
+        # Ellipsoid in Handrichtung gedreht (laengs, Dicke zum Handruecken, Breite); tilt = Kruemmung in Grad
+        bl.ell(pt(l, side, h), (along * k, thick * k, wide * k), rot=(0, 0, -(math.degrees(A) + tilt) * s))
+    parts = []
+    # Handflaeche: schlank und flach; das Handgelenk reicht weit in den Unterarm (kein sichtbarer Absatz)
+    b = Blob()
+    b.cap(pt(-0.034, 0.0, 0.0), 0.0258, pt(0.008, 0.001, 0.0), 0.0266)     # waechst flach aus dem Arm, deckt das Armende ab
+    oell(b, 0.020, 0.002, -0.002, 0.024, 0.0160, 0.027)      # Uebergang Handgelenk -> Handflaeche
+    oell(b, 0.046, 0.002, -0.003, 0.034, 0.0145, 0.0355)     # Mittelhand
+    oell(b, 0.030, 0.022, -0.009, 0.022, 0.0130, 0.016)      # Daumenballen
+    oell(b, 0.040, -0.024, -0.005, 0.026, 0.0115, 0.011)     # Kleinfingerballen
+    b.cap(pt(0.012, 0.013, -0.008), 0.0128 * k, pt(0.044, 0.035, -0.019), 0.0106 * k)   # Daumen-Mittelhand, verschmilzt mit dem Ballen
+    for sd in (0.0275, 0.0095, -0.0088, -0.0258):
+        b.sph(pt(0.071, sd, -0.0008), 0.0082 * k)             # Knoechel auf dem Handruecken
+    parts.append(b.mesh("h", 0.0022, 2, 0.4, 2600))
+    # Finger: [seitlich, Ansatz, Laengen der drei Glieder, Radius, Beugung je Gelenk in Grad]
+    # Lockere Haltung: vom Zeige- zum kleinen Finger zunehmend gebeugt
+    fingers = ((0.0285, 0.076, (0.034, 0.021, 0.017), 0.0091, (10, 20, 16)),
+               (0.0096, 0.079, (0.037, 0.024, 0.018), 0.0094, (14, 26, 20)),
+               (-0.0092, 0.076, (0.035, 0.022, 0.017), 0.0089, (18, 30, 24)),
+               (-0.0267, 0.069, (0.027, 0.017, 0.015), 0.0078, (22, 34, 26)))
+    for sd, l0, segs, r, bend in fingers:
+        fb = Blob()
+        l = l0 - 0.010
+        h = 0.0
+        th = 0.0
+        rad = r * 1.04
+        for i, ln in enumerate(segs):
+            th += bend[i]
+            ca, sa = math.cos(math.radians(th)), math.sin(math.radians(th))
+            nl = l + ln * ca
+            nh = h - ln * sa
+            nr = rad * (0.93 if i < 2 else 0.86)
+            s0, s1 = sd * (1.0 + 0.04 * i), sd * (1.0 + 0.04 * (i + 1))
+            fb.cap(pt(l, s0, h), rad * k, pt(nl, s1, nh), nr * k * 0.95)
+            # Gelenk: leicht verdickt, damit die Finger nicht wie Roehren wirken
+            fb.sph(pt(l + ln * ca * 0.5, (s0 + s1) * 0.5, h - ln * sa * 0.5), (rad + nr) * 0.5 * k * 0.93)
+            fb.sph(pt(nl, s1, nh), nr * k * (1.08 if i < 2 else 1.0))
+            if i == 2:
+                # Fingernagel: flache Platte auf dem letzten Glied (Handrueckenseite), mit dem Glied gekippt
+                lm = l + ln * ca * 0.60 + sa * nr * 0.86
+                hm = h - ln * sa * 0.60 + ca * nr * 0.86
+                sm = sd * (1.0 + 0.04 * 2.6)
+                oell(fb, lm, sm, hm, ln * 0.40, nr * 0.26, nr * 0.70, th)
+                NAIL_SPOTS.append((V(pt(lm, sm, hm)), nr * 0.78 * k))
+            l, h, rad = nl, nh, nr
+        parts.append(fb.mesh("fi", 0.0014, 2, 0.30, 1100))
+    # Daumen: vom Ballen schraeg nach vorn, leicht eingedreht und gebeugt
+    tb = Blob()
+    # schlank und verjuengt, liegt etwas unter dem Zeigefinger statt seitlich daneben (kein Klumpen)
+    tb.cap(pt(0.044, 0.035, -0.019), 0.0098 * k, pt(0.064, 0.040, -0.030), 0.0086 * k)
+    tb.cap(pt(0.064, 0.040, -0.030), 0.0085 * k, pt(0.083, 0.038, -0.041), 0.0068 * k)
+    tb.sph(pt(0.064, 0.040, -0.030), 0.0087 * k)
+    oell(tb, 0.077, 0.0450, -0.036, 0.0070, 0.0050, 0.0020)
+    NAIL_SPOTS.append((V(pt(0.077, 0.0450, -0.036)), 0.0064 * k))
+    parts.append(tb.mesh("th", 0.0015, 2, 0.30, 1100))
+    return join("h", parts)
+
+
+def hand_color(x, y, z):
+    """Hautfarbe der Hand: am Handgelenk wie der Arm (kein Farbsprung), Naegel rosig mit feinem Rand."""
+    arm = (1.0, 0.985, 0.98)
+    hnd = (1.0, 0.96, 0.945)
+    nail = (1.0, 0.84, 0.84)
+    dw = V((abs(x) - WR[0], y - WR[1], z - WR[2])).length
+    t = smoothstep(0.015, 0.045, dw)
+    c = [arm[i] + (hnd[i] - arm[i]) * t for i in range(3)]
+    p = V((x, y, z))
+    for c0, r in NAIL_SPOTS:
+        dn = (p - c0).length
+        if dn < r * 1.15:
+            m = 1.0 - smoothstep(r * 0.72, r * 0.86, dn)          # Nagel
+            rim = smoothstep(r * 0.80, r * 0.92, dn) * (1.0 - smoothstep(r * 0.95, r * 1.12, dn))   # Nagelrand
+            c = [c[i] + (nail[i] - c[i]) * m for i in range(3)]
+            c = [v * (1.0 - 0.10 * rim) for v in c]
+    return tuple(min(1.0, v) for v in c)
 
 
 def hands():
     ob = join("Hands", [hand(1), hand(-1)])
     set_mats(ob, ["Skin"])
-    vcol(ob, lambda x, y, z: (1, 0.96, 0.945))
+    vcol(ob, hand_color)
     return ob
 
 
@@ -1795,16 +1961,44 @@ def legs_skin():
 
 # ---------------------------------------------------------------- Kleidung oben
 
+# Rumpfprofil (y, halbe Breite, Vorderkante z, Hinterkante z): dicht gestapelt statt weniger grosser Ellipsoide,
+# damit keine Wuelste und Beulen entstehen. Brust ueber das Profil statt ueber einzelne Kugeln.
+TORSO_PROFILE = [(0.86, 0.172, 0.104, -0.112), (0.94, 0.170, 0.104, -0.112), (1.00, 0.160, 0.102, -0.108),
+                 (1.08, 0.145, 0.098, -0.098), (1.15, 0.137, 0.095, -0.092), (1.22, 0.141, 0.101, -0.093),
+                 (1.30, 0.150, 0.114, -0.099), (1.36, 0.155, 0.116, -0.104), (1.42, 0.150, 0.103, -0.102),
+                 (1.47, 0.126, 0.080, -0.088), (1.50, 0.100, 0.060, -0.073)]
+
+
+def torso_at(y):
+    """Weich interpoliertes Rumpfprofil (Catmull-Rom)."""
+    P = TORSO_PROFILE
+    if y <= P[0][0]:
+        return P[0][1:]
+    if y >= P[-1][0]:
+        return P[-1][1:]
+    for i in range(len(P) - 1):
+        if P[i][0] <= y <= P[i + 1][0]:
+            break
+    p0, p1, p2, p3 = P[max(0, i - 1)], P[i], P[i + 1], P[min(len(P) - 1, i + 2)]
+    u = (y - p1[0]) / (p2[0] - p1[0])
+    out = []
+    for k in (1, 2, 3):
+        a, b, c, d = p0[k], p1[k], p2[k], p3[k]
+        out.append(0.5 * (2 * b + (-a + c) * u + (2 * a - 5 * b + 4 * c - d) * u * u + (-a + 3 * b - 3 * c + d) * u ** 3))
+    return tuple(out)
+
+
 def torso(b, gr=0.0, hem=0.90, neck=True):
-    b.ell((0, 1.360, -0.004), (0.143 + gr, 0.130, 0.098 + gr))
-    b.ell((0, 1.300, 0.020), (0.132 + gr, 0.090, 0.092 + gr))
-    b.ell((0, 1.200, 0.004), (0.130 + gr, 0.130, 0.090 + gr))
-    b.ell((0, 1.080, 0.002), (0.134 + gr, 0.120, 0.094 + gr))
-    b.ell((0, 0.980, -0.004), (0.146 + gr, 0.100, 0.104 + gr))
+    y = 0.86
+    while y <= 1.4801:
+        wx, zf, zb = torso_at(y)
+        b.ell((0, y, (zf + zb) * 0.5), (wx + gr, 0.036, (zf - zb) * 0.5 + gr), seg=24)
+        y += 0.015
     for s in (-1, 1):
-        b.cap((s * 0.060, 1.462, -0.016), 0.044 + gr * 0.6, (SH[0] * s, SH[1] - 0.004, SH[2]), 0.0500 + gr * 0.7)
-        b.ell((s * 0.066, 1.352, 0.050), (0.066 + gr, 0.056, 0.046 + gr))
-        b.ell((s * 0.090, 1.370, -0.050), (0.074 + gr, 0.090, 0.048 + gr))
+        # Schulter: vom Hals schraeg abfallend, runder Deltamuskel statt Ecke
+        b.cap((s * 0.058, 1.468, -0.016), 0.044 + gr * 0.6, (SH[0] * 0.96 * s, SH[1] - 0.014, SH[2]), 0.0490 + gr * 0.7)
+        b.ell((s * 0.166, 1.410, -0.012), (0.050 + gr, 0.060, 0.052 + gr))
+        b.ell((s * 0.088, 1.375, -0.048), (0.070 + gr, 0.085, 0.046 + gr))   # Schulterblatt, flach
     if neck:
         b.cap((0, 1.450, -0.022), 0.062 + gr * 0.5, (0, 1.505, -0.018), 0.058 + gr * 0.5)
 
@@ -1822,8 +2016,11 @@ def top_mesh(name, gr, sleeve, hem, faces=5200, wr=1.0, sleeve_gr=None, neck_y=1
     ob = deci(b.mesh(name, voxel, 5, 0.5, None), faces * 1.35 if faces else None)
     spots = []
     for s in (-1, 1):
-        spots += [((EL[0] * s, EL[1], EL[2]), (s * 0.7, -0.7, 0), 0.085, 1.0), ((0.150 * s, 1.36, 0.0), (s * 0.8, 0.5, 0.2), 0.095, 0.8), ((0.11 * s, 1.07, 0.02), (0.2 * s, 1, 0), 0.10, 0.6)]
-    wrinkle(ob, spots, 0.0040 * wr)
+        # Falten nur dort, wo Stoff sich wirklich staucht: Ellbogen, Achsel, ueber dem Bund
+        spots += [((EL[0] * s, EL[1], EL[2]), (s * 0.7, -0.7, 0), 0.085, 1.0), ((0.168 * s, 1.335, 0.0), (s * 0.7, -0.7, 0), 0.060, 0.55),
+                  ((0.12 * s, 0.985, 0.03), (0.15 * s, 1, 0), 0.085, 0.5)]
+    wrinkle(ob, spots, 0.0040 * wr, base=0.12)
+    seams(ob, sleeve)
     al = arm_len()
     bis(ob, ypl(hem, neck_y) + (armpl(al * sleeve) if sleeve > 0.0 else xpl(0.168)) + list(planes))
     if open_front:
@@ -1876,7 +2073,8 @@ def collar_ring(y=1.494, r=0.066, h=0.026, flare=0.012, matname="Top_A", open_a=
 
 
 def front_z(y):
-    return 0.094 + 0.020 * gauss((y - 1.345) ** 2, 0.09) - 0.008 * gauss((y - 1.15) ** 2, 0.08)
+    """Vorderkante des Rumpfs ohne Stoff (fuer Knoepfe, Reissverschluesse, Kordeln)."""
+    return torso_at(y)[1]
 
 
 def tops():
@@ -1907,9 +2105,8 @@ def tops():
         b.chain([((s * 0.088, 1.500, -0.060), 0.030), ((s * 0.078, 1.505, 0.012), 0.024), ((s * 0.032, 1.470, 0.070), 0.015)])
     hood = b.mesh("h", 0.007, 4, 0.5, 1500)
     set_mats(hood, ["Top_A"])
-    pk = box("p", [((0, 1.050, 0.126), (0.220, 0.110, 0.020), (-3, 0, 0))], "Top_A", 0.010)
-    st = [tube("s", [(s * 0.030, 1.476, 0.088), (s * 0.033, 1.420, 0.120), (s * 0.034, 1.350, 0.132)], 0.0036, "Top_B", 8) for s in (-1, 1)]
-    out.append((join("Top_Hoodie", [ob, hood, pk] + st), "top", True))
+    st = [tube("s", [(s * 0.030, 1.476, torso_at(1.476)[1] + 0.026), (s * 0.033, 1.420, torso_at(1.420)[1] + 0.033), (s * 0.034, 1.350, torso_at(1.350)[1] + 0.034)], 0.0036, "Top_B", 8) for s in (-1, 1)]
+    out.append((join("Top_Hoodie", [ob, hood] + st), "top", True))
     # Pullover
     ob = top_mesh("Top_Sweater", 0.018, 0.985, 0.905, wr=1.2, cuff=0.004, planes=ypl(0.94, 1.262, 1.300))
 
@@ -1942,8 +2139,8 @@ def tops():
         return 0
     set_mats(ob, ["Top_A", "Top_C", "Reflect"], refl)
     zp = tube("z", [(0, y, front_z(y) + 0.028) for y in (0.890, 1.0, 1.1, 1.2, 1.3, 1.4, 1.48)], 0.0048, "Metal", 8)
-    pk = box("p", [((s * 0.080, 1.320, 0.128), (0.080, 0.086, 0.014), (4, s * 18, 0)) for s in (-1, 1)] + [((s * 0.092, 0.985, 0.112), (0.094, 0.090, 0.014), (-4, s * 16, 0)) for s in (-1, 1)], "Top_A", 0.004)
-    fl = box("p", [((s * 0.080, 1.362, 0.134), (0.084, 0.022, 0.014), (4, s * 18, 0)) for s in (-1, 1)], "Top_C", 0.003)
+    pk = box("p", [((s * 0.080, 1.320, torso_at(1.320)[1] + 0.022), (0.080, 0.086, 0.014), (4, s * 18, 0)) for s in (-1, 1)] + [((s * 0.092, 0.985, torso_at(0.985)[1] + 0.022), (0.094, 0.090, 0.014), (-4, s * 16, 0)) for s in (-1, 1)], "Top_A", 0.004)
+    fl = box("p", [((s * 0.080, 1.362, torso_at(1.362)[1] + 0.029), (0.084, 0.022, 0.014), (4, s * 18, 0)) for s in (-1, 1)], "Top_C", 0.003)
     out.append((join("Top_Work", [ob, zp, pk, fl, collar_ring(1.490, 0.076, 0.040, 0.014, "Top_C", 12, 0.012)]), "top", True))
     # Warnweste ueber Langarm
     ob = top_mesh("Top_Vest", 0.028, 0.0, 0.900, 3600, wr=0.8, open_front=lambda y: 0.004, planes=ypl(1.075, 1.125, 1.195, 1.235) + xpl(0.078, 0.112))
@@ -1984,10 +2181,10 @@ def tops():
 
 # ---------------------------------------------------------------- Kleidung unten
 
-def bottom_mesh(name, gr, hem, flare=0.0, wr=1.0, faces=4200, planes=()):
+def bottom_mesh(name, gr, hem, flare=0.0, wr=1.0, faces=6000, planes=()):
     b = Blob()
     b.ell((0, 0.955, -0.006), (0.140 + gr * 0.8, 0.095, 0.100 + gr * 0.8))
-    b.ell((0, 0.880, -0.008), (0.146 + gr, 0.090, 0.106 + gr))
+    b.ell((0, 0.905, -0.010), (0.146 + gr, 0.068, 0.100 + gr))     # endet ueber dem Schritt (kein Klumpen zwischen den Beinen)
     for s in (-1, 1):
         b.ell((s * 0.066, 0.890, -0.052), (0.070 + gr, 0.080, 0.062 + gr))
         ch = []
@@ -2000,10 +2197,23 @@ def bottom_mesh(name, gr, hem, flare=0.0, wr=1.0, faces=4200, planes=()):
     spots = []
     for s in (-1, 1):
         spots += [((0.10 * s, 0.50, 0.01), (0, 1, 0), 0.11, 0.9), ((0.10 * s, 0.11, 0.0), (0, 1, 0), 0.13, 1.1), ((0.06 * s, 0.84, 0.06), (s, 0.6, 0), 0.12, 0.8)]
-    wrinkle(ob, spots, 0.0046 * wr)
+    wrinkle(ob, spots, 0.0046 * wr, base=0.15)
+    leg_seams(ob)
     bis(ob, ypl(hem, 1.002) + list(planes))
     cut(ob, lambda x, y, z: hem < y < 1.002)
     return solidify(ob, 0.0045)
+
+
+def leg_seams(ob, depth=0.0020):
+    """Hosennaehte als feine Rillen: Aussennaht, Innennaht und Hosenschlitz vorn."""
+    def fn(x, y, z, n):
+        k = 0.0
+        if y < 0.88 and abs(n[0]) > 0.55:
+            k = math.exp(-(n[2] / 0.10) ** 2)
+        if 0.80 < y < 0.985 and z > 0.04 and abs(x) < 0.03:
+            k = max(k, math.exp(-((abs(x) - 0.012) / 0.0022) ** 2) * smoothstep(0.80, 0.83, y))
+        return (x - n[0] * depth * k, y - n[1] * depth * k, z - n[2] * depth * k)
+    return move(ob, fn)
 
 
 def belt():
@@ -2225,9 +2435,11 @@ def accessories():
     # Umhaengeband mit Ausweis
     parts = []
     for s in (-1, 1):
-        parts.append(tube("l", [(s * 0.070, 1.500, -0.040), (s * 0.078, 1.480, 0.030), (s * 0.052, 1.400, 0.118), (s * 0.010, 1.265, 0.140)], 0.0044, "Acc_A", 8))
-    parts.append(box("k", [((0, 1.215, 0.1430), (0.058, 0.086, 0.005))], "Top_B", 0.002))
-    parts.append(box("k", [((0, 1.236, 0.1462), (0.052, 0.016, 0.002)), ((-0.014, 1.206, 0.1462), (0.020, 0.026, 0.002))], "Acc_A", 0.0))
+        # Band liegt ueber jedem Oberteil (Rumpf + dickster Stoff), siehe TORSO_PROFILE
+        parts.append(tube("l", [(s * 0.070, 1.500, -0.040), (s * 0.078, 1.480, 0.030), (s * 0.052, 1.400, torso_at(1.40)[1] + 0.040), (s * 0.010, 1.265, torso_at(1.265)[1] + 0.040)], 0.0044, "Acc_A", 8))
+    bz = torso_at(1.215)[1] + 0.043
+    parts.append(box("k", [((0, 1.215, bz), (0.058, 0.086, 0.005))], "Top_B", 0.002))
+    parts.append(box("k", [((0, 1.236, bz + 0.0032), (0.052, 0.016, 0.002)), ((-0.014, 1.206, bz + 0.0032), (0.020, 0.026, 0.002))], "Acc_A", 0.0))
     out.append((join("Acc_Badge", parts), "Spine2"))
     # Werkzeugguertel
     parts = [box("k", [((s * 0.168, 0.930, 0.020), (0.050, 0.110, 0.100), (0, 0, 0)) for s in (-1, 1)] + [((0.10 * s, 0.940, 0.108), (0.070, 0.070, 0.040)) for s in (-1, 1)], "Acc_B", 0.008)]
