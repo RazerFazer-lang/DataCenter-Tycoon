@@ -1,5 +1,5 @@
 {
-  "updated": "2026-11-27",
+  "updated": "2026-11-28",
   "columns": [
     {
       "id": "planned",
@@ -40,6 +40,12 @@
       "id": "done",
       "title": "Fertig",
       "items": [
+        {
+          "tag": "neu",
+          "version": "v3.7.0",
+          "title": "Neue Figuren",
+          "desc": "Figuren überarbeitet: Hände, Proportionen, Kleidung, Haare, Detailstufen. Echte Vogel- und Rolltor-Geräusche."
+        },
         {
           "tag": "neu",
           "version": "v3.6.3",

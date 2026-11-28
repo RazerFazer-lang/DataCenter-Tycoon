@@ -1,9 +1,23 @@
 {
-  "version": "3.6.3",
-  "launcher_version": "3.6.3",
-  "codename": "v3.6.3 Kaffee, Katze und Licht",
-  "release_date": "2026-11-27",
+  "version": "3.7.0",
+  "launcher_version": "3.7.0",
+  "codename": "v3.7.0 Neue Figuren",
+  "release_date": "2026-11-28",
   "changelog": [
+    {
+      "version": "v3.7.0",
+      "date": "2026-11-28",
+      "title": "Update 3.7.0: Neue Figuren",
+      "items": [
+        "[GRAFIK] Alle Figuren überarbeitet: etwas größerer Kopf, runde Schultern, glatter Oberkörper ohne Wülste und Beulen.",
+        "[GRAFIK] Neue Hände: fünf weiche Finger, locker gebeugt, mit Fingernägeln und sauberem Übergang zum Arm.",
+        "[GRAFIK] Kleidung mit Nähten und Falten nur an Ellbogen, Achsel und Bund. Der Kapuzenpulli hat keine aufgesetzte Bauchtasche mehr.",
+        "[GRAFIK] Frisuren liegen eng am Kopf und haben einen Glanzverlauf. Kurzes Haar ist schlicht, mit ein paar Strähnen in der Stirn.",
+        "[LEISTUNG] Figuren in der Ferne werden automatisch einfacher dargestellt.",
+        "[AUDIO] Vögel draußen und das Rolltor klingen jetzt nach echten Aufnahmen.",
+        "[CO-OP] Alle Mitspieler brauchen v3.7.0."
+      ]
+    },
     {
       "version": "v3.6.3",
       "date": "2026-11-27",
